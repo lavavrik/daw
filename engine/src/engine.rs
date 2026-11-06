@@ -2,12 +2,21 @@
 //! `process` is the real-time callback: no allocation, no blocking, no panics.
 
 use crate::protocol::{self, Command};
+use crate::metronome::Metronome;
 use crate::test_tone::TestTone;
-use crate::MAX_BLOCK;
+use crate::transport::{events_in_window, tick_to_offset, Transport};
+use crate::{MAX_BLOCK, PPQ};
+
+/// 4/4: a bar is 4 beats; beat 0 of each bar is the accent.
+const BAR_TICKS: f64 = 4.0 * PPQ;
+const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 
 pub struct Engine {
     tone: TestTone,
     master_gain: f32,
+    sample_rate: f32,
+    transport: Transport,
+    metronome: Metronome,
     telemetry: [f64; 8],
     // Later tasks add: transport, drum tracks, sample arena.
 }
@@ -15,7 +24,14 @@ pub struct Engine {
 impl Engine {
     /// Does all big allocations (none yet; later tasks reserve the arena here).
     pub fn new(sample_rate: f32) -> Engine {
-        Engine { tone: TestTone::new(sample_rate), master_gain: 0.8, telemetry: [0.0; 8] }
+        Engine {
+            tone: TestTone::new(sample_rate),
+            master_gain: 0.8,
+            sample_rate,
+            transport: Transport::new(),
+            metronome: Metronome::new(sample_rate),
+            telemetry: [0.0; 8],
+        }
     }
 
     /// Decode and apply a command. Returns 0 (OK) or a negative error code.
@@ -41,6 +57,19 @@ impl Engine {
             Command::NoteOn { note, velocity } => self.tone.note_on(note, velocity),
             Command::NoteOff { note } => self.tone.note_off(note),
             Command::SetMasterGain { gain } => self.master_gain = gain,
+            // Already playing: no-op (does not restart).
+            Command::Play => {
+                self.transport.playing = true;
+                self.sync_transport_telemetry();
+            }
+            Command::Stop => {
+                self.transport.playing = false;
+                self.transport.ticks = 0.0;
+                self.sync_transport_telemetry();
+            }
+            // Applies from the next block; the playhead position is unchanged.
+            Command::SetTempo { bpm } => self.transport.bpm = bpm,
+            Command::SetMetronome { on } => self.metronome.on = on,
             // Accepted and ignored until later tasks wire them.
             _ => {}
         }
@@ -53,6 +82,7 @@ impl Engine {
         right.fill(0.0);
         let n = left.len().min(right.len()).min(MAX_BLOCK);
         self.tone.render_add(&mut left[..n], &mut right[..n]);
+        self.render_metronome(&mut left[..n], &mut right[..n]);
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             let l = (left[i] * self.master_gain).clamp(-1.0, 1.0);
@@ -62,9 +92,44 @@ impl Engine {
             pl = pl.max(l.abs());
             pr = pr.max(r.abs());
         }
+        self.transport.advance(n, self.sample_rate);
         self.telemetry[0] += 1.0;
+        self.sync_transport_telemetry();
         self.telemetry[5] = pl as f64;
         self.telemetry[6] = pr as f64;
+    }
+
+    /// Slot 1: playing (0/1); slot 2: playhead ticks at the start of the next block.
+    fn sync_transport_telemetry(&mut self) {
+        self.telemetry[1] = if self.transport.playing { 1.0 } else { 0.0 };
+        self.telemetry[2] = self.transport.ticks;
+    }
+
+    /// Metronome: trigger clicks at their exact sample offsets, rendering the
+    /// segments between them so a click spilling past the block end continues
+    /// next block. Does not advance the transport.
+    fn render_metronome(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let n = left.len();
+        let mut starts = [(0usize, false); 4];
+        let mut count = 0;
+        if self.transport.playing && self.metronome.on && n > 0 {
+            let spt = self.transport.samples_per_tick(self.sample_rate);
+            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
+            events_in_window(t0, t1, BAR_TICKS, &BEAT_OFFSETS, |beat, tick| {
+                if count < starts.len() {
+                    starts[count] = (tick_to_offset(tick, t0, spt, n), beat == 0);
+                    count += 1;
+                }
+            });
+        }
+        let mut pos = 0;
+        for &(at, accent) in &starts[..count] {
+            let at = at.max(pos);
+            self.metronome.render_add(&mut left[pos..at], &mut right[pos..at]);
+            pos = at;
+            self.metronome.trigger(accent);
+        }
+        self.metronome.render_add(&mut left[pos..], &mut right[pos..]);
     }
 
     pub fn telemetry(&self) -> &[f64; 8] {
@@ -75,7 +140,9 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{OP_NOTE_OFF, OP_NOTE_ON};
+    use crate::protocol::{
+        OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_SET_METRONOME, OP_SET_TEMPO, OP_STOP,
+    };
 
     const SR: f32 = 48000.0;
 
@@ -162,5 +229,141 @@ mod tests {
         // successes do not reset the last-error slot
         assert_eq!(e.command(OP_NOTE_OFF, 69.0, 0.0, 0.0, 0.0), 0);
         assert_eq!(e.telemetry()[7], -1.0);
+    }
+
+    /// Sample indices where a click begins (first nonzero sample, tolerant of
+    /// the sine starting at phase 0), found by a gap of silence before it.
+    fn onsets(s: &[f32]) -> Vec<usize> {
+        let mut v = Vec::new();
+        let mut last_nz: Option<usize> = None;
+        for (i, &x) in s.iter().enumerate() {
+            if x != 0.0 {
+                if last_nz.map_or(true, |l| i - l > 200) {
+                    v.push(i);
+                }
+                last_nz = Some(i);
+            }
+        }
+        v
+    }
+
+    fn upward_crossings(s: &[f32]) -> usize {
+        (1..s.len()).filter(|&i| s[i - 1] < 0.0 && s[i] >= 0.0).count()
+    }
+
+    fn start_metronome(bpm: f64) -> Engine {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, bpm, 0.0, 0.0, 0.0);
+        e.command(OP_SET_METRONOME, 1.0, 0.0, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        e
+    }
+
+    #[test]
+    fn metronome_clicks_on_beats() {
+        let mut e = start_metronome(120.0);
+        let s = render(&mut e, 96000); // 2 s
+        let on = onsets(&s);
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (got, want) in on.iter().zip([0usize, 24000, 48000, 72000]) {
+            assert!((*got as i64 - want as i64).abs() <= 1, "{got} vs {want}");
+        }
+        // 1500 Hz accent on beat 1 (30 cycles in 20 ms), 1000 Hz after (20).
+        let c0 = upward_crossings(&s[on[0]..on[0] + 960]);
+        let c1 = upward_crossings(&s[on[1]..on[1] + 960]);
+        assert!((29..=30).contains(&c0), "accent crossings {c0}");
+        assert!((19..=20).contains(&c1), "beat crossings {c1}");
+        // 0.3 amplitude * 0.8 master
+        let pk = s.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(pk > 0.15 && pk <= 0.24 + 1e-6, "peak {pk}");
+    }
+
+    #[test]
+    fn bar_accent_repeats_every_four_beats() {
+        let mut e = start_metronome(120.0);
+        let s = render(&mut e, 48000 * 3); // beats 0..5
+        let on = onsets(&s);
+        assert_eq!(on.len(), 6);
+        let c4 = upward_crossings(&s[on[4]..on[4] + 960]);
+        assert!((29..=30).contains(&c4), "beat 5 should accent, got {c4}");
+    }
+
+    #[test]
+    fn click_spills_across_block_boundary() {
+        // 124 bpm, odd block size via 128-frame blocks: click 2 starts mid-block
+        // and must keep sounding into following blocks without a gap.
+        let mut e = start_metronome(124.0);
+        let s = render(&mut e, 128 * 400);
+        let on = onsets(&s);
+        let o = on[1];
+        assert!(o % 128 != 0 || on[2] % 128 != 0);
+        assert!(s[o..o + 900].iter().filter(|&&x| x == 0.0).count() < 30);
+    }
+
+    #[test]
+    fn silent_when_disabled_or_stopped() {
+        let mut e = Engine::new(SR);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        assert!(render(&mut e, 48000).iter().all(|&x| x == 0.0)); // metronome off
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_METRONOME, 1.0, 0.0, 0.0, 0.0);
+        assert!(render(&mut e, 48000).iter().all(|&x| x == 0.0)); // not playing
+    }
+
+    #[test]
+    fn telemetry_tracks_playing_and_playhead() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render(&mut e, 128);
+        assert_eq!(e.telemetry()[1], 1.0);
+        assert!((e.telemetry()[2] - 128.0 / 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn play_while_playing_does_not_restart() {
+        let mut e = Engine::new(SR);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render(&mut e, 1280);
+        let t = e.telemetry()[2];
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render(&mut e, 128);
+        assert!(e.telemetry()[2] > t);
+    }
+
+    #[test]
+    fn stop_resets_to_zero() {
+        let mut e = start_metronome(120.0);
+        render(&mut e, 4800);
+        assert!(e.telemetry()[2] > 0.0);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.telemetry()[1], 0.0);
+        assert_eq!(e.telemetry()[2], 0.0);
+        render(&mut e, 4800); // let any tail finish
+        assert_eq!(e.telemetry()[2], 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 2400);
+        assert_eq!(onsets(&s)[0], 1); // restarts from tick 0 with a click
+    }
+
+    #[test]
+    fn tempo_change_mid_play_keeps_steps_exact() {
+        let mut e = start_metronome(120.0);
+        let mut s = render(&mut e, 48000); // 1 s at 120 = 2 beats
+        e.command(OP_SET_TEMPO, 128.0, 0.0, 0.0, 0.0);
+        s.extend(render(&mut e, 48000 * 3)); // 3 s at 128 = 6.4 beats
+        // 8.4 beats elapsed -> onsets at beats 0..=8
+        let on = onsets(&s);
+        assert_eq!(on.len(), 9, "{on:?}");
+        for w in on.windows(2) {
+            assert!(w[1] - w[0] > 11000, "onsets too close: {on:?}");
+        }
+        // Exact positions: beat 2 at 48000, then 22500 samples per beat.
+        for k in 2..=8usize {
+            let want = 48000.0 + (k as f64 - 2.0) * 22500.0;
+            assert!((on[k] as f64 - want).abs() <= 1.0, "beat {k}: {} vs {want}", on[k]);
+        }
+        // Playhead never jumped: 8.4 beats = 8064 ticks.
+        assert!((e.telemetry()[2] - 8064.0).abs() < 1e-6);
     }
 }

@@ -1,15 +1,20 @@
 //! Engine core: owns all state, decodes commands, renders blocks.
 //! `process` is the real-time callback: no allocation, no blocking, no panics.
 
+use crate::arena::SampleArena;
 use crate::protocol::{self, Command};
+use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
 use crate::test_tone::TestTone;
 use crate::transport::{events_in_window, tick_to_offset, Transport};
-use crate::{MAX_BLOCK, PPQ};
+use crate::{MAX_BLOCK, MAX_SAMPLES, PPQ};
 
 /// 4/4: a bar is 4 beats; beat 0 of each bar is the accent.
 const BAR_TICKS: f64 = 4.0 * PPQ;
 const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
+
+/// Initial arena size in floats (128 MB).
+const ARENA_FLOATS: usize = 32 * 1024 * 1024;
 
 pub struct Engine {
     tone: TestTone,
@@ -18,11 +23,13 @@ pub struct Engine {
     transport: Transport,
     metronome: Metronome,
     telemetry: [f64; 8],
-    // Later tasks add: transport, drum tracks, sample arena.
+    arena: SampleArena,
+    samples: SamplePool,
+    // Later tasks add: drum tracks.
 }
 
 impl Engine {
-    /// Does all big allocations (none yet; later tasks reserve the arena here).
+    /// Does all big allocations: reserves the 32 Mi-float (128 MB) sample arena.
     pub fn new(sample_rate: f32) -> Engine {
         Engine {
             tone: TestTone::new(sample_rate),
@@ -31,6 +38,8 @@ impl Engine {
             transport: Transport::new(),
             metronome: Metronome::new(sample_rate),
             telemetry: [0.0; 8],
+            arena: SampleArena::with_capacity(ARENA_FLOATS),
+            samples: SamplePool::new(),
         }
     }
 
@@ -132,6 +141,45 @@ impl Engine {
         self.metronome.render_add(&mut left[pos..], &mut right[pos..]);
     }
 
+    fn fail(&mut self, code: i32) -> i32 {
+        self.telemetry[7] = code as f64;
+        code
+    }
+
+    /// Reserve space for sample `id` (planar `[L..., R...]`, `frames*channels`
+    /// floats) and return a pointer the UI fills, then call `sample_ready`.
+    /// Replaces any existing sample in the slot (old data leaks until reset)
+    /// and marks it not ready. May grow the heap only while stopped; while
+    /// playing and out of room, returns `ERR_DEFERRED` so the caller retries
+    /// after stopping. Failures also land in telemetry slot 7.
+    pub fn sample_alloc(&mut self, id: u32, frames: u32, channels: u32) -> Result<*mut f32, i32> {
+        if id as usize >= MAX_SAMPLES {
+            return Err(self.fail(protocol::ERR_BAD_INDEX));
+        }
+        if frames == 0 || !(1..=2).contains(&channels) {
+            return Err(self.fail(protocol::ERR_BAD_VALUE));
+        }
+        let len = frames as usize * channels as usize;
+        let may_grow = !self.transport.playing;
+        let Some(slice) = self.arena.alloc(len, may_grow) else {
+            return Err(self.fail(protocol::ERR_DEFERRED));
+        };
+        self.samples.set(
+            id as usize,
+            Sample { slice, frames: frames as usize, channels: channels as u8, ready: false },
+        );
+        Ok(self.arena.slice_mut(slice).as_mut_ptr())
+    }
+
+    /// Mark sample `id` playable (voices ignore samples that are not ready).
+    pub fn sample_ready(&mut self, id: u32) -> i32 {
+        if (id as usize) < MAX_SAMPLES && self.samples.mark_ready(id as usize) {
+            protocol::OK
+        } else {
+            self.fail(protocol::ERR_BAD_INDEX)
+        }
+    }
+
     pub fn telemetry(&self) -> &[f64; 8] {
         &self.telemetry
     }
@@ -154,6 +202,27 @@ mod tests {
             out.extend_from_slice(&l);
         }
         out
+    }
+
+    #[test]
+    fn sample_alloc_rejects_bad_args() {
+        let mut e = Engine::new(SR);
+        assert_eq!(e.sample_alloc(MAX_SAMPLES as u32, 10, 1), Err(protocol::ERR_BAD_INDEX));
+        assert_eq!(e.sample_alloc(0, 0, 1), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.sample_alloc(0, 10, 0), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.sample_alloc(0, 10, 3), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.telemetry()[7], protocol::ERR_BAD_VALUE as f64); // sticky
+        assert_eq!(e.sample_ready(5), protocol::ERR_BAD_INDEX); // nothing allocated
+        assert_eq!(e.sample_ready(MAX_SAMPLES as u32), protocol::ERR_BAD_INDEX);
+        // valid alloc: pointer is writable, ready flips playable
+        let p = e.sample_alloc(5, 100, 2).unwrap();
+        assert!(!p.is_null());
+        assert!(e.samples.playable(&e.arena, 5).is_none());
+        assert_eq!(e.sample_ready(5), protocol::OK);
+        assert_eq!(e.samples.playable(&e.arena, 5).unwrap().0.len(), 200);
+        // re-alloc replaces and un-readies
+        e.sample_alloc(5, 50, 1).unwrap();
+        assert!(e.samples.playable(&e.arena, 5).is_none());
     }
 
     #[test]

@@ -14,9 +14,12 @@
 //! `NOTE_ON`/`NOTE_OFF`/`PITCH_BEND`/`MOD_WHEEL`/`SUSTAIN` go to the input
 //! track's rack (`SET_INPUT_TRACK`). With no input track, or one that is not a
 //! synth track, they are ignored (and still return `OK`). Switching the input
-//! track sends `AllOff` to the previous one, so no note is left hanging. The
-//! input track is a slot number: removing that track does not unset it, and a
-//! synth track added there later receives notes again.
+//! track sends the previous one `AllOff`, pedal up and bend 0, so no note is
+//! left hanging. The engine caches the last bend / mod wheel / sustain it
+//! received and replays them to the new input track, so controller state
+//! follows the switch (e.g. a held pedal keeps holding). When the input slot
+//! stops being a synth track (`REMOVE_TRACK`, or `ADD_DRUM_TRACK` over it) the
+//! input track is unset, so a track added there later does not inherit it.
 
 use crate::arena::SampleArena;
 use crate::drums::Drums;
@@ -60,6 +63,10 @@ pub struct Engine {
     kinds: [SlotKind; MAX_TRACKS],
     /// Slot that receives live notes, if any.
     input: Option<usize>,
+    /// Last controller values received (replayed on an input switch).
+    bend: f32,
+    mod_wheel: f32,
+    sustain: bool,
 }
 
 impl Engine {
@@ -78,6 +85,9 @@ impl Engine {
             synths: Synths::new(sample_rate),
             kinds: [SlotKind::Empty; MAX_TRACKS],
             input: None,
+            bend: 0.0,
+            mod_wheel: 0.0,
+            sustain: false,
         }
     }
 
@@ -131,7 +141,14 @@ impl Engine {
     fn clear_slot(&mut self, slot: usize) {
         match self.kind(slot) {
             SlotKind::Drum => self.drums.remove_track(slot),
-            SlotKind::Synth => self.synths.remove_track(slot),
+            SlotKind::Synth => {
+                // The rack is cleared (with a fade), so its notes go anyway;
+                // unset the input so a later track there does not inherit it.
+                self.synths.remove_track(slot);
+                if self.input == Some(slot) {
+                    self.input = None;
+                }
+            }
             SlotKind::Empty => {}
         }
         self.set_kind(slot, SlotKind::Empty);
@@ -160,16 +177,30 @@ impl Engine {
             Command::NoteOn { note, velocity: 0 } => self.live(NoteEvent::Off { note }),
             Command::NoteOn { note, velocity } => self.live(NoteEvent::On { note, vel: velocity }),
             Command::NoteOff { note } => self.live(NoteEvent::Off { note }),
-            Command::PitchBend { value } => self.live(NoteEvent::Bend(value)),
-            Command::ModWheel { value } => self.live(NoteEvent::Mod(value)),
-            Command::Sustain { on } => self.live(NoteEvent::Sustain(on)),
+            Command::PitchBend { value } => {
+                self.bend = value;
+                self.live(NoteEvent::Bend(value))
+            }
+            Command::ModWheel { value } => {
+                self.mod_wheel = value;
+                self.live(NoteEvent::Mod(value))
+            }
+            Command::Sustain { on } => {
+                self.sustain = on;
+                self.live(NoteEvent::Sustain(on))
+            }
+            // Old track: everything off, pedal up, bend centred. New track:
+            // the cached controller state.
             Command::SetInputTrack { slot } => {
-                if let Some(old) = self.input {
-                    if slot != Some(old) {
-                        self.live(NoteEvent::AllOff);
-                    }
+                if slot != self.input {
+                    self.live(NoteEvent::AllOff);
+                    self.live(NoteEvent::Sustain(false));
+                    self.live(NoteEvent::Bend(0.0));
+                    self.input = slot;
+                    self.live(NoteEvent::Bend(self.bend));
+                    self.live(NoteEvent::Mod(self.mod_wheel));
+                    self.live(NoteEvent::Sustain(self.sustain));
                 }
-                self.input = slot;
             }
             Command::SetMasterGain { gain } => self.master_gain = gain,
             // Already playing: no-op (does not restart).
@@ -1069,6 +1100,54 @@ mod tests {
         // New notes reach track 4.
         e.command(OP_NOTE_ON, 64.0, 127.0, 0.0, 0.0);
         assert!(peak(&render(&mut e, 4800)) > 0.1);
+    }
+
+    #[test]
+    fn input_track_is_not_inherited_by_a_new_track() {
+        // REMOVE_TRACK on the input slot unsets the input track.
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_REMOVE_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        render(&mut e, 1280);
+        synth_patch(&mut e, 3.0);
+        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
+        assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0), "input inherited after remove");
+        // So does replacing the synth with a drum track.
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        render(&mut e, 1280);
+        synth_patch(&mut e, 3.0);
+        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
+        assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0), "input inherited after kind swap");
+    }
+
+    #[test]
+    fn controllers_follow_an_input_switch() {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        synth_patch(&mut e, 4.0);
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SUSTAIN, 1.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 60.0, 127.0, 0.0, 0.0);
+        render(&mut e, 4800);
+        e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0); // held by the pedal
+        assert!(peak(&render(&mut e, 4800)) > 0.1, "sustained on track 3");
+        // Switch: track 3 gets AllOff + pedal up, and releases.
+        e.command(OP_SET_INPUT_TRACK, 4.0, 0.0, 0.0, 0.0);
+        let frames = ((RELEASE + 0.05) * SR as f64) as usize;
+        let s = render(&mut e, frames.div_ceil(128) * 128);
+        assert!(peak(&s[s.len() - 128..]) < 1e-3, "track 3 still sounding");
+        // Track 4 got the pedal (still down): a released note keeps sounding.
+        e.command(OP_NOTE_ON, 64.0, 127.0, 0.0, 0.0);
+        render(&mut e, 4800);
+        e.command(OP_NOTE_OFF, 64.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 128 * 75); // 200 ms, past release + 50 ms
+        assert!(peak(&s[s.len() - 128..]) > 0.1, "pedal not replayed to track 4");
+        // Pedal up releases it.
+        e.command(OP_SUSTAIN, 0.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, frames.div_ceil(128) * 128);
+        assert!(peak(&s[s.len() - 128..]) < 1e-3);
     }
 
     #[test]

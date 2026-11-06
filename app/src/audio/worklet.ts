@@ -13,7 +13,7 @@
 //     Every 'sample' request still gets exactly one reply, with its original id.
 
 import { CommandRing } from './ring';
-import { Err, HostErr, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import { Err, HostErr, MAX_BLOCK, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
 declare const sampleRate: number;
@@ -47,8 +47,6 @@ interface EngineExports {
   engine_telemetry(e: number): number;
 }
 
-/** Mirrors engine MAX_BLOCK: the out buffers hold this many frames. */
-const MAX_BLOCK = 1024;
 /** Fixed capacity of the deferred-sample queue (oldest dropped when full). */
 const PENDING_CAP = 32;
 /** Telemetry slots the engine owns; 3 (cpu) and 4 (dropouts) are filled here. */

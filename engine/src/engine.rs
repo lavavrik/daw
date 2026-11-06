@@ -9,7 +9,7 @@ use crate::metronome::Metronome;
 use crate::test_tone::TestTone;
 use crate::transport::{events_in_window, tick_to_offset, Transport};
 use crate::{
-    MAX_BLOCK, MAX_SAMPLES, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
+    MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
     TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
 };
 
@@ -19,9 +19,6 @@ const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 
 /// Initial arena size in floats (128 MB).
 const ARENA_FLOATS: usize = 32 * 1024 * 1024;
-
-/// Per-sample size cap in floats (256 MB).
-const MAX_SAMPLE_FLOATS: usize = 64 * 1024 * 1024;
 
 pub struct Engine {
     tone: TestTone,

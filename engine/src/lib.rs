@@ -18,6 +18,8 @@ pub const MAX_TRACKS: usize = 32;
 pub const MAX_ROWS: usize = 16;
 pub const MAX_STEPS: usize = 64;
 pub const MAX_SAMPLES: usize = 256;
+/// Per-sample size cap in floats (frames * channels; 256 MB).
+pub const MAX_SAMPLE_FLOATS: usize = 64 * 1024 * 1024;
 /// Ticks per quarter note.
 pub const PPQ: f64 = 960.0;
 /// A step is a 16th note.

@@ -1,10 +1,12 @@
 // Reactive project state (Svelte 5 runes). Mutate only through actions.ts so
 // every UI edit is mirrored to the audio engine.
 
-/** Must match engine MAX_STEPS / MAX_ROWS / MAX_TRACKS. */
+/** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
 export const MAX_ROWS = 16;
 export const MAX_TRACKS = 32;
+/** Engine sample slots; sample ids are never reused within a session. */
+export const MAX_SAMPLES = 256;
 
 /** 8 colours that read well on the dark UI; track colour = TRACK_COLORS[slot % 8]. */
 export const TRACK_COLORS: string[] = [

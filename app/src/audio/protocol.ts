@@ -1,5 +1,6 @@
-// Mirror of engine/src/protocol.rs (the source of truth). protocol.test.ts
-// regex-parses the Rust file and fails if names or values drift.
+// Mirror of engine/src/protocol.rs and the size/telemetry constants in
+// engine/src/lib.rs (the source of truth). protocol.test.ts regex-parses the
+// Rust files and fails if names or values drift.
 
 export const Op = {
   NOTE_ON: 1,
@@ -42,7 +43,12 @@ export const HostErr = {
   QUEUE_FULL: -101,
 } as const;
 
-/** Indices into the telemetry Float64Array written by the engine. */
+/** Largest block (frames) the engine renders per call (lib.rs MAX_BLOCK). */
+export const MAX_BLOCK = 1024;
+/** Per-sample cap, frames * channels (lib.rs MAX_SAMPLE_FLOATS). */
+export const MAX_SAMPLE_FLOATS = 64 * 1024 * 1024;
+
+/** Indices into the telemetry Float64Array (lib.rs TELEMETRY_*). */
 export const TELEMETRY = {
   blocks: 0,
   playing: 1,

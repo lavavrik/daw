@@ -2,14 +2,13 @@
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
   import StepGrid from './StepGrid.svelte';
+  import { banners } from '../state/banners.svelte';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
 
-  // Banners live here (top of the body) so any tab can raise them.
-  let error = $state<string | null>(null);
-  let notice = $state<string | null>(null);
+  // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
 
 <section class="pane">
@@ -28,18 +27,18 @@
     </span>
   </div>
   <div class="body">
-    {#if error}
+    {#if banners.error}
       <div class="banner err" data-testid="banner" role="alert">
-        <span>{error}</span><button aria-label="Dismiss" onclick={() => (error = null)}>×</button>
+        <span>{banners.error}</span><button aria-label="Dismiss" onclick={() => (banners.error = null)}>×</button>
       </div>
     {/if}
-    {#if notice}
+    {#if banners.notice}
       <div class="banner note" data-testid="notice">
-        <span>{notice}</span><button aria-label="Dismiss" onclick={() => (notice = null)}>×</button>
+        <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
       </div>
     {/if}
     {#if track}
-      <StepGrid {p} {engine} {track} onerror={(m) => (error = m)} onnotice={(m) => (notice = m)} />
+      <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} onnotice={(m) => (banners.notice = m)} />
     {/if}
   </div>
 </section>

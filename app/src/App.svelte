@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
   import TopBar from './ui/TopBar.svelte';
   import Browser from './ui/Browser.svelte';
@@ -10,6 +10,7 @@
   import { Project } from './state/project.svelte';
   import { addDrumTrack } from './state/actions';
   import { installShortcuts } from './input/shortcuts';
+  import { banners } from './state/banners.svelte';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -26,6 +27,29 @@
   }
 
   onDestroy(() => uninstall?.());
+
+  // Window-level drop guard. A file dropped where no row handles it (Browser
+  // pane, gaps, headers, a disabled button, the start overlay) would make the
+  // browser navigate to the file and lose the session. Rows/"+ Add row" call
+  // preventDefault themselves; anything still un-prevented when the event
+  // bubbles here is a miss: cancel it and say where to drop instead.
+  const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
+  onMount(() => {
+    const over = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      if (!e.defaultPrevented) banners.error = 'Drop onto a step-grid row to load a sample';
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', over);
+    window.addEventListener('drop', drop);
+    return () => {
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('drop', drop);
+    };
+  });
 </script>
 
 <div class="app">

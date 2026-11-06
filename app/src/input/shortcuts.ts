@@ -8,10 +8,20 @@ import { keyToNote } from './qwertyPiano';
 
 const PIANO_VELOCITY = 100;
 
-function isTyping(t: EventTarget | null): boolean {
+/** Input types that don't take typed text: shortcuts stay live while they have focus. */
+const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file', 'image']);
+
+/**
+ * True when keys should go to the focused element (text entry), not to the
+ * shortcuts. Sliders/checkboxes/buttons don't count: touching one must not
+ * silently disable Space and the piano. Number fields (BPM) do count while
+ * focused; they release focus on Enter/commit (TopBar).
+ */
+export function isTyping(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;
   if (!el || !el.tagName) return false;
-  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+  if (el.tagName === 'INPUT') return !NON_TEXT_INPUTS.has((el as HTMLInputElement).type);
+  return el.tagName === 'TEXTAREA' || el.isContentEditable;
 }
 
 /** Returns an uninstall function. */

@@ -5,11 +5,11 @@
   import { onMount } from 'svelte';
   import { Err, TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
-  import { decodeFile, isProbablyAudio } from '../audio/samples';
+  import { decodeFile, isProbablyAudio, loadErrorText } from '../audio/samples';
   import {
     addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
-  import { MAX_ROWS } from '../state/project.svelte';
+  import { MAX_ROWS, MAX_SAMPLES } from '../state/project.svelte';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
   let { p, engine, track, onerror, onnotice }: {
@@ -20,7 +20,6 @@
     onnotice: (msg: string | null) => void;
   } = $props();
 
-  const MAX_SAMPLES = 256; // engine MAX_SAMPLES
   const GHOST = 60;
   const FULL = 100;
 
@@ -68,12 +67,15 @@
   let dragOver = $state<string | null>(null); // row id, or 'add'
 
   $effect(() => {
-    engine.onSampleLoaded = (id) => {
+    // Every deferred load ends here exactly once: loaded, or failed (retry
+    // failed, evicted from the worklet's queue, engine stopped).
+    engine.onSampleLoaded = (id, code) => {
       const w = pending.get(id);
       if (!w) return;
       pending.delete(id);
-      setRowSample(p, engine, w.tid, w.rowId, id, w.name);
-      onnotice(null);
+      if (code === Err.OK) setRowSample(p, engine, w.tid, w.rowId, id, w.name);
+      else onerror(`Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`);
+      if (pending.size === 0) onnotice(null);
     };
     return () => (engine.onSampleLoaded = undefined);
   });
@@ -93,11 +95,11 @@
     } catch {
       return fail();
     }
-    if (p.nextSampleId >= MAX_SAMPLES) return onerror('Sample limit reached (256)');
+    if (p.nextSampleId >= MAX_SAMPLES) return onerror(`Sample limit reached (${MAX_SAMPLES} loads per session)`);
     const id = p.nextSampleId++;
     const code = await engine.loadSample(id, decoded.channels);
     if (code !== Err.OK && code !== Err.DEFERRED) {
-      return onerror(`Couldn't load "${file.name}" — engine rejected the sample (code ${code})`);
+      return onerror(`Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}`);
     }
     const rowId = target();
     if (!rowId) return onerror(`Row limit reached (${MAX_ROWS})`);

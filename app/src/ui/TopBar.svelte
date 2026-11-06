@@ -1,5 +1,7 @@
 <script lang="ts">
-  // Transport + live engine readouts. Telemetry refreshes at 4 Hz.
+  // Transport + live engine readouts. Telemetry refreshes at 4 Hz. If the
+  // engine dies after start, a red "Audio engine stopped — reload" alert
+  // replaces the readouts (AudioEngine.onError / failure).
   import { onMount } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
@@ -11,6 +13,7 @@
   let cpu = $state(0);
   let dropouts = $state(0);
   let latency = $state('');
+  let engineError = $state<string | null>(engine.failure);
 
   function refresh() {
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);
@@ -21,13 +24,20 @@
   onMount(() => {
     refresh();
     const id = setInterval(refresh, 250);
-    return () => clearInterval(id);
+    engine.onError = (msg) => (engineError = msg);
+    engineError = engine.failure; // in case it failed before mount
+    return () => {
+      clearInterval(id);
+      engine.onError = undefined;
+    };
   });
 
+  /** Commit on change/Enter, then release focus so Space and the piano work again. */
   function commitTempo(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     setTempo(p, engine, input.valueAsNumber);
     input.value = String(p.tempo); // show the clamped result
+    input.blur();
   }
 </script>
 
@@ -51,6 +61,11 @@
     Metronome
   </button>
   <span class="spacer"></span>
+  {#if engineError}
+    <span class="fatal" role="alert" data-testid="engine-error" title={engineError}>
+      Audio engine stopped — <button onclick={() => location.reload()}>reload</button>
+    </span>
+  {/if}
   <span class="pill">CPU {cpu}%</span>
   <span class="pill" class:bad={dropouts > 0}>Dropouts {dropouts}</span>
   <span class="pill">{latency}</span>
@@ -68,4 +83,6 @@
   input { width: 64px; }
   .pill { background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
   .pill.bad { color: #ff6b6b; font-weight: 600; }
+  .fatal { background: #c92a2a; color: #fff; font-weight: 700; padding: 4px 10px; border-radius: 4px; }
+  .fatal button { background: #fff; color: #c92a2a; border-color: #fff; font-weight: 700; padding: 1px 8px; }
 </style>

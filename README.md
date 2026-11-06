@@ -37,5 +37,6 @@ AudioWorklet, with a Svelte 5 UI. Design:
 Notes: only audio files are accepted (wav, aif, mp3, flac, ogg, m4a); a
 failed drop shows a dismissable red banner and changes nothing. If you drop a
 very large sample while playing, it loads when you stop (yellow notice). Up to
-256 samples per project. The 2 ms fade-out applied to each sample's tail
+256 sample loads per session (every drop uses one, even onto a row that already
+has a sample; reload to start over). The 2 ms fade-out applied to each sample's tail
 avoids clicks from samples that don't end at zero.

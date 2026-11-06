@@ -1,4 +1,4 @@
-<aside class="pane">
+<aside class="pane" data-testid="browser">
   <div class="ttl">Browser</div>
   <p>Drag audio files from Finder onto a step-grid row</p>
 </aside>

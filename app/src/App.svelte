@@ -1,9 +1,19 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
+  import TopBar from './ui/TopBar.svelte';
+  import Browser from './ui/Browser.svelte';
+  import SongArea from './ui/SongArea.svelte';
+  import BottomPanel from './ui/BottomPanel.svelte';
   import { Op } from './audio/protocol';
   import type { AudioEngine } from './audio/engine';
+  import { Project } from './state/project.svelte';
+  import { addDrumTrack } from './state/actions';
+  import { installShortcuts } from './input/shortcuts';
 
+  const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
+  let uninstall: (() => void) | null = null;
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op };
@@ -11,10 +21,33 @@
   function onstarted(e: AudioEngine) {
     engine = e;
     window.__daw.engine = e;
+    addDrumTrack(project, e); // default track so the UI has something to show
+    uninstall = installShortcuts(project, e);
   }
+
+  onDestroy(() => uninstall?.());
 </script>
 
-<h1>House DAW</h1>
+<div class="app">
+  {#if engine}
+    <TopBar p={project} {engine} />
+    <div class="main">
+      <Browser />
+      <div class="right">
+        <div class="song"><SongArea /></div>
+        <div class="bottom"><BottomPanel p={project} /></div>
+      </div>
+    </div>
+  {/if}
+</div>
 {#if !engine}
   <StartOverlay {onstarted} />
 {/if}
+
+<style>
+  :global(html, body) { margin: 0; height: 100%; background: #16171b; color: #c9cbd3; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
+  .app { height: 100vh; display: flex; flex-direction: column; background: #16171b; }
+  .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; gap: 3px; padding: 3px; }
+  .right { display: grid; grid-template-rows: 40fr 60fr; gap: 3px; min-height: 0; min-width: 0; }
+  .song, .bottom { display: grid; min-height: 0; min-width: 0; }
+</style>

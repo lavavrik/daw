@@ -85,3 +85,14 @@ test('oversized sample defers while playing, loads after stop (memory grows)', a
   const blocks = await slot(page, 0)();
   await expect.poll(slot(page, 0)).toBeGreaterThan(blocks + 10);
 });
+
+test('space toggles transport and keyboard plays', async ({ page }) => {
+  await startAudio(page);
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1); // playing
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(0);
+  await page.keyboard.down('KeyH'); // A4
+  await expect.poll(slot(page, 5), { timeout: 5_000 }).toBeGreaterThan(0.05); // peakL
+  await page.keyboard.up('KeyH');
+});

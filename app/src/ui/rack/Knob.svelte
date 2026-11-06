@@ -12,6 +12,9 @@
   // - ArrowUp/Right +1% of travel, ArrowDown/Left -1% (integers: 1 unit),
   //   Shift = 0.1%; Home/End = min/max.
   //
+  // Cancel (pointercancel, lost capture without pointerup, Escape mid-drag)
+  // puts the pre-drag value back.
+  //
   // Click-safety: a drag sends `onchange` at most once per animation frame
   // (the latest value wins) plus the final value on pointerup, so dragging
   // never floods the engine's command ring. The engine smooths the rest.
@@ -39,6 +42,7 @@
   let pos = 0; // unrounded position, so integer params don't stick
   let lastY = 0;
   let lastSent = NaN;
+  let startValue = 0;
   let pending: number | null = null;
   let raf = 0;
 
@@ -70,6 +74,7 @@
     dragging = true;
     local = value;
     lastSent = value;
+    startValue = value;
     pos = toPos(def, value);
     lastY = e.clientY;
   }
@@ -89,9 +94,25 @@
     send(local); // final value, even if a frame was still pending
     dragging = false;
   }
+  /** Abort the drag and restore the value it started from. */
+  function cancel() {
+    if (!dragging) return;
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    pending = null;
+    dragging = false;
+    send(startValue); // no-op if nothing was sent yet
+  }
   onDestroy(flush);
 
   function key(e: KeyboardEvent) {
+    if (dragging) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel();
+      }
+      return;
+    }
     let v: number | null = null;
     if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v = keyStep(def, value, 1, e.shiftKey);
     else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v = keyStep(def, value, -1, e.shiftKey);
@@ -163,7 +184,8 @@
     onpointerdown={down}
     onpointermove={move}
     onpointerup={up}
-    onpointercancel={up}
+    onpointercancel={cancel}
+    onlostpointercapture={cancel}
     ondblclick={() => { if (value !== def.default) onchange(def.default); }}
     onkeydown={key}
   >

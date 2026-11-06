@@ -439,6 +439,19 @@ test('rack shows the patch and knobs show values', async ({ page }) => {
   await expect(page.getByTestId('patch-select')).toHaveValue('Deep Bass');
   // 11 cables in Deep Bass, all drawn.
   await expect(page.locator('[data-testid="cables"] path.cable')).toHaveCount(11);
+  // Every cable's lowest point is inside the rail's scrollable content
+  // (reachable by scrolling, not clipped), and jack labels sit above holes.
+  const fit = await page.evaluate(() => {
+    const rail = document.querySelector('[data-testid="rail"]')!;
+    const top = rail.getBoundingClientRect().top - rail.scrollTop;
+    const lowest = Math.max(...[...document.querySelectorAll('[data-testid="cables"] path.cable')].map((p) => p.getBoundingClientRect().bottom));
+    return { lowest: lowest - top, scrollHeight: rail.scrollHeight };
+  });
+  expect(fit.lowest).toBeLessThanOrEqual(fit.scrollHeight);
+  const jack = page.getByTestId('jack-0-out-gate');
+  const nameBox = (await jack.getByText('gate').boundingBox())!;
+  const holeBox = (await jack.locator('.hole').boundingBox())!;
+  expect(nameBox.y + nameBox.height).toBeLessThanOrEqual(holeBox.y + 1);
   await page.screenshot({ path: 'test-results/rack.png' });
 });
 
@@ -455,6 +468,48 @@ test('turning cutoff updates readout and engine accepts it', async ({ page }) =>
   const blocks = await slot(page, 0)();
   await expect.poll(slot(page, 0)).toBeGreaterThan(blocks + 2);
   expect(await slot(page, 7)()).toBe(err);
+  // With edits, loading a patch asks first: declining keeps everything.
+  const after = await knob.getAttribute('aria-valuetext');
+  let asked = '';
+  page.once('dialog', (d) => { asked = d.message(); void d.dismiss(); });
+  await page.getByTestId('patch-select').selectOption('Pad');
+  await expect.poll(() => asked).toBe('Discard your edits to "Deep Bass"?');
+  await expect(page.getByTestId('patch-select')).toHaveValue('Deep Bass');
+  await expect(knob).toHaveAttribute('aria-valuetext', after!);
+  await expect(page.getByTestId('patch-edited')).toBeVisible();
+  // Accepting loads it and clears the marker.
+  page.once('dialog', (d) => void d.accept());
+  await page.getByTestId('patch-select').selectOption('Pad');
+  await expect(page.getByTestId('patch-select')).toHaveValue('Pad');
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(7);
+  await expect(page.getByTestId('patch-edited')).toBeHidden();
+});
+
+test('Escape cancels a cable drag and a knob drag (nothing changes)', async ({ page }) => {
+  await addSynth(page);
+  const cables = page.locator('[data-testid="cables"] path.cable');
+  const a = await centre(page, 'jack-7-in-l');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x - 60, a.y - 80, { steps: 5 });
+  await expect(cables).toHaveCount(10); // carried
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(0);
+  await expect(cables).toHaveCount(11); // snapped back
+  await page.mouse.up();
+  await expect(cables).toHaveCount(11);
+  expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05); // still plugged in the engine
+
+  const k = await centre(page, 'knob-4-cutoff');
+  await page.mouse.move(k.x, k.y);
+  await page.mouse.down();
+  await page.mouse.move(k.x, k.y - 60, { steps: 5 });
+  await expect(page.getByTestId('knob-4-cutoff')).not.toContainText('300 Hz');
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(page.getByTestId('knob-4-cutoff')).toContainText('300 Hz');
+  await expect(page.getByTestId('knob-4-cutoff')).toHaveAttribute('aria-valuenow', '300');
 });
 
 test('pulling the VCA→Out cable silences, re-plugging restores', async ({ page }) => {

@@ -52,7 +52,7 @@ shows its rack (code: `app/src/ui/rack/`).
 
 - **Patch** dropdown loads a starter patch (Deep Bass, Chord Stab, Pad, Lead,
   Pluck), replacing the rack. After any edit "(edited)" appears; **revert**
-  reloads the patch.
+  reloads the patch. Loading over edits asks before discarding them.
 - **Knobs**: drag up/down (150 px = full range; Shift = fine), double-click =
   default, or focus and use the arrow keys (1% steps). The value is always
   shown under the label. Choice params (wave, filter mode…) are segmented
@@ -61,6 +61,6 @@ shows its rack (code: `app/src/ui/rack/`).
   CV purple. Drag from an output to an input to patch (an input takes one
   cable; a new one replaces it). Grab a cable by its *input* end to move it
   to another input, or drop it anywhere else to unplug it. You can also drag
-  from an empty input to an output.
+  from an empty input to an output. Escape cancels a cable or knob drag.
 - **+ Add module** (grouped by category; up to 32 modules) and the × on a
   module header to remove it.

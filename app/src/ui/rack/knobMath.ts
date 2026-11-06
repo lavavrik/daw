@@ -64,6 +64,9 @@ export function dragPos(pos: number, dy: number, fine: boolean): number {
 /** One keyboard step up (dir 1) or down (dir -1); `fine` = 0.1% of travel. */
 export function keyStep(d: ParamDef, v: number, dir: 1 | -1, fine = false): number {
   if (d.integer) return clampParam(d, Math.round(v) + dir);
+  // From "off", a step up must leave the zero zone (1% would land inside it
+  // and stay 0): go straight to the floor, the smallest non-zero value.
+  if (zeroBased(d) && v <= 0 && dir > 0) return fromPos(d, ZERO_ZONE);
   return fromPos(d, toPos(d, v) + dir * KEY_STEP * (fine ? FINE : 1));
 }
 

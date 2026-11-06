@@ -86,6 +86,12 @@ describe('keyStep', () => {
     expect(keyStep(octave, 3, 1)).toBe(3);
     expect(keyStep(cutoff, 300, 1)).toBeCloseTo(fromPos(cutoff, toPos(cutoff, 300) + 0.01));
   });
+  it('a zero-based exp param (glide) can be turned on from "off" with the keys', () => {
+    expect(keyStep(glide, 0, 1)).toBeGreaterThan(0);
+    expect(keyStep(glide, 0, 1, true)).toBeGreaterThan(0);
+    expect(keyStep(glide, keyStep(glide, 0, 1), -1)).toBe(0); // and back off
+    expect(keyStep(glide, 0, -1)).toBe(0);
+  });
   it('ten steps up from 300 Hz is clearly higher', () => {
     let v = 300;
     for (let i = 0; i < 10; i++) v = keyStep(cutoff, v, 1);

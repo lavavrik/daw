@@ -33,7 +33,7 @@
   import { STARTER_PATCHES } from '../../state/patches';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { addModule, connect, disconnect, loadPatch, removeModule, setParam } from '../../state/rack-actions';
-  import { cablePath, categoryColor, SIGNAL_COLORS } from './cables';
+  import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
 
@@ -88,7 +88,11 @@
       };
     }
     pos = next;
-    size = { w: content.scrollWidth, h: content.scrollHeight };
+    // client* = the panels' box only. Not scroll*: that would include the
+    // cable SVG itself (sized from this) and grow on every measure.
+    size = { w: content.clientWidth, h: content.clientHeight };
+    // Mid-drag scroll/resize: the carried end stays under the pointer.
+    if (drag) drag.at = { x: drag.client.x - r0.left, y: drag.client.y - r0.top };
   }
   /** Coalesced to one measure per frame (scroll and resize fire often). */
   function remeasure() {
@@ -127,7 +131,10 @@
     /** Input whose existing cable is being carried (unplugged visually, not yet in the engine). */
     carry: End | null;
     signal: SignalKind;
+    /** Carried end, relative to `.content`. */
     at: Pt;
+    /** Last pointer position (viewport), to re-derive `at` after a scroll. */
+    client: Pt;
   };
   let drag = $state<Drag | null>(null);
 
@@ -143,6 +150,12 @@
       .filter((c) => c.a && c.b),
   );
   const dragA = $derived(drag ? pos[key(drag.fixed.m, drag.fixed.dir, drag.fixed.port)] : null);
+  /**
+   * The SVG (absolutely positioned inside the scrolled `.content`, so it
+   * extends the rail's scroll area) is tall enough for the lowest point of
+   * every cable: none is clipped or out of reach.
+   */
+  const svgH = $derived(Math.ceil(Math.max(size.h, ...drawn.map((c) => cableBottom(c.a, c.b) + 8))));
 
   function local(e: PointerEvent): Pt {
     const r = content!.getBoundingClientRect();
@@ -150,29 +163,51 @@
   }
 
   function jackDown(e: PointerEvent, m: number, dir: 'in' | 'out', port: number) {
-    if (e.button !== 0 || !content) return;
+    if (e.button !== 0 || !content || drag) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
+    const client = { x: e.clientX, y: e.clientY };
     const existing = dir === 'in' ? track.cables.find((c) => c.to.m === m && c.to.port === port) : undefined;
     drag = existing
-      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at: local(e) }
-      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at: local(e) };
+      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at: local(e), client }
+      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at: local(e), client };
 
     const move = (ev: PointerEvent) => {
-      if (drag) drag.at = local(ev);
+      if (!drag) return;
+      drag.client = { x: ev.clientX, y: ev.clientY };
+      drag.at = local(ev);
     };
-    const end = (ev: PointerEvent) => {
+    const cleanup = () => {
       el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', end);
-      el.removeEventListener('pointercancel', end);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', cancel);
+      el.removeEventListener('lostpointercapture', cancel);
+      window.removeEventListener('keydown', esc, true);
       const d = drag;
       drag = null;
-      if (d && ev.type === 'pointerup') drop(d, document.elementFromPoint(ev.clientX, ev.clientY));
+      return d;
+    };
+    const up = (ev: PointerEvent) => {
+      const d = cleanup();
+      if (d) drop(d, document.elementFromPoint(ev.clientX, ev.clientY));
+    };
+    // Cancel = leave everything as it was (a carried cable snaps back).
+    // lostpointercapture without a pointerup (e.g. the window lost the
+    // pointer) must not leave a phantom cable following nothing.
+    const cancel = () => void cleanup();
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation(); // don't also close a menu etc.
+      cleanup();
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     };
     el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', end);
-    el.addEventListener('pointercancel', end); // cancel = leave everything as it was
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', cancel);
+    el.addEventListener('lostpointercapture', cancel);
+    window.addEventListener('keydown', esc, true);
   }
 
   function drop(d: Drag, under: Element | null) {
@@ -206,20 +241,25 @@
     removeModule(p, engine, track.id, idx);
     edited.add(track.id);
   }
+  /**
+   * Replaces the rack. With unsaved edits it asks first: a stray arrow key on
+   * a focused select (Windows/Linux change the value without opening it) or
+   * a misclick must not silently throw work away. Undo arrives in plan 6.
+   */
+  function load(name: string): boolean {
+    const patch = STARTER_PATCHES.find((x) => x.name === name);
+    if (!patch) return false;
+    if (isEdited && !confirm(`Discard your edits to "${track.patchName}"?`)) return false;
+    loadPatch(p, engine, track.id, patch);
+    edited.delete(track.id);
+    return true;
+  }
   function pickPatch(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
-    const patch = STARTER_PATCHES.find((x) => x.name === sel.value);
     sel.blur(); // give the keys back to the piano at once
-    if (!patch) return;
-    loadPatch(p, engine, track.id, patch);
-    edited.delete(track.id);
+    if (!load(sel.value)) sel.value = track.patchName; // declined: show the current patch again
   }
-  function revert() {
-    const patch = STARTER_PATCHES.find((x) => x.name === track.patchName);
-    if (!patch) return;
-    loadPatch(p, engine, track.id, patch);
-    edited.delete(track.id);
-  }
+  const revert = () => load(track.patchName);
   /** A focused <select> type-aheads on letters: the piano keys must not change the patch. */
   function selectKey(e: KeyboardEvent) {
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
@@ -316,7 +356,7 @@
     </span>
   </div>
 
-  <div class="rail" bind:this={rail}>
+  <div class="rail" data-testid="rail" bind:this={rail}>
     <div class="content" bind:this={content}>
       {#each modules as m (m.idx)}
         <ModulePanel
@@ -332,7 +372,7 @@
       {#if modules.length === 0}
         <p class="empty">Empty rack — pick a patch or add modules. A synth needs at least MIDI In → Oscillator → Out.</p>
       {/if}
-      <svg class="cables" data-testid="cables" width={size.w} height={size.h} aria-hidden="true">
+      <svg class="cables" data-testid="cables" width={size.w} height={svgH} aria-hidden="true">
         {#each drawn as c (c.id)}
           <path class="cable" d={cablePath(c.a, c.b)} stroke={c.color} />
           <circle class="plug" cx={c.a.x} cy={c.a.y} r="3.5" fill={c.color} />
@@ -369,7 +409,7 @@
   .legend i { width: 12px; height: 3px; border-radius: 2px; }
 
   .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; background: #101114; border-radius: 4px; }
-  .content { position: relative; display: flex; align-items: stretch; gap: 4px; width: max-content; min-width: 100%; box-sizing: border-box; padding: 6px 6px 40px; }
+  .content { position: relative; display: flex; align-items: stretch; gap: 4px; width: max-content; min-width: 100%; box-sizing: border-box; padding: 6px; }
   .empty { color: #7d808c; margin: 8px; }
   .cables { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }

@@ -10,8 +10,9 @@
   //   change, scroll and resize instead of every jack reporting in);
   // - forwards pointerdown to the Rack, which captures the pointer on this
   //   element for the rest of the drag.
-  // The outer element (hole + label) is the hit area, so a drop on the label
-  // counts too.
+  // The outer element (label + hole) is the hit area, so a drop on the label
+  // counts too. The label sits ABOVE the hole: cables always sag downward
+  // from the hole, so they never strike through jack names.
   import type { SignalKind } from '../../audio/catalog';
   import { SIGNAL_COLORS } from './cables';
 
@@ -44,8 +45,8 @@
   style:--c={SIGNAL_COLORS[signal]}
   {onpointerdown}
 >
-  <span class="hole" class:connected></span>
   <span class="name">{name}</span>
+  <span class="hole" class:connected></span>
 </div>
 
 <style>

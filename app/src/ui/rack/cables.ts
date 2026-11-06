@@ -30,8 +30,16 @@ export interface Pt {
  * sags downward (longer cables sag more), whichever end is higher.
  */
 export function cablePath(a: Pt, b: Pt): string {
-  const sag = 30 + 0.15 * Math.abs(b.x - a.x);
-  const cy = Math.max(a.y, b.y) + sag;
+  const cy = cableBottom(a, b);
   const r = (n: number) => Math.round(n * 10) / 10;
   return `M ${r(a.x)} ${r(a.y)} C ${r(a.x)} ${r(cy)} ${r(b.x)} ${r(cy)} ${r(b.x)} ${r(b.y)}`;
+}
+
+/**
+ * y of the control points, which bounds the lowest point of the curve (a
+ * bezier stays inside its control hull). The Rack sizes the cable SVG, and so
+ * the scroll area, to cover this, so no cable is clipped or unreachable.
+ */
+export function cableBottom(a: Pt, b: Pt): number {
+  return Math.max(a.y, b.y) + 30 + 0.15 * Math.abs(b.x - a.x);
 }

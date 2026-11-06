@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cablePath, SIGNAL_COLORS } from './cables';
+import { cableBottom, cablePath, SIGNAL_COLORS } from './cables';
 
 /** "M x y C x1 y1 x2 y2 x y" -> the 8 numbers. */
 function nums(d: string): number[] {
@@ -38,5 +38,19 @@ describe('cablePath', () => {
 describe('SIGNAL_COLORS', () => {
   it('has the agreed colour per signal kind', () => {
     expect(SIGNAL_COLORS).toEqual({ audio: '#5ec4ff', pitch: '#f0a23a', gate: '#7ddc7d', cv: '#b28cff' });
+  });
+});
+
+describe('cableBottom', () => {
+  it('bounds every point of the curve from below', () => {
+    const a = { x: 10, y: 200 }, b = { x: 600, y: 120 };
+    const n = (cablePath(a, b).match(/-?\d+(\.\d+)?/g) ?? []).map(Number);
+    let low = -Infinity;
+    for (let t = 0; t <= 1; t += 0.01) {
+      const u = 1 - t;
+      low = Math.max(low, u * u * u * n[1] + 3 * u * u * t * n[3] + 3 * u * t * t * n[5] + t * t * t * n[7]);
+    }
+    expect(cableBottom(a, b)).toBeGreaterThanOrEqual(low);
+    expect(cableBottom(a, b)).toBeCloseTo(200 + 30 + 0.15 * 590);
   });
 });

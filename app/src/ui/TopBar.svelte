@@ -13,7 +13,7 @@
   let cpu = $state(0);
   let dropouts = $state(0);
   let latency = $state('');
-  let engineError = $state<string | null>(engine.failure);
+  let engineError = $state<string | null>(null); // set from engine.failure in onMount
 
   function refresh() {
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);

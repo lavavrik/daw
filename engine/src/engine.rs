@@ -1,15 +1,33 @@
 //! Engine core: owns all state, decodes commands, renders blocks.
 //! `process` is the real-time callback: no allocation, no blocking, no panics.
+//!
+//! # Track slots
+//! Each of the `MAX_TRACKS` slots is empty, a drum track or a synth track
+//! ([`SlotKind`]). Adding one kind over the other first removes the old one
+//! with its own 2 ms fade (drum voices fade in `Drums`, the rack fades in
+//! `Synths`), so a kind swap never hard-cuts audio. Drum commands sent to a
+//! synth slot, and rack commands sent to a non-synth slot, return
+//! `ERR_BAD_INDEX`. Drum row/step edits on an *empty* slot still succeed and
+//! just store state (plan-1 behaviour).
+//!
+//! # Live input
+//! `NOTE_ON`/`NOTE_OFF`/`PITCH_BEND`/`MOD_WHEEL`/`SUSTAIN` go to the input
+//! track's rack (`SET_INPUT_TRACK`). With no input track, or one that is not a
+//! synth track, they are ignored (and still return `OK`). Switching the input
+//! track sends `AllOff` to the previous one, so no note is left hanging. The
+//! input track is a slot number: removing that track does not unset it, and a
+//! synth track added there later receives notes again.
 
 use crate::arena::SampleArena;
 use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
-use crate::test_tone::TestTone;
+use crate::rack::modules::{Ctx, NoteEvent};
+use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Transport};
 use crate::{
-    MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
+    MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
     TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
 };
 
@@ -20,8 +38,16 @@ const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 /// Initial arena size in floats (128 MB).
 const ARENA_FLOATS: usize = 32 * 1024 * 1024;
 
+/// What a track slot currently holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotKind {
+    Empty,
+    Drum,
+    Synth,
+}
+
+/// The whole audio engine (see the module docs).
 pub struct Engine {
-    tone: TestTone,
     master_gain: f32,
     sample_rate: f32,
     transport: Transport,
@@ -30,13 +56,17 @@ pub struct Engine {
     arena: SampleArena,
     samples: SamplePool,
     drums: Drums,
+    synths: Synths,
+    kinds: [SlotKind; MAX_TRACKS],
+    /// Slot that receives live notes, if any.
+    input: Option<usize>,
 }
 
 impl Engine {
-    /// Does all big allocations: reserves the 32 Mi-float (128 MB) sample arena.
+    /// Does all big allocations: reserves the 32 Mi-float (128 MB) sample
+    /// arena and preallocates every synth track's rack.
     pub fn new(sample_rate: f32) -> Engine {
         Engine {
-            tone: TestTone::new(sample_rate),
             master_gain: 0.8,
             sample_rate,
             transport: Transport::new(),
@@ -45,17 +75,19 @@ impl Engine {
             arena: SampleArena::with_capacity(ARENA_FLOATS),
             samples: SamplePool::new(),
             drums: Drums::new(sample_rate),
+            synths: Synths::new(sample_rate),
+            kinds: [SlotKind::Empty; MAX_TRACKS],
+            input: None,
         }
     }
 
     /// Decode and apply a command. Returns 0 (OK) or a negative error code.
     /// `TELEMETRY_LAST_ERROR` holds the most recent *failed* code; successes leave it.
+    /// Rack edits return the rack's own code (e.g. `ERR_BAD_VALUE` for an
+    /// occupied module slot or an out-of-range param value).
     pub fn command(&mut self, op: u32, a: f64, b: f64, c: f64, d: f64) -> i32 {
         let code = match protocol::decode(op, a, b, c, d) {
-            Ok(cmd) => {
-                self.handle(cmd);
-                protocol::OK
-            }
+            Ok(cmd) => self.handle(cmd),
             Err(e) => e,
         };
         if code != protocol::OK {
@@ -64,12 +96,81 @@ impl Engine {
         code
     }
 
-    fn handle(&mut self, cmd: Command) {
+    /// Kind of `slot` (`Empty` for an out-of-range slot; decode prevents that).
+    fn kind(&self, slot: usize) -> SlotKind {
+        self.kinds.get(slot).copied().unwrap_or(SlotKind::Empty)
+    }
+
+    /// Drum commands are refused on synth slots.
+    fn drum_slot(&self, slot: usize) -> Result<(), i32> {
+        if self.kind(slot) == SlotKind::Synth {
+            Err(protocol::ERR_BAD_INDEX)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The rack of synth track `slot`, or `ERR_BAD_INDEX`.
+    fn rack(&mut self, slot: usize) -> Result<&mut crate::rack::Rack, i32> {
+        if self.kind(slot) != SlotKind::Synth {
+            return Err(protocol::ERR_BAD_INDEX);
+        }
+        self.synths.rack_mut(slot).ok_or(protocol::ERR_BAD_INDEX)
+    }
+
+    /// Send a live event to the input track (ignored without one).
+    fn live(&mut self, ev: NoteEvent) {
+        if let Some(slot) = self.input {
+            if self.kind(slot) == SlotKind::Synth {
+                self.synths.note(slot, ev);
+            }
+        }
+    }
+
+    /// Remove whatever `slot` holds, each kind with its own 2 ms fade.
+    fn clear_slot(&mut self, slot: usize) {
+        match self.kind(slot) {
+            SlotKind::Drum => self.drums.remove_track(slot),
+            SlotKind::Synth => self.synths.remove_track(slot),
+            SlotKind::Empty => {}
+        }
+        self.set_kind(slot, SlotKind::Empty);
+    }
+
+    /// Record `slot`'s kind (`get_mut`-guarded: never panics).
+    fn set_kind(&mut self, slot: usize, kind: SlotKind) {
+        if let Some(k) = self.kinds.get_mut(slot) {
+            *k = kind;
+        }
+    }
+
+    /// Apply a decoded command; returns `OK` or an `ERR_*` code.
+    fn handle(&mut self, cmd: Command) -> i32 {
+        match self.apply(cmd) {
+            Ok(()) => protocol::OK,
+            Err(code) => code,
+        }
+    }
+
+    fn apply(&mut self, cmd: Command) -> Result<(), i32> {
+        // Rack methods return OK or an ERR_* code; turn that into a Result.
+        let rack_code = |code: i32| if code == protocol::OK { Ok(()) } else { Err(code) };
         match cmd {
             // MIDI convention: NoteOn with velocity 0 is a NoteOff.
-            Command::NoteOn { note, velocity: 0 } => self.tone.note_off(note),
-            Command::NoteOn { note, velocity } => self.tone.note_on(note, velocity),
-            Command::NoteOff { note } => self.tone.note_off(note),
+            Command::NoteOn { note, velocity: 0 } => self.live(NoteEvent::Off { note }),
+            Command::NoteOn { note, velocity } => self.live(NoteEvent::On { note, vel: velocity }),
+            Command::NoteOff { note } => self.live(NoteEvent::Off { note }),
+            Command::PitchBend { value } => self.live(NoteEvent::Bend(value)),
+            Command::ModWheel { value } => self.live(NoteEvent::Mod(value)),
+            Command::Sustain { on } => self.live(NoteEvent::Sustain(on)),
+            Command::SetInputTrack { slot } => {
+                if let Some(old) = self.input {
+                    if slot != Some(old) {
+                        self.live(NoteEvent::AllOff);
+                    }
+                }
+                self.input = slot;
+            }
             Command::SetMasterGain { gain } => self.master_gain = gain,
             // Already playing: no-op (does not restart).
             Command::Play => {
@@ -85,29 +186,57 @@ impl Engine {
             // Applies from the next block; the playhead position is unchanged.
             Command::SetTempo { bpm } => self.transport.bpm = bpm,
             Command::SetMetronome { on } => self.metronome.on = on,
-            // Resets the slot to defaults and silences its voices.
-            Command::AddDrumTrack { slot } => self.drums.add_track(slot),
-            Command::RemoveTrack { slot } => self.drums.remove_track(slot),
+            // Resets the slot to defaults and silences its voices (a synth
+            // track there fades out first).
+            Command::AddDrumTrack { slot } => {
+                if self.kind(slot) == SlotKind::Synth {
+                    self.clear_slot(slot);
+                }
+                self.drums.add_track(slot);
+                self.set_kind(slot, SlotKind::Drum);
+            }
+            // Empty patch (a drum track there fades out first; a synth patch
+            // there is cleared with a fade).
+            Command::AddSynthTrack { slot } => {
+                if self.kind(slot) == SlotKind::Drum {
+                    self.clear_slot(slot);
+                }
+                self.synths.add_track(slot);
+                self.set_kind(slot, SlotKind::Synth);
+            }
+            // Works for both kinds (and is a no-op on an empty slot, except
+            // that drum state is marked inactive as before).
+            Command::RemoveTrack { slot } => {
+                self.clear_slot(slot);
+                self.drums.remove_track(slot);
+            }
             // Row/step edits on an inactive slot succeed and just store state.
             // Steps are stored for any step < MAX_STEPS (decode checks that),
             // even beyond step_count.
             Command::SetRowSample { slot, row, sample } => {
+                self.drum_slot(slot)?;
                 if let Some(r) = self.drums.row_mut(slot, row) {
                     r.sample = sample;
                 }
             }
             Command::SetRowGain { slot, row, gain } => {
+                self.drum_slot(slot)?;
                 if let Some(r) = self.drums.row_mut(slot, row) {
                     r.gain = gain;
                 }
             }
             Command::SetRowPan { slot, row, pan } => {
+                self.drum_slot(slot)?;
                 if let Some(r) = self.drums.row_mut(slot, row) {
                     r.pan = pan;
                 }
             }
-            Command::SetRowMute { slot, row, mute } => self.drums.set_row_mute(slot, row, mute),
+            Command::SetRowMute { slot, row, mute } => {
+                self.drum_slot(slot)?;
+                self.drums.set_row_mute(slot, row, mute)
+            }
             Command::SetStep { slot, row, step, velocity } => {
+                self.drum_slot(slot)?;
                 if let Some(r) = self.drums.row_mut(slot, row) {
                     if let Some(s) = r.steps.get_mut(step) {
                         *s = velocity;
@@ -115,15 +244,26 @@ impl Engine {
                 }
             }
             Command::SetStepCount { slot, count } => {
+                self.drum_slot(slot)?;
                 if let Some(t) = self.drums.tracks.get_mut(slot) {
                     t.step_count = count;
                 }
             }
             // Latched at the next step-pair boundary while playing (R12).
             Command::SetSwing { slot, swing } => {
+                self.drum_slot(slot)?;
                 self.drums.set_swing(slot, swing, self.transport.playing)
             }
+            Command::RackAddModule { slot, module, kind } => rack_code(self.rack(slot)?.add_module(module, kind))?,
+            Command::RackRemoveModule { slot, module } => rack_code(self.rack(slot)?.remove_module(module))?,
+            Command::RackConnect { slot, from, to } => rack_code(self.rack(slot)?.connect(from, to))?,
+            Command::RackDisconnect { slot, to } => rack_code(self.rack(slot)?.disconnect(to))?,
+            Command::RackSetParam { slot, module, param, value } => {
+                rack_code(self.rack(slot)?.set_param(module, param, value))?
+            }
+            Command::RackClear { slot } => self.rack(slot)?.clear(),
         }
+        Ok(())
     }
 
     /// Render one block, overwriting both buffers. Frames beyond
@@ -132,9 +272,9 @@ impl Engine {
         left.fill(0.0);
         right.fill(0.0);
         let n = left.len().min(right.len()).min(MAX_BLOCK);
-        self.tone.render_add(&mut left[..n], &mut right[..n]);
         self.render_metronome(&mut left[..n], &mut right[..n]);
         self.render_drums(&mut left[..n], &mut right[..n]);
+        self.render_synths(&mut left[..n], &mut right[..n]);
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             let l = (left[i] * self.master_gain).clamp(-1.0, 1.0);
@@ -195,6 +335,20 @@ impl Engine {
             None
         };
         self.drums.render_add(window, &self.samples, &self.arena, left, right);
+    }
+
+    /// Synth tracks, with a `Ctx` from the transport at the block start. Every
+    /// active track renders, playing or not (see `synth.rs`).
+    fn render_synths(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let spt = self.transport.samples_per_tick(self.sample_rate);
+        let ctx = Ctx {
+            sr: self.sample_rate,
+            bpm: self.transport.bpm,
+            playing: self.transport.playing,
+            ticks: self.transport.ticks,
+            ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
+        };
+        self.synths.render_add(&ctx, left, right);
     }
 
     fn fail(&mut self, code: i32) -> i32 {
@@ -300,56 +454,17 @@ mod tests {
     }
 
     #[test]
-    fn note_on_produces_440hz() {
-        let mut e = Engine::new(SR);
-        assert_eq!(e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0), 0);
-        let s = render(&mut e, 24000); // 0.5 s
-        let skip = (0.005 * SR) as usize + 1;
-        let ups: Vec<usize> =
-            (skip..s.len()).filter(|&i| s[i - 1] < 0.0 && s[i] >= 0.0).collect();
-        assert!(ups.len() > 100);
-        let periods = (ups.len() - 1) as f32;
-        let freq = periods * SR / (ups[ups.len() - 1] - ups[0]) as f32;
-        assert!((freq - 440.0).abs() < 2.0, "freq {freq}");
-    }
-
-    #[test]
-    fn note_on_starts_without_click() {
-        let mut e = Engine::new(SR);
-        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
-        let s = render(&mut e, 1280);
-        assert!(s[0].abs() < 0.01);
-        assert!(s.windows(2).all(|w| (w[1] - w[0]).abs() <= 0.05));
-    }
-
-    #[test]
-    fn note_off_releases_to_silence_within_60ms() {
-        let mut e = Engine::new(SR);
-        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
-        render(&mut e, 4800);
-        e.command(OP_NOTE_OFF, 69.0, 0.0, 0.0, 0.0);
-        let s = render(&mut e, 128 * 23); // 61 ms
-        assert!(s[s.len() - 128..].iter().all(|&x| x == 0.0));
-    }
-
-    #[test]
-    fn velocity_zero_note_on_is_note_off() {
-        let mut e = Engine::new(SR);
-        e.command(OP_NOTE_ON, 69.0, 100.0, 0.0, 0.0);
-        e.command(OP_NOTE_ON, 69.0, 0.0, 0.0, 0.0);
-        let s = render(&mut e, 128 * 23);
-        assert!(s[s.len() - 128..].iter().all(|&x| x == 0.0));
-    }
-
-    #[test]
     fn peak_telemetry_tracks_output() {
         let mut e = Engine::new(SR);
+        synth_patch(&mut e, 0.0);
+        e.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0);
         e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
         render(&mut e, 4800);
         let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
         e.process(&mut l, &mut r);
         let pk = l.iter().fold(0.0f32, |m, x| m.max(x.abs())) as f64;
-        assert!(pk > 0.1 && pk <= 0.16 + 1e-6);
+        // Sine at env ~0.73 (decaying to 0.7) * Out 0.8 * master 0.8.
+        assert!(pk > 0.3 && pk <= 0.64 + 1e-6, "{pk}");
         assert_eq!(e.telemetry()[5], pk);
         assert_eq!(e.telemetry()[6], pk);
         assert_eq!(e.telemetry()[0], 38.0);
@@ -359,6 +474,8 @@ mod tests {
     fn bad_command_returns_error_and_keeps_rendering() {
         let mut e = Engine::new(SR);
         assert_eq!(e.command(999, 0.0, 0.0, 0.0, 0.0), -1);
+        synth_patch(&mut e, 0.0);
+        e.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0);
         e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
         let s = render(&mut e, 4800);
         assert!(s.iter().any(|&x| x != 0.0));
@@ -837,6 +954,315 @@ mod tests {
         assert_eq!(e.sample_alloc(0, max / 2 + 1, 2), Err(protocol::ERR_BAD_VALUE));
         assert_eq!(e.sample_alloc(0, u32::MAX, 2), Err(protocol::ERR_BAD_VALUE));
         assert_eq!(e.telemetry()[7], protocol::ERR_BAD_VALUE as f64);
+    }
+
+    // ---- synth tracks -----------------------------------------------------
+
+    use crate::protocol::{
+        ERR_BAD_INDEX, ERR_BAD_VALUE, OK, OP_ADD_SYNTH_TRACK, OP_MOD_WHEEL, OP_PITCH_BEND,
+        OP_RACK_ADD_MODULE, OP_RACK_CLEAR, OP_RACK_CONNECT, OP_RACK_DISCONNECT,
+        OP_RACK_REMOVE_MODULE, OP_RACK_SET_PARAM, OP_SET_INPUT_TRACK, OP_SUSTAIN,
+    };
+
+    // Module kind wire ids (catalog.rs).
+    const K_MIDI_IN: f64 = 0.0;
+    const K_OSC: f64 = 1.0;
+    const K_ADSR: f64 = 4.0;
+    const K_VCA: f64 = 5.0;
+    const K_OUT: f64 = 8.0;
+    const K_LFO: f64 = 6.0;
+    // Module slots used by `synth_patch`.
+    const M_MIDI: usize = 0;
+    const M_OSC: usize = 1;
+    const M_ADSR: usize = 2;
+    const M_VCA: usize = 3;
+    const M_OUT: usize = 4;
+    /// ADSR release used by `synth_patch` (s).
+    const RELEASE: f64 = 0.1;
+
+    /// Packed port argument: `module * 16 + port`.
+    fn pk(module: usize, port: usize) -> f64 {
+        (module * 16 + port) as f64
+    }
+
+    /// Synth track at `slot`: MIDI In -> Osc (sine) -> VCA <- ADSR -> Out.l,
+    /// ADSR release `RELEASE`.
+    fn synth_patch(e: &mut Engine, slot: f64) {
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, slot, 0.0, 0.0, 0.0), OK);
+        for (m, kind) in [(M_MIDI, K_MIDI_IN), (M_OSC, K_OSC), (M_ADSR, K_ADSR), (M_VCA, K_VCA), (M_OUT, K_OUT)] {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, m as f64, kind, 0.0), OK);
+        }
+        for (from, to) in [
+            ((M_MIDI, 0), (M_OSC, 0)),  // pitch -> osc pitch
+            ((M_MIDI, 1), (M_ADSR, 0)), // gate -> adsr gate
+            ((M_OSC, 0), (M_VCA, 0)),   // osc -> vca in
+            ((M_ADSR, 0), (M_VCA, 1)),  // env -> vca cv
+            ((M_VCA, 0), (M_OUT, 0)),   // vca -> out l (r unconnected = l)
+        ] {
+            assert_eq!(e.command(OP_RACK_CONNECT, slot, pk(from.0, from.1), pk(to.0, to.1), 0.0), OK);
+        }
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, M_OSC as f64, 0.0, 3.0), OK); // sine
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, M_ADSR as f64, 3.0, RELEASE), OK);
+    }
+
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+    }
+
+    fn max_jump(prev: f32, xs: &[f32]) -> f32 {
+        let mut last = prev;
+        let mut m = 0.0f32;
+        for &x in xs {
+            m = m.max((x - last).abs());
+            last = x;
+        }
+        m
+    }
+
+    #[test]
+    fn synth_track_plays_live_notes() {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 24000); // 0.5 s
+        assert!(peak(&s) > 0.1, "peak {}", peak(&s));
+        // A4: 440 Hz from the rising zero crossings (after the attack).
+        let ups: Vec<usize> = (480..s.len()).filter(|&i| s[i - 1] < 0.0 && s[i] >= 0.0).collect();
+        let hz = (ups.len() - 1) as f32 * SR / (ups[ups.len() - 1] - ups[0]) as f32;
+        assert!((hz - 440.0).abs() < 2.0, "freq {hz}");
+        assert!(s.windows(2).all(|w| (w[1] - w[0]).abs() <= 0.05), "no clicks");
+        assert_eq!(e.command(OP_NOTE_OFF, 69.0, 0.0, 0.0, 0.0), OK);
+        let frames = ((RELEASE + 0.05) * SR as f64) as usize;
+        let s = render(&mut e, frames.div_ceil(128) * 128);
+        assert!(s[0].abs() > 0.0, "release is not a hard cut");
+        // Silence: below -60 dBFS (the release is exponential, 1% at RELEASE).
+        assert!(peak(&s[s.len() - 128..]) < 1e-3, "tail {}", peak(&s[s.len() - 128..]));
+    }
+
+    #[test]
+    fn velocity_zero_note_on_releases_synth_note() {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 0.0);
+        e.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0);
+        render(&mut e, 4800);
+        e.command(OP_NOTE_ON, 60.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 128 * 60);
+        assert!(peak(&s[s.len() - 128..]) < 1e-3);
+    }
+
+    #[test]
+    fn set_input_track_releases_old_notes() {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        synth_patch(&mut e, 4.0);
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 60.0, 127.0, 0.0, 0.0);
+        assert!(peak(&render(&mut e, 4800)) > 0.1);
+        // Switch while the note is held: track 3 gets AllOff and releases.
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 4.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 128 * 60); // 160 ms
+        assert!(peak(&s[s.len() - 128..]) < 1e-3, "track 3 still sounding");
+        // The NOTE_OFF now goes to track 4 (nothing held there): harmless.
+        assert_eq!(e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0), OK);
+        // New notes reach track 4.
+        e.command(OP_NOTE_ON, 64.0, 127.0, 0.0, 0.0);
+        assert!(peak(&render(&mut e, 4800)) > 0.1);
+    }
+
+    #[test]
+    fn notes_without_input_track_are_ignored() {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        // No input track yet.
+        assert_eq!(e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_PITCH_BEND, 0.5, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_MOD_WHEEL, 0.5, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SUSTAIN, 1.0, 0.0, 0.0, 0.0), OK);
+        assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0));
+        // Set, then unset (-1): ignored again.
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, -1.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
+        assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0));
+        // An input track that is a drum (or empty) slot plays nothing.
+        e.command(OP_ADD_DRUM_TRACK, 5.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 5.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 9.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 70.0, 127.0, 0.0, 0.0);
+        assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn rack_commands_validate() {
+        let mut e = Engine::new(SR);
+        e.command(OP_ADD_DRUM_TRACK, 0.0, 0.0, 0.0, 0.0);
+        // Rack commands on a drum slot or an empty slot.
+        for slot in [0.0, 7.0] {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, 0.0, K_OSC, 0.0), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_RACK_REMOVE_MODULE, slot, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_RACK_CONNECT, slot, pk(0, 0), pk(1, 0), 0.0), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_RACK_DISCONNECT, slot, pk(1, 0), 0.0, 0.0), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 0.0, 0.0, 0.5), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_RACK_CLEAR, slot, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+        }
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        // Drum commands on a synth slot.
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 0.0, 100.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_ROW_GAIN, 1.0, 0.0, 1.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_ROW_PAN, 1.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_ROW_MUTE, 1.0, 0.0, 1.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), ERR_BAD_INDEX);
+        // Bad kind ids / module indices / slots.
+        for kind in [99.0, 9.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, kind, 0.0), ERR_BAD_INDEX, "kind {kind}");
+        }
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 32.0, K_OSC, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 32.0, 0.0, K_OSC, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, K_OSC, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 1.0, K_VCA, 0.0), OK);
+        // Rack error codes propagate (occupied slot is the rack's ERR_BAD_VALUE)
+        // and land in LAST_ERROR.
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, K_LFO, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.telemetry()[TELEMETRY_LAST_ERROR], ERR_BAD_VALUE as f64);
+        // Ports: port index >= MAX_PORTS, module >= MAX_MODULES, garbage packing.
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 8), pk(1, 0), 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 15), pk(1, 0), 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 0), pk(32, 0), 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, 0.5, pk(1, 0), 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, -1.0, pk(1, 0), 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 1), pk(1, 0), 0.0), ERR_BAD_INDEX, "osc has 1 output");
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 0), pk(5, 0), 0.0), ERR_BAD_INDEX, "no module 5");
+        assert_eq!(e.command(OP_RACK_DISCONNECT, 1.0, pk(1, 9), 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_DISCONNECT, 1.0, f64::NAN, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_CONNECT, 1.0, pk(0, 0), pk(1, 0), 0.0), OK);
+        assert_eq!(e.command(OP_RACK_DISCONNECT, 1.0, pk(1, 0), 0.0, 0.0), OK);
+        // Params.
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 0.0, 1.5), ERR_BAD_VALUE, "vca level 0..1");
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 0.0, f64::NAN), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 0.0, 1e300), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 1.0, 0.5), ERR_BAD_INDEX, "vca has 1 param");
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 12.0, 0.5), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 9.0, 0.0, 0.5), ERR_BAD_INDEX, "empty module");
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 1.0, 1.0, 0.0, 0.5), OK);
+        assert_eq!(e.command(OP_RACK_REMOVE_MODULE, 1.0, 9.0, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_REMOVE_MODULE, 1.0, 1.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_CLEAR, 1.0, 0.0, 0.0, 0.0), OK);
+        // Input track and controllers.
+        for bad in [-2.0, 32.0, 0.5, f64::NAN] {
+            assert_eq!(e.command(OP_SET_INPUT_TRACK, bad, 0.0, 0.0, 0.0), ERR_BAD_INDEX, "slot {bad}");
+        }
+        assert_eq!(e.command(OP_PITCH_BEND, 1.5, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_PITCH_BEND, f64::NAN, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_MOD_WHEEL, -0.1, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_SUSTAIN, 2.0, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        // Garbage on every new op never panics, and audio keeps rendering.
+        let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -1.0, 1.0, 17.0];
+        for op in 17..=27u32 {
+            for &v in &vals {
+                for &w in &vals {
+                    let _ = e.command(op, 1.0, v, w, v);
+                    let _ = e.command(op, v, w, v, w);
+                }
+            }
+        }
+        assert!(render(&mut e, 1280).iter().all(|x| x.is_finite()));
+    }
+
+    /// Held sine note at slot 3; returns the engine and the last sample.
+    fn sounding_synth() -> (Engine, f32) {
+        let mut e = Engine::new(SR);
+        synth_patch(&mut e, 3.0);
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
+        let s = render(&mut e, 4800);
+        assert!(peak(&s[s.len() - 128..]) > 0.1);
+        (e, s[s.len() - 1])
+    }
+
+    #[test]
+    fn remove_synth_track_fades() {
+        let (mut e, last) = sounding_synth();
+        assert_eq!(e.command(OP_REMOVE_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 1280);
+        let j = max_jump(last, &s);
+        assert!(j <= 0.05, "jump {j}");
+        assert!(s[(0.004 * SR) as usize..].iter().all(|&x| x == 0.0), "silent after the fade");
+        // The slot is empty now: rack commands fail, notes do nothing.
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 3.0, 9.0, K_OSC, 0.0), ERR_BAD_INDEX);
+        e.command(OP_NOTE_ON, 72.0, 127.0, 0.0, 0.0);
+        assert!(render(&mut e, 1280).iter().all(|&x| x == 0.0));
+        // Re-adding gives an empty patch (module slot 0 is free again).
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 3.0, 0.0, K_OSC, 0.0), OK);
+    }
+
+    #[test]
+    fn re_adding_a_sounding_synth_track_fades_to_an_empty_patch() {
+        let (mut e, last) = sounding_synth();
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        // Validation sees the empty patch at once.
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 3.0, 0.0, K_OSC, 0.0), OK);
+        let s = render(&mut e, 1280);
+        assert!(max_jump(last, &s) <= 0.05);
+        assert!(s[(0.004 * SR) as usize..].iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn slot_kind_swap_fades_both_ways() {
+        // Synth -> drum: the synth fades out, the slot takes drum commands.
+        let (mut e, last) = sounding_synth();
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 3.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 1280);
+        assert!(max_jump(last, &s) <= 0.05, "synth -> drum jump");
+        assert!(s[(0.004 * SR) as usize..].iter().all(|&x| x == 0.0));
+        assert_eq!(e.command(OP_SET_STEP, 3.0, 0.0, 0.0, 100.0), OK);
+        assert_eq!(e.command(OP_RACK_CLEAR, 3.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+
+        // Drum -> synth: the sounding drum voice fades out (no hard cut).
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 2.0, 0.0, &[0.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 1280);
+        let last = s[s.len() - 1];
+        assert!(last > 0.5);
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 2.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 1280);
+        assert!(s[0] > 0.0 && s[0] <= last, "drum tail continues");
+        assert!(s.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] <= 0.1));
+        assert!(s[96..].iter().all(|&x| x == 0.0));
+        assert_eq!(e.command(OP_SET_STEP, 2.0, 0.0, 0.0, 100.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 2.0, 0.0, K_OSC, 0.0), OK);
+    }
+
+    #[test]
+    fn synth_ctx_follows_transport() {
+        // A synced LFO (1/4 note, square) straight into Out: while playing at
+        // 120 bpm it is locked to the playhead (2 Hz, high for the first
+        // half of each beat).
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        e.command(OP_ADD_SYNTH_TRACK, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 0.0, K_LFO, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 1.0, K_OUT, 0.0);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 0.0, 3.0), OK); // square
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 2.0, 1.0), OK); // sync
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 3.0, 3.0), OK); // 1/4
+        assert_eq!(e.command(OP_RACK_CONNECT, 0.0, pk(0, 0), pk(1, 0), 0.0), OK);
+        // Stopped: it still renders (free-running at the division's rate).
+        assert!(peak(&render(&mut e, 4800)) > 0.1);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 48000);
+        // Beat = 24000 frames: high in [0, 12000), low in [12000, 24000).
+        for (at, sign) in [(6000usize, 1.0f32), (18000, -1.0), (30000, 1.0), (42000, -1.0)] {
+            assert!(s[at] * sign > 0.5, "at {at}: {}", s[at]);
+        }
     }
 
     #[test]

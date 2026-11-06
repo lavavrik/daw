@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
+  PORT_STRIDE, packPort,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -18,10 +19,15 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(22);
+    expect(Object.keys(rust).length).toBe(33);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
+  });
+  it('packs ports with the same stride as the engine', () => {
+    const m = src.match(/pub const PORT_STRIDE: usize = (\d+);/);
+    expect(Number(m?.[1])).toBe(PORT_STRIDE);
+    expect(packPort(2, 1)).toBe(33);
   });
 });
 

@@ -40,8 +40,44 @@ test('engine renders', async ({ page }) => {
   await expect.poll(slot(page, 0), { timeout: 5_000 }).toBeGreaterThan(100); // blocks
 });
 
-test('test tone sounds', async ({ page }) => {
+/**
+ * The plan-1 test tone is gone: live notes only sound through a synth track
+ * that is the input track. Build a minimal patch on `track` with raw engine
+ * commands (the UI's default drum track uses slot 0) and make it the input
+ * track: MIDI In(0) -> Osc(1) -> VCA(3) <- ADSR(2) -> Out(4).l.
+ */
+async function buildSynth(page: Page, track = 1) {
+  const blocks = await slot(page, 0)();
+  const sent = await page.evaluate((slot) => {
+    const { engine, Op } = (window as unknown as DawWindow).__daw!;
+    const send = (op: number, a = 0, b = 0, c = 0, d = 0) => engine!.send(op, a, b, c, d);
+    const port = (m: number, p: number) => m * 16 + p; // packed module/port
+    const kinds = { midiIn: 0, osc: 1, adsr: 4, vca: 5, out: 8 }; // catalog wire ids
+    return [
+      send(Op.ADD_SYNTH_TRACK, slot),
+      send(Op.RACK_ADD_MODULE, slot, 0, kinds.midiIn),
+      send(Op.RACK_ADD_MODULE, slot, 1, kinds.osc),
+      send(Op.RACK_ADD_MODULE, slot, 2, kinds.adsr),
+      send(Op.RACK_ADD_MODULE, slot, 3, kinds.vca),
+      send(Op.RACK_ADD_MODULE, slot, 4, kinds.out),
+      send(Op.RACK_CONNECT, slot, port(0, 0), port(1, 0)), // pitch -> osc pitch
+      send(Op.RACK_CONNECT, slot, port(0, 1), port(2, 0)), // gate -> adsr gate
+      send(Op.RACK_CONNECT, slot, port(1, 0), port(3, 0)), // osc -> vca in
+      send(Op.RACK_CONNECT, slot, port(2, 0), port(3, 1)), // env -> vca cv
+      send(Op.RACK_CONNECT, slot, port(3, 0), port(4, 0)), // vca -> out l
+      send(Op.SET_INPUT_TRACK, slot),
+    ];
+  }, track);
+  expect(sent.every((ok) => ok)).toBe(true); // all queued to the engine
+  // The worklet drains the ring at the start of each block: once a couple of
+  // blocks have passed, every command ran and none failed (LAST_ERROR = 0).
+  await expect.poll(slot(page, 0)).toBeGreaterThan(blocks + 2);
+  expect(await slot(page, 7)()).toBe(0);
+}
+
+test('live notes play the input synth track', async ({ page }) => {
   await startAudio(page);
+  await buildSynth(page);
   const sent = await page.evaluate(() => {
     const { engine, Op } = (window as unknown as DawWindow).__daw!;
     return engine!.send(Op.NOTE_ON, 69, 127);
@@ -90,6 +126,7 @@ test('oversized sample defers while playing, loads after stop (memory grows)', a
 
 test('space toggles transport and keyboard plays', async ({ page }) => {
   await startAudio(page);
+  await buildSynth(page);
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1); // playing
   await page.keyboard.press('Space');
@@ -205,6 +242,7 @@ test('drop outside a row is caught: no navigation, hint shown', async ({ page })
 
 test('Space and piano keys still work after touching a slider or the BPM field', async ({ page }) => {
   await startAudio(page);
+  await buildSynth(page);
   await page.getByTestId('swing').fill('30'); // focuses the range input
   await expect(page.getByTestId('swing')).toBeFocused();
   await page.keyboard.press('Space');

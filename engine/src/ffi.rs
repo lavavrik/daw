@@ -97,12 +97,16 @@ pub extern "C" fn engine_telemetry(e: *mut Host) -> *const f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::OP_NOTE_ON;
+    use crate::protocol::{OP_ADD_SYNTH_TRACK, OP_RACK_ADD_MODULE, OP_RACK_CONNECT};
 
     #[test]
     fn ffi_roundtrip() {
         let e = engine_new(48000.0);
-        assert_eq!(engine_command(e, OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0), 0);
+        // Synth track 0: LFO (kind 6) at module 0 -> Out (kind 8) at module 1.
+        assert_eq!(engine_command(e, OP_ADD_SYNTH_TRACK, 0.0, 0.0, 0.0, 0.0), 0);
+        assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 0.0, 0.0, 6.0, 0.0), 0);
+        assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 0.0, 1.0, 8.0, 0.0), 0);
+        assert_eq!(engine_command(e, OP_RACK_CONNECT, 0.0, 0.0, 16.0, 0.0), 0);
         engine_process(e, 128);
         let left = unsafe { core::slice::from_raw_parts(engine_out_left(e), 128) };
         assert!(left.iter().any(|&s| s != 0.0));

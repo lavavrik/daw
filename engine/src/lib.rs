@@ -8,7 +8,7 @@ pub mod metronome;
 pub mod protocol;
 pub mod rack;
 pub mod samples;
-pub mod test_tone;
+pub mod synth;
 pub mod transport;
 
 pub use engine::Engine;

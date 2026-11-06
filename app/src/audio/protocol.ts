@@ -19,6 +19,28 @@ export const Op = {
   SET_STEP_COUNT: 14,
   SET_SWING: 15,
   SET_MASTER_GAIN: 16,
+  /** a=slot: make it a synth track with an empty patch. */
+  ADD_SYNTH_TRACK: 17,
+  /** a=slot b=module idx c=kind id (catalog.json). */
+  RACK_ADD_MODULE: 18,
+  /** a=slot b=module idx. */
+  RACK_REMOVE_MODULE: 19,
+  /** a=slot b=from c=to (ports packed with `packPort`). */
+  RACK_CONNECT: 20,
+  /** a=slot b=to (packed input port). */
+  RACK_DISCONNECT: 21,
+  /** a=slot b=module c=param d=value. */
+  RACK_SET_PARAM: 22,
+  /** a=slot. */
+  RACK_CLEAR: 23,
+  /** a=slot that receives live notes, or -1 for none. */
+  SET_INPUT_TRACK: 24,
+  /** a=-1..1. */
+  PITCH_BEND: 25,
+  /** a=0..1. */
+  MOD_WHEEL: 26,
+  /** a=0/1. */
+  SUSTAIN: 27,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -53,6 +75,11 @@ export const MAX_MODULES = 32;
 export const MAX_POLY = 16;
 export const MAX_PORTS = 8;
 export const MAX_PARAMS = 12;
+
+/** Ports per module in a packed port argument (protocol.rs PORT_STRIDE). */
+export const PORT_STRIDE = 16;
+/** Pack `(module, port)` into one rack-command argument: `module * 16 + port`. */
+export const packPort = (module: number, port: number): number => module * PORT_STRIDE + port;
 
 /** Indices into the telemetry Float64Array (lib.rs TELEMETRY_*). */
 export const TELEMETRY = {

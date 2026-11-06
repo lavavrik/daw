@@ -7,7 +7,11 @@
 //! A later TS parity test regex-parses the constants below, so each is on its
 //! own line in the form `pub const NAME: u32|i32 = N;`.
 
-use crate::{MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS};
+use crate::rack::catalog::ModuleKind;
+use crate::{MAX_MODULES, MAX_PARAMS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS};
+
+/// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
+pub const PORT_STRIDE: usize = 16;
 
 pub const OP_NOTE_ON: u32 = 1; // a=note, b=velocity
 pub const OP_NOTE_OFF: u32 = 2; // a=note
@@ -25,6 +29,20 @@ pub const OP_SET_STEP: u32 = 13; // a=slot b=row c=step d=velocity 0..127 (0 = o
 pub const OP_SET_STEP_COUNT: u32 = 14; // a=slot b=16|32|64
 pub const OP_SET_SWING: u32 = 15; // a=slot b=0..1
 pub const OP_SET_MASTER_GAIN: u32 = 16; // a=0..2
+// Synth tracks and rack edits. Ports are packed into one argument as
+// `module * 16 + port` (module < MAX_MODULES, port < MAX_PORTS).
+pub const OP_ADD_SYNTH_TRACK: u32 = 17; // a=slot (empty patch)
+pub const OP_RACK_ADD_MODULE: u32 = 18; // a=slot b=module idx c=kind id
+pub const OP_RACK_REMOVE_MODULE: u32 = 19; // a=slot b=module idx
+pub const OP_RACK_CONNECT: u32 = 20; // a=slot b=from (packed output) c=to (packed input)
+pub const OP_RACK_DISCONNECT: u32 = 21; // a=slot b=to (packed input)
+pub const OP_RACK_SET_PARAM: u32 = 22; // a=slot b=module c=param d=value
+pub const OP_RACK_CLEAR: u32 = 23; // a=slot
+// Live input: notes/controllers go to the input track's rack.
+pub const OP_SET_INPUT_TRACK: u32 = 24; // a=slot or -1 (none)
+pub const OP_PITCH_BEND: u32 = 25; // a=-1..1
+pub const OP_MOD_WHEEL: u32 = 26; // a=0..1
+pub const OP_SUSTAIN: u32 = 27; // a=0/1
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -34,6 +52,9 @@ pub const ERR_DEFERRED: i32 = -4;
 /// Sample alloc only: growing the arena failed (WASM memory at its max).
 pub const ERR_OUT_OF_MEMORY: i32 = -5;
 
+/// A decoded, range-checked command. Indices are guaranteed in range for
+/// their tables; rack-level checks (module present, port in its spec, param
+/// value in its spec range) are done by the rack itself.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     NoteOn { note: u8, velocity: u8 },
@@ -52,6 +73,19 @@ pub enum Command {
     SetStepCount { slot: usize, count: usize },
     SetSwing { slot: usize, swing: f32 },
     SetMasterGain { gain: f32 },
+    AddSynthTrack { slot: usize },
+    RackAddModule { slot: usize, module: usize, kind: ModuleKind },
+    RackRemoveModule { slot: usize, module: usize },
+    /// `from` = (module, output port), `to` = (module, input port).
+    RackConnect { slot: usize, from: (usize, usize), to: (usize, usize) },
+    RackDisconnect { slot: usize, to: (usize, usize) },
+    RackSetParam { slot: usize, module: usize, param: usize, value: f32 },
+    RackClear { slot: usize },
+    /// `None` = no input track (live notes are ignored).
+    SetInputTrack { slot: Option<usize> },
+    PitchBend { value: f32 },
+    ModWheel { value: f32 },
+    Sustain { on: bool },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -102,6 +136,39 @@ fn sample_id(v: f64) -> Result<Option<u32>, i32> {
     }
 }
 
+/// Module kind wire id: integral and known to the catalog; otherwise
+/// `ERR_BAD_INDEX` (it indexes the catalog).
+fn kind_id(v: f64) -> Result<ModuleKind, i32> {
+    if v.is_finite() && v.fract() == 0.0 && (0.0..=u32::MAX as f64).contains(&v) {
+        ModuleKind::from_id(v as u32).ok_or(ERR_BAD_INDEX)
+    } else {
+        Err(ERR_BAD_INDEX)
+    }
+}
+
+/// Packed `module * PORT_STRIDE + port` -> `(module, port)`, with
+/// `module < MAX_MODULES` and `port < MAX_PORTS`; otherwise `ERR_BAD_INDEX`.
+fn packed_port(v: f64) -> Result<(usize, usize), i32> {
+    let i = index(v, MAX_MODULES * PORT_STRIDE)?;
+    let (module, port) = (i / PORT_STRIDE, i % PORT_STRIDE);
+    if port < MAX_PORTS {
+        Ok((module, port))
+    } else {
+        Err(ERR_BAD_INDEX)
+    }
+}
+
+/// Any finite value (the rack range-checks it against the param spec;
+/// values beyond f32 become ±Inf there and are rejected as `ERR_BAD_VALUE`).
+fn finite(v: f64) -> Result<f32, i32> {
+    if v.is_finite() {
+        Ok(v as f32)
+    } else {
+        Err(ERR_BAD_VALUE)
+    }
+}
+
+/// Decode and range-check one record. Never panics.
 pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
     Ok(match op {
         OP_NOTE_ON => Command::NoteOn { note: midi7(a)?, velocity: midi7(b)? },
@@ -148,6 +215,32 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         },
         OP_SET_SWING => Command::SetSwing { slot: index(a, MAX_TRACKS)?, swing: ranged(b, 0.0, 1.0)? },
         OP_SET_MASTER_GAIN => Command::SetMasterGain { gain: ranged(a, 0.0, 2.0)? },
+        OP_ADD_SYNTH_TRACK => Command::AddSynthTrack { slot: index(a, MAX_TRACKS)? },
+        OP_RACK_ADD_MODULE => Command::RackAddModule {
+            slot: index(a, MAX_TRACKS)?,
+            module: index(b, MAX_MODULES)?,
+            kind: kind_id(c)?,
+        },
+        OP_RACK_REMOVE_MODULE => {
+            Command::RackRemoveModule { slot: index(a, MAX_TRACKS)?, module: index(b, MAX_MODULES)? }
+        }
+        OP_RACK_CONNECT => {
+            Command::RackConnect { slot: index(a, MAX_TRACKS)?, from: packed_port(b)?, to: packed_port(c)? }
+        }
+        OP_RACK_DISCONNECT => Command::RackDisconnect { slot: index(a, MAX_TRACKS)?, to: packed_port(b)? },
+        OP_RACK_SET_PARAM => Command::RackSetParam {
+            slot: index(a, MAX_TRACKS)?,
+            module: index(b, MAX_MODULES)?,
+            param: index(c, MAX_PARAMS)?,
+            value: finite(d)?,
+        },
+        OP_RACK_CLEAR => Command::RackClear { slot: index(a, MAX_TRACKS)? },
+        OP_SET_INPUT_TRACK => Command::SetInputTrack {
+            slot: if a == -1.0 { None } else { Some(index(a, MAX_TRACKS)?) },
+        },
+        OP_PITCH_BEND => Command::PitchBend { value: ranged(a, -1.0, 1.0)? },
+        OP_MOD_WHEEL => Command::ModWheel { value: ranged(a, 0.0, 1.0)? },
+        OP_SUSTAIN => Command::Sustain { on: flag(a)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -212,6 +305,41 @@ mod tests {
             }
         }
         let _ = decode(u32::MAX, 0., 0., 0., 0.);
+    }
+    #[test]
+    fn decode_rack_commands() {
+        use crate::rack::catalog::ModuleKind;
+        assert_eq!(decode(OP_ADD_SYNTH_TRACK, 3., 0., 0., 0.), Ok(Command::AddSynthTrack { slot: 3 }));
+        assert_eq!(
+            decode(OP_RACK_ADD_MODULE, 3., 31., 8., 0.),
+            Ok(Command::RackAddModule { slot: 3, module: 31, kind: ModuleKind::Out })
+        );
+        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 9., 0.), Err(ERR_BAD_INDEX), "unknown kind");
+        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 32., 1., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_RACK_REMOVE_MODULE, 3., 4., 0., 0.), Ok(Command::RackRemoveModule { slot: 3, module: 4 }));
+        // Ports are packed module*16 + port.
+        assert_eq!(
+            decode(OP_RACK_CONNECT, 0., 2. * 16. + 1., 5. * 16. + 7., 0.),
+            Ok(Command::RackConnect { slot: 0, from: (2, 1), to: (5, 7) })
+        );
+        assert_eq!(decode(OP_RACK_CONNECT, 0., 8., 16., 0.), Err(ERR_BAD_INDEX), "port 8 >= MAX_PORTS");
+        assert_eq!(decode(OP_RACK_CONNECT, 0., 0., 32. * 16., 0.), Err(ERR_BAD_INDEX), "module 32");
+        assert_eq!(decode(OP_RACK_DISCONNECT, 0., 17., 0., 0.), Ok(Command::RackDisconnect { slot: 0, to: (1, 1) }));
+        assert_eq!(
+            decode(OP_RACK_SET_PARAM, 0., 1., 2., 0.25),
+            Ok(Command::RackSetParam { slot: 0, module: 1, param: 2, value: 0.25 })
+        );
+        assert_eq!(decode(OP_RACK_SET_PARAM, 0., 1., 12., 0.25), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_RACK_SET_PARAM, 0., 1., 2., f64::NAN), Err(ERR_BAD_VALUE));
+        assert_eq!(decode(OP_RACK_CLEAR, 31., 0., 0., 0.), Ok(Command::RackClear { slot: 31 }));
+        assert_eq!(decode(OP_SET_INPUT_TRACK, -1., 0., 0., 0.), Ok(Command::SetInputTrack { slot: None }));
+        assert_eq!(decode(OP_SET_INPUT_TRACK, 4., 0., 0., 0.), Ok(Command::SetInputTrack { slot: Some(4) }));
+        assert_eq!(decode(OP_SET_INPUT_TRACK, -2., 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_PITCH_BEND, -1., 0., 0., 0.), Ok(Command::PitchBend { value: -1.0 }));
+        assert_eq!(decode(OP_PITCH_BEND, 1.01, 0., 0., 0.), Err(ERR_BAD_VALUE));
+        assert_eq!(decode(OP_MOD_WHEEL, 1., 0., 0., 0.), Ok(Command::ModWheel { value: 1.0 }));
+        assert_eq!(decode(OP_SUSTAIN, 1., 0., 0., 0.), Ok(Command::Sustain { on: true }));
+        assert_eq!(decode(OP_SUSTAIN, 0.5, 0., 0., 0.), Err(ERR_BAD_VALUE));
     }
     #[test]
     fn decode_value_ranges() {

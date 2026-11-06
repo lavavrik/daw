@@ -17,6 +17,8 @@
 pub mod adsr;
 pub mod lfo;
 pub mod midi_in;
+pub mod noise;
+pub mod osc;
 pub mod out;
 pub mod vca;
 
@@ -55,6 +57,8 @@ pub enum NoteEvent {
 #[derive(Clone)]
 pub enum Module {
     MidiIn(midi_in::MidiIn),
+    Osc(osc::Osc),
+    Noise(noise::Noise),
     Adsr(adsr::Adsr),
     Vca(vca::Vca),
     Lfo(lfo::Lfo),
@@ -66,6 +70,8 @@ impl Module {
     pub fn new(kind: ModuleKind, sr: f32) -> Module {
         match kind {
             ModuleKind::MidiIn => Module::MidiIn(midi_in::MidiIn::new(sr)),
+            ModuleKind::Osc => Module::Osc(osc::Osc::new(sr)),
+            ModuleKind::Noise => Module::Noise(noise::Noise::new(sr)),
             ModuleKind::Adsr => Module::Adsr(adsr::Adsr::new(sr)),
             ModuleKind::Vca => Module::Vca(vca::Vca::new(sr)),
             ModuleKind::Lfo => Module::Lfo(lfo::Lfo::new(sr)),
@@ -76,6 +82,8 @@ impl Module {
     pub fn kind(&self) -> ModuleKind {
         match self {
             Module::MidiIn(_) => ModuleKind::MidiIn,
+            Module::Osc(_) => ModuleKind::Osc,
+            Module::Noise(_) => ModuleKind::Noise,
             Module::Adsr(_) => ModuleKind::Adsr,
             Module::Vca(_) => ModuleKind::Vca,
             Module::Lfo(_) => ModuleKind::Lfo,
@@ -87,6 +95,8 @@ impl Module {
     pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf]) {
         match self {
             Module::MidiIn(m) => m.process(params, outs),
+            Module::Osc(m) => m.process(params, ins, outs),
+            Module::Noise(m) => m.process(params, outs),
             Module::Adsr(m) => m.process(params, ins, outs),
             Module::Vca(m) => m.process(params, ins, outs),
             Module::Lfo(m) => m.process(ctx, params, outs),
@@ -108,6 +118,8 @@ impl Module {
     pub fn reset(&mut self) {
         match self {
             Module::MidiIn(m) => m.reset(),
+            Module::Osc(m) => m.reset(),
+            Module::Noise(m) => m.reset(),
             Module::Adsr(m) => m.reset(),
             Module::Vca(_) => {}
             Module::Lfo(m) => m.reset(),

@@ -20,6 +20,8 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
     MidiIn = 0,
+    Osc = 1,
+    Noise = 2,
     Adsr = 4,
     Vca = 5,
     Lfo = 6,
@@ -28,7 +30,7 @@ pub enum ModuleKind {
 
 impl ModuleKind {
     /// Every kind, ordered by id (the catalog order).
-    pub const ALL: &'static [ModuleKind] = &[ModuleKind::MidiIn, ModuleKind::Adsr, ModuleKind::Vca, ModuleKind::Lfo, ModuleKind::Out];
+    pub const ALL: &'static [ModuleKind] = &[ModuleKind::MidiIn, ModuleKind::Osc, ModuleKind::Noise, ModuleKind::Adsr, ModuleKind::Vca, ModuleKind::Lfo, ModuleKind::Out];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
     pub fn from_id(id: u32) -> Option<ModuleKind> {
@@ -159,6 +161,69 @@ static MIDI_IN: ModuleSpec = ModuleSpec {
     ],
 };
 
+static OSC: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Osc,
+    id: "osc",
+    name: "Oscillator",
+    category: "source",
+    // Channels follow the connected inputs (pitch normally); unconnected pitch = C4.
+    inputs: &[port("pitch", Signal::Pitch), port("fm", Signal::Audio), port("pw", Signal::Cv)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        choice("wave", "Wave", &["Saw", "Square", "Tri", "Sine"], 0.0),
+        int("octave", "Octave", -3.0, 3.0, 0.0, "oct"),
+        ParamSpec {
+            name: "tune",
+            label: "Tune",
+            min: -12.0,
+            max: 12.0,
+            default: 0.0,
+            integer: false,
+            curve: Curve::Lin,
+            unit: "st",
+            choices: &[],
+            smooth: false,
+        },
+        ParamSpec {
+            name: "fine",
+            label: "Fine",
+            min: -100.0,
+            max: 100.0,
+            default: 0.0,
+            integer: false,
+            curve: Curve::Lin,
+            unit: "ct",
+            choices: &[],
+            smooth: false,
+        },
+        lin("pw", "Pulse width", 0.05, 0.95, 0.5, true),
+        lin("fm", "FM", 0.0, 1.0, 0.0, true),
+        int("unison", "Unison", 1.0, 4.0, 1.0, ""),
+        ParamSpec {
+            name: "detune",
+            label: "Detune",
+            min: 0.0,
+            max: 100.0,
+            default: 15.0,
+            integer: false,
+            curve: Curve::Lin,
+            unit: "ct",
+            choices: &[],
+            smooth: true,
+        },
+    ],
+};
+
+static NOISE: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Noise,
+    id: "noise",
+    name: "Noise",
+    category: "source",
+    inputs: &[],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[lin("level", "Level", 0.0, 1.0, 1.0, true)],
+};
+
 static ADSR: ModuleSpec = ModuleSpec {
     kind: ModuleKind::Adsr,
     id: "adsr",
@@ -230,6 +295,8 @@ static OUT: ModuleSpec = ModuleSpec {
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
         ModuleKind::MidiIn => &MIDI_IN,
+        ModuleKind::Osc => &OSC,
+        ModuleKind::Noise => &NOISE,
         ModuleKind::Adsr => &ADSR,
         ModuleKind::Vca => &VCA,
         ModuleKind::Lfo => &LFO,
@@ -351,6 +418,8 @@ mod tests {
     #[test]
     fn ids_are_unique_and_stable() {
         assert_eq!(ModuleKind::MidiIn as u8, 0);
+        assert_eq!(ModuleKind::Osc as u8, 1);
+        assert_eq!(ModuleKind::Noise as u8, 2);
         assert_eq!(ModuleKind::Adsr as u8, 4);
         assert_eq!(ModuleKind::Vca as u8, 5);
         assert_eq!(ModuleKind::Lfo as u8, 6);

@@ -138,6 +138,27 @@ fn rack_edits_and_render_do_not_allocate() {
     assert_eq!(r.set_param(8, 3, 0.05), OK);
     render(&mut r, 5, &mut ctx);
 
+    // Oscillator (poly, unison, FM from a noise source, every wave) + Noise.
+    r.clear();
+    render(&mut r, 5, &mut ctx);
+    assert_eq!(r.add_module(11, ModuleKind::MidiIn), OK);
+    assert_eq!(r.add_module(12, ModuleKind::Osc), OK);
+    assert_eq!(r.add_module(13, ModuleKind::Noise), OK);
+    assert_eq!(r.add_module(14, ModuleKind::Out), OK);
+    assert_eq!(r.connect((11, 0), (12, 0)), OK); // pitch
+    assert_eq!(r.connect((13, 0), (12, 1)), OK); // noise -> fm
+    assert_eq!(r.connect((12, 0), (14, 0)), OK);
+    assert_eq!(r.set_param(12, 6, 4.0), OK); // unison 4
+    assert_eq!(r.set_param(12, 5, 0.5), OK); // fm
+    r.note(NoteEvent::On { note: 48, vel: 100 });
+    r.note(NoteEvent::On { note: 55, vel: 100 });
+    for wave in 0..4 {
+        assert_eq!(r.set_param(12, 0, wave as f32), OK);
+        assert_eq!(r.set_param(12, 4, 0.2 + 0.2 * wave as f32), OK);
+        assert_eq!(r.set_param(13, 0, 0.3), OK);
+        render(&mut r, 5, &mut ctx);
+    }
+
     ARMED.with(|a| a.set(false));
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));

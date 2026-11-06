@@ -1,6 +1,10 @@
 //! DAW audio engine (compiled to WASM, hosted in an AudioWorklet).
 
+pub mod engine;
 pub mod protocol;
+pub mod test_tone;
+
+pub use engine::Engine;
 
 /// Largest block (frames) `process()` is ever asked to render.
 pub const MAX_BLOCK: usize = 1024;

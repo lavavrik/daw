@@ -31,6 +31,8 @@ pub const ERR_UNKNOWN_OP: i32 = -1;
 pub const ERR_BAD_INDEX: i32 = -2;
 pub const ERR_BAD_VALUE: i32 = -3;
 pub const ERR_DEFERRED: i32 = -4;
+/// Sample alloc only: growing the arena failed (WASM memory at its max).
+pub const ERR_OUT_OF_MEMORY: i32 = -5;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {

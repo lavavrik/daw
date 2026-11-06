@@ -5,14 +5,22 @@
 //!
 //! Declicking rules (the project's #1 anti-goal is clicks):
 //! * Each row owns two voice slots: `active` and `fading`.
-//! * A retrigger over a still-sounding voice crossfades over ~2 ms: the old
-//!   voice moves to `fading` and ramps 1 -> 0 while the new voice ramps 0 -> 1.
-//!   For steady material the two ramps sum to a constant, so there is no jump.
-//!   A trigger over silence starts at full level (the sample's own attack is
-//!   the onset; adding a fade-in there would soften every hit).
+//! * A retrigger over a still-sounding voice moves the old voice to `fading`,
+//!   which ramps 1 -> 0 over ~2 ms (so the old sound never jumps). The new
+//!   voice starts at FULL level, exactly like a first hit: its attack is the
+//!   sample's own content, and a fade-in would dull every kick/hat attack
+//!   (ruling R11).
 //! * Stop / mute / track removal move sounding voices to `fading` (2 ms).
 //! * Known limit: if a row is retriggered twice within one fade (2 ms), the
-//!   older fading voice is dropped. Only reachable at absurd settings.
+//!   older fading voice is dropped. Only reachable at absurd settings (swing
+//!   changes cannot cause it: see swing latching below).
+//!
+//! Swing latching (ruling R12): `SetSwing` only stores `swing_next`. The swing
+//! that places steps (`swing`) is latched from it when the playhead crosses a
+//! step-pair boundary (a multiple of `2 * STEP_TICKS`), or immediately while
+//! stopped. An odd step always lies strictly inside its pair (at most
+//! `0.5 * STEP_TICKS` late), so it can never move across the playhead: a
+//! swing change never double-fires or skips a step.
 
 use crate::arena::{SampleArena, SampleSlice};
 use crate::samples::SamplePool;
@@ -111,6 +119,11 @@ impl Voice {
         self.live
     }
 
+    #[doc(hidden)]
+    pub fn pos_for_test(&self) -> usize {
+        self.pos
+    }
+
     /// Sample data vanished/changed: hold the last output value and ramp it
     /// to 0 over `fade` samples (no data reads, no discontinuity).
     fn begin_hold(&mut self, fade: usize) {
@@ -153,12 +166,10 @@ impl RowVoices {
         }
     }
 
+    /// Start a hit. A still-sounding voice fades out (2 ms); the new one starts
+    /// at full level (R11: no fade-in, the attack is the sample's own).
     fn trigger(&mut self, sample: u32, slice: Option<SampleSlice>, gl: f32, gr: f32, fade: usize) {
-        let fade = fade.max(1);
-        let crossfade = self.active.live;
-        if crossfade {
-            self.fade_out(fade);
-        }
+        self.fade_out(fade);
         self.active = Voice {
             live: true,
             sample,
@@ -169,9 +180,9 @@ impl RowVoices {
             pos: 0,
             gl,
             gr,
-            level: if crossfade { 0.0 } else { 1.0 },
-            step: if crossfade { 1.0 / fade as f32 } else { 0.0 },
-            ramp_left: if crossfade { fade } else { 0 },
+            level: 1.0,
+            step: 0.0,
+            ramp_left: 0,
         };
     }
 
@@ -208,10 +219,16 @@ impl RowVoices {
     }
 }
 
+/// Steps per swing pair; swing changes latch on pair boundaries.
+const PAIR_TICKS: f64 = 2.0 * STEP_TICKS;
+
 pub struct DrumTrack {
     pub active: bool,
     pub step_count: usize,
+    /// Swing currently placing steps (latched; see module docs).
     pub swing: f32,
+    /// Most recent `SetSwing`; becomes `swing` at the next pair boundary.
+    pub swing_next: f32,
     pub rows: [DrumRow; MAX_ROWS],
     pub voices: [RowVoices; MAX_ROWS],
 }
@@ -222,6 +239,7 @@ impl DrumTrack {
             active: false,
             step_count: 16,
             swing: 0.0,
+            swing_next: 0.0,
             rows: [DrumRow::new(); MAX_ROWS],
             voices: [RowVoices::OFF; MAX_ROWS],
         }
@@ -244,7 +262,7 @@ impl DrumTrack {
     }
 
     /// Tick of step `k` within the pattern: odd steps are pushed late by
-    /// `swing * 0.5 * STEP_TICKS`.
+    /// `swing * 0.5 * STEP_TICKS` (uses the latched `swing`).
     fn step_tick(&self, k: usize) -> f64 {
         let late = if k % 2 == 1 { self.swing as f64 * 0.5 * STEP_TICKS } else { 0.0 };
         k as f64 * STEP_TICKS + late
@@ -308,6 +326,17 @@ impl Drums {
         }
     }
 
+    /// Store a new swing. While playing it latches at the next step-pair
+    /// boundary (R12); while stopped it applies at once.
+    pub fn set_swing(&mut self, slot: usize, swing: f32, playing: bool) {
+        if let Some(t) = self.tracks.get_mut(slot) {
+            t.swing_next = swing;
+            if !playing {
+                t.swing = swing;
+            }
+        }
+    }
+
     pub fn row_mut(&mut self, slot: usize, row: usize) -> Option<&mut DrumRow> {
         self.tracks.get_mut(slot)?.rows.get_mut(row)
     }
@@ -330,18 +359,37 @@ impl Drums {
             // (sample offset, step index) in time order.
             let mut ev = [(0usize, 0usize); MAX_EVENTS];
             let mut cnt = 0;
-            if let (true, Some((t0, t1, spt))) = (track.active, window) {
-                let count = track.step_count.clamp(1, MAX_STEPS);
-                let mut offs = [0.0f64; MAX_STEPS];
-                for (k, o) in offs.iter_mut().enumerate().take(count) {
-                    *o = track.step_tick(k);
-                }
-                events_in_window(t0, t1, count as f64 * STEP_TICKS, &offs[..count], |step, tick| {
-                    if cnt < MAX_EVENTS {
-                        ev[cnt] = (tick_to_offset(tick, t0, spt, n), step);
-                        cnt += 1;
+            match (track.active, window) {
+                (true, Some((t0, t1, spt))) => {
+                    let count = track.step_count.clamp(1, MAX_STEPS);
+                    let period = count as f64 * STEP_TICKS; // a multiple of PAIR_TICKS
+                    let mut offs = [0.0f64; MAX_STEPS];
+                    // Split the window at step-pair boundaries; each segment
+                    // uses the swing latched for its pair (R12).
+                    let mut a = t0;
+                    while a < t1 {
+                        let next = ((a / PAIR_TICKS).floor() + 1.0) * PAIR_TICKS;
+                        let b = if next < t1 { next } else { t1 };
+                        for (k, o) in offs.iter_mut().enumerate().take(count) {
+                            *o = track.step_tick(k);
+                        }
+                        events_in_window(a, b, period, &offs[..count], |step, tick| {
+                            if cnt < MAX_EVENTS {
+                                ev[cnt] = (tick_to_offset(tick, t0, spt, n), step);
+                                cnt += 1;
+                            }
+                        });
+                        if next <= t1 {
+                            track.swing = track.swing_next; // reached a pair boundary
+                        }
+                        if next >= t1 {
+                            break;
+                        }
+                        a = b;
                     }
-                });
+                }
+                // Stopped or inactive: nothing can be scheduled, latch at once.
+                _ => track.swing = track.swing_next,
             }
             for (row, rv) in track.rows.iter().zip(track.voices.iter_mut()) {
                 let mut pos = 0;

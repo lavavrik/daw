@@ -28,14 +28,20 @@ impl SampleArena {
 
     /// Bump-allocate `len` floats. A request never straddles chunks: if the
     /// current (last) chunk lacks room, a new chunk of `max(64 MB, len)` is
-    /// added when `may_grow`; otherwise returns `None` and changes nothing.
+    /// added when `may_grow`. Returns `None` (changing nothing) when there is
+    /// no room and `!may_grow`, or when growing fails (out of memory: on WASM
+    /// `memory.grow` hit the max). Growth is fallible on purpose: `vec![]`
+    /// would abort (a WASM trap that kills the engine) instead.
     pub fn alloc(&mut self, len: usize, may_grow: bool) -> Option<SampleSlice> {
         let last = self.chunks.len() - 1;
         if self.chunks[last].len() - self.used[last] < len {
             if !may_grow {
                 return None;
             }
-            self.chunks.push(vec![0.0; GROW_CHUNK.max(len)]); // heap grows here
+            self.chunks.try_reserve(1).ok()?;
+            self.used.try_reserve(1).ok()?;
+            let chunk = try_zeroed(GROW_CHUNK.max(len))?; // heap grows here
+            self.chunks.push(chunk); // capacity reserved above: cannot fail
             self.used.push(0);
         }
         let chunk = self.chunks.len() - 1;
@@ -63,6 +69,30 @@ impl SampleArena {
         self.used.truncate(1);
         self.used[0] = 0;
         self.chunks[0].fill(0.0);
+    }
+}
+
+/// A zeroed `Vec<f32>` of `len`, or `None` if the allocation fails.
+///
+/// Like `vec![0.0; len]` (which aborts on failure) but fallible. Uses
+/// `alloc_zeroed` rather than `Vec::try_reserve_exact` + `resize` so fresh
+/// pages from `memory.grow` (already zero) are not written again: zeroing a
+/// 256 MB chunk by hand would stall the audio thread for many blocks.
+fn try_zeroed(len: usize) -> Option<Vec<f32>> {
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<f32>(len).ok()?;
+    // SAFETY: `layout` has non-zero size (len > 0). On success the block is
+    // zeroed (all-zero bits are a valid f32 0.0) and was allocated by the
+    // global allocator with exactly the layout `Vec<f32>` uses for capacity
+    // `len`, so `from_raw_parts(p, len, len)` takes ownership soundly.
+    unsafe {
+        let p = std::alloc::alloc_zeroed(layout) as *mut f32;
+        if p.is_null() {
+            return None;
+        }
+        Some(Vec::from_raw_parts(p, len, len))
     }
 }
 
@@ -105,6 +135,20 @@ mod tests {
         // an oversized request gets a chunk of its own size
         let big = a.alloc(GROW_CHUNK + 5, true).unwrap();
         assert_eq!(a.slice(big).len(), GROW_CHUNK + 5);
+    }
+
+    #[test]
+    fn failed_growth_returns_none_instead_of_aborting() {
+        let mut a = SampleArena::with_capacity(1000);
+        let s1 = a.alloc(800, true).unwrap();
+        // Unallocatable (byte size overflows isize): must not abort the process.
+        assert!(a.alloc(usize::MAX / 2, true).is_none());
+        assert!(a.alloc(isize::MAX as usize / 4 + 1, true).is_none());
+        // Nothing changed: the arena still works and old data is intact.
+        a.slice_mut(s1).fill(3.0);
+        let s2 = a.alloc(200, true).unwrap();
+        assert_eq!((s2.chunk, s2.start), (0, 800));
+        assert!(a.slice(s1).iter().all(|&x| x == 3.0));
     }
 
     #[test]

@@ -27,6 +27,7 @@ export const Err = {
   BAD_INDEX: -2,
   BAD_VALUE: -3,
   DEFERRED: -4,
+  OUT_OF_MEMORY: -5,
 } as const;
 export type ErrCode = (typeof Err)[keyof typeof Err];
 

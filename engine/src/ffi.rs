@@ -66,7 +66,7 @@ pub extern "C" fn engine_command(e: *mut Host, op: u32, a: f64, b: f64, c: f64, 
     }
 }
 
-/// Null on error; the code is recorded in telemetry slot 7 by the engine.
+/// Null on error; the code is recorded in `TELEMETRY_LAST_ERROR` by the engine.
 #[no_mangle]
 pub extern "C" fn engine_sample_alloc(e: *mut Host, id: u32, frames: u32, channels: u32) -> *mut f32 {
     // SAFETY: see module contract.

@@ -8,7 +8,10 @@ use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
 use crate::test_tone::TestTone;
 use crate::transport::{events_in_window, tick_to_offset, Transport};
-use crate::{MAX_BLOCK, MAX_SAMPLES, PPQ};
+use crate::{
+    MAX_BLOCK, MAX_SAMPLES, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
+    TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
+};
 
 /// 4/4: a bar is 4 beats; beat 0 of each bar is the accent.
 const BAR_TICKS: f64 = 4.0 * PPQ;
@@ -26,7 +29,7 @@ pub struct Engine {
     sample_rate: f32,
     transport: Transport,
     metronome: Metronome,
-    telemetry: [f64; 8],
+    telemetry: [f64; TELEMETRY_LEN],
     arena: SampleArena,
     samples: SamplePool,
     drums: Drums,
@@ -41,7 +44,7 @@ impl Engine {
             sample_rate,
             transport: Transport::new(),
             metronome: Metronome::new(sample_rate),
-            telemetry: [0.0; 8],
+            telemetry: [0.0; TELEMETRY_LEN],
             arena: SampleArena::with_capacity(ARENA_FLOATS),
             samples: SamplePool::new(),
             drums: Drums::new(sample_rate),
@@ -49,7 +52,7 @@ impl Engine {
     }
 
     /// Decode and apply a command. Returns 0 (OK) or a negative error code.
-    /// Telemetry slot 7 holds the most recent *failed* code; successes leave it.
+    /// `TELEMETRY_LAST_ERROR` holds the most recent *failed* code; successes leave it.
     pub fn command(&mut self, op: u32, a: f64, b: f64, c: f64, d: f64) -> i32 {
         let code = match protocol::decode(op, a, b, c, d) {
             Ok(cmd) => {
@@ -59,7 +62,7 @@ impl Engine {
             Err(e) => e,
         };
         if code != protocol::OK {
-            self.telemetry[7] = code as f64;
+            self.telemetry[TELEMETRY_LAST_ERROR] = code as f64;
         }
         code
     }
@@ -119,10 +122,9 @@ impl Engine {
                     t.step_count = count;
                 }
             }
+            // Latched at the next step-pair boundary while playing (R12).
             Command::SetSwing { slot, swing } => {
-                if let Some(t) = self.drums.tracks.get_mut(slot) {
-                    t.swing = swing;
-                }
+                self.drums.set_swing(slot, swing, self.transport.playing)
             }
         }
     }
@@ -146,16 +148,16 @@ impl Engine {
             pr = pr.max(r.abs());
         }
         self.transport.advance(n, self.sample_rate);
-        self.telemetry[0] += 1.0;
+        self.telemetry[TELEMETRY_BLOCKS] += 1.0;
         self.sync_transport_telemetry();
-        self.telemetry[5] = pl as f64;
-        self.telemetry[6] = pr as f64;
+        self.telemetry[TELEMETRY_PEAK_L] = pl as f64;
+        self.telemetry[TELEMETRY_PEAK_R] = pr as f64;
     }
 
-    /// Slot 1: playing (0/1); slot 2: playhead ticks at the start of the next block.
+    /// Playing (0/1) and the playhead ticks at the start of the next block.
     fn sync_transport_telemetry(&mut self) {
-        self.telemetry[1] = if self.transport.playing { 1.0 } else { 0.0 };
-        self.telemetry[2] = self.transport.ticks;
+        self.telemetry[TELEMETRY_PLAYING] = if self.transport.playing { 1.0 } else { 0.0 };
+        self.telemetry[TELEMETRY_TICKS] = self.transport.ticks;
     }
 
     /// Metronome: trigger clicks at their exact sample offsets, rendering the
@@ -199,7 +201,7 @@ impl Engine {
     }
 
     fn fail(&mut self, code: i32) -> i32 {
-        self.telemetry[7] = code as f64;
+        self.telemetry[TELEMETRY_LAST_ERROR] = code as f64;
         code
     }
 
@@ -208,7 +210,9 @@ impl Engine {
     /// Replaces any existing sample in the slot (old data leaks until reset)
     /// and marks it not ready. May grow the heap only while stopped; while
     /// playing and out of room, returns `ERR_DEFERRED` so the caller retries
-    /// after stopping. Failures also land in telemetry slot 7.
+    /// after stopping; if growing fails (WASM memory exhausted), returns
+    /// `ERR_OUT_OF_MEMORY` instead of trapping. Failures also land in
+    /// `TELEMETRY_LAST_ERROR`.
     pub fn sample_alloc(&mut self, id: u32, frames: u32, channels: u32) -> Result<*mut f32, i32> {
         if id as usize >= MAX_SAMPLES {
             return Err(self.fail(protocol::ERR_BAD_INDEX));
@@ -226,7 +230,10 @@ impl Engine {
         };
         let may_grow = !self.transport.playing;
         let Some(slice) = self.arena.alloc(len, may_grow) else {
-            return Err(self.fail(protocol::ERR_DEFERRED));
+            // Without growth the only failure is "no room yet"; with growth
+            // allowed, failure means the heap could not grow.
+            let code = if may_grow { protocol::ERR_OUT_OF_MEMORY } else { protocol::ERR_DEFERRED };
+            return Err(self.fail(code));
         };
         self.samples.set(
             id as usize,
@@ -244,7 +251,7 @@ impl Engine {
         }
     }
 
-    pub fn telemetry(&self) -> &[f64; 8] {
+    pub fn telemetry(&self) -> &[f64; TELEMETRY_LEN] {
         &self.telemetry
     }
 }
@@ -503,7 +510,8 @@ mod tests {
     // ---- drums -----------------------------------------------------------
 
     use crate::protocol::{
-        OP_ADD_DRUM_TRACK, OP_REMOVE_TRACK, OP_SET_ROW_MUTE, OP_SET_ROW_PAN, OP_SET_ROW_SAMPLE,
+        OP_ADD_DRUM_TRACK, OP_REMOVE_TRACK, OP_SET_ROW_GAIN, OP_SET_ROW_MUTE, OP_SET_ROW_PAN,
+        OP_SET_ROW_SAMPLE,
         OP_SET_STEP, OP_SET_STEP_COUNT, OP_SET_SWING,
     };
 
@@ -593,16 +601,24 @@ mod tests {
         assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0));
     }
 
+    /// R11: a retrigger over a sounding voice starts the new hit at FULL level
+    /// (its attack is the sample's own content, exactly as for a first hit);
+    /// only the old voice fades out, over exactly 96 samples (2 ms at 48 kHz).
+    /// The new voice's contribution is known (constant sample), so subtracting
+    /// it leaves the old voice alone, which must continue from its pre-retrigger
+    /// level and ramp smoothly to silence.
     #[test]
     fn retrigger_declicks() {
         let mut e = Engine::new(SR);
         e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
         load_const(&mut e, 0, 48000, 1.0);
         drum_setup(&mut e, 0.0, 0.0, &[0.0, 1.0]);
+        // Half gain so old + new voice (2v) stays under the master clamp.
+        assert_eq!(e.command(OP_SET_ROW_GAIN, 0.0, 0.0, 0.5, 0.0), 0);
         e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
         let (l, _) = render2(&mut e, 128 * 46); // 5888 frames
-        // Single-sample blocks from 5888 find exactly when the crossfade
-        // starts and ends: the fade must be exactly 96 samples long.
+        // Single-sample blocks from 5888 find exactly when the old voice's
+        // fade starts and ends: it must be exactly 96 samples long.
         let mut l = l;
         let (mut first_live, mut first_dead) = (None, None);
         for i in 5888..6400usize {
@@ -620,12 +636,86 @@ mod tests {
         let (f, d) = (first_live.unwrap(), first_dead.unwrap());
         assert!((5999..=6000).contains(&f), "retrigger at ~6000, got {f}");
         assert_eq!(d - f, 95, "fade lasts exactly 96 samples (live through 95 processed)");
-        // no jump anywhere after the initial onset at 0
-        let worst = (1..l.len()).map(|i| (l[i] - l[i - 1]).abs()).fold(0.0f32, f32::max);
-        assert!(worst <= 0.1, "worst jump {worst}");
-        assert!((l[5990] - 0.5657).abs() < 1e-3);
-        assert!((l[6100] - 0.5657).abs() < 1e-3);
+        // v = one voice at gain 0.5, centre pan, 0.8 master.
+        let v: f32 = 0.5 * 0.5f32.sqrt() * 0.8;
+        assert!((l[f - 1] - v).abs() < 1e-4, "before the retrigger: one voice");
+        // New voice at full level from its very first sample (no fade-in).
+        assert!((l[f] - 2.0 * v).abs() < 1e-4, "old (still full) + new (full): {}", l[f]);
+        // Old voice alone = output - new voice.
+        let old: Vec<f32> = (f..f + 200).map(|i| l[i] - v).collect();
+        assert!((old[0] - v).abs() < 1e-4, "old voice continues at its level");
+        for w in old.windows(2) {
+            assert!(w[1] <= w[0] + 1e-6, "old voice only ramps down");
+            assert!(w[0] - w[1] <= v / 96.0 + 1e-4, "old voice ramps smoothly: {:?}", w);
+        }
+        assert!(old.iter().all(|&x| x >= -1e-5), "never below 0 (would mean a fade-in)");
+        assert!(old[96..].iter().all(|&x| x.abs() < 1e-5), "old voice silent after 96");
+        assert!(old[90] > 0.0);
+        assert!((l[6100] - v).abs() < 1e-4);
         assert!(e.drums.tracks[0].voices[0].active.live_for_test());
+    }
+
+    /// R12: swing is latched per track and only changes when the playhead
+    /// crosses a step-pair boundary (multiple of 2*STEP_TICKS), so an odd step
+    /// can never jump across the playhead: no double fire, no skip.
+    #[test]
+    fn swing_change_mid_play_never_double_fires_or_skips() {
+        // 120 bpm: a step is 6000 samples, a pair 12000, a 16-step loop 96000.
+        // (a) Step 1 has just fired (swing 0, at 6000); more swing would move
+        //     it to 6300, *after* the playhead: it must not fire again. The new
+        //     swing applies from the next pair (step 3 at 18000 + 300).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[1.0, 3.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let mut l = render2(&mut e, 128 * 47).0; // 6016: step 1 fired
+        assert_eq!(e.command(OP_SET_SWING, 0.0, 0.1, 0.0, 0.0), 0);
+        l.extend(render2(&mut e, 128 * 853).0); // to 115200
+        assert_eq!(onsets(&l), vec![6000, 18300, 102300, 114300]);
+
+        // (b) Swing 0.5 puts step 1 at 7500; removing swing just before it
+        //     would move it to 6000, *behind* the playhead: it must still fire
+        //     (at 7500), and the new swing applies from the next pair.
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[1.0, 3.0]);
+        e.command(OP_SET_SWING, 0.0, 0.5, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let mut l = render2(&mut e, 128 * 55).0; // 7040: step 1 not yet fired
+        assert_eq!(e.command(OP_SET_SWING, 0.0, 0.0, 0.0, 0.0), 0);
+        l.extend(render2(&mut e, 128 * 845).0); // to 115200
+        assert_eq!(onsets(&l), vec![7500, 18000, 102000, 114000]);
+
+        // (c) A small nudge mid-crossfade must not double-fire either (that
+        //     hard-cut the fading voice): with a long sample, step 1 retriggers
+        //     over step 0 once, so the fading slot is used exactly once.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0, 1.0]);
+        e.command(OP_SET_SWING, 0.0, 0.2, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 128 * 50); // 6400: step 1 (at 6600) not yet
+        // Count triggers: the active voice's read position restarts at 0.
+        let mut l = Vec::new();
+        let mut triggers = 0;
+        let mut last_pos = e.drums.tracks[0].voices[0].active.pos_for_test();
+        for i in 6400..9000usize {
+            let (mut a, mut b) = ([0.0f32; 1], [0.0f32; 1]);
+            e.process(&mut a, &mut b);
+            l.push(a[0]);
+            if i == 6610 {
+                // just after step 1 fired at 6600: nudge swing +1% (-> 6630)
+                assert_eq!(e.command(OP_SET_SWING, 0.0, 0.21, 0.0, 0.0), 0);
+            }
+            let pos = e.drums.tracks[0].voices[0].active.pos_for_test();
+            if pos < last_pos {
+                triggers += 1;
+            }
+            last_pos = pos;
+        }
+        assert_eq!(triggers, 1, "step 1 fires exactly once");
+        // After the fade, the output is one steady voice.
+        let v: f32 = 0.5f32.sqrt() * 0.8;
+        assert!(l[400..].iter().all(|&x| (x - v).abs() < 1e-4));
     }
 
     #[test]

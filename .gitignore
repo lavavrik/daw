@@ -4,3 +4,4 @@ node_modules/
 app/public/engine.wasm
 test-results/
 playwright-report/
+dist/

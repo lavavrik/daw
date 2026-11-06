@@ -9,5 +9,5 @@
     "noEmit": true,
     "types": ["svelte"]
   },
-  "include": ["app/src", "vite.config.ts", "playwright.config.ts", "e2e"]
+  "include": ["app/src", "vite.config.ts", "playwright.config.ts", "tests"]
 }

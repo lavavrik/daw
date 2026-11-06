@@ -24,7 +24,11 @@ AudioWorklet, with a Svelte 5 UI. Design:
 
 1. `npm run dev`, open http://localhost:5174, click **Click to start audio**.
 2. Drag a kick from Finder onto the first row (it says "drop sample"; the row
-   takes the file's name). Drag a hat onto the second row. Dropping on a row
+   takes the file's name). No samples yet? Use the starter kit in
+   `samples/starter/` (open it with `open samples/starter`): two kicks, clap,
+   snare, rim, closed/open hats, shaker, tom, two chord stabs and a sub hit.
+   It is synthesised by `scripts/make-starter-kit.mjs` (original sounds, CC0),
+   so you can tweak the recipes and re-run the script. Drag a hat onto the second row. Dropping on a row
    that already has a sample replaces it; dropping on **+ Add row** makes a new
    row for it.
 3. Click cells to place steps (click-drag paints; Alt-click = quiet ghost

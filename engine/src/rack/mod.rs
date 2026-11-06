@@ -292,7 +292,7 @@ impl Rack {
     pub fn note(&mut self, ev: NoteEvent) {
         for slot in self.slots.iter_mut() {
             if let Some(m) = slot.module.as_mut() {
-                m.note(ev);
+                m.note(ev, &slot.params);
             }
         }
     }

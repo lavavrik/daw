@@ -103,6 +103,41 @@ fn rack_edits_and_render_do_not_allocate() {
     r.clear();
     render(&mut r, 5, &mut ctx);
 
+    // MIDI In + ADSR: note-on/off, steal, sustain, mode/voices switches.
+    assert_eq!(r.add_module(7, ModuleKind::MidiIn), OK);
+    assert_eq!(r.add_module(8, ModuleKind::Adsr), OK);
+    assert_eq!(r.add_module(9, ModuleKind::Vca), OK);
+    assert_eq!(r.add_module(10, ModuleKind::Out), OK);
+    assert_eq!(r.connect((7, 1), (8, 0)), OK);
+    assert_eq!(r.connect((8, 0), (9, 1)), OK);
+    assert_eq!(r.connect((9, 0), (10, 0)), OK);
+    assert_eq!(r.set_param(7, 0, 2.0), OK); // 2 voices: easy to steal
+    render(&mut r, 5, &mut ctx);
+    for (n, v) in [(60u8, 100u8), (64, 90), (67, 80)] {
+        r.note(NoteEvent::On { note: n, vel: v }); // third note steals
+        render(&mut r, 3, &mut ctx);
+    }
+    r.note(NoteEvent::On { note: 64, vel: 90 }); // re-press
+    r.note(NoteEvent::Bend(0.5));
+    r.note(NoteEvent::Mod(0.7));
+    render(&mut r, 3, &mut ctx);
+    r.note(NoteEvent::Sustain(true));
+    r.note(NoteEvent::Off { note: 64 });
+    render(&mut r, 3, &mut ctx);
+    r.note(NoteEvent::Sustain(false));
+    r.note(NoteEvent::Off { note: 67 });
+    render(&mut r, 3, &mut ctx);
+    assert_eq!(r.set_param(7, 1, 1.0), OK); // mono + glide
+    assert_eq!(r.set_param(7, 2, 0.1), OK);
+    r.note(NoteEvent::On { note: 48, vel: 100 });
+    r.note(NoteEvent::On { note: 55, vel: 100 });
+    render(&mut r, 5, &mut ctx);
+    r.note(NoteEvent::Off { note: 55 });
+    r.note(NoteEvent::AllOff);
+    assert_eq!(r.set_param(7, 0, 16.0), OK);
+    assert_eq!(r.set_param(8, 3, 0.05), OK);
+    render(&mut r, 5, &mut ctx);
+
     ARMED.with(|a| a.set(false));
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));

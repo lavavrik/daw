@@ -19,6 +19,8 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
+    MidiIn = 0,
+    Adsr = 4,
     Vca = 5,
     Lfo = 6,
     Out = 8,
@@ -26,7 +28,7 @@ pub enum ModuleKind {
 
 impl ModuleKind {
     /// Every kind, ordered by id (the catalog order).
-    pub const ALL: &'static [ModuleKind] = &[ModuleKind::Vca, ModuleKind::Lfo, ModuleKind::Out];
+    pub const ALL: &'static [ModuleKind] = &[ModuleKind::MidiIn, ModuleKind::Adsr, ModuleKind::Vca, ModuleKind::Lfo, ModuleKind::Out];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
     pub fn from_id(id: u32) -> Option<ModuleKind> {
@@ -114,6 +116,16 @@ const fn lin(name: &'static str, label: &'static str, min: f32, max: f32, defaul
     ParamSpec { name, label, min, max, default, integer: false, curve: Curve::Lin, unit: "", choices: &[], smooth }
 }
 
+/// A continuous exponential-knob param (times); `min > 0` unless noted.
+const fn exp(name: &'static str, label: &'static str, min: f32, max: f32, default: f32, unit: &'static str) -> ParamSpec {
+    ParamSpec { name, label, min, max, default, integer: false, curve: Curve::Exp, unit, choices: &[], smooth: false }
+}
+
+/// An integer param `min..=max`.
+const fn int(name: &'static str, label: &'static str, min: f32, max: f32, default: f32, unit: &'static str) -> ParamSpec {
+    ParamSpec { name, label, min, max, default, integer: true, curve: Curve::Lin, unit, choices: &[], smooth: false }
+}
+
 /// A choice param: integer `0..=choices.len()-1`.
 const fn choice(name: &'static str, label: &'static str, choices: &'static [&'static str], default: f32) -> ParamSpec {
     ParamSpec {
@@ -129,6 +141,38 @@ const fn choice(name: &'static str, label: &'static str, choices: &'static [&'st
         smooth: false,
     }
 }
+
+static MIDI_IN: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::MidiIn,
+    id: "midi_in",
+    name: "MIDI In",
+    category: "source",
+    inputs: &[],
+    // pitch/gate/vel carry `voices` channels (1 in Mono); mod is 1 channel.
+    outputs: &[port("pitch", Signal::Pitch), port("gate", Signal::Gate), port("vel", Signal::Cv), port("mod", Signal::Cv)],
+    params: &[
+        int("voices", "Voices", 1.0, 16.0, 8.0, ""),
+        choice("mode", "Mode", &["Poly", "Mono"], 0.0),
+        // Exp knob that starts at 0 (= off): the UI maps 0 -> min exactly.
+        exp("glide", "Glide", 0.0, 2.0, 0.0, "s"),
+        int("bend", "Bend range", 0.0, 12.0, 2.0, "st"),
+    ],
+};
+
+static ADSR: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Adsr,
+    id: "adsr",
+    name: "ADSR",
+    category: "shaping",
+    inputs: &[port("gate", Signal::Gate)],
+    outputs: &[port("env", Signal::Cv)],
+    params: &[
+        exp("attack", "Attack", 0.001, 10.0, 0.005, "s"),
+        exp("decay", "Decay", 0.001, 10.0, 0.2, "s"),
+        lin("sustain", "Sustain", 0.0, 1.0, 0.7, true),
+        exp("release", "Release", 0.001, 10.0, 0.3, "s"),
+    ],
+};
 
 static VCA: ModuleSpec = ModuleSpec {
     kind: ModuleKind::Vca,
@@ -185,6 +229,8 @@ static OUT: ModuleSpec = ModuleSpec {
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
+        ModuleKind::MidiIn => &MIDI_IN,
+        ModuleKind::Adsr => &ADSR,
         ModuleKind::Vca => &VCA,
         ModuleKind::Lfo => &LFO,
         ModuleKind::Out => &OUT,
@@ -295,7 +341,8 @@ mod tests {
                     assert_eq!(p.max, (p.choices.len() - 1) as f32, "{at}");
                 }
                 if p.curve == Curve::Exp {
-                    assert!(p.min > 0.0, "{at}: exp curve needs min > 0");
+                    // min == 0 is allowed for "zero-based" exp knobs (glide: 0 = off).
+                    assert!(p.min >= 0.0, "{at}: exp curve needs min >= 0");
                 }
             }
         }
@@ -303,6 +350,8 @@ mod tests {
 
     #[test]
     fn ids_are_unique_and_stable() {
+        assert_eq!(ModuleKind::MidiIn as u8, 0);
+        assert_eq!(ModuleKind::Adsr as u8, 4);
         assert_eq!(ModuleKind::Vca as u8, 5);
         assert_eq!(ModuleKind::Lfo as u8, 6);
         assert_eq!(ModuleKind::Out as u8, 8);

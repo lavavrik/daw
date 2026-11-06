@@ -14,7 +14,9 @@
 //!   [`Smooth`] (5 ms one-pole), so knob moves never click.
 //! * Outputs must be finite; DSP state below 1e-20 is flushed to 0.
 
+pub mod adsr;
 pub mod lfo;
+pub mod midi_in;
 pub mod out;
 pub mod vca;
 
@@ -52,6 +54,8 @@ pub enum NoteEvent {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Module {
+    MidiIn(midi_in::MidiIn),
+    Adsr(adsr::Adsr),
     Vca(vca::Vca),
     Lfo(lfo::Lfo),
     Out(out::Out),
@@ -61,6 +65,8 @@ impl Module {
     /// A fresh module with its params' smoothers at the catalog defaults.
     pub fn new(kind: ModuleKind, sr: f32) -> Module {
         match kind {
+            ModuleKind::MidiIn => Module::MidiIn(midi_in::MidiIn::new(sr)),
+            ModuleKind::Adsr => Module::Adsr(adsr::Adsr::new(sr)),
             ModuleKind::Vca => Module::Vca(vca::Vca::new(sr)),
             ModuleKind::Lfo => Module::Lfo(lfo::Lfo::new(sr)),
             ModuleKind::Out => Module::Out(out::Out::new(sr)),
@@ -69,6 +75,8 @@ impl Module {
 
     pub fn kind(&self) -> ModuleKind {
         match self {
+            Module::MidiIn(_) => ModuleKind::MidiIn,
+            Module::Adsr(_) => ModuleKind::Adsr,
             Module::Vca(_) => ModuleKind::Vca,
             Module::Lfo(_) => ModuleKind::Lfo,
             Module::Out(_) => ModuleKind::Out,
@@ -78,21 +86,29 @@ impl Module {
     /// Render one sub-block (see the module contract above).
     pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf]) {
         match self {
+            Module::MidiIn(m) => m.process(params, outs),
+            Module::Adsr(m) => m.process(params, ins, outs),
             Module::Vca(m) => m.process(params, ins, outs),
             Module::Lfo(m) => m.process(ctx, params, outs),
             Module::Out(m) => m.process(params, ins),
         }
     }
 
-    /// Deliver a note event. A no-op for everything except MIDI In.
-    pub fn note(&mut self, ev: NoteEvent) {
-        let _ = ev;
+    /// Deliver a note event (with the module's current param values, which
+    /// MIDI In needs for `voices`/`mode`). A no-op for everything except
+    /// MIDI In.
+    pub fn note(&mut self, ev: NoteEvent, params: &[f32]) {
+        if let Module::MidiIn(m) = self {
+            m.note(ev, params);
+        }
     }
 
     /// Clear DSP state (phases, filter memories, held notes) without changing
     /// params.
     pub fn reset(&mut self) {
         match self {
+            Module::MidiIn(m) => m.reset(),
+            Module::Adsr(m) => m.reset(),
             Module::Vca(_) => {}
             Module::Lfo(m) => m.reset(),
             Module::Out(m) => m.reset(),

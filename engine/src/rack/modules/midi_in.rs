@@ -9,7 +9,7 @@
 //!
 //! # Poly
 //! * A new note takes a free voice (never-used voices first, then the one
-//!   with the oldest note-on, i.e. released longest ago); with none
+//!   whose gate went low longest ago, so fresh release tails survive); with none
 //!   free it steals the voice whose current note-on is oldest (a monotonic
 //!   counter, no clock). Re-pressing a sounding note reuses its voice.
 //! * Retrigger gap: on a steal or re-press, that channel's gate is 0 for the
@@ -66,6 +66,8 @@ struct Voice {
     pitch: f32,
     /// Counter value at the current note-on (smallest = oldest).
     age: u64,
+    /// Counter value when the gate last went low (0 = never used).
+    released_at: u64,
     /// Output a 0 gate for the next sub-block before going high.
     retrig: bool,
     /// The last sub-block emitted gate 1 on this voice.
@@ -73,7 +75,16 @@ struct Voice {
 }
 
 impl Voice {
-    const IDLE: Voice = Voice { note: 0, gate: false, down: false, vel: 0.0, pitch: 0.0, age: 0, retrig: false, emitted: false };
+    const IDLE: Voice = Voice { note: 0, gate: false, down: false, vel: 0.0, pitch: 0.0, age: 0, released_at: 0, retrig: false, emitted: false };
+
+    /// Close the gate, stamping when (for longest-released free-voice choice).
+    fn release(&mut self, stamp: u64) {
+        if self.gate {
+            self.released_at = stamp;
+        }
+        self.gate = false;
+        self.down = false;
+    }
 
     /// The gate level to emit for this sub-block; consumes the retrigger gap.
     fn gate_out(&mut self) -> f32 {
@@ -167,10 +178,16 @@ impl MidiIn {
         }
     }
 
+    /// A fresh, unique counter value for stamping events.
+    fn stamp(&mut self) -> u64 {
+        self.counter += 1;
+        self.counter
+    }
+
     fn all_off(&mut self) {
+        let t = self.stamp();
         for v in self.voices.iter_mut() {
-            v.gate = false;
-            v.down = false;
+            v.release(t);
         }
         self.stack_len = 0;
     }
@@ -184,9 +201,9 @@ impl MidiIn {
         }
         let n = voice_count(params);
         if n < self.n_voices {
+            let t = self.stamp();
             for v in self.voices.iter_mut().skip(n) {
-                v.gate = false;
-                v.down = false;
+                v.release(t);
             }
         }
         self.n_voices = n;
@@ -215,8 +232,7 @@ impl MidiIn {
 
     fn note_on(&mut self, note: u8, vel: u8) {
         let vel = vel as f32 / 127.0;
-        let age = self.counter;
-        self.counter += 1;
+        let age = self.stamp();
         if self.mono {
             self.mono_note_on(note, vel);
             return;
@@ -227,7 +243,8 @@ impl MidiIn {
         let idx = self.voices[..n]
             .iter()
             .position(|v| v.gate && v.note == note)
-            .or_else(|| oldest(&self.voices[..n], |v| !v.gate))
+            .or_else(|| self.voices[..n].iter().position(|v| !v.gate && v.released_at == 0))
+            .or_else(|| longest_released(&self.voices[..n]))
             .or_else(|| oldest(&self.voices[..n], |_| true));
         let Some(v) = idx.and_then(|i| self.voices.get_mut(i)) else { return };
         // Gate was high in the last emitted block (re-press, steal, or a
@@ -270,10 +287,14 @@ impl MidiIn {
                 }
             }
             self.mono_retarget();
-        } else if let Some(v) = self.voices.iter_mut().find(|v| v.gate && v.down && v.note == note) {
-            v.down = false;
-            if !self.pedal {
-                v.gate = false;
+        } else {
+            let (pedal, t) = (self.pedal, self.stamp());
+            if let Some(v) = self.voices.iter_mut().find(|v| v.gate && v.down && v.note == note) {
+                if pedal {
+                    v.down = false;
+                } else {
+                    v.release(t);
+                }
             }
         }
     }
@@ -294,8 +315,9 @@ impl MidiIn {
             self.stack_len = w;
             self.mono_retarget();
         } else {
+            let t = self.stamp();
             for v in self.voices.iter_mut().filter(|v| v.gate && !v.down) {
-                v.gate = false;
+                v.release(t);
             }
         }
     }
@@ -372,6 +394,17 @@ impl MidiIn {
             }
         }
     }
+}
+
+/// The free voice whose gate went low longest ago (smallest `released_at`).
+fn longest_released(voices: &[Voice]) -> Option<usize> {
+    let mut best: Option<usize> = None;
+    for (i, v) in voices.iter().enumerate() {
+        if !v.gate && best.is_none_or(|b| v.released_at < voices[b].released_at) {
+            best = Some(i);
+        }
+    }
+    best
 }
 
 /// Index of the matching voice with the smallest age (ties: lowest index).
@@ -494,7 +527,9 @@ mod tests {
         let slope = 1.0 / (a * SR);
         assert!(trace.windows(2).all(|w| (w[1] - w[0]).abs() <= slope * 1.001));
         let gap = &trace[40 * RACK_BLOCK..41 * RACK_BLOCK];
-        assert!(gap[RACK_BLOCK - 1] < gap[0] || gap[0] < 0.7 + 1e-3, "release during the gap");
+        assert!(gap[RACK_BLOCK - 1] < gap[0], "envelope releases during the gap");
+        let after = trace[41 * RACK_BLOCK];
+        assert!(after > gap[RACK_BLOCK - 1], "attack resumes after the gap");
     }
 
     #[test]
@@ -514,17 +549,53 @@ mod tests {
     fn free_voice_prefers_longest_released() {
         let mut r = Rig::new();
         r.p[VOICES] = 2.0;
+        r.on(60); // A (long) -> voice 0
+        r.on(62); // B (short) -> voice 1
+        r.block();
+        r.off(62); // B released first
+        r.block();
+        r.off(60); // A released later: its tail is the freshest
+        r.block();
+        r.on(64); // C must reuse B's voice (1), not A's (0)
+        r.block();
+        assert_eq!(r.gate(1), 1.0);
+        assert!((r.pitch(1) - 4.0 / 12.0).abs() < 1e-6);
+        assert_eq!(r.gate(0), 0.0);
+        assert!((r.pitch(0) - 0.0).abs() < 1e-6, "A's tail keeps its pitch");
+    }
+
+    #[test]
+    fn steal_takes_oldest_even_when_not_voice_zero() {
+        let mut r = Rig::new();
+        r.p[VOICES] = 2.0;
         r.on(60);
         r.on(62);
         r.block();
-        r.off(60);
-        r.off(62);
+        r.on(60); // re-press: voice 0 becomes the newest, voice 1 (62) oldest
         r.block();
-        r.on(64); // both free; voice 0 has the older note-on
+        r.block();
+        r.on(64);
+        r.block();
+        assert_eq!(r.gate(1), 0.0, "voice 1 stolen: gap");
+        assert!((r.pitch(1) - 4.0 / 12.0).abs() < 1e-6);
+        assert!((r.pitch(0) - 0.0).abs() < 1e-6, "voice 0 untouched");
+        assert_eq!(r.gate(0), 1.0);
+    }
+
+    #[test]
+    fn mono_release_of_non_top_note_keeps_top() {
+        let mut r = Rig::new();
+        r.p[MODE] = 1.0;
+        r.on(48);
+        r.on(55);
+        r.on(60);
+        r.off(55);
+        r.block();
+        assert!((r.pitch(0) - 0.0).abs() < 1e-6, "still 60");
+        r.off(60);
         r.block();
         assert_eq!(r.gate(0), 1.0);
-        assert!((r.pitch(1) - 2.0 / 12.0).abs() < 1e-6, "released tail keeps its pitch");
-        assert_eq!(r.gate(1), 0.0);
+        assert!((r.pitch(0) - (48.0 - 60.0) / 12.0).abs() < 1e-6, "back to 48");
     }
 
     #[test]

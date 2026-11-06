@@ -80,6 +80,12 @@ impl Adsr {
         let decay_coef = exp_coef(param(params, K, DECAY), self.sr);
         let release_coef = exp_coef(param(params, K, RELEASE), self.sr);
         let sustain_target = param(params, K, SUSTAIN).clamp(0.0, 1.0);
+        // Channels above the current count must not keep stale state, or raising
+        // the count later would resurrect an old level.
+        for ch in channels..MAX_POLY {
+            self.level[ch] = 0.0;
+            self.stage[ch] = Stage::Idle;
+        }
         for i in 0..RACK_BLOCK {
             let sus = self.sustain.next(sustain_target);
             for ch in 0..channels {
@@ -207,6 +213,38 @@ mod tests {
         for w in again.windows(2) {
             assert!((w[1] - w[0]).abs() <= slope * 1.01);
         }
+    }
+
+    #[test]
+    fn release_mid_attack_starts_from_current_level() {
+        let p = params(0.1, 0.2, 0.7, 0.5);
+        let mut env = Adsr::new(SR);
+        let up = run(&mut env, &p, 1.0, 30);
+        let lvl = up[up.len() - 1];
+        assert!(lvl > 0.1 && lvl < 0.5, "mid attack {lvl}");
+        let down = run(&mut env, &p, 0.0, 1);
+        assert!(down[0] < lvl && down[0] > lvl * 0.99, "no jump: {lvl} -> {}", down[0]);
+        assert!(down.windows(2).all(|w| w[1] <= w[0]), "falls monotonically");
+    }
+
+    #[test]
+    fn stale_channel_state_is_cleared_when_channels_drop() {
+        let p = params(0.001, 0.2, 0.7, 5.0);
+        let mut env = Adsr::new(SR);
+        let mut g = [PortBuf::new()];
+        g[0].channels = 4;
+        g[0].data[3] = [1.0; RACK_BLOCK];
+        let mut outs = [PortBuf::new()];
+        for _ in 0..10 {
+            env.process(&p, &g, &mut outs);
+        }
+        assert!(outs[0].data[3][RACK_BLOCK - 1] > 0.6);
+        g[0].channels = 2;
+        env.process(&p, &g, &mut outs);
+        g[0].channels = 4;
+        g[0].data[3] = [0.0; RACK_BLOCK];
+        env.process(&p, &g, &mut outs);
+        assert_eq!(outs[0].data[3][0], 0.0, "no resurrected level");
     }
 
     #[test]

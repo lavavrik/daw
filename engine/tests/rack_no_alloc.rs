@@ -159,6 +159,38 @@ fn rack_edits_and_render_do_not_allocate() {
         render(&mut r, 5, &mut ctx);
     }
 
+    // Filter (every mode, cv from a poly ADSR, drive) + Mixer (mono + poly in).
+    r.clear();
+    render(&mut r, 5, &mut ctx);
+    assert_eq!(r.add_module(15, ModuleKind::MidiIn), OK);
+    assert_eq!(r.add_module(16, ModuleKind::Osc), OK);
+    assert_eq!(r.add_module(17, ModuleKind::Adsr), OK);
+    assert_eq!(r.add_module(18, ModuleKind::Filter), OK);
+    assert_eq!(r.add_module(19, ModuleKind::Noise), OK);
+    assert_eq!(r.add_module(20, ModuleKind::Mixer), OK);
+    assert_eq!(r.add_module(21, ModuleKind::Out), OK);
+    assert_eq!(r.connect((15, 0), (16, 0)), OK); // pitch -> osc
+    assert_eq!(r.connect((15, 1), (17, 0)), OK); // gate -> adsr
+    assert_eq!(r.connect((16, 0), (18, 0)), OK); // osc -> filter in
+    assert_eq!(r.connect((17, 0), (18, 1)), OK); // env -> filter cv
+    assert_eq!(r.connect((18, 0), (20, 0)), OK); // filter -> mixer in1
+    assert_eq!(r.connect((19, 0), (20, 1)), OK); // noise -> mixer in2
+    assert_eq!(r.connect((20, 0), (21, 0)), OK);
+    assert_eq!(r.set_param(18, 3, 4.0), OK); // cv_amt
+    assert_eq!(r.set_param(18, 2, 1.0), OK); // reso
+    assert_eq!(r.set_param(18, 4, 1.0), OK); // drive
+    assert_eq!(r.set_param(20, 1, 0.1), OK); // lvl2
+    r.note(NoteEvent::On { note: 36, vel: 100 });
+    r.note(NoteEvent::On { note: 43, vel: 100 });
+    for mode in [0, 2, 1, 3, 4, 0] {
+        assert_eq!(r.set_param(18, 0, mode as f32), OK);
+        assert_eq!(r.set_param(18, 1, 200.0 + 3000.0 * mode as f32), OK); // cutoff
+        render(&mut r, 5, &mut ctx);
+    }
+    r.note(NoteEvent::AllOff);
+    assert_eq!(r.disconnect((18, 1)), OK);
+    render(&mut r, 5, &mut ctx);
+
     ARMED.with(|a| a.set(false));
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));

@@ -14,23 +14,34 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 
 /// Module kinds. The discriminants are **fixed wire ids** (commands and saved
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
-/// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8. Only the kinds implemented
-/// so far are listed; the others are added with their modules.
+/// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
     MidiIn = 0,
     Osc = 1,
     Noise = 2,
+    Filter = 3,
     Adsr = 4,
     Vca = 5,
     Lfo = 6,
+    Mixer = 7,
     Out = 8,
 }
 
 impl ModuleKind {
     /// Every kind, ordered by id (the catalog order).
-    pub const ALL: &'static [ModuleKind] = &[ModuleKind::MidiIn, ModuleKind::Osc, ModuleKind::Noise, ModuleKind::Adsr, ModuleKind::Vca, ModuleKind::Lfo, ModuleKind::Out];
+    pub const ALL: &'static [ModuleKind] = &[
+        ModuleKind::MidiIn,
+        ModuleKind::Osc,
+        ModuleKind::Noise,
+        ModuleKind::Filter,
+        ModuleKind::Adsr,
+        ModuleKind::Vca,
+        ModuleKind::Lfo,
+        ModuleKind::Mixer,
+        ModuleKind::Out,
+    ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
     pub fn from_id(id: u32) -> Option<ModuleKind> {
@@ -224,6 +235,48 @@ static NOISE: ModuleSpec = ModuleSpec {
     params: &[lin("level", "Level", 0.0, 1.0, 1.0, true)],
 };
 
+/// Filter `mode` choices (ids 0..4; see `modules::filter`).
+pub const FILTER_MODES: &[&str] = &["LP24", "LP12", "HP", "BP", "Notch"];
+
+static FILTER: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Filter,
+    id: "filter",
+    name: "Filter",
+    category: "shaping",
+    // `cv` is V/oct: effective cutoff = cutoff × 2^(cv × cv_amt).
+    inputs: &[port("in", Signal::Audio), port("cv", Signal::Cv)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        choice("mode", "Mode", FILTER_MODES, 0.0),
+        ParamSpec {
+            name: "cutoff",
+            label: "Cutoff",
+            min: 20.0,
+            max: 20000.0,
+            default: 1200.0,
+            integer: false,
+            curve: Curve::Exp,
+            unit: "Hz",
+            choices: &[],
+            smooth: true,
+        },
+        lin("reso", "Resonance", 0.0, 1.0, 0.2, true),
+        ParamSpec {
+            name: "cv_amt",
+            label: "CV amount",
+            min: -8.0,
+            max: 8.0,
+            default: 0.0,
+            integer: false,
+            curve: Curve::Lin,
+            unit: "oct",
+            choices: &[],
+            smooth: true,
+        },
+        lin("drive", "Drive", 0.0, 1.0, 0.0, true),
+    ],
+};
+
 static ADSR: ModuleSpec = ModuleSpec {
     kind: ModuleKind::Adsr,
     id: "adsr",
@@ -281,6 +334,21 @@ static LFO: ModuleSpec = ModuleSpec {
     ],
 };
 
+static MIXER: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Mixer,
+    id: "mixer",
+    name: "Mixer",
+    category: "utility",
+    inputs: &[port("in1", Signal::Audio), port("in2", Signal::Audio), port("in3", Signal::Audio), port("in4", Signal::Audio)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        lin("lvl1", "Level 1", 0.0, 1.0, 0.8, true),
+        lin("lvl2", "Level 2", 0.0, 1.0, 0.8, true),
+        lin("lvl3", "Level 3", 0.0, 1.0, 0.8, true),
+        lin("lvl4", "Level 4", 0.0, 1.0, 0.8, true),
+    ],
+};
+
 static OUT: ModuleSpec = ModuleSpec {
     kind: ModuleKind::Out,
     id: "out",
@@ -297,9 +365,11 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::MidiIn => &MIDI_IN,
         ModuleKind::Osc => &OSC,
         ModuleKind::Noise => &NOISE,
+        ModuleKind::Filter => &FILTER,
         ModuleKind::Adsr => &ADSR,
         ModuleKind::Vca => &VCA,
         ModuleKind::Lfo => &LFO,
+        ModuleKind::Mixer => &MIXER,
         ModuleKind::Out => &OUT,
     }
 }
@@ -420,9 +490,11 @@ mod tests {
         assert_eq!(ModuleKind::MidiIn as u8, 0);
         assert_eq!(ModuleKind::Osc as u8, 1);
         assert_eq!(ModuleKind::Noise as u8, 2);
+        assert_eq!(ModuleKind::Filter as u8, 3);
         assert_eq!(ModuleKind::Adsr as u8, 4);
         assert_eq!(ModuleKind::Vca as u8, 5);
         assert_eq!(ModuleKind::Lfo as u8, 6);
+        assert_eq!(ModuleKind::Mixer as u8, 7);
         assert_eq!(ModuleKind::Out as u8, 8);
         let mut last = -1i32;
         for (i, &k) in ModuleKind::ALL.iter().enumerate() {

@@ -32,6 +32,16 @@
       "params":[
         {"name":"level","label":"Level","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
       ]},
+    {"kind":3,"id":"filter","name":"Filter","category":"shaping",
+      "inputs":[{"name":"in","signal":"audio"},{"name":"cv","signal":"cv"}],
+      "outputs":[{"name":"out","signal":"audio"}],
+      "params":[
+        {"name":"mode","label":"Mode","min":0,"max":4,"default":0,"integer":true,"curve":"lin","unit":"","choices":["LP24","LP12","HP","BP","Notch"],"smooth":false},
+        {"name":"cutoff","label":"Cutoff","min":20,"max":20000,"default":1200,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":true},
+        {"name":"reso","label":"Resonance","min":0,"max":1,"default":0.2,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"cv_amt","label":"CV amount","min":-8,"max":8,"default":0,"integer":false,"curve":"lin","unit":"oct","choices":[],"smooth":true},
+        {"name":"drive","label":"Drive","min":0,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
     {"kind":4,"id":"adsr","name":"ADSR","category":"shaping",
       "inputs":[{"name":"gate","signal":"gate"}],
       "outputs":[{"name":"env","signal":"cv"}],
@@ -56,6 +66,15 @@
         {"name":"sync","label":"Sync","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Free","Sync"],"smooth":false},
         {"name":"division","label":"Division","min":0,"max":7,"default":3,"integer":true,"curve":"lin","unit":"","choices":["1/16","1/8","1/8.","1/4","1/2","1 bar","2 bars","4 bars"],"smooth":false},
         {"name":"depth","label":"Depth","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":7,"id":"mixer","name":"Mixer","category":"utility",
+      "inputs":[{"name":"in1","signal":"audio"},{"name":"in2","signal":"audio"},{"name":"in3","signal":"audio"},{"name":"in4","signal":"audio"}],
+      "outputs":[{"name":"out","signal":"audio"}],
+      "params":[
+        {"name":"lvl1","label":"Level 1","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"lvl2","label":"Level 2","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"lvl3","label":"Level 3","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"lvl4","label":"Level 4","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
       ]},
     {"kind":8,"id":"out","name":"Out","category":"utility",
       "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],

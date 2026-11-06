@@ -29,8 +29,16 @@ function find(p: Project, trackId: string, rowId: string) {
   return row < 0 ? null : { track, row, r: track.rows[row] };
 }
 
+/** First unused "Base", "Base 2", "Base 3"… so the list and the "Keys →" pill stay unambiguous. */
+export function uniqueTrackName(p: Project, base: string): string {
+  const names = new Set(p.tracks.map((t) => t.name));
+  let n = 1;
+  while (names.has(n === 1 ? base : `${base} ${n}`)) n++;
+  return n === 1 ? base : `${base} ${n}`;
+}
+
 /** Returns null when all MAX_TRACKS slots are taken. */
-export function addDrumTrack(p: Project, sink: CommandSink, name = 'Drums'): DrumTrack | null {
+export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackName(p, 'Drums')): DrumTrack | null {
   const used = new Set(p.tracks.map((t) => t.slot));
   let slot = 0;
   while (slot < MAX_TRACKS && used.has(slot)) slot++;
@@ -175,10 +183,13 @@ export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
   if (p.selectedTrackId === trackId) {
     p.selectedTrackId = (p.tracks[i] ?? p.tracks[i - 1] ?? null)?.id ?? null;
   }
-  if (p.lastSynthTrackId === trackId) {
-    // Fall back to the selection if it is a synth, else any remaining synth.
-    const sel = p.tracks.find((t) => t.id === p.selectedTrackId);
-    p.lastSynthTrackId = (sel?.kind === 'synth' ? sel : p.tracks.find((t) => t.kind === 'synth'))?.id ?? null;
+  const sel = p.tracks.find((t) => t.id === p.selectedTrackId);
+  if (sel?.kind === 'synth') {
+    // Selection landed on a synth: keys follow it, and stay on it if a drum is selected later.
+    p.lastSynthTrackId = sel.id;
+  } else if (p.lastSynthTrackId === trackId) {
+    // Removed the last synth while a drum is selected: fall back to any remaining synth.
+    p.lastSynthTrackId = p.tracks.find((t) => t.kind === 'synth')?.id ?? null;
   }
   syncInput(p, sink, before);
 }

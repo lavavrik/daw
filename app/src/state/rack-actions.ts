@@ -4,7 +4,7 @@ import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
 import { MAX_TRACKS, TRACK_COLORS } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
-import { selectTrack } from './actions';
+import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { STARTER_PATCHES } from './patches';
 import type { Patch } from './patches';
@@ -20,7 +20,7 @@ export function synthTrack(p: Project, trackId: string): SynthTrack | null {
  * SET_INPUT_TRACK if the live input changes. Null when all slots are taken.
  */
 export function addSynthTrack(
-  p: Project, sink: CommandSink, name = 'Synth', patch: Patch = STARTER_PATCHES[0],
+  p: Project, sink: CommandSink, name = uniqueTrackName(p, 'Synth'), patch: Patch = STARTER_PATCHES[0],
 ): SynthTrack | null {
   const used = new Set(p.tracks.map((t) => t.slot));
   let slot = 0;

@@ -7,6 +7,9 @@
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
+  // Which tab is shown follows the selected track's kind: drum -> Step grid,
+  // synth -> Instrument (the only tab each kind has so far).
+  const active = $derived(track?.kind === 'synth' ? 'instrument' : track?.kind === 'drum' ? 'step' : null);
 
   // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
@@ -20,9 +23,9 @@
       <span class="none">No track selected</span>
     {/if}
     <span class="tabs">
-      <button class="tab active">Step grid</button>
+      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'}>Step grid</button>
       <button class="tab" disabled title={later}>Piano roll</button>
-      <button class="tab" disabled title={later}>Instrument</button>
+      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'}>Instrument</button>
       <button class="tab" disabled title={later}>Mixer</button>
     </span>
   </div>
@@ -39,6 +42,9 @@
     {/if}
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} onnotice={(m) => (banners.notice = m)} />
+    {:else if track && track.kind === 'synth'}
+      <!-- Task 9 replaces this placeholder with <Rack>. -->
+      <p class="none" data-testid="instrument-body">Rack arrives in the next task</p>
     {/if}
   </div>
 </section>

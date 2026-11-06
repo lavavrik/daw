@@ -145,6 +145,20 @@ describe('input track selection', () => {
     expect(p.lastSynthTrackId).toBeNull();
   });
 
+  it('removeTrack landing on a synth makes it the last synth (keys follow the visible synth)', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s1 = addSynthTrack(p, sink)!;
+    const d = addDrumTrack(p, sink)!;
+    const s2 = addSynthTrack(p, sink)!;
+    selectTrack(p, sink, s1.id);
+    selectTrack(p, sink, d.id); // last synth = s1
+    removeTrack(p, sink, d.id); // selection moves to s2
+    expect(p.selectedTrackId).toBe(s2.id);
+    expect(p.lastSynthTrackId).toBe(s2.id);
+    expect(liveInputTrack(p)?.id).toBe(s2.id);
+  });
+
   it('loadPatch can be reloaded onto an existing track', () => {
     const p = new Project();
     const { sink, sent } = fake();

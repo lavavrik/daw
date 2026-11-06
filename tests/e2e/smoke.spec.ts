@@ -351,3 +351,46 @@ test('a deferred load evicted from the retry queue shows an error', async ({ pag
   await expect(page.getByTestId('notice')).toBeHidden();
   await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
 });
+
+// ---- Track list (Task 8): driven through the UI, not raw engine commands ----
+
+test('add synth track, it plays from the keyboard', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  const row = page.getByTestId('track-1');
+  await expect(row).toContainText('Synth · Deep Bass');
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
+  await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
+  await expect(page.getByTestId('instrument-body')).toBeVisible();
+  await page.keyboard.down('KeyA');
+  await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05); // peakL
+  await page.keyboard.up('KeyA');
+  await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeLessThan(0.001);
+});
+
+test('selecting drums keeps keys on the last synth', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await page.getByTestId('track-0').click();
+  await expect(page.getByTestId('track-0')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Step grid' })).toHaveClass(/active/);
+  await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
+  await page.keyboard.down('KeyA');
+  await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05);
+  await page.keyboard.up('KeyA');
+});
+
+test('removing the synth track silences it and keys show no synth', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  page.once('dialog', (d) => d.accept());
+  await page.getByTestId('track-1').hover();
+  await page.getByRole('button', { name: 'Remove track Synth' }).click();
+  await expect(page.getByTestId('track-1')).toHaveCount(0);
+  await expect(page.getByTestId('keys-target')).not.toContainText('Synth');
+  await page.keyboard.down('KeyA');
+  await page.waitForTimeout(300);
+  expect(await slot(page, 5)()).toBeLessThan(0.001);
+  await page.keyboard.up('KeyA');
+});

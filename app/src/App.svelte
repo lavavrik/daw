@@ -68,7 +68,7 @@
     <div class="main">
       <Browser />
       <div class="right">
-        <div class="song"><SongArea /></div>
+        <div class="song"><SongArea p={project} {engine} /></div>
         <div class="bottom"><BottomPanel p={project} {engine} /></div>
       </div>
     </div>

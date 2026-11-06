@@ -1,9 +1,15 @@
 <script lang="ts">
   import type { Project } from '../state/project.svelte';
+  import type { AudioEngine } from '../audio/engine';
+  import StepGrid from './StepGrid.svelte';
 
-  let { p }: { p: Project } = $props();
+  let { p, engine }: { p: Project; engine: AudioEngine } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
+
+  // Banners live here (top of the body) so any tab can raise them.
+  let error = $state<string | null>(null);
+  let notice = $state<string | null>(null);
 </script>
 
 <section class="pane">
@@ -21,7 +27,21 @@
       <button class="tab" disabled title={later}>Mixer</button>
     </span>
   </div>
-  <div class="body">Step grid arrives in the next task</div>
+  <div class="body">
+    {#if error}
+      <div class="banner err" data-testid="banner" role="alert">
+        <span>{error}</span><button aria-label="Dismiss" onclick={() => (error = null)}>×</button>
+      </div>
+    {/if}
+    {#if notice}
+      <div class="banner note" data-testid="notice">
+        <span>{notice}</span><button aria-label="Dismiss" onclick={() => (notice = null)}>×</button>
+      </div>
+    {/if}
+    {#if track}
+      <StepGrid {p} {engine} {track} onerror={(m) => (error = m)} onnotice={(m) => (notice = m)} />
+    {/if}
+  </div>
 </section>
 
 <style>
@@ -33,5 +53,9 @@
   .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
   .tab.active { background: #f0a23a; color: #111; }
   .tab:disabled { opacity: 0.45; cursor: not-allowed; }
-  .body { padding: 12px; color: #7d808c; overflow: auto; flex: 1; }
+  .body { padding: 8px; overflow: auto; flex: 1; }
+  .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
+  .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
+  .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
+  .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
 </style>

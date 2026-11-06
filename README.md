@@ -19,3 +19,23 @@ AudioWorklet, with a Svelte 5 UI. Design:
   (cross-origin isolated: COOP/COEP headers set)
 - `npm run preview` — production build + preview on the same port
 - `npm run test:e2e` — Playwright
+
+## First loop in 60 seconds
+
+1. `npm run dev`, open http://localhost:5174, click **Click to start audio**.
+2. Drag a kick from Finder onto the first row (it says "drop sample"; the row
+   takes the file's name). Drag a hat onto the second row. Dropping on a row
+   that already has a sample replaces it; dropping on **+ Add row** makes a new
+   row for it.
+3. Click cells to place steps (click-drag paints; Alt-click = quiet ghost
+   note, shown dimmer). For four-on-the-floor tick steps 1, 5, 9, 13 on the
+   kick; put the hat on 3, 7, 11, 15 for off-beats.
+4. Press **Space**. The white-outlined column is the playhead. Tempo defaults
+   to 124 BPM; try the metronome and change tempo while playing (it should not
+   click). Dropouts in the top bar should stay 0.
+
+Notes: only audio files are accepted (wav, aif, mp3, flac, ogg, m4a); a
+failed drop shows a dismissable red banner and changes nothing. If you drop a
+very large sample while playing, it loads when you stop (yellow notice). Up to
+256 samples per project. The 2 ms fade-out applied to each sample's tail
+avoids clicks from samples that don't end at zero.

@@ -132,6 +132,11 @@ export class AudioEngine {
     });
   }
 
+  /** The engine's AudioContext, for decodeAudioData (resamples to engine rate). */
+  get context(): BaseAudioContext {
+    return this.ctx;
+  }
+
   /** Live view of the telemetry slots (see TELEMETRY); updated every block. */
   telemetry(): Float64Array {
     return this.tele;

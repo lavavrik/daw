@@ -35,7 +35,7 @@
       <Browser />
       <div class="right">
         <div class="song"><SongArea /></div>
-        <div class="bottom"><BottomPanel p={project} /></div>
+        <div class="bottom"><BottomPanel p={project} {engine} /></div>
       </div>
     </div>
   {/if}

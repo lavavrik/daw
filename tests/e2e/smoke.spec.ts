@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { makeWav } from './wav';
 
 // Minimal shape of what App.svelte exposes on window for tests.
 type DawWindow = {
@@ -95,4 +96,77 @@ test('space toggles transport and keyboard plays', async ({ page }) => {
   await page.keyboard.down('KeyH'); // A4
   await expect.poll(slot(page, 5), { timeout: 5_000 }).toBeGreaterThan(0.05); // peakL
   await page.keyboard.up('KeyH');
+});
+
+/** Max peakL seen over `ms` (sampled every 4 ms): a short hit is easy to miss with a single read. */
+function maxPeak(page: Page, ms = 2000) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<number>((resolve) => {
+        const eng = (window as unknown as DawWindow).__daw!.engine!;
+        let max = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          max = Math.max(max, eng.telemetry()[5]);
+          if (performance.now() - t0 > ms) {
+            clearInterval(id);
+            resolve(max);
+          }
+        }, 4);
+      }),
+    ms,
+  );
+}
+
+/** Dispatch a file drop onto the element with `testid` (bytes passed as a number array). */
+async function dropFile(page: Page, testid: string, name: string, type: string, bytes: number[]) {
+  await page.evaluate(
+    ({ testid, name, type, bytes }) => {
+      const el = document.querySelector(`[data-testid="${testid}"]`)!;
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(bytes)], name, { type }));
+      for (const t of ['dragenter', 'dragover', 'drop']) {
+        el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
+      }
+    },
+    { testid, name, type, bytes },
+  );
+}
+
+async function loadKickOnRow0(page: Page) {
+  await dropFile(page, 'row-0', 'kick.wav', 'audio/wav', [...makeWav()]);
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
+}
+
+test('drop sample, program steps, hear it', async ({ page }) => {
+  await startAudio(page);
+  await loadKickOnRow0(page);
+  for (const s of [0, 4, 8, 12]) await page.getByTestId(`step-0-${s}`).click();
+  await page.keyboard.press('Space');
+  expect(await maxPeak(page)).toBeGreaterThan(0.1); // peakL
+  const seen = new Set<string>();
+  await expect
+    .poll(
+      async () => {
+        const cls = await page.locator('[data-testid^="step-0-"].playhead').first().getAttribute('data-testid');
+        if (cls) seen.add(cls);
+        return seen.size;
+      },
+      { timeout: 4_000 },
+    )
+    .toBeGreaterThan(1);
+  await page.screenshot({
+    path: '.superpowers/sdd/2026-11-06-plan-1-engine-and-step-grid/task-12-screenshot.png',
+  });
+});
+
+test('bad file drop shows error', async ({ page }) => {
+  await startAudio(page);
+  await loadKickOnRow0(page);
+  await page.getByTestId('step-0-0').click();
+  await dropFile(page, 'row-1', 'notes.txt', 'text/plain', [...Buffer.from('hello')]);
+  await expect(page.getByTestId('banner')).toContainText('Couldn\'t load "notes.txt"');
+  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('drop sample');
+  await page.keyboard.press('Space');
+  expect(await maxPeak(page)).toBeGreaterThan(0);
 });

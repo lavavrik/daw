@@ -10,11 +10,16 @@
   import { Project } from './state/project.svelte';
   import { addDrumTrack } from './state/actions';
   import { installShortcuts } from './input/shortcuts';
+  import { connectMidi } from './input/midi';
+  import type { MidiStatus } from './input/midi';
   import { banners } from './state/banners.svelte';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
   let uninstall: (() => void) | null = null;
+  let uninstallMidi: (() => void) | null = null;
+  let octave = $state(4);
+  let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op };
@@ -23,10 +28,15 @@
     engine = e;
     window.__daw.engine = e;
     addDrumTrack(project, e); // default track so the UI has something to show
-    uninstall = installShortcuts(project, e);
+    uninstall = installShortcuts(project, e, (o) => (octave = o));
+    // Not awaited: the permission prompt must never block startup/rendering.
+    void connectMidi(e, (s) => (midi = s)).then((d) => (uninstallMidi = d));
   }
 
-  onDestroy(() => uninstall?.());
+  onDestroy(() => {
+    uninstall?.();
+    uninstallMidi?.();
+  });
 
   // Window-level drop guard. A file dropped where no row handles it (Browser
   // pane, gaps, headers, a disabled button, the start overlay) would make the
@@ -54,7 +64,7 @@
 
 <div class="app">
   {#if engine}
-    <TopBar p={project} {engine} />
+    <TopBar p={project} {engine} {octave} {midi} />
     <div class="main">
       <Browser />
       <div class="right">

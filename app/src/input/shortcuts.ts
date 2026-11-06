@@ -24,8 +24,20 @@ export function isTyping(t: EventTarget | null): boolean {
   return el.tagName === 'TEXTAREA' || el.isContentEditable;
 }
 
-/** Returns an uninstall function. */
-export function installShortcuts(p: Project, sink: CommandSink): () => void {
+export interface ShortcutHandlers {
+  onKeyDown(e: KeyboardEvent): void;
+  onKeyUp(e: KeyboardEvent): void;
+  onBlur(): void;
+  /** Call with document.hidden on visibilitychange; releases when hidden. */
+  onVisibility(hidden: boolean): void;
+}
+
+/**
+ * Window-free core (tested with fake events). Stuck-note rules: any held
+ * piano note is released on blur, on page hidden, and when a Meta key goes
+ * down (macOS swallows the keyup of keys held during Cmd shortcuts).
+ */
+export function createShortcutHandlers(p: Project, sink: CommandSink, onOctave?: (o: number) => void): ShortcutHandlers {
   let octave = 4;
   // KeyboardEvent.code -> note that was actually started, so changing the
   // octave while a key is held still releases the right note.
@@ -37,38 +49,56 @@ export function installShortcuts(p: Project, sink: CommandSink): () => void {
     held.delete(code);
     sink.send(Op.NOTE_OFF, note);
   };
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.code === 'Space') {
-      e.preventDefault(); // no page scroll / focused-button activation
-      if (!e.repeat) togglePlay(p, sink);
-      return;
-    }
-    if (e.code === 'KeyZ' || e.code === 'KeyX') {
-      if (!e.repeat) octave = Math.min(8, Math.max(0, octave + (e.code === 'KeyX' ? 1 : -1)));
-      return;
-    }
-    if (e.repeat) return;
-    const note = keyToNote(e.code, octave);
-    if (note === null || held.has(e.code)) return;
-    held.set(e.code, note);
-    sink.send(Op.NOTE_ON, note, PIANO_VELOCITY);
-  };
-
-  const onKeyUp = (e: KeyboardEvent) => release(e.code); // always, even if focus moved into an input
-
-  const onBlur = () => {
+  const releaseAll = () => {
     for (const code of [...held.keys()]) release(code);
   };
 
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-  window.addEventListener('blur', onBlur);
+  return {
+    onKeyDown(e) {
+      if (e.metaKey) releaseAll(); // before the typing/modifier bail-out below
+      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === 'Space') {
+        e.preventDefault(); // no page scroll / focused-button activation
+        if (!e.repeat) togglePlay(p, sink);
+        return;
+      }
+      if (e.code === 'KeyZ' || e.code === 'KeyX') {
+        if (!e.repeat) {
+          const next = Math.min(8, Math.max(0, octave + (e.code === 'KeyX' ? 1 : -1)));
+          if (next !== octave) {
+            octave = next;
+            onOctave?.(octave);
+          }
+        }
+        return;
+      }
+      if (e.repeat) return;
+      const note = keyToNote(e.code, octave);
+      if (note === null || held.has(e.code)) return;
+      held.set(e.code, note);
+      sink.send(Op.NOTE_ON, note, PIANO_VELOCITY);
+    },
+    onKeyUp: (e) => release(e.code), // always, even if focus moved into an input
+    onBlur: releaseAll,
+    onVisibility(hidden) {
+      if (hidden) releaseAll();
+    },
+  };
+}
+
+/** Returns an uninstall function. `onOctave` fires (with the new octave) on Z/X. */
+export function installShortcuts(p: Project, sink: CommandSink, onOctave?: (o: number) => void): () => void {
+  const h = createShortcutHandlers(p, sink, onOctave);
+  const onVis = () => h.onVisibility(document.hidden);
+  window.addEventListener('keydown', h.onKeyDown);
+  window.addEventListener('keyup', h.onKeyUp);
+  window.addEventListener('blur', h.onBlur);
+  document.addEventListener('visibilitychange', onVis);
   return () => {
-    onBlur();
-    window.removeEventListener('keydown', onKeyDown);
-    window.removeEventListener('keyup', onKeyUp);
-    window.removeEventListener('blur', onBlur);
+    h.onBlur();
+    window.removeEventListener('keydown', h.onKeyDown);
+    window.removeEventListener('keyup', h.onKeyUp);
+    window.removeEventListener('blur', h.onBlur);
+    document.removeEventListener('visibilitychange', onVis);
   };
 }

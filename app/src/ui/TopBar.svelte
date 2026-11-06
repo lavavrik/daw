@@ -108,7 +108,7 @@
   <span class="pill">CPU {cpu}%</span>
   <span class="pill" class:bad={dropouts > 0}>Dropouts {dropouts}</span>
   <span class="pill" data-testid="latency" title={latencyMs > 40 ? BT_TIP : 'Output latency'}>
-    Latency {latency}{#if latencyMs > 40}<span class="bt"> BT?</span>{/if}
+    Latency {latency}{#if latencyMs > 40}<span class="bt">{" "}BT?</span>{/if}
   </span>
 </header>
 

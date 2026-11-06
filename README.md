@@ -47,6 +47,13 @@ avoids clicks from samples that don't end at zero.
 
 ## Synth tracks: the rack (Instrument tab)
 
+**Play a synth**: click **+ Synth track**, then play with the computer
+keyboard (A-row = white keys, W/E/T/Y/U = black; **Z / X** change octave, shown
+as "Oct" in the top bar) or a MIDI keyboard. Chrome asks for MIDI permission
+the first time; the "MIDI:" pill shows the state. Notes go to the selected
+synth track (selecting drums keeps the last synth). Design notes:
+`docs/architecture/modular.md`.
+
 **+ Synth track** adds a track with the *Deep Bass* patch; the bottom panel
 shows its rack (code: `app/src/ui/rack/`).
 

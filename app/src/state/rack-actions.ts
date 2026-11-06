@@ -1,0 +1,138 @@
+// Synth-track and rack edits. Like actions.ts: every function mutates Project
+// AND sends the matching engine command(s), so UI and engine never diverge.
+import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
+import { MAX_MODULES, Op, packPort } from '../audio/protocol';
+import { MAX_TRACKS, TRACK_COLORS } from './project.svelte';
+import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
+import { selectTrack } from './actions';
+import type { CommandSink } from './actions';
+import { STARTER_PATCHES } from './patches';
+import type { Patch } from './patches';
+
+export function synthTrack(p: Project, trackId: string): SynthTrack | null {
+  const t = p.tracks.find((x) => x.id === trackId);
+  return t && t.kind === 'synth' ? t : null;
+}
+
+/**
+ * Takes the lowest free slot (shared with drums). Command order: ADD_SYNTH_TRACK,
+ * the patch's commands (RACK_CLEAR first), then selectTrack, which sends
+ * SET_INPUT_TRACK if the live input changes. Null when all slots are taken.
+ */
+export function addSynthTrack(
+  p: Project, sink: CommandSink, name = 'Synth', patch: Patch = STARTER_PATCHES[0],
+): SynthTrack | null {
+  const used = new Set(p.tracks.map((t) => t.slot));
+  let slot = 0;
+  while (slot < MAX_TRACKS && used.has(slot)) slot++;
+  if (slot >= MAX_TRACKS) return null;
+  p.tracks.push({
+    kind: 'synth',
+    id: crypto.randomUUID(),
+    slot,
+    name,
+    color: TRACK_COLORS[slot % TRACK_COLORS.length],
+    patchName: '',
+    modules: [],
+    cables: [],
+  });
+  const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
+  sink.send(Op.ADD_SYNTH_TRACK, slot);
+  loadPatch(p, sink, track.id, patch);
+  selectTrack(p, sink, track.id);
+  return track;
+}
+
+/** RACK_CLEAR, then ADD_MODULE per module, SET_PARAM per non-default param, CONNECT per cable. */
+export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch: Patch) {
+  const t = synthTrack(p, trackId);
+  if (!t) return;
+  sink.send(Op.RACK_CLEAR, t.slot);
+  const modules: RackModule[] = [];
+  const cables: RackCable[] = [];
+  const sets: [number, number, number][] = [];
+  for (const pm of patch.modules) {
+    const def = moduleDef(pm.id);
+    sink.send(Op.RACK_ADD_MODULE, t.slot, pm.idx, def.kind);
+    const params = def.params.map((pd) => pd.default);
+    for (const [name, v] of Object.entries(pm.params ?? {})) {
+      const i = paramIndex(def, name);
+      params[i] = clampParam(def.params[i], v);
+      if (params[i] !== def.params[i].default) sets.push([pm.idx, i, params[i]]);
+    }
+    modules.push({ idx: pm.idx, kind: def.kind, params });
+  }
+  for (const [m, i, v] of sets) sink.send(Op.RACK_SET_PARAM, t.slot, m, i, v);
+  for (const c of patch.cables) {
+    const from = modules.find((m) => m.idx === c.from[0]);
+    const to = modules.find((m) => m.idx === c.to[0]);
+    if (!from || !to) continue;
+    const fp = portIndex(moduleDef(from.kind), 'out', c.from[1]);
+    const tp = portIndex(moduleDef(to.kind), 'in', c.to[1]);
+    const k = cables.findIndex((x) => x.to.m === to.idx && x.to.port === tp);
+    if (k >= 0) cables.splice(k, 1); // one cable per input
+    cables.push({ from: { m: from.idx, port: fp }, to: { m: to.idx, port: tp } });
+    sink.send(Op.RACK_CONNECT, t.slot, packPort(from.idx, fp), packPort(to.idx, tp));
+  }
+  t.modules = modules;
+  t.cables = cables;
+  t.patchName = patch.name;
+}
+
+/** Lowest free idx; null when the rack is full (or the track/kind is unknown). */
+export function addModule(p: Project, sink: CommandSink, trackId: string, kind: string | number): number | null {
+  const t = synthTrack(p, trackId);
+  if (!t) return null;
+  let def;
+  try { def = moduleDef(kind); } catch { return null; }
+  const used = new Set(t.modules.map((m) => m.idx));
+  let idx = 0;
+  while (idx < MAX_MODULES && used.has(idx)) idx++;
+  if (idx >= MAX_MODULES) return null;
+  t.modules.push({ idx, kind: def.kind, params: def.params.map((pd) => pd.default) });
+  sink.send(Op.RACK_ADD_MODULE, t.slot, idx, def.kind);
+  return idx;
+}
+
+/** The engine drops the module's cables itself; mirror that in state. */
+export function removeModule(p: Project, sink: CommandSink, trackId: string, idx: number) {
+  const t = synthTrack(p, trackId);
+  if (!t || !t.modules.some((m) => m.idx === idx)) return;
+  t.modules = t.modules.filter((m) => m.idx !== idx);
+  t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
+  sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
+}
+
+/** Replaces any cable already on `to` (one cable per input). */
+export function connect(
+  p: Project, sink: CommandSink, trackId: string,
+  from: { m: number; port: number }, to: { m: number; port: number },
+) {
+  const t = synthTrack(p, trackId);
+  if (!t) return;
+  const fm = t.modules.find((m) => m.idx === from.m);
+  const tm = t.modules.find((m) => m.idx === to.m);
+  if (!fm || !tm) return;
+  if (from.port < 0 || from.port >= moduleDef(fm.kind).outputs.length) return;
+  if (to.port < 0 || to.port >= moduleDef(tm.kind).inputs.length) return;
+  t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
+  t.cables.push({ from: { ...from }, to: { ...to } });
+  sink.send(Op.RACK_CONNECT, t.slot, packPort(from.m, from.port), packPort(to.m, to.port));
+}
+
+export function disconnect(p: Project, sink: CommandSink, trackId: string, to: { m: number; port: number }) {
+  const t = synthTrack(p, trackId);
+  if (!t) return;
+  t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
+  sink.send(Op.RACK_DISCONNECT, t.slot, packPort(to.m, to.port));
+}
+
+export function setParam(p: Project, sink: CommandSink, trackId: string, idx: number, paramIdx: number, value: number) {
+  const t = synthTrack(p, trackId);
+  const m = t?.modules.find((x) => x.idx === idx);
+  if (!t || !m || Number.isNaN(value)) return;
+  const pd = moduleDef(m.kind).params[paramIdx];
+  if (!pd) return;
+  m.params[paramIdx] = clampParam(pd, value);
+  sink.send(Op.RACK_SET_PARAM, t.slot, idx, paramIdx, m.params[paramIdx]);
+}

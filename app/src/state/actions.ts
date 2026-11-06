@@ -1,7 +1,7 @@
 // Every user edit: mutate Project AND send the matching engine command.
 import { Op } from '../audio/protocol';
 import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from './project.svelte';
-import type { DrumRow, DrumTrack, Project } from './project.svelte';
+import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -24,7 +24,7 @@ function makeRow(n: number): DrumRow {
 
 function find(p: Project, trackId: string, rowId: string) {
   const track = p.tracks.find((t) => t.id === trackId);
-  if (!track) return null;
+  if (!track || track.kind !== 'drum') return null;
   const row = track.rows.findIndex((r) => r.id === rowId);
   return row < 0 ? null : { track, row, r: track.rows[row] };
 }
@@ -36,6 +36,7 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = 'Drums'): Dru
   while (slot < MAX_TRACKS && used.has(slot)) slot++;
   if (slot >= MAX_TRACKS) return null;
   p.tracks.push({
+    kind: 'drum',
     id: crypto.randomUUID(),
     slot,
     name,
@@ -44,16 +45,16 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = 'Drums'): Dru
     swing: 0,
     rows: [1, 2, 3, 4].map(makeRow),
   });
-  const track = p.tracks[p.tracks.length - 1]; // reactive proxy
-  p.selectedTrackId = track.id;
+  const track = p.tracks[p.tracks.length - 1] as DrumTrack; // reactive proxy
   sink.send(Op.ADD_DRUM_TRACK, slot);
+  selectTrack(p, sink, track.id);
   return track;
 }
 
 /** No engine command: all engine rows already exist (empty). */
 export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow | null {
   const track = p.tracks.find((t) => t.id === trackId);
-  if (!track || track.rows.length >= MAX_ROWS) return null;
+  if (!track || track.kind !== 'drum' || track.rows.length >= MAX_ROWS) return null;
   track.rows.push(makeRow(track.rows.length + 1));
   return track.rows[track.rows.length - 1];
 }
@@ -103,14 +104,14 @@ export function setRowMute(p: Project, sink: CommandSink, trackId: string, rowId
 
 export function setStepCount(p: Project, sink: CommandSink, trackId: string, n: 16 | 32 | 64) {
   const track = p.tracks.find((t) => t.id === trackId);
-  if (!track || (n !== 16 && n !== 32 && n !== 64)) return;
+  if (!track || track.kind !== 'drum' || (n !== 16 && n !== 32 && n !== 64)) return;
   track.stepCount = n;
   sink.send(Op.SET_STEP_COUNT, track.slot, n);
 }
 
 export function setSwing(p: Project, sink: CommandSink, trackId: string, s: number) {
   const track = p.tracks.find((t) => t.id === trackId);
-  if (!track || Number.isNaN(s)) return;
+  if (!track || track.kind !== 'drum' || Number.isNaN(s)) return;
   track.swing = clamp(s, 0, 1);
   sink.send(Op.SET_SWING, track.slot, track.swing);
 }
@@ -139,4 +140,45 @@ export function stop(p: Project, sink: CommandSink) {
 export function togglePlay(p: Project, sink: CommandSink) {
   if (p.playing) stop(p, sink);
   else play(p, sink);
+}
+
+/** The synth that receives live keys: the selected synth, else the last-selected one. */
+export function liveInputTrack(p: Project): SynthTrack | null {
+  const sel = p.tracks.find((t) => t.id === p.selectedTrackId);
+  if (sel?.kind === 'synth') return sel;
+  const last = p.tracks.find((t) => t.id === p.lastSynthTrackId);
+  return last?.kind === 'synth' ? last : null;
+}
+
+/** Sends SET_INPUT_TRACK only when `before` (a live input captured earlier) differs from the current one. */
+function syncInput(p: Project, sink: CommandSink, before: SynthTrack | null) {
+  const now = liveInputTrack(p);
+  if (now?.id !== before?.id) sink.send(Op.SET_INPUT_TRACK, now ? now.slot : -1);
+}
+
+export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
+  const t = p.tracks.find((x) => x.id === trackId);
+  if (!t) return;
+  const before = liveInputTrack(p);
+  p.selectedTrackId = t.id;
+  if (t.kind === 'synth') p.lastSynthTrackId = t.id;
+  syncInput(p, sink, before);
+}
+
+export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
+  const i = p.tracks.findIndex((t) => t.id === trackId);
+  if (i < 0) return;
+  const before = liveInputTrack(p);
+  const slot = p.tracks[i].slot;
+  p.tracks.splice(i, 1);
+  sink.send(Op.REMOVE_TRACK, slot);
+  if (p.selectedTrackId === trackId) {
+    p.selectedTrackId = (p.tracks[i] ?? p.tracks[i - 1] ?? null)?.id ?? null;
+  }
+  if (p.lastSynthTrackId === trackId) {
+    // Fall back to the selection if it is a synth, else any remaining synth.
+    const sel = p.tracks.find((t) => t.id === p.selectedTrackId);
+    p.lastSynthTrackId = (sel?.kind === 'synth' ? sel : p.tracks.find((t) => t.kind === 'synth'))?.id ?? null;
+  }
+  syncInput(p, sink, before);
 }

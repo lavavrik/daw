@@ -10,7 +10,8 @@ const headers = {
 export default defineConfig({
   root: 'app',
   plugins: [svelte()],
-  server: { port: 5174, strictPort: true, headers },
+  // root is app/, so allow the repo root for ../engine/catalog.json.
+  server: { port: 5174, strictPort: true, headers, fs: { allow: ['..'] } },
   preview: { port: 5174, strictPort: true, headers },
   build: { outDir: '../dist', emptyOutDir: true },
   test: { include: ['src/**/*.test.ts'] },

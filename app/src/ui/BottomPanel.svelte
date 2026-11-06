@@ -37,7 +37,7 @@
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
       </div>
     {/if}
-    {#if track}
+    {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} onnotice={(m) => (banners.notice = m)} />
     {/if}
   </div>

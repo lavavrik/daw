@@ -26,6 +26,7 @@ export interface DrumRow {
 }
 
 export interface DrumTrack {
+  kind: 'drum';
   id: string;
   /** Engine track slot (0..MAX_TRACKS-1). */
   slot: number;
@@ -37,11 +38,42 @@ export interface DrumTrack {
   rows: DrumRow[];
 }
 
+/** One module in a synth track's rack; `idx` is the engine module slot (0..31). */
+export interface RackModule {
+  idx: number;
+  /** Numeric kind from engine/catalog.json. */
+  kind: number;
+  /** Full param array in catalog order (defaults filled in). */
+  params: number[];
+}
+
+/** A cable from output `from.port` of module `from.m` to input `to.port` of `to.m`. */
+export interface RackCable {
+  from: { m: number; port: number };
+  to: { m: number; port: number };
+}
+
+export interface SynthTrack {
+  kind: 'synth';
+  id: string;
+  /** Engine track slot, shared with drum tracks. */
+  slot: number;
+  name: string;
+  color: string;
+  patchName: string;
+  modules: RackModule[];
+  cables: RackCable[];
+}
+
+export type Track = DrumTrack | SynthTrack;
+
 export class Project {
   tempo = $state(124);
   metronome = $state(false);
   playing = $state(false);
-  tracks = $state<DrumTrack[]>([]);
+  tracks = $state<Track[]>([]);
   selectedTrackId = $state<string | null>(null);
+  /** Most recently selected synth track; keeps receiving keys while a drum track is selected. */
+  lastSynthTrackId = $state<string | null>(null);
   nextSampleId = $state(0);
 }

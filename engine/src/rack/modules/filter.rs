@@ -10,14 +10,24 @@
 //!   need `g = tan(π·fc/sr)` every sample. We use [`tan_fast`], a rational
 //!   approximation (Lambert continued fraction, 4 mults + 1 div) whose error
 //!   is < 0.01% up to 0.45·sr, far below the 1% budget, and much cheaper than
-//!   libm `tan` in wasm. When `cv` is unconnected the coefficients are shared
-//!   by all channels (computed once per sample).
+//!   libm `tan` in wasm. When `cv` is unconnected or mono the coefficients
+//!   are shared by all channels (computed once per sample).
 //! * **LP24 (ladder).** Four one-pole TPT stages with global feedback
 //!   `k = 4.2 × reso`, solved with the zero-delay-feedback estimate: the
 //!   linear prediction `y4 = (G⁴u + S)/(1 + kG⁴)` gives the feedback, then the
 //!   loop input `u − k·y4` passes through a soft saturator (`3·tanh(v/3)`,
 //!   via [`tanh_fast`]) and the stages run. The loop gain is `k/4`, so
 //!   self-oscillation starts at reso ≈ 0.95; the in-loop saturator bounds it.
+//!   * Loop saturation is intended ladder character (ruling R10): because the
+//!     saturator sits inside the feedback loop, at high resonance the loop
+//!     signal is hot and the resonant peak is compressed by input level, as
+//!     in an analog ladder. A quiet signal rings relatively more than a loud
+//!     one. Review measurements on a full-scale 55 Hz saw sweep put the
+//!     resonance ~14 dB below a linear ladder's at reso 0.6 and ~6 dB below
+//!     at 0.8; a 0 dBFS 120 Hz saw's peak at reso 0.9 sits ~5.5 dB below a
+//!     −20 dBFS one's (`lp24_resonance_compresses_with_level`). At low
+//!     resonance or low level the ladder is linear (within 0.5 dB at
+//!     −20 dBFS, reso 0.3; the −20 dBFS reso-0.9 peak matches too).
 //!   * Passband makeup: the input is scaled by `1 + k/2`, so at reso 1 the
 //!     passband drops to about −4.5 dB instead of a bare ladder's −14 dB.
 //!   * Stage tuning: at reso 0 the four stages sit 0.585 oct (×1.5) above the
@@ -32,17 +42,27 @@
 //!   Notch = x − k·v1.
 //! * **Drive.** Input gain `D = 1 + 7·drive` (×1..×8) into the soft saturator
 //!   (inside the ladder's loop; before the SVF), then the output is scaled by
-//!   `1/√D`: drive 0 is clean (the saturator's headroom of 3 makes a
-//!   full-scale signal lose < 0.3 dB), and at drive 1 a full-scale signal
-//!   stays near unity while quiet ones gain up to +9 dB of grit.
+//!   `1/√D`. Drive 0 means no *added* input saturation: the SVF modes are
+//!   clean (headroom 3: a full-scale signal loses < 0.3 dB), and LP24 is
+//!   clean at low resonance or low level but still has its loop saturation
+//!   at high resonance (above). Drive adds input saturation on top; at
+//!   drive 1 a full-scale signal stays near unity while quiet ones gain up
+//!   to +9 dB of grit.
 //! * **Output stage.** A soft limiter, linear up to ±2 and easing into ±3.5,
 //!   tames the SVF's resonant peak (up to +26 dB at Q 20) on hot inputs, so
 //!   the output never exceeds ±3.5 even with full-scale noise at reso 1.
+//!   It does engage (audibly soft-clipping the peak) on hot resonant LP12/HP
+//!   sweeps, e.g. a full-scale saw at reso ≳ 0.8. LP24's loop saturation
+//!   keeps it below the knee: a full-scale saw swept 100 Hz..12.8 kHz at reso
+//!   0.3..0.9 peaks below ±2 (`lp24_never_hits_the_limiter`).
 //! * **Mode switches** crossfade the old and new outputs linearly over 2 ms.
 //!   The SVF modes share one state, so switching between them is seamless;
 //!   switching to or from LP24 starts the incoming core from zero state, and
-//!   the crossfade hides its start-up. A switch requested mid-crossfade waits
-//!   for the current one to finish (≤ 2 ms).
+//!   the crossfade hides its start-up. At very low cutoffs (≲ 100 Hz) that
+//!   core takes longer than the 2 ms fade to charge up, so an LP24 <-> SVF
+//!   switch can dip in level briefly (no click, just a short swell back).
+//!   A switch requested mid-crossfade waits for the current one to finish
+//!   (≤ 2 ms).
 //! * **Safety.** Non-finite inputs (audio or cv) read as 0. After each
 //!   sub-block, states below 1e-20 are flushed to 0 (denormal guard) and a
 //!   channel whose state went non-finite is reset (defensive; the filters are
@@ -277,7 +297,8 @@ impl Filter {
 
         let cut_t = param(params, K, CUTOFF).max(MIN_HZ).log2();
         let (reso_t, amt_t, drive_t) = (param(params, K, RESO), param(params, K, CV_AMT), param(params, K, DRIVE));
-        let cv_connected = cv_in.channels > 0;
+        // A poly cv needs per-channel coefficients; a mono one is shared.
+        let cv_poly = cv_in.channels > 1;
 
         for i in 0..RACK_BLOCK {
             let base = self.cutoff.next(cut_t);
@@ -292,10 +313,15 @@ impl Filter {
             let w_old = self.fade as f32 / self.fade_len as f32;
             let need_ladder = mode == LP24 || (fading && prev == LP24);
             let need_svf = mode != LP24 || (fading && prev != LP24);
-            let shared = self.coefs(base, reso, need_svf, need_ladder);
+            let shared = if cv_poly {
+                Coefs::default() // unused
+            } else {
+                // cv_in.get reads 0 when unconnected.
+                self.coefs(base + finite_or_zero(cv_in.get(0, i)) * amt, reso, need_svf, need_ladder)
+            };
 
             for ch in 0..channels {
-                let c = if cv_connected {
+                let c = if cv_poly {
                     self.coefs(base + finite_or_zero(cv_in.get(ch, i)) * amt, reso, need_svf, need_ladder)
                 } else {
                     shared
@@ -455,7 +481,7 @@ mod tests {
         let (g250, g1k, g4k) = (gain_db(&p, 250.0, None), gain_db(&p, 1000.0, None), gain_db(&p, 4000.0, None));
         assert!(g250 > -1.5, "250 Hz: {g250} dB");
         assert!((-9.0..=-1.5).contains(&g1k), "1 kHz: {g1k} dB");
-        assert!(g4k < -20.0, "4 kHz: {g4k} dB");
+        assert!(g4k < -30.0, "4 kHz: {g4k} dB");
     }
 
     #[test]
@@ -483,7 +509,7 @@ mod tests {
         let hp = params(HP, 1000.0, 0.0);
         let (pass, cut) = (gain_db(&hp, 4000.0, None), gain_db(&hp, 250.0, None));
         assert!(pass > -3.0, "HP 4 kHz: {pass} dB");
-        assert!(cut < -9.0, "HP 250 Hz: {cut} dB");
+        assert!(cut < -18.0, "HP 250 Hz: {cut} dB");
 
         let bp = params(BP, 1000.0, 0.5);
         let at = gain_db(&bp, 1000.0, None);
@@ -675,6 +701,137 @@ mod tests {
         f.process(&p, &ins, &mut outs);
         for ch in 1..4 {
             assert!(outs[0].data[ch].iter().all(|&y| y == 0.0), "ch {ch} restarted from stale state");
+        }
+    }
+
+    /// One period (400 samples = 120 Hz at 48 kHz) of a band-limited saw
+    /// of peak-ish amplitude `amp`: `amp·(2/π)·Σ (−1)^(n+1) sin(nωt)/n` over the
+    /// harmonics below 20 kHz.
+    fn saw_period(amp: f32) -> Vec<f32> {
+        (0..400)
+            .map(|t| {
+                let mut acc = 0.0f64;
+                for n in 1..=166 {
+                    let sign = if n % 2 == 1 { 1.0 } else { -1.0 };
+                    acc += sign * (std::f64::consts::TAU * n as f64 * t as f64 / 400.0).sin() / n as f64;
+                }
+                (amp as f64 * 2.0 / std::f64::consts::PI * acc) as f32
+            })
+            .collect()
+    }
+
+    /// Amplitude of harmonic `n` of a 400-sample-periodic signal (single-bin
+    /// DFT over a whole number of periods).
+    fn harmonic(x: &[f32], n: usize) -> f64 {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (t, &s) in x.iter().enumerate() {
+            let a = std::f64::consts::TAU * n as f64 * t as f64 / 400.0;
+            re += s as f64 * a.cos();
+            im += s as f64 * a.sin();
+        }
+        2.0 * (re * re + im * im).sqrt() / x.len() as f64
+    }
+
+    /// LP24 output for the 120 Hz saw (after 0.3 s), 0.25 s = 30 periods.
+    fn lp24_saw(amp: f32, cutoff: f32, reso: f32) -> (Vec<f32>, Vec<f32>) {
+        let mut p = params(LP24, cutoff, reso);
+        p[DRIVE] = 0.0;
+        let period = saw_period(amp);
+        let mut f = Filter::new(SR);
+        let mut ins = [PortBuf::new(), PortBuf::new()];
+        ins[0].channels = 1;
+        let mut outs = [PortBuf::new()];
+        let (warm, total) = (blocks(0.3), blocks(0.3) + 375); // 375 blocks = 12000 = 30 periods
+        let (mut x, mut y) = (Vec::new(), Vec::new());
+        let mut t = 0usize;
+        for b in 0..total {
+            for i in 0..RACK_BLOCK {
+                ins[0].data[0][i] = period[t % 400];
+                t += 1;
+            }
+            f.process(&p, &ins, &mut outs);
+            if b >= warm {
+                x.extend_from_slice(&ins[0].data[0]);
+                y.extend_from_slice(&outs[0].data[0]);
+            }
+        }
+        // Align the analysis window to whole periods.
+        let skip = (400 - (warm * RACK_BLOCK) % 400) % 400;
+        let n = (x.len() - skip) / 400 * 400;
+        (x[skip..skip + n].to_vec(), y[skip..skip + n].to_vec())
+    }
+
+    /// The linear ladder's gain at `hz` (exact for the TPT design: each stage
+    /// is the prewarped analog one-pole `g/(g + j·tan(πf/sr))`; with makeup
+    /// `1 + k/2` and feedback `k`).
+    fn lp24_linear_gain(cutoff: f32, reso: f32, hz: f64) -> f64 {
+        let fl = (cutoff as f64 * 2f64.powf((LADDER_OFFSET_OCT * (1.0 - reso)) as f64)).min(0.45 * SR as f64);
+        let g = (std::f64::consts::PI * fl / SR as f64).tan();
+        let t = (std::f64::consts::PI * hz / SR as f64).tan();
+        let k = (LADDER_K_MAX * reso) as f64;
+        // h = g/(g + jt); h⁴ as (re, im).
+        let d = g * g + t * t;
+        let (hr, hi) = (g * g / d, -g * t / d);
+        let (h2r, h2i) = (hr * hr - hi * hi, 2.0 * hr * hi);
+        let (h4r, h4i) = (h2r * h2r - h2i * h2i, 2.0 * h2r * h2i);
+        let (nr, ni) = ((1.0 + k / 2.0) * h4r, (1.0 + k / 2.0) * h4i);
+        let (dr, di) = (1.0 + k * h4r, k * h4i);
+        ((nr * nr + ni * ni) / (dr * dr + di * di)).sqrt()
+    }
+
+    #[test]
+    fn lp24_resonance_compresses_with_level() {
+        // Ruling R10: in-loop saturation compresses the resonant peak of a
+        // loud signal (analog-ladder character), even at drive 0. Cutoff 960 Hz
+        // puts the reso-0.9 peak on the saw's 8th harmonic.
+        let peak_gain = |amp: f32| {
+            let (x, y) = lp24_saw(amp, 960.0, 0.9);
+            20.0 * (harmonic(&y, 8) / harmonic(&x, 8)).log10()
+        };
+        let (quiet, loud) = (peak_gain(0.1), peak_gain(1.0));
+        assert!(quiet > loud + 3.0, "resonant peak gain: -20 dBFS {quiet:.2} dB vs 0 dBFS {loud:.2} dB");
+        // The quiet one is close to the linear filter's peak.
+        let lin = 20.0 * lp24_linear_gain(960.0, 0.9, 960.0).log10();
+        assert!((quiet - lin).abs() < 0.5, "quiet {quiet:.2} dB vs linear {lin:.2} dB");
+
+        // At low resonance and low level the ladder is linear (within 0.5 dB)
+        // across the spectrum: fundamental, near cutoff, and above it.
+        let (x, y) = lp24_saw(0.1, 960.0, 0.3);
+        for n in [1usize, 4, 8, 16] {
+            let got = 20.0 * (harmonic(&y, n) / harmonic(&x, n)).log10();
+            let want = 20.0 * lp24_linear_gain(960.0, 0.3, 120.0 * n as f64).log10();
+            assert!((got - want).abs() < 0.5, "harmonic {n}: {got:.2} dB vs linear {want:.2} dB");
+        }
+    }
+
+    #[test]
+    fn lp24_never_hits_the_limiter() {
+        // A full-scale (naive, so worst-case edges) 55 Hz saw with the cutoff
+        // swept 100 Hz -> 12.8 kHz over 1 s: the ladder's own loop saturation
+        // keeps the output below the limiter's knee (2.0), at drive 0 and 1.
+        let mut ins = [PortBuf::new(), PortBuf::new()];
+        ins[0].channels = 1;
+        let mut outs = [PortBuf::new()];
+        for drive in [0.0f32, 1.0] {
+            for reso in [0.3f32, 0.5, 0.7, 0.9] {
+                let mut p = params(LP24, 100.0, reso);
+                p[DRIVE] = drive;
+                let mut f = Filter::new(SR);
+                let (mut ph, inc) = (0.0f64, 55.0 / SR as f64);
+                let mut peak = 0.0f32;
+                let n = blocks(1.0);
+                for b in 0..n + blocks(0.1) {
+                    // 7 octaves over 1 s, then hold at the top.
+                    p[CUTOFF] = 100.0 * 2f32.powf(7.0 * (b.min(n) as f32 / n as f32));
+                    for i in 0..RACK_BLOCK {
+                        ins[0].data[0][i] = (2.0 * ph - 1.0) as f32;
+                        ph = (ph + inc).fract();
+                    }
+                    f.process(&p, &ins, &mut outs);
+                    peak = outs[0].data[0].iter().fold(peak, |m, s| m.max(s.abs()));
+                }
+                assert!(peak < OUT_KNEE, "drive {drive} reso {reso}: peak {peak}");
+            }
         }
     }
 }

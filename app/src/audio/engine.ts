@@ -3,15 +3,21 @@
 // ring (never postMessage, which allocates and is not real-time safe);
 // telemetry comes back through a second SAB that the worklet overwrites every
 // block. Only sample uploads use the MessagePort. See docs/architecture/audio-path.md.
+//
+// Failure model: if the engine traps (or the worklet dies) after start, the
+// worklet goes silent for good and `onError` fires once; `failure` keeps the
+// message. Every loadSample() promise always settles (pending ones resolve
+// with HostErr.ENGINE_STOPPED).
 
 import workletUrl from './worklet.ts?worker&url';
 import { CommandRing, createRingBuffer } from './ring';
-import { Err, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import { Err, HostErr, TELEMETRY, TELEMETRY_LEN } from './protocol';
 import type { ProcessorOptions } from './worklet';
 
 type WorkletMessage =
   | { type: 'ready' }
   | { type: 'error'; message: string }
+  | { type: 'engine-error'; message: string }
   | { type: 'sample-result'; id: number; code: number }
   | { type: 'sample-loaded'; id: number; code: number };
 
@@ -20,14 +26,21 @@ type WithPlaybackStats = { playbackStats?: { underrunEvents?: number } };
 
 export class AudioEngine {
   readonly sampleRate: number;
-  /** Fires when a load that first resolved with Err.DEFERRED completes. */
-  onSampleLoaded?: (id: number) => void;
+  /**
+   * Fires when a load that first resolved with Err.DEFERRED finishes: code is
+   * Err.OK (now playable) or the failure (an Err / HostErr code).
+   */
+  onSampleLoaded?: (id: number, code: number) => void;
+  /** Fires once if the engine stops working after start (see `failure`). */
+  onError?: (message: string) => void;
 
   private readonly ring: CommandRing;
   private readonly tele: Float64Array;
   /** FIFO of loadSample resolvers per sample id (the worklet replies in order). */
   private readonly waiting = new Map<number, ((code: number) => void)[]>();
   private readonly ready: Promise<void>;
+  private started = false;
+  private failMsg: string | null = null;
 
   private constructor(
     private readonly ctx: AudioContext,
@@ -39,14 +52,20 @@ export class AudioEngine {
     this.ring = new CommandRing(ringSab);
     this.tele = new Float64Array(telemetrySab, 0, TELEMETRY_LEN);
     this.ready = new Promise((resolve, reject) => {
-      node.onprocessorerror = () => reject(new Error('daw-engine worklet failed'));
+      // Before 'ready' a failure rejects start(); after it, it's reported via onError.
+      const failed = (message: string) =>
+        this.started ? this.fail(message) : reject(new Error(`daw-engine worklet: ${message}`));
+      node.onprocessorerror = () => failed('the audio worklet crashed');
       node.port.onmessage = (ev: MessageEvent<WorkletMessage>) => {
         const m = ev.data;
         switch (m.type) {
           case 'ready':
+            this.started = true;
             return resolve();
           case 'error':
-            return reject(new Error(`daw-engine worklet: ${m.message}`));
+            return failed(m.message);
+          case 'engine-error':
+            return this.fail(m.message);
           case 'sample-result': {
             const q = this.waiting.get(m.id);
             const done = q?.shift();
@@ -54,12 +73,25 @@ export class AudioEngine {
             return done?.(m.code);
           }
           case 'sample-loaded':
-            if (m.code === Err.OK) this.onSampleLoaded?.(m.id);
-            else console.warn(`deferred sample ${m.id} failed with code ${m.code}`);
-            return;
+            return this.onSampleLoaded?.(m.id, m.code);
         }
       };
     });
+  }
+
+  /** Message of the failure that stopped the engine, or null while healthy. */
+  get failure(): string | null {
+    return this.failMsg;
+  }
+
+  private fail(message: string): void {
+    if (this.failMsg !== null) return;
+    this.failMsg = message;
+    console.error(`daw-engine stopped: ${message}`);
+    // Nothing will answer pending uploads any more (or answers are moot).
+    for (const q of this.waiting.values()) for (const done of q) done(HostErr.ENGINE_STOPPED);
+    this.waiting.clear();
+    this.onError?.(message);
   }
 
   /** Must be called from a user gesture (it creates/resumes the AudioContext). */
@@ -111,9 +143,12 @@ export class AudioEngine {
    * Upload a sample (1 or 2 equal-length channels) into engine slot `id`.
    * Resolves with the worklet's first result code. Err.DEFERRED means the
    * transport was playing and the arena needed to grow: the worklet retries
-   * once stopped and then calls `onSampleLoaded(id)`.
+   * once stopped and then calls `onSampleLoaded(id, code)`. Always settles.
    */
   loadSample(id: number, channels: Float32Array[]): Promise<number> {
+    if (this.failMsg !== null) return Promise.resolve(HostErr.ENGINE_STOPPED);
+    // The worklet matches replies by id, so only post ids it can echo as u32.
+    if (!Number.isInteger(id) || id < 0 || id > 0xffffffff) return Promise.resolve(Err.BAD_INDEX);
     const frames = channels[0]?.length ?? 0;
     if (channels.length < 1 || channels.length > 2 || channels.some((ch) => ch.length !== frames)) {
       return Promise.resolve(Err.BAD_VALUE);

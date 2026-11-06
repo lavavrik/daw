@@ -19,6 +19,7 @@ it glitch-free. Code: `app/src/audio/{engine,worklet,ring,protocol}.ts`,
  AudioEngine.loadSample() ── port.postMessage({type:'sample'}) ──► arena alloc + copy
                           ◄── {type:'sample-result', id, code} ──┘
                           ◄── {type:'sample-loaded', id, code}  (only after a DEFERRED)
+ AudioEngine.onError(msg) ◄── {type:'engine-error', message}       (once, fatal)
 ```
 
 `AudioEngine.start()` (from the "Click to start audio" gesture) creates the
@@ -34,12 +35,14 @@ makes `SharedArrayBuffer` available at all.
 | --- | --- |
 | `process()` never allocates | GC pauses on the audio thread are dropouts. Views, scratch (`Float64Array(5)`) and the pending queue are created in the constructor. |
 | `process()` never blocks or waits on the UI | The block deadline is ~2.7 ms at 48 kHz. Commands arrive via a lock-free SPSC ring (`Atomics` load/store only), never `postMessage`. |
-| `process()` never throws; the engine never panics | A thrown exception or WASM trap kills the node: silence until reload. Every command is validated in Rust and bad ones return an `Err` code (also recorded in telemetry slot 7); `process()` is additionally wrapped in try/catch. |
+| `process()` never throws; the engine never panics | A thrown exception or WASM trap kills the node: silence until reload. Every command is validated in Rust and bad ones return an `Err` code (also recorded in telemetry slot 7); `process()` and the port handler are additionally wrapped in try/catch (see *When the engine fails*). |
 | WASM memory grows only while stopped | `memory.grow` is slow and detaches every typed-array view. The engine reserves a 128 MB sample arena up front and refuses to grow while playing (`Err.DEFERRED`). The worklet rebuilds its views whenever `memory.buffer` changes identity. |
 | Telemetry is a plain overwrite, never a queue | The UI just samples the latest values; nothing can back up. |
 
 CPU (slot 3) is time spent in `process()` divided by wall time, published once a
-second; overruns (slot 4) count blocks that took longer than `128/sampleRate`.
+second; overruns (slot 4) count blocks that took longer than `128/sampleRate`,
+except the one block that runs the deferred-sample retry at stop time (a
+one-off copy, maybe a `memory.grow`, not a steady-state overrun).
 `AudioEngine.dropouts()` prefers the browser's own
 `ctx.playbackStats.underrunEvents` when Chrome exposes it.
 
@@ -53,11 +56,54 @@ second; overruns (slot 4) count blocks that took longer than `128/sampleRate`.
    calls `engine_sample_ready`. It replies `sample-result` with the code;
    `loadSample()` resolves with it.
 3. If the code is `Err.DEFERRED` (playing and the arena is full), the request is
-   parked in a fixed 32-entry queue (oldest dropped with a warning when full).
-   On the first block after `playing` goes to 0 the worklet retries each entry
-   once and posts `sample-loaded`; `AudioEngine` then calls `onSampleLoaded(id)`
-   (or warns if the retry failed). This one-off work happens in `process()` only
-   at stop time, never during steady-state playback.
+   parked in a fixed 32-entry queue. When it is full the oldest entry is
+   evicted and answered with `sample-loaded` / `HostErr.QUEUE_FULL`. On the
+   first block after `playing` goes to 0 the worklet retries each entry once
+   and posts `sample-loaded` with the result; `AudioEngine` calls
+   `onSampleLoaded(id, code)` and the step grid either attaches the sample or
+   shows a red banner. This one-off work happens in `process()` only at stop
+   time, never during steady-state playback.
+4. Growing the arena is fallible: if `memory.grow` hits the 4 GB maximum the
+   engine returns `Err.OUT_OF_MEMORY` instead of aborting (an abort is a WASM
+   trap that would kill the engine).
+
+Every `sample` message gets exactly one `sample-result` that echoes its
+original `id` (replies are matched by id), even for malformed requests
+(`Err.BAD_VALUE`). `AudioEngine.loadSample()` rejects non-u32 ids itself
+(`Err.BAD_INDEX`) without posting, and every promise it returns settles. Error
+codes are turned into plain words for the user by `loadErrorText()` in
+`samples.ts`.
+
+## When the engine fails
+
+A caught exception from any engine call (most likely a WASM trap, after which
+the instance may be half-updated) is fatal and handled once, in
+`worklet.ts` `fail()`:
+
+1. The instance is dropped and never called again; `process()` keeps the node
+   alive but outputs silence (the failing block is zeroed too).
+2. Deferred uploads are answered with `HostErr.ENGINE_STOPPED`, and so is every
+   later `sample` message.
+3. `{type:'engine-error'}` is posted. `AudioEngine` records it in `failure`,
+   resolves all pending `loadSample()` promises with `ENGINE_STOPPED`, and
+   fires `onError`. A crash of the worklet itself (`onprocessorerror`) after
+   start takes the same path. The top bar shows **Audio engine stopped —
+   reload**.
+
+Before `ready`, failures reject `AudioEngine.start()` instead (the start
+overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
+`process()` throw, so e2e tests can exercise this path.
+
+## Engine timing rules (engine/src/drums.rs)
+
+- **Retrigger:** a new hit on a still-sounding row starts at full level (its
+  attack is the sample's own); only the old voice fades out, over 2 ms.
+- **Swing latching:** a swing change is stored and only takes effect when the
+  playhead crosses a step-pair boundary (every 2 steps), or at once while
+  stopped. An odd step always sits inside its pair, so a swing change can
+  never make it fire twice or be skipped.
+- **Tempo:** changes apply from the next block; the playhead position is
+  integrated, never recomputed, so it never jumps.
 
 ## Adding an opcode
 

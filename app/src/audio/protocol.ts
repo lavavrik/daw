@@ -31,6 +31,17 @@ export const Err = {
 } as const;
 export type ErrCode = (typeof Err)[keyof typeof Err];
 
+/**
+ * Result codes produced by the worklet / AudioEngine themselves, never by the
+ * engine (so they are not in protocol.rs). Kept far from Err's range.
+ */
+export const HostErr = {
+  /** The engine trapped (or never started): it is gone until reload. */
+  ENGINE_STOPPED: -100,
+  /** A deferred load was evicted from the full 32-entry retry queue. */
+  QUEUE_FULL: -101,
+} as const;
+
 /** Indices into the telemetry Float64Array written by the engine. */
 export const TELEMETRY = {
   blocks: 0,

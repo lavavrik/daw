@@ -86,4 +86,20 @@ fn playback_does_not_allocate() {
     ARMED.with(|a| a.set(false));
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "audio path allocated");
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+
+    // Prove the drums actually sounded: drop the tone and metronome, let the
+    // tone release finish, then watch the peak with only drums playing.
+    for n in [60.0, 64.0, 67.0, 71.0] {
+        e.command(OP_NOTE_OFF, n, 0., 0., 0.);
+    }
+    e.command(OP_SET_METRONOME, 0., 0., 0., 0.);
+    for _ in 0..100 {
+        e.process(&mut l, &mut r);
+    }
+    let mut peak = 0.0f64;
+    for _ in 0..200 {
+        e.process(&mut l, &mut r);
+        peak = peak.max(e.telemetry()[5]);
+    }
+    assert!(peak > 0.05, "drums should be audible, peak {peak}");
 }

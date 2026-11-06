@@ -600,16 +600,32 @@ mod tests {
         load_const(&mut e, 0, 48000, 1.0);
         drum_setup(&mut e, 0.0, 0.0, &[0.0, 1.0]);
         e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
-        let (l, _) = render2(&mut e, 128 * 48); // 6144 frames
+        let (l, _) = render2(&mut e, 128 * 46); // 5888 frames
+        // Single-sample blocks from 5888 find exactly when the crossfade
+        // starts and ends: the fade must be exactly 96 samples long.
+        let mut l = l;
+        let (mut first_live, mut first_dead) = (None, None);
+        for i in 5888..6400usize {
+            let (mut a, mut b) = ([0.0f32; 1], [0.0f32; 1]);
+            e.process(&mut a, &mut b);
+            l.push(a[0]);
+            let live = e.drums.tracks[0].voices[0].fading.live_for_test();
+            if live && first_live.is_none() {
+                first_live = Some(i);
+            }
+            if !live && first_live.is_some() && first_dead.is_none() {
+                first_dead = Some(i);
+            }
+        }
+        let (f, d) = (first_live.unwrap(), first_dead.unwrap());
+        assert!((5999..=6000).contains(&f), "retrigger at ~6000, got {f}");
+        assert_eq!(d - f, 95, "fade lasts exactly 96 samples (live through 95 processed)");
         // no jump anywhere after the initial onset at 0
         let worst = (1..l.len()).map(|i| (l[i] - l[i - 1]).abs()).fold(0.0f32, f32::max);
         assert!(worst <= 0.1, "worst jump {worst}");
         assert!((l[5990] - 0.5657).abs() < 1e-3);
-        // crossfade: the old voice is gone and the new one is at full level
         assert!((l[6100] - 0.5657).abs() < 1e-3);
-        let t = &e.drums.tracks[0].voices[0];
-        assert!(!t.fading.live_for_test(), "old voice should be silent by 6000+96");
-        assert!(t.active.live_for_test());
+        assert!(e.drums.tracks[0].voices[0].active.live_for_test());
     }
 
     #[test]
@@ -678,6 +694,26 @@ mod tests {
     }
 
     #[test]
+    fn add_within_tail_does_not_cut() {
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 1280);
+        e.command(OP_REMOVE_TRACK, 0.0, 0.0, 0.0, 0.0);
+        let mut l = [0.0f32; 40];
+        let mut r = [0.0f32; 40];
+        e.process(&mut l, &mut r); // 40 samples into the 96-sample tail
+        let before = l[39];
+        e.command(OP_ADD_DRUM_TRACK, 0.0, 0.0, 0.0, 0.0); // remove-then-add
+        let (l2, _) = render2(&mut e, 256);
+        assert!(l2[0] > 0.0 && l2[0] <= before, "tail continues");
+        assert!(l2.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] <= 0.1));
+        assert!(l2[60..].iter().all(|&x| x == 0.0));
+        assert!(l2[50] > 0.0);
+    }
+
+    #[test]
     fn replaced_sample_mid_play_stops_safely() {
         let mut e = Engine::new(SR);
         load_const(&mut e, 0, 48000, 1.0);
@@ -686,7 +722,24 @@ mod tests {
         render2(&mut e, 1280);
         e.sample_alloc(0, 5, 1).unwrap(); // un-ready replacement
         let (l, _) = render2(&mut e, 1280);
-        assert!(l.iter().all(|&x| x == 0.0));
+        let v: f32 = 0.5f32.sqrt() * 0.8;
+        // holds the last value and decays monotonically within 96 samples
+        assert!((l[0] - v).abs() < 0.01, "{}", l[0]);
+        assert!(l.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] <= 0.1));
+        assert!(l[96..].iter().all(|&x| x == 0.0));
+        assert!(l[90] > 0.0);
+
+        // re-allocated AND re-readied between blocks: must not read the new data
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 1280);
+        load_const(&mut e, 0, 48000, -1.0);
+        let (l, _) = render2(&mut e, 1280);
+        assert!(l.iter().all(|&x| x >= 0.0), "never plays the new sample's data");
+        assert!(l.windows(2).all(|w| w[1] <= w[0]));
+        assert!(l[96..].iter().all(|&x| x == 0.0));
     }
 
     #[test]

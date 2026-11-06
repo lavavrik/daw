@@ -14,8 +14,8 @@
 //! * Known limit: if a row is retriggered twice within one fade (2 ms), the
 //!   older fading voice is dropped. Only reachable at absurd settings.
 
+use crate::arena::{SampleArena, SampleSlice};
 use crate::samples::SamplePool;
-use crate::arena::SampleArena;
 use crate::transport::{events_in_window, tick_to_offset};
 use crate::{MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
 
@@ -47,6 +47,14 @@ impl DrumRow {
 pub struct Voice {
     live: bool,
     sample: u32,
+    /// Arena region captured at trigger; if the sample slot now points
+    /// elsewhere (re-allocated), the voice must not read it.
+    slice: Option<SampleSlice>,
+    /// Hold-and-fade mode: no data reads; `gl`/`gr` hold the last output and
+    /// the `level` ramp takes it to 0.
+    hold: bool,
+    last_l: f32,
+    last_r: f32,
     pos: usize,
     gl: f32,
     gr: f32,
@@ -57,25 +65,32 @@ pub struct Voice {
 
 impl Voice {
     const OFF: Voice =
-        Voice { live: false, sample: 0, pos: 0, gl: 0.0, gr: 0.0, level: 0.0, step: 0.0, ramp_left: 0 };
+        Voice { live: false, sample: 0, slice: None, hold: false, last_l: 0.0, last_r: 0.0, pos: 0, gl: 0.0, gr: 0.0, level: 0.0, step: 0.0, ramp_left: 0 };
 
     /// Add this voice into `l`/`r` (equal length). All reads are bounds-checked
     /// against the *current* playable data; running off the end frees the voice.
     fn render_add(&mut self, data: &[f32], frames: usize, channels: u8, l: &mut [f32], r: &mut [f32]) {
         let n = l.len().min(r.len());
         for i in 0..n {
-            if self.pos >= frames {
-                self.live = false;
-                return;
-            }
-            let Some(&a) = data.get(self.pos) else {
-                self.live = false;
-                return;
+            let (a, b) = if self.hold {
+                (1.0, 1.0) // constant; gl/gr carry the held value
+            } else {
+                if self.pos >= frames {
+                    self.live = false;
+                    return;
+                }
+                let Some(&a) = data.get(self.pos) else {
+                    self.live = false;
+                    return;
+                };
+                let b = if channels == 2 { data.get(frames + self.pos).copied().unwrap_or(0.0) } else { a };
+                self.pos += 1;
+                (a, b)
             };
-            let b = if channels == 2 { data.get(frames + self.pos).copied().unwrap_or(0.0) } else { a };
-            l[i] += a * self.gl * self.level;
-            r[i] += b * self.gr * self.level;
-            self.pos += 1;
+            self.last_l = a * self.gl * self.level;
+            self.last_r = b * self.gr * self.level;
+            l[i] += self.last_l;
+            r[i] += self.last_r;
             if self.ramp_left > 0 {
                 self.level += self.step;
                 self.ramp_left -= 1;
@@ -94,6 +109,22 @@ impl Voice {
     #[doc(hidden)]
     pub fn live_for_test(&self) -> bool {
         self.live
+    }
+
+    /// Sample data vanished/changed: hold the last output value and ramp it
+    /// to 0 over `fade` samples (no data reads, no discontinuity).
+    fn begin_hold(&mut self, fade: usize) {
+        if self.last_l == 0.0 && self.last_r == 0.0 {
+            self.live = false;
+            return;
+        }
+        let fade = fade.max(1);
+        self.hold = true;
+        self.gl = self.last_l;
+        self.gr = self.last_r;
+        self.level = 1.0;
+        self.step = -1.0 / fade as f32;
+        self.ramp_left = fade;
     }
 
     /// Turn into a fade-out from the current level over `fade` samples.
@@ -122,7 +153,7 @@ impl RowVoices {
         }
     }
 
-    fn trigger(&mut self, sample: u32, gl: f32, gr: f32, fade: usize) {
+    fn trigger(&mut self, sample: u32, slice: Option<SampleSlice>, gl: f32, gr: f32, fade: usize) {
         let fade = fade.max(1);
         let crossfade = self.active.live;
         if crossfade {
@@ -131,6 +162,10 @@ impl RowVoices {
         self.active = Voice {
             live: true,
             sample,
+            slice,
+            hold: false,
+            last_l: 0.0,
+            last_r: 0.0,
             pos: 0,
             gl,
             gr,
@@ -140,16 +175,35 @@ impl RowVoices {
         };
     }
 
-    fn render_add(&mut self, pool: &SamplePool, arena: &SampleArena, l: &mut [f32], r: &mut [f32]) {
+    fn render_add(
+        &mut self,
+        pool: &SamplePool,
+        arena: &SampleArena,
+        fade: usize,
+        l: &mut [f32],
+        r: &mut [f32],
+    ) {
         for v in [&mut self.active, &mut self.fading] {
             if !v.live {
                 continue;
             }
-            match pool.playable(arena, v.sample as usize) {
-                Some((data, frames, ch)) => v.render_add(data, frames, ch, l, r),
-                // Sample went away/replaced mid-play: nothing safe to read.
-                None => v.live = false,
+            if !v.hold {
+                let id = v.sample as usize;
+                let same = pool.get(id).map(|s| s.slice) == v.slice;
+                match pool.playable(arena, id) {
+                    Some((data, frames, ch)) if same => {
+                        v.render_add(data, frames, ch, l, r);
+                        continue;
+                    }
+                    // Sample replaced / un-readied mid-play: nothing safe to
+                    // read, so hold the last value and fade it out.
+                    _ => v.begin_hold(fade),
+                }
+                if !v.live {
+                    continue;
+                }
             }
+            v.render_add(&[], 0, 1, l, r);
         }
     }
 }
@@ -174,8 +228,12 @@ impl DrumTrack {
     }
 
     /// Fresh active track: default rows, 16 steps, no swing, silent voices.
+    /// Voices are kept (the caller fades them) so a still-sounding tail is
+    /// never hard-cut.
     pub fn reset_active(&mut self) {
+        let voices = self.voices;
         *self = DrumTrack::new();
+        self.voices = voices;
         self.active = true;
     }
 
@@ -221,8 +279,10 @@ impl Drums {
     }
 
     pub fn add_track(&mut self, slot: usize) {
+        let fade = self.fade;
         if let Some(t) = self.tracks.get_mut(slot) {
             t.reset_active();
+            t.fade_all(fade);
         }
     }
 
@@ -295,13 +355,13 @@ impl Drums {
                         continue;
                     }
                     let at = off.max(pos);
-                    rv.render_add(pool, arena, &mut l[pos..at], &mut r[pos..at]);
+                    rv.render_add(pool, arena, fade, &mut l[pos..at], &mut r[pos..at]);
                     pos = at;
                     let g = row.gain * vel as f32 / 127.0;
                     let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-                    rv.trigger(id, g * a.cos(), g * a.sin(), fade);
+                    rv.trigger(id, pool.get(id as usize).map(|s| s.slice), g * a.cos(), g * a.sin(), fade);
                 }
-                rv.render_add(pool, arena, &mut l[pos..n], &mut r[pos..n]);
+                rv.render_add(pool, arena, fade, &mut l[pos..n], &mut r[pos..n]);
             }
         }
     }

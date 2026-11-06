@@ -27,7 +27,7 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   // `pub const NAME: usize = <integer product>;`, e.g. `64 * 1024 * 1024`.
   const rust: Record<string, number> = {};
   for (const m of read('lib.rs').matchAll(/pub const ((?:MAX|TELEMETRY)_\w+): usize = ([\d\s*]+);/g)) {
-    rust[m[1]] = m[2].split('*').reduce((p, x) => p * Number(x.trim()), 1);
+    rust[m[1]] = m[2].split('*').reduce((p: number, x: string) => p * Number(x.trim()), 1);
   }
   const snake = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase(); // peakL -> PEAK_L
   const ts: Record<string, number> = {

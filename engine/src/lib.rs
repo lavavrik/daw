@@ -1,6 +1,7 @@
 //! DAW audio engine (compiled to WASM, hosted in an AudioWorklet).
 
 pub mod arena;
+pub mod drums;
 pub mod engine;
 pub mod metronome;
 pub mod protocol;

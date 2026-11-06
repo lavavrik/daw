@@ -2,6 +2,7 @@
 //! `process` is the real-time callback: no allocation, no blocking, no panics.
 
 use crate::arena::SampleArena;
+use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
@@ -16,6 +17,9 @@ const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 /// Initial arena size in floats (128 MB).
 const ARENA_FLOATS: usize = 32 * 1024 * 1024;
 
+/// Per-sample size cap in floats (256 MB).
+const MAX_SAMPLE_FLOATS: usize = 64 * 1024 * 1024;
+
 pub struct Engine {
     tone: TestTone,
     master_gain: f32,
@@ -25,7 +29,7 @@ pub struct Engine {
     telemetry: [f64; 8],
     arena: SampleArena,
     samples: SamplePool,
-    // Later tasks add: drum tracks.
+    drums: Drums,
 }
 
 impl Engine {
@@ -40,6 +44,7 @@ impl Engine {
             telemetry: [0.0; 8],
             arena: SampleArena::with_capacity(ARENA_FLOATS),
             samples: SamplePool::new(),
+            drums: Drums::new(sample_rate),
         }
     }
 
@@ -74,13 +79,51 @@ impl Engine {
             Command::Stop => {
                 self.transport.playing = false;
                 self.transport.ticks = 0.0;
+                self.drums.fade_all(); // no hard cuts: 2 ms fade-out
                 self.sync_transport_telemetry();
             }
             // Applies from the next block; the playhead position is unchanged.
             Command::SetTempo { bpm } => self.transport.bpm = bpm,
             Command::SetMetronome { on } => self.metronome.on = on,
-            // Accepted and ignored until later tasks wire them.
-            _ => {}
+            // Resets the slot to defaults and silences its voices.
+            Command::AddDrumTrack { slot } => self.drums.add_track(slot),
+            Command::RemoveTrack { slot } => self.drums.remove_track(slot),
+            // Row/step edits on an inactive slot succeed and just store state.
+            // Steps are stored for any step < MAX_STEPS (decode checks that),
+            // even beyond step_count.
+            Command::SetRowSample { slot, row, sample } => {
+                if let Some(r) = self.drums.row_mut(slot, row) {
+                    r.sample = sample;
+                }
+            }
+            Command::SetRowGain { slot, row, gain } => {
+                if let Some(r) = self.drums.row_mut(slot, row) {
+                    r.gain = gain;
+                }
+            }
+            Command::SetRowPan { slot, row, pan } => {
+                if let Some(r) = self.drums.row_mut(slot, row) {
+                    r.pan = pan;
+                }
+            }
+            Command::SetRowMute { slot, row, mute } => self.drums.set_row_mute(slot, row, mute),
+            Command::SetStep { slot, row, step, velocity } => {
+                if let Some(r) = self.drums.row_mut(slot, row) {
+                    if let Some(s) = r.steps.get_mut(step) {
+                        *s = velocity;
+                    }
+                }
+            }
+            Command::SetStepCount { slot, count } => {
+                if let Some(t) = self.drums.tracks.get_mut(slot) {
+                    t.step_count = count;
+                }
+            }
+            Command::SetSwing { slot, swing } => {
+                if let Some(t) = self.drums.tracks.get_mut(slot) {
+                    t.swing = swing;
+                }
+            }
         }
     }
 
@@ -92,6 +135,7 @@ impl Engine {
         let n = left.len().min(right.len()).min(MAX_BLOCK);
         self.tone.render_add(&mut left[..n], &mut right[..n]);
         self.render_metronome(&mut left[..n], &mut right[..n]);
+        self.render_drums(&mut left[..n], &mut right[..n]);
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             let l = (left[i] * self.master_gain).clamp(-1.0, 1.0);
@@ -141,6 +185,19 @@ impl Engine {
         self.metronome.render_add(&mut left[pos..], &mut right[pos..]);
     }
 
+    /// Drums: new hits are placed at their exact sample offsets while playing
+    /// (same pattern as the metronome); tails keep rendering after Stop.
+    fn render_drums(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let n = left.len();
+        let window = if self.transport.playing && n > 0 {
+            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
+            Some((t0, t1, self.transport.samples_per_tick(self.sample_rate)))
+        } else {
+            None
+        };
+        self.drums.render_add(window, &self.samples, &self.arena, left, right);
+    }
+
     fn fail(&mut self, code: i32) -> i32 {
         self.telemetry[7] = code as f64;
         code
@@ -159,7 +216,14 @@ impl Engine {
         if frames == 0 || !(1..=2).contains(&channels) {
             return Err(self.fail(protocol::ERR_BAD_VALUE));
         }
-        let len = frames as usize * channels as usize;
+        // Reject absurd sizes before touching the arena (and without overflow
+        // on wasm32's 32-bit usize): at most 64 Mi floats per sample.
+        let Some(len) = (frames as usize)
+            .checked_mul(channels as usize)
+            .filter(|&n| n <= MAX_SAMPLE_FLOATS)
+        else {
+            return Err(self.fail(protocol::ERR_BAD_VALUE));
+        };
         let may_grow = !self.transport.playing;
         let Some(slice) = self.arena.alloc(len, may_grow) else {
             return Err(self.fail(protocol::ERR_DEFERRED));
@@ -434,5 +498,215 @@ mod tests {
         }
         // Playhead never jumped: 8.4 beats = 8064 ticks.
         assert!((e.telemetry()[2] - 8064.0).abs() < 1e-6);
+    }
+
+    // ---- drums -----------------------------------------------------------
+
+    use crate::protocol::{
+        OP_ADD_DRUM_TRACK, OP_REMOVE_TRACK, OP_SET_ROW_MUTE, OP_SET_ROW_PAN, OP_SET_ROW_SAMPLE,
+        OP_SET_STEP, OP_SET_STEP_COUNT, OP_SET_SWING,
+    };
+
+    /// Load a mono sample of `frames` copies of `v` into slot `id` (ready).
+    fn load_const(e: &mut Engine, id: u32, frames: u32, v: f32) {
+        let p = e.sample_alloc(id, frames, 1).unwrap();
+        unsafe { std::slice::from_raw_parts_mut(p, frames as usize) }.fill(v);
+        assert_eq!(e.sample_ready(id), 0);
+    }
+
+    /// Track `slot` with `sample` on row 0 and hits (vel 127) on `steps`.
+    fn drum_setup(e: &mut Engine, slot: f64, sample: f64, steps: &[f64]) {
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, slot, 0.0, 0.0, 0.0), 0);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, slot, 0.0, sample, 0.0), 0);
+        for &s in steps {
+            assert_eq!(e.command(OP_SET_STEP, slot, 0.0, s, 127.0), 0);
+        }
+    }
+
+    fn render2(e: &mut Engine, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let (mut ol, mut or) = (Vec::new(), Vec::new());
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        for _ in 0..frames / 128 {
+            e.process(&mut l, &mut r);
+            ol.extend_from_slice(&l);
+            or.extend_from_slice(&r);
+        }
+        (ol, or)
+    }
+
+    /// First sample index >= `from` that is nonzero.
+    fn first_nz(s: &[f32], from: usize) -> Option<usize> {
+        (from..s.len()).find(|&i| s[i] != 0.0)
+    }
+
+    fn drum_engine() -> Engine {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        load_const(&mut e, 0, 10, 1.0);
+        e
+    }
+
+    #[test]
+    fn four_on_the_floor_onsets_exact() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[0.0, 4.0, 8.0, 12.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, r) = render2(&mut e, 96000 + 128);
+        let on = onsets(&l);
+        assert_eq!(on, vec![0, 24000, 48000, 72000, 96000]);
+        let want = 0.5f32.sqrt() * 0.8;
+        for &o in &on {
+            assert!((l[o] - want).abs() < 1e-4, "{}", l[o]);
+            assert!((r[o] - want).abs() < 1e-4);
+        }
+        assert_eq!(l, r);
+    }
+
+    #[test]
+    fn swing_delays_odd_steps() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[1.0]);
+        e.command(OP_SET_SWING, 0.0, 0.5, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 12800);
+        assert_eq!(onsets(&l), vec![6000 + 1500]);
+    }
+
+    #[test]
+    fn pan_hard_left() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_SET_ROW_PAN, 0.0, 0.0, -1.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, r) = render2(&mut e, 256);
+        assert!((l[0] - 0.8).abs() < 1e-4);
+        assert!(r.iter().all(|&x| x.abs() < 1e-6));
+    }
+
+    #[test]
+    fn muted_row_is_silent() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[0.0, 4.0]);
+        e.command(OP_SET_ROW_MUTE, 0.0, 0.0, 1.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, r) = render2(&mut e, 48000);
+        assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn retrigger_declicks() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0, 1.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 128 * 48); // 6144 frames
+        // no jump anywhere after the initial onset at 0
+        let worst = (1..l.len()).map(|i| (l[i] - l[i - 1]).abs()).fold(0.0f32, f32::max);
+        assert!(worst <= 0.1, "worst jump {worst}");
+        assert!((l[5990] - 0.5657).abs() < 1e-3);
+        // crossfade: the old voice is gone and the new one is at full level
+        assert!((l[6100] - 0.5657).abs() < 1e-3);
+        let t = &e.drums.tracks[0].voices[0];
+        assert!(!t.fading.live_for_test(), "old voice should be silent by 6000+96");
+        assert!(t.active.live_for_test());
+    }
+
+    #[test]
+    fn stop_fades_out_in_2ms() {
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 1280);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 256);
+        let v: f32 = 0.5f32.sqrt() * 0.8;
+        assert!((l[0] - v).abs() < 1e-4, "starts from the current level");
+        assert!(l.windows(2).all(|w| w[1] <= w[0] && w[0] - w[1] <= 0.1));
+        assert!(l[96..].iter().all(|&x| x == 0.0), "silent by 96 samples");
+        assert!(l[90] > 0.0);
+    }
+
+    #[test]
+    fn shrinking_step_count_wraps_playhead() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_SET_STEP_COUNT, 0.0, 64.0, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        // step 40 starts at 40 * 6000 samples
+        render2(&mut e, 128 * 1876); // 240128 frames
+        e.command(OP_SET_STEP_COUNT, 0.0, 16.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 96000); // one 16-step loop is 96000
+        let o = first_nz(&l, 0).expect("hit within one loop");
+        // playhead 240128 samples = 9605.12 ticks; mod 3840 = 1925.12; next loop
+        // start in 1914.88 ticks = 47872 samples
+        assert!((o as i64 - 47872).abs() <= 1, "{o}");
+    }
+
+    #[test]
+    fn tracks_loop_independently() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        e.command(OP_SET_ROW_PAN, 0.0, 0.0, -1.0, 0.0); // A -> left only
+        e.command(OP_SET_ROW_PAN, 1.0, 0.0, 1.0, 0.0); // B -> right only
+        e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, r) = render2(&mut e, 192000 + 256);
+        assert_eq!(onsets(&l), vec![0, 96000, 192000]);
+        assert_eq!(onsets(&r), vec![0, 192000]);
+    }
+
+    #[test]
+    fn add_track_resets_and_remove_fades() {
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_SET_ROW_PAN, 0.0, 0.0, -1.0, 0.0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 1280);
+        e.command(OP_REMOVE_TRACK, 0.0, 0.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 256);
+        assert!(l[0] > 0.5 && l[96..].iter().all(|&x| x == 0.0));
+        // re-adding resets everything (no sample, no steps, no pan)
+        e.command(OP_ADD_DRUM_TRACK, 0.0, 0.0, 0.0, 0.0);
+        let t = &e.drums.tracks[0];
+        assert!(t.active && t.rows[0].sample.is_none() && t.rows[0].steps[0] == 0);
+        assert_eq!(t.rows[0].pan, 0.0);
+        assert_eq!(t.step_count, 16);
+    }
+
+    #[test]
+    fn replaced_sample_mid_play_stops_safely() {
+        let mut e = Engine::new(SR);
+        load_const(&mut e, 0, 48000, 1.0);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render2(&mut e, 1280);
+        e.sample_alloc(0, 5, 1).unwrap(); // un-ready replacement
+        let (l, _) = render2(&mut e, 1280);
+        assert!(l.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn sample_alloc_rejects_huge() {
+        let mut e = Engine::new(SR);
+        let max = 64 * 1024 * 1024u32;
+        assert_eq!(e.sample_alloc(0, max + 1, 1), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.sample_alloc(0, max / 2 + 1, 2), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.sample_alloc(0, u32::MAX, 2), Err(protocol::ERR_BAD_VALUE));
+        assert_eq!(e.telemetry()[7], protocol::ERR_BAD_VALUE as f64);
+    }
+
+    #[test]
+    fn sample_alloc_defers_when_full_and_playing() {
+        let mut e = Engine::new(SR);
+        assert!(e.arena.alloc(ARENA_FLOATS, false).is_some()); // bumps offset only
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.sample_alloc(0, 10, 1), Err(protocol::ERR_DEFERRED));
+        assert_eq!(e.telemetry()[7], protocol::ERR_DEFERRED as f64);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert!(e.sample_alloc(0, 10, 1).is_ok());
     }
 }

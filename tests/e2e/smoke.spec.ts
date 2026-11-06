@@ -163,10 +163,20 @@ test('drop sample, program steps, hear it', async ({ page }) => {
 test('bad file drop shows error', async ({ page }) => {
   await startAudio(page);
   await loadKickOnRow0(page);
-  await page.getByTestId('step-0-0').click();
+  const rows = page.locator('[data-testid^="row-"][role="group"]');
+  const before = await rows.count();
   await dropFile(page, 'row-1', 'notes.txt', 'text/plain', [...Buffer.from('hello')]);
   await expect(page.getByTestId('banner')).toContainText('Couldn\'t load "notes.txt"');
   await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('drop sample');
+  // A .wav name with garbage bytes passes the extension check but fails decoding.
+  await page.getByRole('button', { name: 'Dismiss' }).click();
+  await dropFile(page, 'row-1', 'broken.wav', 'audio/wav', [1, 2, 3, 4, 5, 6, 7, 8]);
+  await expect(page.getByTestId('banner')).toContainText('not a readable audio file');
+  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('drop sample');
+  // A failed drop on "+ Add row" must not leave an orphan row.
+  await dropFile(page, 'add-row', 'notes.txt', 'text/plain', [...Buffer.from('hello')]);
+  await expect(rows).toHaveCount(before);
+  for (const s of [0, 4, 8, 12]) await page.getByTestId(`step-0-${s}`).click();
   await page.keyboard.press('Space');
-  expect(await maxPeak(page)).toBeGreaterThan(0);
+  expect(await maxPeak(page)).toBeGreaterThan(0.1);
 });

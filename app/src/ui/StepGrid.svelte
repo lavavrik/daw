@@ -64,7 +64,7 @@
 
   // ---- sample drop ----------------------------------------------------
   /** Deferred loads: sample id -> where to attach it once the worklet has it. */
-  const pending = new Map<number, { rowId: string; name: string }>();
+  const pending = new Map<number, { tid: string; rowId: string; name: string }>();
   let dragOver = $state<string | null>(null); // row id, or 'add'
 
   $effect(() => {
@@ -72,13 +72,19 @@
       const w = pending.get(id);
       if (!w) return;
       pending.delete(id);
-      setRowSample(p, engine, track.id, w.rowId, id, w.name);
+      setRowSample(p, engine, w.tid, w.rowId, id, w.name);
       onnotice(null);
     };
     return () => (engine.onSampleLoaded = undefined);
   });
 
-  async function loadInto(file: File, rowId: string) {
+  /**
+   * Decode first; only then resolve the target row (for "+ Add row" this
+   * creates it), so a failed drop leaves state unchanged. Track id is captured
+   * at drop time for both the immediate and the deferred attach.
+   */
+  async function loadInto(file: File, target: () => string | null) {
+    const tid = track.id;
     const fail = () => onerror(`Couldn't load "${file.name}" — not a readable audio file`);
     if (!isProbablyAudio(file)) return fail();
     let decoded;
@@ -90,14 +96,17 @@
     if (p.nextSampleId >= MAX_SAMPLES) return onerror('Sample limit reached (256)');
     const id = p.nextSampleId++;
     const code = await engine.loadSample(id, decoded.channels);
+    if (code !== Err.OK && code !== Err.DEFERRED) {
+      return onerror(`Couldn't load "${file.name}" — engine rejected the sample (code ${code})`);
+    }
+    const rowId = target();
+    if (!rowId) return onerror(`Row limit reached (${MAX_ROWS})`);
     if (code === Err.OK) {
-      setRowSample(p, engine, track.id, rowId, id, decoded.name);
+      setRowSample(p, engine, tid, rowId, id, decoded.name);
       onerror(null);
-    } else if (code === Err.DEFERRED) {
-      pending.set(id, { rowId, name: decoded.name });
-      onnotice(`"${decoded.name}" will load when playback stops`);
     } else {
-      onerror(`Couldn't load "${file.name}" — engine rejected the sample (code ${code})`);
+      pending.set(id, { tid, rowId, name: decoded.name });
+      onnotice(`"${decoded.name}" will load when playback stops`);
     }
   }
 
@@ -105,23 +114,29 @@
     e.preventDefault();
     dragOver = null;
     const file = e.dataTransfer?.files[0];
-    if (file) void loadInto(file, rowId);
+    if (file) void loadInto(file, () => rowId);
   }
   function dropOnAdd(e: DragEvent) {
     e.preventDefault();
     dragOver = null;
     const file = e.dataTransfer?.files[0];
-    if (!file) return;
-    const row = addRow(p, engine, track.id);
-    if (!row) return onerror(`Row limit reached (${MAX_ROWS})`);
-    void loadInto(file, row.id);
+    if (file) void loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
   }
   const allow = (e: DragEvent) => e.preventDefault();
 
+  /** "C", "L 30", "R 50" (percent off centre). */
+  function panText(v: number) {
+    const n = Math.round(Math.abs(v) * 100);
+    return n === 0 ? 'C' : `${v < 0 ? 'L' : 'R'} ${n}`;
+  }
   const vol = (e: Event) => (e.currentTarget as HTMLInputElement).valueAsNumber;
 </script>
 
 <div class="grid" style:--c={track.color}>
+  <div class="hdr" aria-hidden="true">
+    <span class="name">Sample</span><span class="mute-h">Mute</span>
+    <span class="knob-h">Gain</span><span class="knob-h">Pan</span><span class="cells-h">Steps</span>
+  </div>
   {#each track.rows as row, r (row.id)}
     <div
       class="row"
@@ -138,17 +153,24 @@
         {row.sampleId === null ? 'drop sample' : row.name}
       </span>
       <button
-        class="mute" class:on={row.mute} aria-pressed={row.mute} title="Mute"
+        class="mute" class:on={row.mute} aria-pressed={row.mute}
+        title="Mute {row.name}" aria-label="Mute {row.name}"
         onclick={() => setRowMute(p, engine, track.id, row.id, !row.mute)}
       >M</button>
-      <input
-        class="knob" type="range" min="0" max="2" step="0.01" value={row.gain} title="Gain"
-        aria-label="Gain row {r + 1}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
-      />
-      <input
-        class="knob" type="range" min="-1" max="1" step="0.01" value={row.pan} title="Pan"
-        aria-label="Pan row {r + 1}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
-      />
+      <label class="kn" title="Gain {row.gain.toFixed(2)}">
+        <input
+          class="knob" type="range" min="0" max="2" step="0.01" value={row.gain}
+          aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
+        />
+        <span class="val">{row.gain.toFixed(2)}</span>
+      </label>
+      <label class="kn" title="Pan {panText(row.pan)}">
+        <input
+          class="knob" type="range" min="-1" max="1" step="0.01" value={row.pan}
+          aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
+        />
+        <span class="val">{panText(row.pan)}</span>
+      </label>
       <div class="cells">
         {#each { length: track.stepCount } as _, s (s)}
           {@const v = row.steps[s]}
@@ -191,7 +213,7 @@
     <label>Swing
       <input
         type="range" min="0" max="100" step="1" value={Math.round(track.swing * 100)}
-        data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
+        data-testid="swing" style:accent-color={track.color} oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
       />
       <span class="pct">{Math.round(track.swing * 100)}%</span>
     </label>
@@ -206,7 +228,13 @@
   .name.empty { color: #6a6d79; font-style: italic; }
   .mute { font: inherit; font-size: 10px; width: 22px; height: 22px; border: 0; border-radius: 3px; background: #2a2c33; color: #9a9ca8; cursor: pointer; }
   .mute.on { background: #f0a23a; color: #111; }
-  .knob { width: 56px; flex: none; accent-color: var(--c); }
+  .kn { display: flex; flex-direction: column; align-items: center; width: 64px; flex: none; }
+  .knob { width: 56px; margin: 0; accent-color: var(--c); }
+  .val { font-size: 9px; color: #7d808c; line-height: 1; }
+  .hdr { display: flex; gap: 6px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #6a6d79; }
+  .hdr .name { color: #6a6d79; }
+  .mute-h { width: 22px; flex: none; text-align: center; }
+  .knob-h { width: 64px; flex: none; text-align: center; }
   .cells { display: flex; gap: 2px; flex: 1; min-width: 0; user-select: none; }
   .cell {
     flex: 1 1 0; min-width: 8px; max-width: 34px; height: 26px; padding: 0; border: 0; border-radius: 3px;

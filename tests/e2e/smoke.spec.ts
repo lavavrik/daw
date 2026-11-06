@@ -362,7 +362,7 @@ test('add synth track, it plays from the keyboard', async ({ page }) => {
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
   await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
-  await expect(page.getByTestId('instrument-body')).toBeVisible();
+  await expect(page.getByTestId('rack')).toBeVisible();
   await page.keyboard.down('KeyA');
   await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05); // peakL
   await page.keyboard.up('KeyA');
@@ -393,4 +393,160 @@ test('removing the synth track silences it and keys show no synth', async ({ pag
   await page.waitForTimeout(300);
   expect(await slot(page, 5)()).toBeLessThan(0.001);
   await page.keyboard.up('KeyA');
+});
+
+// ---- Rack UI (Task 9): modules, knobs, jacks, cables -----------------------
+
+/** Centre of the element with `testid`, scrolled into view first. */
+async function centre(page: Page, testid: string) {
+  const el = page.getByTestId(testid);
+  await el.scrollIntoViewIfNeeded();
+  const b = (await el.boundingBox())!;
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/** Real mouse drag (pointer events + capture) from a jack to a point. */
+async function dragTo(page: Page, fromTestid: string, to: { x: number; y: number }) {
+  const a = await centre(page, fromTestid);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move((a.x + to.x) / 2, (a.y + to.y) / 2 + 20, { steps: 5 });
+  await page.mouse.move(to.x, to.y, { steps: 5 });
+  await page.mouse.up();
+}
+
+/** Hold `keys`, return the max peakL seen over `ms`, release. */
+async function holdPeak(page: Page, keys: string[], ms = 700) {
+  for (const k of keys) await page.keyboard.down(k);
+  const peak = await maxPeak(page, ms);
+  for (const k of keys) await page.keyboard.up(k);
+  return peak;
+}
+
+async function addSynth(page: Page) {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await expect(page.getByTestId('rack')).toBeVisible();
+}
+
+test('rack shows the patch and knobs show values', async ({ page }) => {
+  await addSynth(page);
+  const names = ['MIDI In', 'Oscillator', 'Oscillator', 'Mixer', 'Filter', 'ADSR', 'VCA', 'Out'];
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(names.length);
+  for (const [i, n] of names.entries()) await expect(page.getByTestId(`module-${i}`)).toContainText(n);
+  await expect(page.getByTestId('knob-4-cutoff')).toContainText('300 Hz');
+  await expect(page.getByTestId('knob-4-cutoff')).toContainText('Cutoff');
+  await expect(page.getByTestId('patch-select')).toHaveValue('Deep Bass');
+  // 11 cables in Deep Bass, all drawn.
+  await expect(page.locator('[data-testid="cables"] path.cable')).toHaveCount(11);
+  await page.screenshot({ path: 'test-results/rack.png' });
+});
+
+test('turning cutoff updates readout and engine accepts it', async ({ page }) => {
+  await addSynth(page);
+  const knob = page.getByTestId('knob-4-cutoff');
+  const before = await knob.getAttribute('aria-valuetext');
+  const err = await slot(page, 7)();
+  await knob.focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('ArrowUp');
+  await expect(knob).not.toHaveAttribute('aria-valuetext', before!);
+  await expect(knob).not.toContainText('300 Hz');
+  await expect(page.getByTestId('patch-edited')).toBeVisible();
+  const blocks = await slot(page, 0)();
+  await expect.poll(slot(page, 0)).toBeGreaterThan(blocks + 2);
+  expect(await slot(page, 7)()).toBe(err);
+});
+
+test('pulling the VCA→Out cable silences, re-plugging restores', async ({ page }) => {
+  await addSynth(page);
+  const cables = page.locator('[data-testid="cables"] path.cable');
+  await expect(cables).toHaveCount(11);
+  // Drop the Out `l` cable end on the module's header: not a jack -> disconnect.
+  const header = await centre(page, 'module-7');
+  const box = (await page.getByTestId('module-7').boundingBox())!;
+  await dragTo(page, 'jack-7-in-l', { x: header.x, y: box.y + 8 });
+  await expect(cables).toHaveCount(10);
+  await page.waitForTimeout(100);
+  expect(await holdPeak(page, ['KeyA'])).toBeLessThan(0.001);
+  await dragTo(page, 'jack-6-out-out', await centre(page, 'jack-7-in-l'));
+  await expect(cables).toHaveCount(11);
+  expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05);
+});
+
+test('add module menu adds Noise', async ({ page }) => {
+  await addSynth(page);
+  await page.getByRole('button', { name: '+ Add module' }).click();
+  const menu = page.getByTestId('add-menu');
+  await expect(menu).toContainText('Source');
+  await menu.getByRole('menuitem', { name: 'Noise' }).click();
+  await expect(menu).toBeHidden();
+  await expect(page.getByTestId('module-8')).toContainText('Noise');
+  await expect(page.getByTestId('knob-8-level')).toContainText('100%');
+  // Escape closes the menu without adding anything.
+  await page.getByRole('button', { name: '+ Add module' }).click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(9);
+});
+
+test('loading the Chord Stab patch replaces the rack and plays chords', async ({ page }) => {
+  await addSynth(page);
+  await page.getByTestId('patch-select').selectOption('Chord Stab');
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(6);
+  await expect(page.getByTestId('module-5')).toContainText('Out');
+  await expect(page.getByTestId('track-1')).toContainText('Synth · Chord Stab');
+  await expect(page.getByTestId('patch-edited')).toBeHidden();
+  expect(await holdPeak(page, ['KeyA', 'KeyD', 'KeyG'])).toBeGreaterThan(0.05);
+  // Piano keys must not retarget the patch dropdown (type-ahead).
+  await expect(page.getByTestId('patch-select')).toHaveValue('Chord Stab');
+});
+
+test('a cable can also be drawn from an empty input to an output; a full rack says so', async ({ page }) => {
+  await addSynth(page);
+  const cables = page.locator('[data-testid="cables"] path.cable');
+  await dragTo(page, 'jack-3-in-in3', await centre(page, 'jack-1-out-out'));
+  await expect(cables).toHaveCount(12);
+  // Deep Bass has 8 modules; fill the other 24 slots through the menu.
+  const addBtn = page.getByRole('button', { name: '+ Add module' });
+  for (let i = 0; i < 24; i++) {
+    await addBtn.click();
+    await page.getByTestId('add-noise').click();
+  }
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(32);
+  await addBtn.click();
+  await expect(page.getByTestId('add-menu')).toContainText('Rack is full');
+  await page.mouse.click(5, 5); // outside click closes it
+  await expect(page.getByTestId('add-menu')).toBeHidden();
+});
+
+test('dragging a knob coalesces param sends (at most one per frame + final)', async ({ page }) => {
+  await addSynth(page);
+  await page.evaluate(() => {
+    const { engine, Op } = (window as unknown as DawWindow).__daw!;
+    const w = window as unknown as { setParams: number[] };
+    w.setParams = [];
+    const orig = engine!.send.bind(engine);
+    engine!.send = (op, a, b, c, d) => {
+      if (op === Op.RACK_SET_PARAM) w.setParams.push(d!);
+      return orig(op, a, b, c, d);
+    };
+  });
+  const k = await centre(page, 'knob-4-cutoff');
+  await page.mouse.move(k.x, k.y);
+  await page.mouse.down();
+  // 60 moves inside one task (one frame), half the range up in total.
+  await page.evaluate(({ x, y }) => {
+    const el = document.querySelector('[data-testid="knob-4-cutoff"]')!;
+    for (let i = 1; i <= 60; i++) {
+      el.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: x, clientY: y - (75 * i) / 60, bubbles: true }));
+    }
+  }, k);
+  await page.mouse.up();
+  const sent = await page.evaluate(() => (window as unknown as { setParams: number[] }).setParams);
+  expect(sent.length).toBeGreaterThan(0);
+  expect(sent.length).toBeLessThanOrEqual(2); // one frame + the final value on pointerup
+  // Half of the log range above 300 Hz: 300·(1000)^0.5 ≈ 9.5 kHz, final value sent last.
+  expect(sent[sent.length - 1]).toBeGreaterThan(8000);
+  await expect(page.getByTestId('knob-4-cutoff')).toContainText('kHz');
 });

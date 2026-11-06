@@ -1,0 +1,89 @@
+<script lang="ts">
+  // One module in the rack: a header in its category colour (source orange,
+  // shaping purple, utility grey-blue, effect pink) with the module's name and
+  // a × to remove it; then its params (choice params as segmented controls,
+  // the rest as knobs), then the input jacks, then the output jacks on a dark
+  // plate (VCV convention: outputs are the boxed ones).
+  import type { ModuleDef } from '../../audio/catalog';
+  import type { RackModule } from '../../state/project.svelte';
+  import { categoryColor } from './cables';
+  import Jack from './Jack.svelte';
+  import Knob from './Knob.svelte';
+
+  let { module, def, title, isConnected, onparam, onremove, onjackdown }: {
+    module: RackModule;
+    def: ModuleDef;
+    /** Display name, numbered when the rack has several of a kind ("Oscillator 2"). */
+    title: string;
+    isConnected: (inputPort: number) => boolean;
+    onparam: (paramIdx: number, v: number) => void;
+    onremove: () => void;
+    onjackdown: (e: PointerEvent, dir: 'in' | 'out', port: number) => void;
+  } = $props();
+
+  const color = $derived(categoryColor(def.category));
+  const choices = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.pd.choices.length));
+  const knobs = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => !x.pd.choices.length));
+  // 1 knob: 1 column; up to 4: 2 columns; more: 4 (keeps the rail short).
+  const cols = $derived(knobs.length <= 1 ? 1 : knobs.length <= 4 ? 2 : 4);
+</script>
+
+<div class="panel" data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}>
+  <header>
+    <span class="title">{title}</span>
+    <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}>×</button>
+  </header>
+  {#if def.params.length}
+    <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>
+      {#each choices as { pd, i } (pd.name)}
+        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`} />
+      {/each}
+      {#each knobs as { pd, i } (pd.name)}
+        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`} />
+      {/each}
+    </div>
+  {/if}
+  <div class="spacer"></div>
+  <!-- inputs, then outputs (boxed); side by side when they fit, keeps the rail short -->
+  <div class="ports">
+    {#if def.inputs.length}
+      <div class="group ins">
+        <span class="dir">in</span>
+        <div class="jacks">
+          {#each def.inputs as port, pi (port.name)}
+            <Jack m={module.idx} port={pi} dir="in" name={port.name} signal={port.signal} moduleName={title}
+              connected={isConnected(pi)} onpointerdown={(e) => onjackdown(e, 'in', pi)} />
+          {/each}
+        </div>
+      </div>
+    {/if}
+    {#if def.outputs.length}
+      <div class="group outs">
+        <span class="dir">out</span>
+        <div class="jacks">
+          {#each def.outputs as port, pi (port.name)}
+            <Jack m={module.idx} port={pi} dir="out" name={port.name} signal={port.signal} moduleName={title}
+              connected={false} onpointerdown={(e) => onjackdown(e, 'out', pi)} />
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
+  header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); }
+  .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }
+  .x { border: 0; background: transparent; color: #8d90a0; font-size: 14px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: 0.6; }
+  .panel:hover .x, .x:focus-visible { opacity: 1; }
+  .x:hover { color: #ff8a92; }
+  .x:focus-visible { outline: 1px solid #f0a23a; }
+  .params { display: grid; gap: 4px 2px; justify-content: center; }
+  .spacer { flex: 1; }
+  .ports { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 4px; border-top: 1px solid #2e3038; padding-top: 4px; }
+  .group { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; padding: 2px; }
+  .outs { background: #15161a; border: 1px solid #2e3038; border-radius: 3px; }
+  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6f7280; }
+  .jacks { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; justify-content: center; }
+</style>

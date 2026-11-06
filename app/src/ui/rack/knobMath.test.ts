@@ -1,0 +1,141 @@
+import { describe, expect, it } from 'vitest';
+import { moduleDef, paramIndex } from '../../audio/catalog';
+import type { ParamDef } from '../../audio/catalog';
+import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, toPos, ZERO_ZONE } from './knobMath';
+
+const param = (mod: string, name: string): ParamDef => {
+  const d = moduleDef(mod);
+  return d.params[paramIndex(d, name)];
+};
+const cutoff = param('filter', 'cutoff'); // 20..20000 exp Hz
+const glide = param('midi_in', 'glide'); // 0..2 exp s
+const reso = param('filter', 'reso'); // 0..1 lin
+const octave = param('osc', 'octave'); // -3..3 int oct
+const attack = param('adsr', 'attack'); // 0.001..10 exp s
+
+describe('toPos / fromPos', () => {
+  it('lin maps min..max to 0..1', () => {
+    expect(toPos(reso, 0)).toBe(0);
+    expect(toPos(reso, 1)).toBe(1);
+    expect(toPos(reso, 0.25)).toBeCloseTo(0.25);
+    expect(fromPos(reso, 0.4)).toBeCloseTo(0.4);
+  });
+
+  it('exp is logarithmic: geometric mean sits at the middle', () => {
+    expect(toPos(cutoff, 20)).toBe(0);
+    expect(toPos(cutoff, 20000)).toBeCloseTo(1);
+    expect(toPos(cutoff, Math.sqrt(20 * 20000))).toBeCloseTo(0.5);
+    expect(fromPos(cutoff, 0.5)).toBeCloseTo(Math.sqrt(20 * 20000));
+  });
+
+  it('round-trips for every catalog param', () => {
+    for (const pd of moduleDef('osc').params.concat(moduleDef('adsr').params, moduleDef('midi_in').params)) {
+      for (const pos of [0, 0.1, 0.37, 0.5, 0.9, 1]) {
+        const v = fromPos(pd, pos);
+        expect(v).toBeGreaterThanOrEqual(pd.min);
+        expect(v).toBeLessThanOrEqual(pd.max);
+        const zeroZone = pd.curve === 'exp' && pd.min === 0 && pos < ZERO_ZONE;
+        if (!pd.integer) expect(toPos(pd, v)).toBeCloseTo(zeroZone ? 0 : pos);
+      }
+    }
+  });
+
+  it('integer params round', () => {
+    expect(fromPos(octave, 0.5)).toBe(0);
+    expect(fromPos(octave, 0.6)).toBe(1);
+    expect(Number.isInteger(fromPos(octave, 0.77))).toBe(true);
+  });
+
+  it('exp with min 0 (glide): bottom 2% of travel is exactly 0, then log from a floor', () => {
+    expect(fromPos(glide, 0)).toBe(0);
+    expect(fromPos(glide, ZERO_ZONE / 2)).toBe(0);
+    expect(fromPos(glide, ZERO_ZONE + 0.001)).toBeGreaterThan(0);
+    expect(fromPos(glide, ZERO_ZONE + 0.001)).toBeLessThan(0.005);
+    expect(fromPos(glide, 1)).toBeCloseTo(2);
+    expect(toPos(glide, 0)).toBe(0);
+    expect(toPos(glide, 2)).toBeCloseTo(1);
+    // log in between: equal position steps multiply the value
+    const a = fromPos(glide, 0.4), b = fromPos(glide, 0.6), c = fromPos(glide, 0.8);
+    expect(b / a).toBeCloseTo(c / b);
+  });
+
+  it('clamps out-of-range inputs', () => {
+    expect(toPos(cutoff, 5)).toBe(0);
+    expect(toPos(cutoff, 1e6)).toBe(1);
+    expect(fromPos(reso, -1)).toBe(0);
+    expect(fromPos(reso, 2)).toBe(1);
+  });
+});
+
+describe('dragPos', () => {
+  it('150 px upward covers the full range; Shift is x0.1', () => {
+    expect(DRAG_PX).toBe(150);
+    expect(dragPos(0, -150, false)).toBe(1);
+    expect(dragPos(0, -75, false)).toBeCloseTo(0.5);
+    expect(dragPos(0.5, 75, false)).toBeCloseTo(0);
+    expect(dragPos(0.5, -150, true)).toBeCloseTo(0.6);
+    expect(dragPos(0.9, -300, false)).toBe(1);
+  });
+});
+
+describe('keyStep', () => {
+  it('steps 1% of travel (in curve space), 1 unit for integers', () => {
+    expect(keyStep(reso, 0.5, 1)).toBeCloseTo(0.51);
+    expect(keyStep(reso, 0.5, -1)).toBeCloseTo(0.49);
+    expect(keyStep(octave, 0, 1)).toBe(1);
+    expect(keyStep(octave, 3, 1)).toBe(3);
+    expect(keyStep(cutoff, 300, 1)).toBeCloseTo(fromPos(cutoff, toPos(cutoff, 300) + 0.01));
+  });
+  it('ten steps up from 300 Hz is clearly higher', () => {
+    let v = 300;
+    for (let i = 0; i < 10; i++) v = keyStep(cutoff, v, 1);
+    expect(v).toBeGreaterThan(500);
+  });
+});
+
+describe('formatValue', () => {
+  it('Hz', () => {
+    expect(formatValue(cutoff, 300)).toBe('300 Hz');
+    expect(formatValue(cutoff, 1200)).toBe('1.2 kHz');
+    expect(formatValue(cutoff, 20000)).toBe('20 kHz');
+    expect(formatValue(cutoff, 1234.5)).toBe('1.23 kHz');
+    expect(formatValue(param('lfo', 'rate'), 0.25)).toBe('0.25 Hz');
+    expect(formatValue(param('lfo', 'rate'), 2)).toBe('2 Hz');
+  });
+  it('seconds', () => {
+    expect(formatValue(attack, 0.25)).toBe('250 ms');
+    expect(formatValue(attack, 0.005)).toBe('5 ms');
+    expect(formatValue(attack, 1.5)).toBe('1.5 s');
+    expect(formatValue(attack, 10)).toBe('10 s');
+    expect(formatValue(glide, 0)).toBe('off');
+    expect(formatValue(glide, 0.04)).toBe('40 ms');
+  });
+  it('signed oct / st / ct when the range is bipolar', () => {
+    expect(formatValue(octave, 1)).toBe('+1 oct');
+    expect(formatValue(octave, -2)).toBe('−2 oct');
+    expect(formatValue(octave, 0)).toBe('0 oct');
+    expect(formatValue(param('osc', 'tune'), 0.5)).toBe('+0.5 st');
+    expect(formatValue(param('osc', 'fine'), -12)).toBe('−12 ct');
+    expect(formatValue(param('filter', 'cv_amt'), 3)).toBe('+3 oct');
+    // unipolar ranges read as amounts, not offsets
+    expect(formatValue(param('midi_in', 'bend'), 2)).toBe('2 st');
+    expect(formatValue(param('osc', 'detune'), 15)).toBe('15 ct');
+  });
+  it('0..1 unitless params are percent; unitless integers are plain', () => {
+    expect(formatValue(reso, 0.35)).toBe('35%');
+    expect(formatValue(param('osc', 'pw'), 0.5)).toBe('50%');
+    expect(formatValue(param('mixer', 'lvl1'), 0.8)).toBe('80%');
+    expect(formatValue(param('midi_in', 'voices'), 8)).toBe('8');
+  });
+  it('choice params show the choice label', () => {
+    expect(formatValue(param('filter', 'mode'), 2)).toBe('HP');
+  });
+});
+
+describe('formatValue rounding edges', () => {
+  it('switches unit when rounding reaches the next one', () => {
+    expect(formatValue(cutoff, 999.7)).toBe('1 kHz');
+    expect(formatValue(attack, 0.9996)).toBe('1 s');
+    expect(formatValue(glide, 0.0002)).toBe('0.2 ms');
+  });
+});

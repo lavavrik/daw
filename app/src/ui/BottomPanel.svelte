@@ -2,6 +2,7 @@
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
   import StepGrid from './StepGrid.svelte';
+  import Rack from './rack/Rack.svelte';
   import { banners } from '../state/banners.svelte';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
@@ -43,14 +44,13 @@
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} onnotice={(m) => (banners.notice = m)} />
     {:else if track && track.kind === 'synth'}
-      <!-- Task 9 replaces this placeholder with <Rack>. -->
-      <p class="none" data-testid="instrument-body">Rack arrives in the next task</p>
+      {#key track.id}<Rack {p} {engine} {track} />{/key}
     {/if}
   </div>
 </section>
 
 <style>
-  .pane { background: #1b1c21; border: 1px solid #2a2c33; display: flex; flex-direction: column; min-height: 0; }
+  .pane { background: #1b1c21; border: 1px solid #2a2c33; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   .head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
   .none { color: #7d808c; }
@@ -58,7 +58,7 @@
   .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
   .tab.active { background: #f0a23a; color: #111; }
   .tab:disabled { opacity: 0.45; cursor: not-allowed; }
-  .body { padding: 8px; overflow: auto; flex: 1; }
+  .body { padding: 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
   .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }

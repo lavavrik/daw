@@ -44,3 +44,23 @@ very large sample while playing, it loads when you stop (yellow notice). Up to
 256 sample loads per session (every drop uses one, even onto a row that already
 has a sample; reload to start over). The 2 ms fade-out applied to each sample's tail
 avoids clicks from samples that don't end at zero.
+
+## Synth tracks: the rack (Instrument tab)
+
+**+ Synth track** adds a track with the *Deep Bass* patch; the bottom panel
+shows its rack (code: `app/src/ui/rack/`).
+
+- **Patch** dropdown loads a starter patch (Deep Bass, Chord Stab, Pad, Lead,
+  Pluck), replacing the rack. After any edit "(edited)" appears; **revert**
+  reloads the patch.
+- **Knobs**: drag up/down (150 px = full range; Shift = fine), double-click =
+  default, or focus and use the arrow keys (1% steps). The value is always
+  shown under the label. Choice params (wave, filter mode…) are segmented
+  buttons (arrow keys move the selection).
+- **Cables** are coloured by signal: audio blue, pitch orange, gate green,
+  CV purple. Drag from an output to an input to patch (an input takes one
+  cable; a new one replaces it). Grab a cable by its *input* end to move it
+  to another input, or drop it anywhere else to unplug it. You can also drag
+  from an empty input to an output.
+- **+ Add module** (grouped by category; up to 32 modules) and the × on a
+  module header to remove it.

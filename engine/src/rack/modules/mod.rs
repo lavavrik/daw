@@ -18,7 +18,7 @@ pub mod lfo;
 pub mod out;
 pub mod vca;
 
-use super::catalog::ModuleKind;
+use super::catalog::{spec, ModuleKind};
 use super::port::PortBuf;
 
 /// Timing context for one sub-block.
@@ -114,8 +114,13 @@ pub struct Smooth {
 
 impl Smooth {
     pub fn new(sr: f32, initial: f32) -> Smooth {
+        Smooth::with_time(sr, SMOOTH_SECONDS, initial)
+    }
+
+    /// A smoother with time constant `seconds` (e.g. the LFO's output slew).
+    pub fn with_time(sr: f32, seconds: f32, initial: f32) -> Smooth {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
-        Smooth { value: initial, coef: 1.0 - (-1.0 / (SMOOTH_SECONDS * sr)).exp() }
+        Smooth { value: initial, coef: 1.0 - (-1.0 / (seconds.max(1e-6) * sr)).exp() }
     }
 
     /// Advance one sample toward `target` and return the smoothed value.
@@ -136,8 +141,15 @@ impl Smooth {
     }
 }
 
-/// Param `i` from the rack's slice, or `default` if the slice is short.
+/// Catalog default of `kind`'s param `i` (0.0 if there is no such param).
+/// Modules read defaults from here instead of repeating the catalog's numbers.
+pub(crate) fn default(kind: ModuleKind, i: usize) -> f32 {
+    spec(kind).params.get(i).map_or(0.0, |p| p.default)
+}
+
+/// Param `i` from the rack's slice, or its catalog default if the slice is
+/// short.
 #[inline]
-pub(crate) fn param(params: &[f32], i: usize, default: f32) -> f32 {
-    params.get(i).copied().unwrap_or(default)
+pub(crate) fn param(params: &[f32], kind: ModuleKind, i: usize) -> f32 {
+    params.get(i).copied().unwrap_or_else(|| default(kind, i))
 }

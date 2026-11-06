@@ -5,7 +5,8 @@
 //! the current sub-block is left in `l`/`r`, which the rack adds to the track
 //! output (several Out modules sum). Non-finite samples are replaced by 0.
 
-use super::{param, Smooth};
+use super::{default, param, Smooth};
+use crate::rack::catalog::ModuleKind;
 use crate::rack::port::PortBuf;
 use crate::{MAX_POLY, RACK_BLOCK};
 
@@ -21,7 +22,7 @@ pub struct Out {
 
 impl Out {
     pub fn new(sr: f32) -> Out {
-        Out { level: Smooth::new(sr, 0.8), l: [0.0; RACK_BLOCK], r: [0.0; RACK_BLOCK] }
+        Out { level: Smooth::new(sr, default(ModuleKind::Out, LEVEL)), l: [0.0; RACK_BLOCK], r: [0.0; RACK_BLOCK] }
     }
 
     pub fn reset(&mut self) {
@@ -35,7 +36,7 @@ impl Out {
             return;
         };
         let r = if r.channels == 0 { l } else { r };
-        let target = param(params, LEVEL, 0.8);
+        let target = param(params, ModuleKind::Out, LEVEL);
         for i in 0..RACK_BLOCK {
             let level = self.level.next(target);
             let sl: f32 = (0..l.channels.min(MAX_POLY)).map(|ch| l.get(ch, i)).sum();

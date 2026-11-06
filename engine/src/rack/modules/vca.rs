@@ -3,7 +3,8 @@
 //! Channels follow the inputs (max of `in` and `cv`, min 1), with mono
 //! broadcast: a 1-channel `cv` (e.g. an LFO) scales every voice of a poly `in`.
 
-use super::{param, Smooth};
+use super::{default, param, Smooth};
+use crate::rack::catalog::ModuleKind;
 use crate::rack::port::{poly, PortBuf};
 use crate::RACK_BLOCK;
 
@@ -16,14 +17,14 @@ pub struct Vca {
 
 impl Vca {
     pub fn new(sr: f32) -> Vca {
-        Vca { level: Smooth::new(sr, 1.0) }
+        Vca { level: Smooth::new(sr, default(ModuleKind::Vca, LEVEL)) }
     }
 
     pub fn process(&mut self, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf]) {
         let (Some(inp), Some(cv), Some(out)) = (ins.first(), ins.get(1), outs.first_mut()) else {
             return;
         };
-        let target = param(params, LEVEL, 1.0);
+        let target = param(params, ModuleKind::Vca, LEVEL);
         let channels = poly(&ins[..2]);
         out.channels = channels;
         let cv_connected = cv.channels > 0;

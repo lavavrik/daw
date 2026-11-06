@@ -12,9 +12,11 @@
 //! Each input holds at most one cable (connecting to an occupied input
 //! replaces it); outputs fan out freely. After every structural edit the
 //! processing order is rebuilt with Kahn's algorithm. Modules in cycles have
-//! no zero-in-degree candidate, so when Kahn stalls the lowest-index remaining
-//! module is taken next (cycles are broken in index order) and Kahn resumes,
-//! so modules downstream of a loop still run after it.
+//! no zero-in-degree candidate, so when Kahn stalls, the lowest-index
+//! remaining module that is actually *on* a cycle (reachable from itself
+//! through the remaining modules) is taken next, which breaks that cycle in
+//! index order, and Kahn resumes. Modules merely downstream of a loop (e.g. the
+//! Out it feeds) are never picked this way, so they still run after it.
 //!
 //! Before a module runs, each connected input is copied from its source's
 //! output buffer into per-rack scratch. A source earlier in the order has
@@ -25,6 +27,13 @@
 //! # Declicking
 //! * Params: modules smooth `smooth` params per sample (5 ms one-pole), so
 //!   `set_param` applies immediately.
+//! * Structural edits on a silent rack apply at once, but the output gain
+//!   restarts from 0 and ramps up over round(0.002·sr) samples, so whatever
+//!   the edit switched on (e.g. the last cable from a free-running LFO to Out)
+//!   fades in instead of starting at full level.
+//! * Adding a module never changes the sound (it has no cables yet), so it
+//!   applies at once without a fade, even while sounding, unless edits are
+//!   already queued (then it queues, to keep edits in order).
 //! * Structural edits while [`Rack::is_sounding`]: the edit is validated now
 //!   (the caller gets its `ERR_*`/`OK` code immediately) and queued in a fixed
 //!   64-entry queue. The rack output then fades to 0 over round(0.002·sr)
@@ -67,6 +76,17 @@ enum Edit {
     Clear,
 }
 
+/// How an edit interacts with the declick machinery (see `Rack::submit`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditClass {
+    /// Smoothed by the module: never faded.
+    Param,
+    /// A new, cable-less module: cannot change the sound, never faded.
+    Add,
+    /// Cables, removal, clear: faded (queued while sounding).
+    Structural,
+}
+
 /// One module slot of the running graph.
 #[derive(Clone)]
 struct Slot {
@@ -107,6 +127,25 @@ pub struct Rack {
     blk_l: [f32; RACK_BLOCK],
     blk_r: [f32; RACK_BLOCK],
     blk_pos: usize,
+}
+
+/// Is module `m` reachable from itself through modules in `within`?
+/// Bitmask BFS: at most `MAX_MODULES` rounds of `MAX_MODULES` ORs.
+fn on_cycle(succ: &[u32; MAX_MODULES], within: u32, m: usize) -> bool {
+    let mut reach = succ[m] & within;
+    let mut frontier = reach;
+    while frontier != 0 {
+        let mut next = 0u32;
+        let mut f = frontier;
+        while f != 0 {
+            let y = f.trailing_zeros() as usize;
+            f &= f - 1;
+            next |= succ[y] & within;
+        }
+        frontier = next & !reach;
+        reach |= next;
+    }
+    reach & (1 << m) != 0
 }
 
 impl Rack {
@@ -180,8 +219,7 @@ impl Rack {
             self.queue[0] = Edit::Clear;
             self.queued = 1;
         } else {
-            self.apply(Edit::Clear);
-            self.rebuild_order();
+            self.submit(Edit::Clear, EditClass::Structural);
         }
     }
 
@@ -193,7 +231,7 @@ impl Rack {
             return ERR_BAD_VALUE;
         }
         *slot = Some(kind);
-        self.submit(Edit::Add(idx as u8, kind), true);
+        self.submit(Edit::Add(idx as u8, kind), EditClass::Add);
         OK
     }
 
@@ -204,7 +242,7 @@ impl Rack {
             Some(slot @ Some(_)) => *slot = None,
             _ => return ERR_BAD_INDEX,
         }
-        self.submit(Edit::Remove(idx as u8), true);
+        self.submit(Edit::Remove(idx as u8), EditClass::Structural);
         OK
     }
 
@@ -219,7 +257,7 @@ impl Rack {
             return OK; // no-op: don't dip the output for a re-sent edit
         }
         let e = Edit::Connect { from: (from.0 as u8, from.1 as u8), to: (to.0 as u8, to.1 as u8) };
-        self.submit(e, true);
+        self.submit(e, EditClass::Structural);
         OK
     }
 
@@ -232,7 +270,7 @@ impl Rack {
         if self.queued == 0 && self.cable(to).is_none() {
             return OK; // no-op: don't dip the output
         }
-        self.submit(Edit::Disconnect((to.0 as u8, to.1 as u8)), true);
+        self.submit(Edit::Disconnect((to.0 as u8, to.1 as u8)), EditClass::Structural);
         OK
     }
 
@@ -246,7 +284,7 @@ impl Rack {
         if !(value >= p.min && value <= p.max) || (p.integer && value.fract() != 0.0) {
             return ERR_BAD_VALUE;
         }
-        self.submit(Edit::SetParam(idx as u8, param as u8, value), false);
+        self.submit(Edit::SetParam(idx as u8, param as u8, value), EditClass::Param);
         OK
     }
 
@@ -272,13 +310,20 @@ impl Rack {
 
     /// Apply a validated edit now, or queue it behind a declick fade.
     /// Structural edits queue while sounding; anything queues while the queue
-    /// is non-empty (to keep edits in order). On overflow everything applies.
-    fn submit(&mut self, e: Edit, structural: bool) {
-        let defer = self.queued > 0 || (structural && self.is_sounding());
+    /// is non-empty (to keep edits in order). On overflow everything applies
+    /// at once. A structural edit applied at once (silent rack, or overflow)
+    /// restarts the output gain from 0 so the result fades in.
+    fn submit(&mut self, e: Edit, class: EditClass) {
+        let defer = self.queued > 0 || (class == EditClass::Structural && self.is_sounding());
         if !defer {
             self.apply(e);
-            if structural {
-                self.rebuild_order();
+            match class {
+                EditClass::Param => {}
+                EditClass::Add => self.rebuild_order(),
+                EditClass::Structural => {
+                    self.rebuild_order();
+                    self.gain = 0.0;
+                }
             }
         } else if self.queued < EDIT_QUEUE_LEN {
             self.queue[self.queued] = e;
@@ -287,6 +332,7 @@ impl Rack {
             self.apply_queue();
             self.apply(e);
             self.rebuild_order();
+            self.gain = 0.0;
         }
     }
 
@@ -364,40 +410,51 @@ impl Rack {
         }
     }
 
-    /// Kahn's algorithm over the running graph (fixed arrays, no allocation).
-    /// Ready modules are taken lowest index first; when none is ready (only
-    /// cycles remain) the lowest-index remaining module is taken.
+    /// Kahn's algorithm over the running graph (fixed arrays and bitmasks, no
+    /// allocation). Ready modules are taken lowest index first. When none is
+    /// ready (only cycles and their downstream remain), the lowest-index
+    /// remaining module that lies on a cycle is taken.
+    #[allow(clippy::needless_range_loop)] // `m` is also a bit index
     fn rebuild_order(&mut self) {
-        let mut present = [false; MAX_MODULES];
+        const _: () = assert!(MAX_MODULES <= 32, "module sets are u32 bitmasks");
+        // succ[x]: modules with a cable from x. indeg[m]: cables into m from
+        // present modules (one per cable, so parallel cables count twice and
+        // are decremented twice).
+        let mut succ = [0u32; MAX_MODULES];
         let mut indeg = [0u8; MAX_MODULES];
+        let mut remaining = 0u32;
         for (m, slot) in self.slots.iter().enumerate().take(MAX_MODULES) {
-            present[m] = slot.module.is_some();
+            if slot.module.is_some() {
+                remaining |= 1 << m;
+            }
         }
-        let mut remaining = 0;
         for m in 0..MAX_MODULES {
-            if !present[m] {
+            if remaining & (1 << m) == 0 {
                 continue;
             }
-            remaining += 1;
             for (src, _) in self.slots[m].cables.iter().flatten() {
-                if present.get(*src as usize).copied().unwrap_or(false) {
+                let src = *src as usize;
+                if src < MAX_MODULES && remaining & (1 << src) != 0 {
                     indeg[m] += 1;
+                    succ[src] |= 1 << m;
                 }
             }
         }
-        let mut done = [false; MAX_MODULES];
         self.order_len = 0;
-        while remaining > 0 {
-            let ready = (0..MAX_MODULES).find(|&m| present[m] && !done[m] && indeg[m] == 0);
-            let Some(pick) = ready.or_else(|| (0..MAX_MODULES).find(|&m| present[m] && !done[m])) else {
-                break;
+        while remaining != 0 {
+            let ready = (0..MAX_MODULES).find(|&m| remaining & (1 << m) != 0 && indeg[m] == 0);
+            let pick = match ready {
+                Some(m) => m,
+                None => (0..MAX_MODULES)
+                    .find(|&m| remaining & (1 << m) != 0 && on_cycle(&succ, remaining, m))
+                    // Unreachable (a stall implies a cycle); keep it total.
+                    .unwrap_or(remaining.trailing_zeros() as usize),
             };
-            done[pick] = true;
-            remaining -= 1;
+            remaining &= !(1 << pick);
             self.order[self.order_len] = pick as u8;
             self.order_len += 1;
             for m in 0..MAX_MODULES {
-                if present[m] && !done[m] {
+                if remaining & (1 << m) != 0 {
                     for (src, _) in self.slots[m].cables.iter().flatten() {
                         if *src as usize == pick {
                             indeg[m] = indeg[m].saturating_sub(1);
@@ -748,17 +805,70 @@ mod tests {
     #[test]
     fn queued_edits_validate_against_pending_state() {
         let mut r = sounding_square();
-        // Module 5 does not exist in the running graph yet, but is queued.
+        // A cable-less add applies at once, even while sounding.
+        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.kind(3), Some(ModuleKind::Lfo));
+        assert_eq!(r.connect((3, 0), (1, 1)), OK); // queued (sounding)
+        assert_eq!(r.cable((1, 1)), None);
+        // With the queue non-empty, adds queue too (ordering).
         assert_eq!(r.add_module(5, ModuleKind::Lfo), OK);
         assert_eq!(r.add_module(5, ModuleKind::Lfo), ERR_BAD_VALUE, "occupied once queued");
+        assert_eq!(r.kind(5), None, "not applied before the fade-out");
+        // Module 5 is not in the running graph yet, but validates.
         assert_eq!(r.connect((5, 0), (1, 1)), OK);
         assert_eq!(r.set_param(5, LFO_RATE, 3.0), OK);
-        assert_eq!(r.kind(5), None, "not applied before the fade-out");
         let out = render(&mut r, 960);
         assert!(max_jump(0.8, &out) <= 0.05);
         assert_eq!(r.kind(5), Some(ModuleKind::Lfo));
         assert_eq!(r.cable((1, 1)), Some((5, 0)));
         assert_eq!(r.param(5, LFO_RATE), Some(3.0));
+    }
+
+    #[test]
+    fn add_while_sounding_does_not_dip() {
+        let mut r = sounding_square();
+        assert_eq!(r.add_module(7, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(8, ModuleKind::Out), OK);
+        assert_eq!(r.kind(8), Some(ModuleKind::Out));
+        let out = render(&mut r, 480);
+        assert!(out.iter().all(|&x| (x - 0.8).abs() < 1e-3), "output dipped");
+    }
+
+    #[test]
+    fn edit_on_silent_rack_fades_in() {
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Out), OK);
+        assert_eq!(r.set_param(0, LFO_WAVE, SQUARE), OK);
+        assert_eq!(r.set_param(0, LFO_RATE, 1.0), OK);
+        assert_eq!(r.connect((0, 0), (1, 0)), OK);
+        // The LFO free-runs (at +1) while nothing reaches Out.
+        let silent = render(&mut r, 1280);
+        assert!(silent.iter().all(|&x| x == 0.0));
+        assert!(!r.is_sounding());
+        // The last cable applies at once, but the output fades in.
+        assert_eq!(r.connect((1, 0), (2, 0)), OK);
+        assert_eq!(r.cable((2, 0)), Some((1, 0)));
+        let out = render(&mut r, 960);
+        let j = max_jump(0.0, &out);
+        assert!(j <= 0.05, "jump {j}");
+        assert!((out[out.len() - 1] - 0.8).abs() < 1e-3);
+    }
+
+    #[test]
+    fn cycle_breaking_keeps_downstream_last() {
+        // Out@0 is fed by the loop 1 <-> 2 but is not on it.
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.connect((3, 0), (1, 0)), OK);
+        assert_eq!(r.connect((1, 0), (2, 0)), OK);
+        assert_eq!(r.connect((2, 0), (1, 1)), OK);
+        assert_eq!(r.connect((2, 0), (0, 0)), OK);
+        assert_eq!(r.order(), &[3, 1, 2, 0]);
     }
 
     #[test]
@@ -805,7 +915,9 @@ mod tests {
         let mut r = Rack::new(SR);
         chain(&mut r, 0, 1, 2);
         assert_eq!(r.set_param(0, LFO_RATE, 50.0), OK);
-        let mut out = Vec::new();
+        // Warm up past the 2 ms fade-in that follows the (silent-rack) edits.
+        let warm = render(&mut r, 1280);
+        let mut out = vec![warm[warm.len() - 1]];
         for n in [1usize, 31, 100, 7, 128, 33, 200] {
             let (mut l, mut rr) = (vec![0.0f32; n], vec![0.0f32; n]);
             r.render_add(&ctx(), &mut l, &mut rr);
@@ -813,7 +925,7 @@ mod tests {
             out.extend_from_slice(&l);
         }
         // A 50 Hz sine at 0.8 moves at most 2*pi*50*0.8/48000 per sample.
-        let j = max_jump(0.0, &out);
+        let j = max_jump(out[0], &out);
         assert!(j < 0.006, "discontinuity {j}");
     }
 }

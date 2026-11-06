@@ -83,7 +83,25 @@ fn rack_edits_and_render_do_not_allocate() {
     }
     render(&mut r, 10, &mut ctx);
     r.clear();
-    render(&mut r, 10, &mut ctx);
+    render(&mut r, 30, &mut ctx);
+    assert!(!r.is_sounding());
+
+    // Immediate path on a silent rack: add, connect (+ no-op re-connect),
+    // no-op disconnect, real disconnect, remove, clear.
+    assert_eq!(r.add_module(4, ModuleKind::Lfo), OK);
+    assert_eq!(r.add_module(5, ModuleKind::Vca), OK);
+    assert_eq!(r.add_module(6, ModuleKind::Out), OK);
+    assert_eq!(r.connect((4, 0), (5, 0)), OK);
+    assert_eq!(r.connect((4, 0), (5, 0)), OK); // no-op
+    assert_eq!(r.disconnect((5, 1)), OK); // no-op (unconnected)
+    assert_eq!(r.connect((5, 0), (6, 0)), OK);
+    assert_eq!(r.disconnect((6, 0)), OK);
+    assert_eq!(r.remove_module(5), OK);
+    assert_eq!(r.set_param(4, 0, 2.0), OK);
+    render(&mut r, 5, &mut ctx);
+    assert!(!r.is_sounding());
+    r.clear();
+    render(&mut r, 5, &mut ctx);
 
     ARMED.with(|a| a.set(false));
     assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "rack allocated");

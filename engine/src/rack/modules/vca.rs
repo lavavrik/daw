@@ -1,0 +1,38 @@
+//! VCA: `out = in × level × cv` (cv taken as 1 when unconnected).
+//!
+//! Channels follow the inputs (max of `in` and `cv`, min 1), with mono
+//! broadcast: a 1-channel `cv` (e.g. an LFO) scales every voice of a poly `in`.
+
+use super::{param, Smooth};
+use crate::rack::port::{poly, PortBuf};
+use crate::RACK_BLOCK;
+
+const LEVEL: usize = 0;
+
+#[derive(Clone)]
+pub struct Vca {
+    level: Smooth,
+}
+
+impl Vca {
+    pub fn new(sr: f32) -> Vca {
+        Vca { level: Smooth::new(sr, 1.0) }
+    }
+
+    pub fn process(&mut self, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf]) {
+        let (Some(inp), Some(cv), Some(out)) = (ins.first(), ins.get(1), outs.first_mut()) else {
+            return;
+        };
+        let target = param(params, LEVEL, 1.0);
+        let channels = poly(&ins[..2]);
+        out.channels = channels;
+        let cv_connected = cv.channels > 0;
+        for i in 0..RACK_BLOCK {
+            let level = self.level.next(target);
+            for (ch, row) in out.data.iter_mut().take(channels).enumerate() {
+                let c = if cv_connected { cv.get(ch, i) } else { 1.0 };
+                row[i] = inp.get(ch, i) * level * c;
+            }
+        }
+    }
+}

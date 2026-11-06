@@ -6,6 +6,7 @@ pub mod engine;
 pub mod ffi;
 pub mod metronome;
 pub mod protocol;
+pub mod rack;
 pub mod samples;
 pub mod test_tone;
 pub mod transport;
@@ -20,6 +21,17 @@ pub const MAX_STEPS: usize = 64;
 pub const MAX_SAMPLES: usize = 256;
 /// Per-sample size cap in floats (frames * channels; 256 MB).
 pub const MAX_SAMPLE_FLOATS: usize = 64 * 1024 * 1024;
+/// Frames per rack sub-block. Modules always process exactly this many frames,
+/// so live and sequenced note timing inside a rack resolves to one sub-block.
+pub const RACK_BLOCK: usize = 32;
+/// Module slots per rack (patch).
+pub const MAX_MODULES: usize = 32;
+/// Channels (voices) per rack cable.
+pub const MAX_POLY: usize = 16;
+/// Max inputs, and separately max outputs, per rack module.
+pub const MAX_PORTS: usize = 8;
+/// Max params per rack module.
+pub const MAX_PARAMS: usize = 12;
 /// Ticks per quarter note.
 pub const PPQ: f64 = 960.0;
 /// A step is a 16th note.

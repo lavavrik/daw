@@ -1,0 +1,143 @@
+//! Rack modules: the DSP behind each `ModuleKind`.
+//!
+//! Contract for every module (the audio thread must never allocate, block or
+//! panic):
+//! * `process` renders exactly one sub-block (`RACK_BLOCK` frames). `ins` holds
+//!   one `PortBuf` per catalog input (an unconnected input has
+//!   `channels == 0`), `outs` one per catalog output, and `params` the target
+//!   values in catalog order (already validated by the rack). Modules must
+//!   tolerate shorter slices than expected (they then output nothing) and
+//!   never index out of bounds.
+//! * Each output's `channels` must be set every call (the poly rule: the
+//!   maximum over the connected inputs, minimum 1; see `port::poly`).
+//! * Params marked `smooth` in the catalog are smoothed per sample with
+//!   [`Smooth`] (5 ms one-pole), so knob moves never click.
+//! * Outputs must be finite; DSP state below 1e-20 is flushed to 0.
+
+pub mod lfo;
+pub mod out;
+pub mod vca;
+
+use super::catalog::ModuleKind;
+use super::port::PortBuf;
+
+/// Timing context for one sub-block.
+#[derive(Clone, Copy, Debug)]
+pub struct Ctx {
+    pub sr: f32,
+    pub bpm: f32,
+    pub playing: bool,
+    /// Transport position (ticks) at the start of this sub-block.
+    pub ticks: f64,
+    /// Ticks advanced per frame while playing (`bpm * PPQ / (60 * sr)`).
+    pub ticks_per_frame: f64,
+}
+
+/// Note/controller events delivered to MIDI In modules.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NoteEvent {
+    On { note: u8, vel: u8 },
+    Off { note: u8 },
+    /// Pitch bend, -1..1 (scaled by the module's bend range).
+    Bend(f32),
+    /// Mod wheel, 0..1.
+    Mod(f32),
+    Sustain(bool),
+    AllOff,
+}
+
+/// A module instance. Fixed-size (no heap), so racks store them inline in
+/// preallocated slots and adding a module never allocates. Variants differ in
+/// size by design: boxing the big ones would allocate on `add_module`.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
+pub enum Module {
+    Vca(vca::Vca),
+    Lfo(lfo::Lfo),
+    Out(out::Out),
+}
+
+impl Module {
+    /// A fresh module with its params' smoothers at the catalog defaults.
+    pub fn new(kind: ModuleKind, sr: f32) -> Module {
+        match kind {
+            ModuleKind::Vca => Module::Vca(vca::Vca::new(sr)),
+            ModuleKind::Lfo => Module::Lfo(lfo::Lfo::new(sr)),
+            ModuleKind::Out => Module::Out(out::Out::new(sr)),
+        }
+    }
+
+    pub fn kind(&self) -> ModuleKind {
+        match self {
+            Module::Vca(_) => ModuleKind::Vca,
+            Module::Lfo(_) => ModuleKind::Lfo,
+            Module::Out(_) => ModuleKind::Out,
+        }
+    }
+
+    /// Render one sub-block (see the module contract above).
+    pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf]) {
+        match self {
+            Module::Vca(m) => m.process(params, ins, outs),
+            Module::Lfo(m) => m.process(ctx, params, outs),
+            Module::Out(m) => m.process(params, ins),
+        }
+    }
+
+    /// Deliver a note event. A no-op for everything except MIDI In.
+    pub fn note(&mut self, ev: NoteEvent) {
+        let _ = ev;
+    }
+
+    /// Clear DSP state (phases, filter memories, held notes) without changing
+    /// params.
+    pub fn reset(&mut self) {
+        match self {
+            Module::Vca(_) => {}
+            Module::Lfo(m) => m.reset(),
+            Module::Out(m) => m.reset(),
+        }
+    }
+}
+
+/// Smoothing time constant for `smooth` params.
+pub const SMOOTH_SECONDS: f32 = 0.005;
+
+/// Per-sample one-pole smoother (time constant `SMOOTH_SECONDS`) for a
+/// `smooth` param. Starts at the param's default, so a fresh module does not
+/// glide in from 0.
+#[derive(Clone, Copy, Debug)]
+pub struct Smooth {
+    value: f32,
+    coef: f32,
+}
+
+impl Smooth {
+    pub fn new(sr: f32, initial: f32) -> Smooth {
+        let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
+        Smooth { value: initial, coef: 1.0 - (-1.0 / (SMOOTH_SECONDS * sr)).exp() }
+    }
+
+    /// Advance one sample toward `target` and return the smoothed value.
+    /// Snaps once within 1e-6 of the target (also the denormal guard).
+    #[inline]
+    pub fn next(&mut self, target: f32) -> f32 {
+        let d = target - self.value;
+        if d.abs() < 1e-6 || !d.is_finite() {
+            self.value = if target.is_finite() { target } else { self.value };
+        } else {
+            self.value += d * self.coef;
+        }
+        self.value
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+}
+
+/// Param `i` from the rack's slice, or `default` if the slice is short.
+#[inline]
+pub(crate) fn param(params: &[f32], i: usize, default: f32) -> f32 {
+    params.get(i).copied().unwrap_or(default)
+}

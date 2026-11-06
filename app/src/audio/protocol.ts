@@ -47,6 +47,12 @@ export const HostErr = {
 export const MAX_BLOCK = 1024;
 /** Per-sample cap, frames * channels (lib.rs MAX_SAMPLE_FLOATS). */
 export const MAX_SAMPLE_FLOATS = 64 * 1024 * 1024;
+/** Rack sizes (lib.rs MAX_MODULES etc.): module slots per patch, channels per
+ *  cable, inputs (and separately outputs) per module, params per module. */
+export const MAX_MODULES = 32;
+export const MAX_POLY = 16;
+export const MAX_PORTS = 8;
+export const MAX_PARAMS = 12;
 
 /** Indices into the telemetry Float64Array (lib.rs TELEMETRY_*). */
 export const TELEMETRY = {

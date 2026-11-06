@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import {
+  Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
+} from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
 const read = (f: string) => readFileSync(new URL(`../../../engine/src/${f}`, import.meta.url), 'utf8');
@@ -32,11 +34,12 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   const snake = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase(); // peakL -> PEAK_L
   const ts: Record<string, number> = {
     MAX_BLOCK, MAX_TRACKS, MAX_ROWS, MAX_STEPS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, TELEMETRY_LEN,
+    MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
   it('parsed every MAX_* and TELEMETRY_* constant', () => {
-    expect(Object.keys(rust).length).toBe(6 + 9);
+    expect(Object.keys(rust).length).toBe(10 + 9);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);

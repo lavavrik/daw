@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "rackBlock": 32,
+  "maxModules": 32,
+  "maxPoly": 16,
+  "modules": [
+    {"kind":5,"id":"vca","name":"VCA","category":"shaping",
+      "inputs":[{"name":"in","signal":"audio"},{"name":"cv","signal":"cv"}],
+      "outputs":[{"name":"out","signal":"audio"}],
+      "params":[
+        {"name":"level","label":"Level","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":6,"id":"lfo","name":"LFO","category":"source",
+      "inputs":[],
+      "outputs":[{"name":"out","signal":"cv"}],
+      "params":[
+        {"name":"wave","label":"Wave","min":0,"max":3,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Sine","Tri","Saw","Square"],"smooth":false},
+        {"name":"rate","label":"Rate","min":0.01,"max":50,"default":2,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":false},
+        {"name":"sync","label":"Sync","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Free","Sync"],"smooth":false},
+        {"name":"division","label":"Division","min":0,"max":7,"default":3,"integer":true,"curve":"lin","unit":"","choices":["1/16","1/8","1/8.","1/4","1/2","1 bar","2 bars","4 bars"],"smooth":false},
+        {"name":"depth","label":"Depth","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":8,"id":"out","name":"Out","category":"utility",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "outputs":[],
+      "params":[
+        {"name":"level","label":"Level","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]}
+  ]
+}

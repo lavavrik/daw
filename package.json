@@ -1,0 +1,27 @@
+{
+  "name": "daw",
+  "version": "1.0.0",
+  "description": "",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build:engine": "node scripts/build-engine.mjs",
+    "dev": "npm run build:engine && vite",
+    "preview": "npm run build:engine && vite build && vite preview",
+    "test": "cargo test --workspace && vitest run",
+    "test:e2e": "playwright test"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "svelte": "^5.57.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  },
+  "private": true
+}

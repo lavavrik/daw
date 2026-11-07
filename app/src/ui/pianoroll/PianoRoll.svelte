@@ -751,16 +751,21 @@
     fitWidth();
     refocus();
   }
-  /** The Clear button while its confirmation is open (the popover's anchor). */
-  let clearAsk = $state<HTMLElement | null>(null);
+  /**
+   * The open "Clear?" question: the Clear button (the popover's anchor) and
+   * the track and pattern it was asked about, captured when it opened -- a
+   * confirm clears exactly that pattern, or nothing if it is no longer current.
+   */
+  let clearAsk = $state<{ anchor: HTMLElement; trackId: string; patternId: string } | null>(null);
   function clearAll(e: MouseEvent) {
     if (!notes.length) return;
     releaseHeldKeys();
-    clearAsk = e.currentTarget as HTMLElement;
+    clearAsk = { anchor: e.currentTarget as HTMLElement, trackId: track.id, patternId: pat.id };
   }
   function clearConfirmed() {
+    const a = clearAsk;
     clearAsk = null;
-    clearPattern(p, engine, track.id);
+    if (a) clearPattern(p, engine, a.trackId, a.patternId);
     selected = new Set();
     refocus(); // the popover had focus
   }
@@ -791,7 +796,7 @@
     {#if clearAsk}
       <InlineConfirm
         message={clearPatternText(track, notes.length)}
-        anchor={clearAsk}
+        anchor={clearAsk.anchor}
         confirmLabel="Clear"
         oncancel={() => (clearAsk = null)}
         onconfirm={clearConfirmed}

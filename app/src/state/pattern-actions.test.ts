@@ -153,6 +153,21 @@ describe('pattern actions', () => {
     expect(currentPattern(t).notes).toEqual([]);
   });
 
+  it('clearPattern with a patternId clears only while that pattern is current', () => {
+    const { p, t, sink, sent } = setup();
+    const first = currentPattern(t).id;
+    addNote(p, sink, t.id, { pitch: 60, start: 0, len: 100 });
+    newPattern(p, sink, t.id); // the question was asked about `first`; now another is current
+    addNote(p, sink, t.id, { pitch: 62, start: 0, len: 100 });
+    sent.length = 0;
+    clearPattern(p, sink, t.id, first);
+    expect(sent).toEqual([]);
+    expect(currentPattern(t).notes).toHaveLength(1);
+    expect(t.patterns.find((x) => x.id === first)!.notes).toHaveLength(1);
+    clearPattern(p, sink, t.id, currentPattern(t).id);
+    expect(currentPattern(t).notes).toEqual([]);
+  });
+
   it('unknown / drum track is a no-op', () => {
     const { p, sink, sent } = setup();
     const d = addDrumTrack(p, sink)!;

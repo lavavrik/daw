@@ -5,7 +5,9 @@
   //
   // Keyboard: focus starts on Cancel (the safe default); Esc cancels; Enter
   // confirms only when Confirm itself is focused (a plain button press), so a
-  // stray Enter never destroys work. Focus returns to the anchor afterwards.
+  // stray Enter never destroys work. Focus returns to the anchor afterwards,
+  // except to a <select> (the Rack's patch list): there a stray arrow key
+  // would change the patch, so the keys go back to the piano instead.
   // Key events inside stop here so the global piano/transport shortcuts
   // never see them. Held piano keys are the HOST's job: call
   // releaseHeldKeys() before opening (a popover doesn't block the thread, but
@@ -26,6 +28,12 @@
     oncancel: () => void;
   } = $props();
 
+  // Unique per instance: two popovers (or a re-open) never share an id.
+  const uid = $props.id();
+  const msgId = `${uid}-msg`;
+  /** A <select> anchor: pressing it cancels, and focus never returns to it. */
+  const isSelect = () => anchor?.tagName === 'SELECT';
+
   let root: HTMLDivElement;
   let cancelBtn: HTMLButtonElement;
   let top = $state(0);
@@ -45,7 +53,9 @@
     cancelBtn.focus();
     const outside = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (!root.contains(t) && !anchor?.contains(t)) oncancel();
+      // A press on a button anchor is its own click (ignored here). A press on
+      // a <select> anchor would open its native list under the popover: cancel.
+      if (!root.contains(t) && (!anchor?.contains(t) || isSelect())) oncancel();
     };
     window.addEventListener('pointerdown', outside, true);
     window.addEventListener('resize', place);
@@ -57,7 +67,7 @@
 
   // Back to the button that asked (if it still exists, e.g. not a removed track).
   onDestroy(() => {
-    if (anchor?.isConnected) anchor.focus({ preventScroll: true });
+    if (anchor?.isConnected && !isSelect()) anchor.focus({ preventScroll: true });
   });
 
   function onkeydown(e: KeyboardEvent) {
@@ -82,15 +92,14 @@
   bind:this={root}
   class="ic"
   role="alertdialog"
-  aria-label="Confirm"
-  aria-describedby="ic-msg"
+  aria-labelledby={msgId}
   tabindex="-1"
   data-testid="inline-confirm"
   style:top="{top}px"
   style:left="{left}px"
   {onkeydown}
 >
-  <p id="ic-msg">{message}</p>
+  <p id={msgId}>{message}</p>
   <div class="btns">
     <button class="ok" data-testid="inline-confirm-ok" onclick={onconfirm}>{confirmLabel}</button>
     <button bind:this={cancelBtn} data-testid="inline-confirm-cancel" onclick={oncancel}>Cancel</button>

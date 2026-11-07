@@ -18,10 +18,10 @@ describe('confirm texts', () => {
   it('clear names the pattern and the clips that use it', () => {
     const { p, sink, s } = setup();
     const name = currentPattern(s).name;
-    expect(clearPatternText(s, 3)).toBe(`Clear all 3 notes from pattern "${name}" of "${s.name}"? This cannot be undone.`);
+    expect(clearPatternText(s, 3)).toBe(`Clear all 3 notes from pattern "${name}" of "${s.name}"?`);
     addClip(p, sink, s.id, { start: 0 });
     expect(clearPatternText(s, 1)).toBe(
-      `Clear all 1 note from pattern "${name}" of "${s.name}"? The clip that uses it is affected too. This cannot be undone.`,
+      `Clear all 1 note from pattern "${name}" of "${s.name}"? The clip that uses it is affected too.`,
     );
     addClip(p, sink, s.id, { start: 3840 });
     expect(clearPatternText(s, 2)).toContain('Both clips that use it are affected too.');
@@ -33,10 +33,10 @@ describe('confirm texts', () => {
 
   it('remove track says its clips and patterns go too', () => {
     const { p, sink, d } = setup();
-    expect(removeTrackText(d)).toBe(`Remove track "${d.name}" and its 1 pattern? This cannot be undone.`);
+    expect(removeTrackText(d)).toBe(`Remove track "${d.name}" and its 1 pattern?`);
     newPattern(p, sink, d.id);
     addClip(p, sink, d.id, { start: 0 });
-    expect(removeTrackText(d)).toBe(`Remove track "${d.name}" with its 2 patterns and 1 clip? This cannot be undone.`);
+    expect(removeTrackText(d)).toBe(`Remove track "${d.name}" with its 2 patterns and 1 clip?`);
     addClip(p, sink, d.id, { start: 3840 });
     expect(removeTrackText(d)).toContain('its 2 patterns and 2 clips?');
   });

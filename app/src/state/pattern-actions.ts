@@ -149,9 +149,10 @@ export function setPatternBars(p: Project, sink: CommandSink, trackId: string, b
 }
 
 /** Empties the current pattern (every clip using it goes silent at once). */
-export function clearPattern(p: Project, sink: CommandSink, trackId: string) {
+/** Empties the current pattern (`patternId`: only if that one is still current). */
+export function clearPattern(p: Project, sink: CommandSink, trackId: string, patternId?: string) {
   return edit(p, 'Clear pattern', () => {
-    const tp = target(p, trackId);
+    const tp = target(p, trackId, patternId);
     if (!tp) return;
     tp.pat.notes = [];
     sink.send(Op.NOTE_CLEAR, tp.t.slot);

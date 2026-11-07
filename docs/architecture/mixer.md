@@ -30,7 +30,8 @@ release notes only, so effect tails, compressor and limiter state survive them.
                                                                      |
  master bus -> x legacy gain (SET_MASTER_GAIN, 0.8) -> [EQ] -> fader |
    -> Limiter (lookahead 72 samples, release 50 ms, ceiling -0.3 dBFS)
-   -> + metronome click -> soft clip -> NaN-safe +-1 clamp -> output
+   -> + metronome click (soft clip only around clicks) -> NaN-safe +-1 clamp
+   -> output
 ```
 
 EQ and compressor are bypassed by default and crossfade over 5 ms; once fully
@@ -108,11 +109,25 @@ The lookahead delays the whole output by 72 samples. Two compensations:
 ### Click soft clip
 
 Because the click is added after the limiter, the sum could pass the ceiling.
-`soft_clip(x, ceiling)` runs on it: **bit-transparent while |x| <= 0.9 x
-ceiling**, above that a tanh knee with slope 1 at the knee (no corner) that
-approaches but never reaches the ceiling. Non-finite input is returned as is
-so the final `is_finite` backstop turns it into silence (not a full-scale
-sample). The last +-1 clamp is only that NaN-safe backstop.
+`ClickClip` (engine/src/mixer/mod.rs) adds it as
+`out = mix + w * (soft_clip(mix + click, ceiling) - mix)`, where `w` is a
+click-activity envelope:
+
+* `w` rises linearly over the limiter latency while the *incoming* click (the
+  ring's input) is sounding, so it reaches 1 exactly as the delayed click
+  arrives (the ring doubles as a lookahead: no step at the click onset);
+* it holds at 1 while the delayed click sample is non-zero;
+* then falls linearly to exactly 0 over 5 ms.
+
+With `w == 0` (metronome off, or between clicks) the **limiter output passes
+bit for bit**: a limited mix reaches the ceiling and is never coloured by the
+knee. Only around a click is the sum shaped. `soft_clip(x, ceiling)` itself is
+bit-transparent while |x| <= 0.9 x ceiling, above that a tanh knee with slope
+1 at the knee (no corner) that approaches but never reaches the ceiling. Both
+`mix` and `soft_clip(...)` are within +-ceiling, so the blend is too (it is
+clamped against rounding). Non-finite input is returned as is so the final
+`is_finite` backstop turns it into silence (not a full-scale sample). The last
++-1 clamp is only that NaN-safe backstop.
 
 ## Meters path
 

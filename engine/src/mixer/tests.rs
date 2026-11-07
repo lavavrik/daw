@@ -599,6 +599,77 @@ fn click_on_a_limited_mix_stays_under_the_ceiling() {
 }
 
 #[test]
+fn click_clip_is_bit_exact_without_a_click() {
+    // The safety stage only shapes while a click plays (and for its 5 ms
+    // release); otherwise every limiter sample passes bit for bit, even in
+    // the old soft-clip knee (0.9..1 × ceiling) and at the ceiling itself.
+    use super::ClickClip;
+    let c = 10f32.powf(-0.3 / 20.0);
+    let mut cc = ClickClip::new(SR, 72);
+    let xs = [0.0, 0.5, 0.9 * c, 0.95 * c, 0.999 * c, c, -0.97 * c, -c];
+    for _ in 0..3 {
+        for &x in &xs {
+            let (l, r) = cc.next(x, -x, 0.0, 0.0, false, c);
+            assert_eq!((l.to_bits(), r.to_bits()), (x.to_bits(), (-x).to_bits()), "at {x}");
+        }
+    }
+    // A click shapes its sum under the ceiling ...
+    let (l, _) = cc.next(c, c, 0.2, 0.2, true, c);
+    assert!(l <= c && l < c + 0.2);
+    // ... and 5 ms (240 samples at 48 kHz) after it ends, bit-exact again.
+    for _ in 0..240 {
+        cc.next(c, c, 0.0, 0.0, false, c);
+    }
+    let (l, _) = cc.next(0.95 * c, 0.95 * c, 0.0, 0.0, false, c);
+    assert_eq!(l.to_bits(), (0.95 * c).to_bits());
+}
+
+#[test]
+fn limited_mix_without_the_metronome_reaches_the_ceiling() {
+    // A DC mix limited by ~6 dB, metronome off: the output is the limiter's,
+    // flat at the ceiling (no soft-clip knee pulling it down).
+    let mut e = Engine::new(SR);
+    gate_patch(&mut e, 0, 1.0);
+    hold(&mut e, 0, 60.0);
+    mix(&mut e, 0, P_FADER, 6.0);
+    mix(&mut e, MIX_MASTER, P_FADER, 2.0);
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let ceiling = 10f32.powf(-0.3 / 20.0);
+    let (l, r) = render(&mut e, 48000);
+    assert!(meter(&e, MIX_MASTER).2 > 6.0, "limited by 6 dB: {}", meter(&e, MIX_MASTER).2);
+    for s in [&l, &r] {
+        assert!(peak(s) <= ceiling + 1e-6, "peak {} > ceiling", peak(s));
+        assert!(s[9600..].iter().all(|&x| (x - ceiling).abs() < 1e-4), "at the ceiling: {}", s[9600]);
+    }
+}
+
+#[test]
+fn metronome_leaves_the_mix_bit_exact_between_clicks() {
+    // Same limited mix with and without the metronome: outside each click
+    // (lookahead + 20 ms click + 5 ms release) the outputs are identical.
+    let run = |click: bool| {
+        let mut e = Engine::new(SR);
+        gate_patch(&mut e, 0, 1.0);
+        hold(&mut e, 0, 60.0);
+        mix(&mut e, 0, P_FADER, 6.0);
+        ok(e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0));
+        ok(e.command(OP_SET_METRONOME, if click { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0));
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        render(&mut e, 2 * 48000).0
+    };
+    let (on, off) = (run(true), run(false));
+    let mut differs = 0;
+    for (i, (a, b)) in on.iter().zip(&off).enumerate() {
+        if i % 24000 >= 1500 {
+            assert_eq!(a.to_bits(), b.to_bits(), "sample {i}");
+        } else if a != b {
+            differs += 1;
+        }
+    }
+    assert!(differs > 500, "the clicks are there: {differs}");
+}
+
+#[test]
 fn post_fader_send_applies_the_gate_once() {
     // DC through a post-fader send into the Delay (feedback 0): muting ramps
     // the dry track linearly over 2 ms, and the echo of that ramp must be

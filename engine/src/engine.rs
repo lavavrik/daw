@@ -82,7 +82,7 @@ use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
-use crate::mixer::{soft_clip, Key, Mixer, StereoBufs};
+use crate::mixer::{ClickClip, Key, Mixer, StereoBufs};
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Mode, Transport};
@@ -154,6 +154,8 @@ pub struct Engine {
     /// Delays the click by the limiter latency so it stays on the beat.
     click_ring: Vec<f32>,
     click_pos: usize,
+    /// Adds the delayed click to the limited mix (soft clip only around clicks).
+    click_clip: ClickClip,
     /// Slots the renderers wrote this block (bit = slot).
     rendered: u32,
 }
@@ -195,6 +197,7 @@ impl Engine {
             click: StereoBufs::new(1),
             click_ring: vec![0.0; 2 * (latency + 1)],
             click_pos: 0,
+            click_clip: ClickClip::new(sample_rate, latency),
             rendered: 0,
         }
     }
@@ -679,9 +682,10 @@ impl Engine {
     /// into their own buffers; then the mixer runs once over the whole block
     /// (strips, sends, returns, master, limiter); then the metronome, delayed
     /// by the limiter latency so it stays on the beat, is added after the
-    /// limiter (the click is never compressed); a soft clip (`mixer::soft_clip`,
-    /// transparent below 0.9 × ceiling) keeps click + mix under the ceiling,
-    /// and a NaN-safe ±1 clamp is the last backstop.
+    /// limiter (the click is never compressed); around each click a soft clip
+    /// (`mixer::ClickClip`) keeps click + mix under the ceiling, elsewhere the
+    /// limiter output passes bit for bit; a NaN-safe ±1 clamp is the last
+    /// backstop.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         left.fill(0.0);
         right.fill(0.0);
@@ -752,11 +756,12 @@ impl Engine {
                     (c_l, c_r) = (a, b);
                 }
                 self.click_pos = next;
-                // The click rides on the limited mix: the soft clip keeps the
-                // sum under the ceiling (bit-transparent below 0.9 of it);
-                // the ±1 clamp is only a NaN-safe backstop.
-                let l = soft_clip(left[i] + c_l * g, ceiling);
-                let r = soft_clip(right[i] + c_r * g, ceiling);
+                // The click rides on the limited mix: around a click the soft
+                // clip keeps the sum under the ceiling; without one the
+                // limiter output passes bit for bit (see `ClickClip`). The
+                // ±1 clamp is only a NaN-safe backstop.
+                let incoming = cl[i] != 0.0 || cr[i] != 0.0;
+                let (l, r) = self.click_clip.next(left[i], right[i], c_l * g, c_r * g, incoming, ceiling);
                 let l = if l.is_finite() { l.clamp(-1.0, 1.0) } else { 0.0 };
                 let r = if r.is_finite() { r.clamp(-1.0, 1.0) } else { 0.0 };
                 left[i] = l;

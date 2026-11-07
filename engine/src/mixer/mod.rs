@@ -21,8 +21,10 @@
 //! * **Master:** bus × the legacy master gain (`SET_MASTER_GAIN`, default
 //!   0.8) → EQ → fader → [`Limiter`] (lookahead 1.5 ms, release 50 ms,
 //!   ceiling −0.3 dBFS by default) → output. The engine adds the metronome
-//!   after this, then [`soft_clip`] (bit-transparent below 0.9 × ceiling,
-//!   never above the ceiling), and keeps a NaN-safe ±1 clamp as a backstop.
+//!   after this through [`ClickClip`]: only while a click plays (and 5 ms
+//!   after) is the sum shaped by [`soft_clip`] (never above the ceiling);
+//!   otherwise the limiter output passes bit for bit. A NaN-safe ±1 clamp is
+//!   the last backstop.
 //!
 //! # Smoothing (no clicks)
 //! * Fader, pan, sends and the legacy master gain move linearly over 5 ms
@@ -718,7 +720,7 @@ impl Mixer {
 /// Where [`soft_clip`] leaves linear (as a fraction of the ceiling).
 pub const SOFT_KNEE: f32 = 0.9;
 
-/// The post-limiter safety stage (the click is added after the limiter):
+/// The click's safety shaper (used by [`ClickClip`] only around clicks):
 /// bit-transparent while `|x| ≤ SOFT_KNEE·ceiling`, above that a tanh knee
 /// with slope 1 at the knee (continuous value and slope, so no corner) that
 /// approaches but never exceeds `ceiling`. Monotonic, odd. A non-finite input
@@ -738,6 +740,59 @@ pub fn soft_clip(x: f32, ceiling: f32) -> f32 {
     let y = k + room * ((a - k) / room).tanh();
     // tanh rounds to 1.0 for large inputs: keep strictly within the ceiling.
     y.min(ceiling).copysign(x)
+}
+
+/// How long [`ClickClip`] keeps shaping after the click ends (seconds).
+pub const CLICK_CLIP_RELEASE_SECONDS: f32 = 0.005;
+
+/// The post-limiter stage that adds the (latency-delayed) click to the
+/// limited mix: `out = mix + w·(soft_clip(mix + click) − mix)`, where `w` is
+/// a click-activity envelope. `w` rises linearly over the limiter latency
+/// while the *incoming* (undelayed) click plays, so it reaches 1 as the
+/// delayed click arrives (the ring is a lookahead: no step at the onset),
+/// holds at 1 while the delayed click is non-zero, then falls linearly to
+/// exactly 0 over [`CLICK_CLIP_RELEASE_SECONDS`]. With `w == 0` (metronome
+/// off, or between clicks) the limiter output passes bit for bit, so a
+/// limited mix reaches the ceiling and is never coloured by the tanh knee.
+/// Both outputs are convex blends of values within ±ceiling (the limited mix
+/// and the soft clip), so the result stays under the ceiling.
+pub struct ClickClip {
+    w: f32,
+    attack: f32,
+    release: f32,
+}
+
+impl ClickClip {
+    /// `latency`: the limiter lookahead in samples (the click's delay).
+    pub fn new(sr: f32, latency: usize) -> ClickClip {
+        let release = (CLICK_CLIP_RELEASE_SECONDS * sr).max(1.0);
+        ClickClip { w: 0.0, attack: 1.0 / latency.max(1) as f32, release: 1.0 / release }
+    }
+
+    /// One stereo frame: the limited mix `(l, r)`, the delayed click
+    /// `(cl, cr)` (already at its gain), whether the incoming click is
+    /// sounding, and the limiter ceiling.
+    #[inline]
+    pub fn next(&mut self, l: f32, r: f32, cl: f32, cr: f32, incoming: bool, ceiling: f32) -> (f32, f32) {
+        if cl != 0.0 || cr != 0.0 {
+            self.w = 1.0;
+        } else if incoming {
+            self.w = (self.w + self.attack).min(1.0);
+        } else {
+            self.w = (self.w - self.release).max(0.0);
+        }
+        let w = self.w;
+        if w == 0.0 {
+            return (l, r);
+        }
+        let (sl, sr) = (soft_clip(l + cl, ceiling), soft_clip(r + cr, ceiling));
+        if w >= 1.0 {
+            return (sl, sr);
+        }
+        // Rounding of the blend could step an ulp past ±ceiling: clamp.
+        let blend = |x: f32, s: f32| (x + w * (s - x)).clamp(-ceiling, ceiling);
+        (blend(l, sl), blend(r, sr))
+    }
 }
 
 fn write_meter(meters: &mut [f32], ch: usize, pl: f32, pr: f32, gr: f32) {

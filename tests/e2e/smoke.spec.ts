@@ -15,7 +15,7 @@ type DawWindow = {
     recorder?: { armed: boolean } | null;
     clock?: { heardTicks(): number } | null;
     project: {
-      tempo: number; tracks: { patterns: { notes?: { pitch: number; start: number; len: number }[] }[] }[] };
+      tempo: number; arenaFloats: number; tracks: { patterns: { notes?: { pitch: number; start: number; len: number }[] }[] }[] };
   };
 };
 
@@ -356,12 +356,17 @@ test('a command burst larger than the ring is delivered, in order, nothing dropp
   });
 });
 
-/** Fill the 32 Mi-float arena (stopped) so any further load needs growth. */
+/**
+ * Fill the arena's first 32 Mi-float chunk (stopped) up to `leave` floats, so
+ * any larger load needs growth. The arena allocates first fit, so the fill
+ * goes into that chunk's tail after the default kit's samples, which
+ * Project.arenaFloats counts (state/sampleBudget.ts).
+ */
 async function fillArena(page: Page, leave: number) {
-  const code = await page.evaluate(
-    (leave) => (window as unknown as DawWindow).__daw!.engine!.loadSample(200, [new Float32Array(32 * 1024 * 1024 - leave)]),
-    leave,
-  );
+  const code = await page.evaluate((leave) => {
+    const daw = (window as unknown as DawWindow).__daw!;
+    return daw.engine!.loadSample(200, [new Float32Array(32 * 1024 * 1024 - daw.project.arenaFloats - leave)]);
+  }, leave);
   expect(code).toBe(0);
 }
 

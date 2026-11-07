@@ -18,7 +18,7 @@ type DawWindow = {
       sampleRate: number;
     } | null;
     Op: Record<string, number>;
-    project: { tracks: { id: string; slot: number; kind: string; rows?: { id: string }[] }[] };
+    project: { arenaFloats: number; tracks: { id: string; slot: number; kind: string; rows?: { id: string }[] }[] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: Record<string, (...args: any[]) => any>;
   };
@@ -52,12 +52,17 @@ async function dropFile(page: Page, testid: string, name: string, type: string, 
   );
 }
 
-/** Fill the 32 Mi-float arena (stopped) so any further load needs growth. */
+/**
+ * Fill the arena's first 32 Mi-float chunk (stopped) up to `leave` floats, so
+ * any larger load needs growth. The arena allocates first fit, so the fill
+ * goes into that chunk's tail after the default kit's samples, which
+ * Project.arenaFloats counts (state/sampleBudget.ts).
+ */
 async function fillArena(page: Page, leave: number) {
-  const code = await page.evaluate(
-    (leave) => (window as unknown as DawWindow).__daw!.engine!.loadSample(200, [new Float32Array(32 * 1024 * 1024 - leave)]),
-    leave,
-  );
+  const code = await page.evaluate((leave) => {
+    const daw = (window as unknown as DawWindow).__daw!;
+    return daw.engine!.loadSample(200, [new Float32Array(32 * 1024 * 1024 - daw.project.arenaFloats - leave)]);
+  }, leave);
   expect(code).toBe(0);
 }
 
@@ -88,8 +93,7 @@ test('deferred drop while playing: notice, loads on Stop, engine keeps running a
   // Let the default kit load first: loading after the fill (stopped, so it
   // may grow the arena) it would leave room for the kick.
   await expect(page.getByTestId('row-7').getByTestId('row-name')).toHaveText('Perc');
-  // Leave less room than the kick (50 ms = 2205..2400 frames) needs (the fill
-  // gets a chunk of its own size when the kit's samples took some of the first).
+  // Leave less room than the kick (50 ms = 2205..2400 frames) needs.
   await fillArena(page, 100);
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);

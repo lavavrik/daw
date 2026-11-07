@@ -45,16 +45,19 @@ const GLIDE_MAX: f32 = 0.5;
 const TAP_L: [f32; N] = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
 const TAP_R: [f32; N] = [1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
 
-/// 8-line FDN reverb (see the module docs).
+/// The reverb's state without its rings. The memory (the 8 lines, then
+/// the stereo predelay ring: `buffer_len(sr)` floats) is passed to
+/// [`process`](ReverbCore::process), so a rack Reverb can run on pooled
+/// memory (`rack/fx_pool.rs`) while the mixer's [`Reverb`] owns its own.
+/// Never allocates.
 #[derive(Clone, Debug)]
-pub struct Reverb {
+pub struct ReverbCore {
     sr: f32,
     size: f32,
     decay: f32,
     damping: f32,
     predelay_ms: f32,
-    /// Ring buffers: line `i` occupies `lines[i*cap .. (i+1)*cap]`.
-    lines: Vec<f32>,
+    /// Line length (power of two): line `i` occupies `buf[i*cap .. (i+1)*cap]`.
     cap: usize,
     pos: usize,
     /// Current (gliding) and target read lengths, in samples.
@@ -64,8 +67,7 @@ pub struct Reverb {
     damp_state: [f32; N],
     decay_s: Glide,
     damp_s: Glide,
-    /// Predelay ring (stereo, interleaved per channel blocks).
-    pre: Vec<f32>,
+    /// Predelay ring length (power of two): left then right, after the lines.
     pre_cap: usize,
     pre_pos: usize,
     pre_len: f32,
@@ -73,22 +75,33 @@ pub struct Reverb {
     fresh: bool,
 }
 
-impl Reverb {
-    /// A reverb at the mixer defaults (size 0.6, decay 2.2 s, damping 0.5,
-    /// predelay 20 ms). Allocates the lines for size 1 and the 200 ms
-    /// predelay at `sr`.
-    pub fn new(sr: f32) -> Reverb {
+impl ReverbCore {
+    /// `(line cap, predelay cap)` at `sr`: lines for size 1, 200 ms predelay.
+    fn caps(sr: f32) -> (usize, usize) {
         let sr = valid_sr(sr);
         let longest = (BASE_LENGTHS[N - 1] as f32 * sr / 48000.0).ceil() as usize;
         let cap = (longest + 4).next_power_of_two();
         let pre_cap = ((MAX_PREDELAY_MS * 1e-3 * sr).ceil() as usize + 4).next_power_of_two();
-        let mut r = Reverb {
+        (cap, pre_cap)
+    }
+
+    /// Floats of memory [`process`](ReverbCore::process) needs at `sr`.
+    pub fn buffer_len(sr: f32) -> usize {
+        let (cap, pre_cap) = Self::caps(sr);
+        N * cap + 2 * pre_cap
+    }
+
+    /// A reverb at the mixer defaults (size 0.6, decay 2.2 s, damping 0.5,
+    /// predelay 20 ms). Allocation-free.
+    pub fn new(sr: f32) -> ReverbCore {
+        let sr = valid_sr(sr);
+        let (cap, pre_cap) = Self::caps(sr);
+        let mut r = ReverbCore {
             sr,
             size: 0.6,
             decay: 2.2,
             damping: 0.5,
             predelay_ms: 20.0,
-            lines: vec![0.0; N * cap],
             cap,
             pos: 0,
             len: [1.0; N],
@@ -97,7 +110,6 @@ impl Reverb {
             damp_state: [0.0; N],
             decay_s: Glide::new(2.2, SMOOTH_SECONDS, sr / SUB_BLOCK as f32, 1e-4),
             damp_s: Glide::new(0.5, SMOOTH_SECONDS, sr / SUB_BLOCK as f32, 1e-4),
-            pre: vec![0.0; 2 * pre_cap],
             pre_cap,
             pre_pos: 0,
             pre_len: 0.0,
@@ -140,18 +152,24 @@ impl Reverb {
         }
     }
 
-    /// Silence the tail and jump to the targets (no allocation).
+    /// Jump to the targets on the next block and clear the damping state.
+    /// The memory is the caller's: it must zero it too to silence the tail.
     pub fn reset(&mut self) {
-        self.lines.fill(0.0);
-        self.pre.fill(0.0);
         self.damp_state = [0.0; N];
         self.fresh = true;
     }
 
-    /// Process a stereo block in place: the input is replaced by the wet
-    /// signal.
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+    /// Process a stereo block in place through the memory `buf` (at least
+    /// [`buffer_len`](ReverbCore::buffer_len) floats, else the output is
+    /// silence): the input is replaced by the wet signal.
+    pub fn process(&mut self, buf: &mut [f32], l: &mut [f32], r: &mut [f32]) {
         let n = l.len().min(r.len());
+        let Some(buf) = buf.get_mut(..N * self.cap + 2 * self.pre_cap) else {
+            l[..n].fill(0.0);
+            r[..n].fill(0.0);
+            return;
+        };
+        let (lines, pre) = buf.split_at_mut(N * self.cap);
         let pre_target = (self.predelay_ms * 1e-3 * self.sr).round().min((self.pre_cap - 2) as f32);
         if self.fresh {
             self.fresh = false;
@@ -174,12 +192,12 @@ impl Reverb {
             for i in start..end {
                 // Predelay: write, then read `pre_len` back (0 = this sample).
                 let (xl, xr) = (finite(l[i]), finite(r[i]));
-                self.pre[self.pre_pos] = xl;
-                self.pre[self.pre_cap + self.pre_pos] = xr;
+                pre[self.pre_pos] = xl;
+                pre[self.pre_cap + self.pre_pos] = xr;
                 self.pre_len = glide(self.pre_len, pre_target, self.glide_coef);
                 let (il, ir) = (
-                    read(&self.pre[..self.pre_cap], self.pre_pos, self.pre_len, pre_mask),
-                    read(&self.pre[self.pre_cap..], self.pre_pos, self.pre_len, pre_mask),
+                    read(&pre[..self.pre_cap], self.pre_pos, self.pre_len, pre_mask),
+                    read(&pre[self.pre_cap..], self.pre_pos, self.pre_len, pre_mask),
                 );
                 self.pre_pos = (self.pre_pos + 1) & pre_mask;
 
@@ -191,7 +209,7 @@ impl Reverb {
                     if gliding {
                         self.len[k] = glide(self.len[k], self.len_target[k], self.glide_coef);
                     }
-                    let line = &self.lines[k * self.cap..(k + 1) * self.cap];
+                    let line = &lines[k * self.cap..(k + 1) * self.cap];
                     y[k] = read(line, self.pos, self.len[k], cap_mask);
                     // Decay gain, then the damping low-pass.
                     let s = &mut self.damp_state[k];
@@ -204,7 +222,7 @@ impl Reverb {
                 for k in 0..N {
                     let inject = if k % 2 == 0 { il } else { ir };
                     let sign = if k % 4 < 2 { 1.0 } else { -1.0 };
-                    self.lines[k * self.cap + self.pos] = flush(d[k] - sum + IN_GAIN * sign * inject);
+                    lines[k * self.cap + self.pos] = flush(d[k] - sum + IN_GAIN * sign * inject);
                     ol += TAP_L[k] * y[k];
                     or += TAP_R[k] * y[k];
                 }
@@ -223,6 +241,55 @@ impl Reverb {
         for (g, len) in self.gain.iter_mut().zip(self.len) {
             *g = (k * len).exp();
         }
+    }
+}
+
+/// 8-line FDN reverb that owns its memory (the mixer's Reverb return; see
+/// the module docs). A thin wrapper over [`ReverbCore`].
+#[derive(Clone, Debug)]
+pub struct Reverb {
+    core: ReverbCore,
+    buf: Vec<f32>,
+}
+
+impl Reverb {
+    /// A reverb at the mixer defaults (size 0.6, decay 2.2 s, damping 0.5,
+    /// predelay 20 ms). Allocates the lines for size 1 and the 200 ms
+    /// predelay at `sr`.
+    pub fn new(sr: f32) -> Reverb {
+        Reverb { core: ReverbCore::new(sr), buf: vec![0.0; ReverbCore::buffer_len(sr)] }
+    }
+
+    /// See [`ReverbCore::set_size`].
+    pub fn set_size(&mut self, size: f32) {
+        self.core.set_size(size);
+    }
+
+    /// See [`ReverbCore::set_decay`].
+    pub fn set_decay(&mut self, seconds: f32) {
+        self.core.set_decay(seconds);
+    }
+
+    /// See [`ReverbCore::set_damping`].
+    pub fn set_damping(&mut self, damping: f32) {
+        self.core.set_damping(damping);
+    }
+
+    /// See [`ReverbCore::set_predelay_ms`].
+    pub fn set_predelay_ms(&mut self, ms: f32) {
+        self.core.set_predelay_ms(ms);
+    }
+
+    /// Silence the tail and jump to the targets (no allocation).
+    pub fn reset(&mut self) {
+        self.buf.fill(0.0);
+        self.core.reset();
+    }
+
+    /// Process a stereo block in place: the input is replaced by the wet
+    /// signal.
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        self.core.process(&mut self.buf, l, r);
     }
 }
 
@@ -371,14 +438,14 @@ mod tests {
                 rv.set_size(1.0);
                 rv.set_predelay_ms(200.0);
                 rv.set_decay(20.0);
-                rv.fresh |= !smooth;
+                rv.core.fresh |= !smooth;
             }
             if blk == 800 {
                 rv.set_size(0.0);
                 rv.set_predelay_ms(0.0);
                 rv.set_damping(1.0);
                 rv.set_decay(0.2);
-                rv.fresh |= !smooth;
+                rv.core.fresh |= !smooth;
             }
             let mut l: [f32; 128] =
                 std::array::from_fn(|k| 0.1 * (2.0 * std::f32::consts::PI * 100.0 * (t + k) as f32 / 48000.0).sin());
@@ -419,10 +486,10 @@ mod tests {
     #[test]
     fn reverb_sizes_its_lines_from_the_sample_rate() {
         let rv = Reverb::new(96000.0);
-        assert!(rv.cap >= 2 * BASE_LENGTHS[N - 1] + 3);
-        assert!(rv.pre_cap >= 19200);
+        assert!(rv.core.cap >= 2 * BASE_LENGTHS[N - 1] + 3);
+        assert!(rv.core.pre_cap >= 19200);
         let mut rv = Reverb::new(96000.0);
         rv.set_size(1.0);
-        assert_eq!(rv.len_target[0], 4106.0);
+        assert_eq!(rv.core.len_target[0], 4106.0);
     }
 }

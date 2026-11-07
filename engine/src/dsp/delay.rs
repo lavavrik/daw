@@ -32,17 +32,20 @@ pub const XFADE_SECONDS: f32 = 0.05;
 const SAT_KNEE: f32 = 1.0;
 const SAT_CEIL: f32 = 2.5;
 
-/// Tempo-synced stereo delay (see the module docs).
+/// The delay's state without its ring: everything but the buffer. The ring
+/// is passed to [`process`](DelayCore::process) (`buffer_len(sr)` floats),
+/// so a rack Delay can run on pooled memory (`rack/fx_pool.rs`) while the
+/// mixer's [`Delay`] owns its own. Never allocates.
 #[derive(Clone, Debug)]
-pub struct Delay {
+pub struct DelayCore {
     sr: f32,
     beats: f32,
     bpm: f32,
     feedback: f32,
     ping_pong: bool,
     high_cut: f32,
-    /// Rings: left `buf[0..cap]`, right `buf[cap..2cap]`.
-    buf: Vec<f32>,
+    /// Ring length per channel (power of two): left `buf[0..cap]`, right
+    /// `buf[cap..2cap]`.
     cap: usize,
     pos: usize,
     /// Current head time, and the incoming head's time during a fade
@@ -62,21 +65,30 @@ pub struct Delay {
     fresh: bool,
 }
 
-impl Delay {
+impl DelayCore {
+    /// Ring length per channel at `sr`: 2 s, power-of-two rounded.
+    fn cap_for(sr: f32) -> usize {
+        ((MAX_SECONDS * valid_sr(sr)).ceil() as usize + 4).next_power_of_two()
+    }
+
+    /// Floats of ring [`process`](DelayCore::process) needs at `sr` (both
+    /// channels).
+    pub fn buffer_len(sr: f32) -> usize {
+        2 * Self::cap_for(sr)
+    }
+
     /// A delay at the mixer defaults: 3/16 note at 120 BPM, feedback 0.35,
-    /// ping-pong on, high-cut 6 kHz. Allocates 2 s of stereo ring at `sr`.
-    pub fn new(sr: f32) -> Delay {
+    /// ping-pong on, high-cut 6 kHz. Allocation-free.
+    pub fn new(sr: f32) -> DelayCore {
         let sr = valid_sr(sr);
-        let cap = ((MAX_SECONDS * sr).ceil() as usize + 4).next_power_of_two();
-        let mut d = Delay {
+        let mut d = DelayCore {
             sr,
             beats: 0.75,
             bpm: 120.0,
             feedback: 0.35,
             ping_pong: true,
             high_cut: 6000.0,
-            buf: vec![0.0; 2 * cap],
-            cap,
+            cap: Self::cap_for(sr),
             pos: 0,
             time: 1.0,
             next_time: 1.0,
@@ -135,17 +147,23 @@ impl Delay {
         clampf(t, 1.0, (self.cap - 3) as f32).min(MAX_SECONDS * self.sr)
     }
 
-    /// Silence the tail and jump to the targets (no allocation).
+    /// Jump to the targets on the next block and clear the filter state.
+    /// The ring is the caller's: it must zero it too to silence the tail.
     pub fn reset(&mut self) {
-        self.buf.fill(0.0);
         self.lp = [0.0; 2];
         self.fresh = true;
     }
 
-    /// Process a stereo block in place: the input is replaced by the wet
-    /// signal.
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+    /// Process a stereo block in place through the ring `buf` (at least
+    /// [`buffer_len`](DelayCore::buffer_len) floats, else the output is
+    /// silence): the input is replaced by the wet signal.
+    pub fn process(&mut self, buf: &mut [f32], l: &mut [f32], r: &mut [f32]) {
         let n = l.len().min(r.len());
+        let Some(buf) = buf.get_mut(..2 * self.cap) else {
+            l[..n].fill(0.0);
+            r[..n].fill(0.0);
+            return;
+        };
         let target = self.target_time();
         let pp_target = if self.ping_pong { 1.0 } else { 0.0 };
         let cut_target = self.high_cut.min(0.45 * self.sr).log2();
@@ -175,7 +193,7 @@ impl Delay {
             }
             for i in start..end {
                 let (xl, xr) = (finite(l[i]), finite(r[i]));
-                let (bl, br) = self.buf.split_at(self.cap);
+                let (bl, br) = buf.split_at(self.cap);
                 let mut yl = read(bl, self.pos, self.time, mask);
                 let mut yr = read(br, self.pos, self.time, mask);
                 if self.fading {
@@ -200,8 +218,8 @@ impl Delay {
                 let mono = 0.5 * (xl + xr);
                 let wl = (xl + fl) + pp * ((mono + fr) - (xl + fl));
                 let wr = (xr + fr) + pp * (fl - (xr + fr));
-                self.buf[self.pos] = flush(wl);
-                self.buf[self.cap + self.pos] = flush(wr);
+                buf[self.pos] = flush(wl);
+                buf[self.cap + self.pos] = flush(wr);
                 self.pos = (self.pos + 1) & mask;
                 l[i] = finite(yl);
                 r[i] = finite(yr);
@@ -213,6 +231,59 @@ impl Delay {
     /// High-cut coefficient from the gliding cutoff: `a = exp(−2π·fc/sr)`.
     fn update_cut(&mut self) {
         self.lp_a = (-2.0 * std::f32::consts::PI * self.cut_s.value.exp2() / self.sr).exp();
+    }
+}
+
+/// Tempo-synced stereo delay that owns its ring (the mixer's Delay return;
+/// see the module docs). A thin wrapper over [`DelayCore`].
+#[derive(Clone, Debug)]
+pub struct Delay {
+    core: DelayCore,
+    buf: Vec<f32>,
+}
+
+impl Delay {
+    /// A delay at the mixer defaults: 3/16 note at 120 BPM, feedback 0.35,
+    /// ping-pong on, high-cut 6 kHz. Allocates 2 s of stereo ring at `sr`.
+    pub fn new(sr: f32) -> Delay {
+        Delay { core: DelayCore::new(sr), buf: vec![0.0; DelayCore::buffer_len(sr)] }
+    }
+
+    /// See [`DelayCore::set_time_beats`].
+    pub fn set_time_beats(&mut self, beats: f32) {
+        self.core.set_time_beats(beats);
+    }
+
+    /// See [`DelayCore::set_tempo`].
+    pub fn set_tempo(&mut self, bpm: f32) {
+        self.core.set_tempo(bpm);
+    }
+
+    /// See [`DelayCore::set_feedback`].
+    pub fn set_feedback(&mut self, fb: f32) {
+        self.core.set_feedback(fb);
+    }
+
+    /// See [`DelayCore::set_ping_pong`].
+    pub fn set_ping_pong(&mut self, on: bool) {
+        self.core.set_ping_pong(on);
+    }
+
+    /// See [`DelayCore::set_high_cut`].
+    pub fn set_high_cut(&mut self, hz: f32) {
+        self.core.set_high_cut(hz);
+    }
+
+    /// Silence the tail and jump to the targets (no allocation).
+    pub fn reset(&mut self) {
+        self.buf.fill(0.0);
+        self.core.reset();
+    }
+
+    /// Process a stereo block in place: the input is replaced by the wet
+    /// signal.
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        self.core.process(&mut self.buf, l, r);
     }
 }
 
@@ -360,7 +431,7 @@ mod tests {
         assert!(tail > 0.1, "the change happened mid-tail");
         assert!(max_step < 0.1, "max step {max_step}");
         // Settled on the new time.
-        assert!((d.time - 0.75 * 60.0 / 160.0 * 48000.0).abs() < 1e-3);
+        assert!((d.core.time - 0.75 * 60.0 / 160.0 * 48000.0).abs() < 1e-3);
     }
 
     #[test]
@@ -385,13 +456,13 @@ mod tests {
     #[test]
     fn delay_sizes_from_sample_rate_and_survives_garbage() {
         let mut d = Delay::new(96000.0);
-        assert!(d.cap >= 192000);
+        assert!(d.core.cap >= 192000);
         d.set_time_beats(16.0);
         d.set_tempo(20.0); // 48 s requested: clamped to 2 s
         d.set_feedback(f32::NAN);
         d.set_high_cut(f32::INFINITY);
         let (l, r) = run(&mut d, 4096, |i| if i % 3 == 0 { (f32::NAN, f32::INFINITY) } else { (1e30, -1e30) });
         assert!(l.iter().chain(r.iter()).all(|v| v.is_finite()));
-        assert!(d.target_time() <= 2.0 * 96000.0);
+        assert!(d.core.target_time() <= 2.0 * 96000.0);
     }
 }

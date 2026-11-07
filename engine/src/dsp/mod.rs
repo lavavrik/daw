@@ -1,14 +1,24 @@
-//! Shared DSP for the mixer (and later rack effect modules): a TDF-II
+//! Shared DSP for the mixer and the rack effect modules: a TDF-II
 //! [`Biquad`](biquad::Biquad) with RBJ designs, a 3-band [`Eq3`](eq::Eq3)
 //! with a high-pass, a feed-forward [`Compressor`](compressor::Compressor), an
 //! 8-line FDN [`Reverb`](reverb::Reverb), a tempo-synced
-//! [`Delay`](delay::Delay) and a lookahead [`Limiter`](limiter::Limiter).
+//! [`Delay`](delay::Delay), a modulated [`ChorusCore`](chorus::ChorusCore)
+//! and a lookahead [`Limiter`](limiter::Limiter).
 //!
 //! Contract for every processor (the audio thread must never allocate, block
 //! or panic):
 //! * `new(sr)` allocates everything (delay lines, ring buffers) once, sized
 //!   from the sample rate. `process*` and every setter never allocate;
 //!   `reset()` clears the state without allocating.
+//! * **Borrowed buffers.** The processors with big rings come in two layers:
+//!   a `*Core` ([`DelayCore`], [`ReverbCore`], [`ChorusCore`]) holds every
+//!   piece of state except the ring and takes it as `process(buf, l, r)`
+//!   (`Core::buffer_len(sr)` floats; a shorter slice outputs silence). The
+//!   mixer's [`Delay`] / [`Reverb`] are thin wrappers that own a `Vec` of
+//!   that size; rack modules borrow theirs from the engine's FX pool
+//!   (`rack/fx_pool.rs`) so adding one never allocates. The wrappers run
+//!   exactly the core code, so the mixer returns are bit-identical to the
+//!   pre-split ones (`mixer_delay_reverb_unchanged`).
 //! * Processing is in place on stereo slices (`l`, `r`); the frame count is
 //!   `min(l.len(), r.len())`, so mismatched slices never index out of bounds.
 //! * Setters are cheap: they clamp to the documented range, ignore non-finite
@@ -22,6 +32,7 @@
 //!   flushed to 0 (denormal guard), and outputs are always finite.
 
 pub mod biquad;
+pub mod chorus;
 pub mod compressor;
 pub mod delay;
 pub mod eq;
@@ -29,11 +40,12 @@ pub mod limiter;
 pub mod reverb;
 
 pub use biquad::Biquad;
+pub use chorus::ChorusCore;
 pub use compressor::Compressor;
-pub use delay::Delay;
+pub use delay::{Delay, DelayCore};
 pub use eq::Eq3;
 pub use limiter::Limiter;
-pub use reverb::Reverb;
+pub use reverb::{Reverb, ReverbCore};
 
 /// Frames per coefficient-update sub-block (EQ, reverb and delay recompute
 /// their filter coefficients at most once per sub-block).

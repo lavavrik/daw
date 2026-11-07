@@ -365,5 +365,8 @@ restart; click it to grant access again.
 - `npm run test:e2e`: Playwright (`npx playwright install chromium` once). It
   reuses a server already on :5174, else starts `npm run preview`. The
   `serial` project (real-time and CPU assertions) runs after the rest, in one
-  worker.
+  worker. Playwright 1.65 ignores `--repeat-each` when the run includes the
+  `serial` project (it depends on `chromium`); to repeat, run
+  `--project=chromium --repeat-each=3` and then
+  `--project=serial --no-deps --repeat-each=3`.
 - Follow-ups and decisions per plan: [docs/followups/](docs/followups/).

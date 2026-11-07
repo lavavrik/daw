@@ -268,6 +268,99 @@ pub(crate) fn write_stereo(outs: &mut [PortBuf], l: &[f32; RACK_BLOCK], r: &[f32
     }
 }
 
+/// An FX-pool slot as a pooled module (Delay, Reverb, Chorus) holds it: the
+/// slot index, and whether the slot must be re-zeroed before its next use
+/// (the module was reset, so stale ring content must never play).
+#[derive(Clone, Copy)]
+pub(crate) struct PoolSlot {
+    kind: FxKind,
+    slot: u8,
+    rezero: bool,
+}
+
+impl PoolSlot {
+    pub(crate) fn new(kind: FxKind, slot: u8) -> PoolSlot {
+        PoolSlot { kind, slot, rezero: false }
+    }
+
+    pub(crate) fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    /// The next [`buffer`](PoolSlot::buffer) restarts the slot's zeroing
+    /// (`FxPool::reassign`, in bounded steps; silent wet signal meanwhile).
+    pub(crate) fn rezero(&mut self) {
+        self.rezero = true;
+    }
+
+    /// Borrow the slot's memory for this sub-block; `None` while the pool is
+    /// still zeroing it (or without a slot).
+    pub(crate) fn buffer<'a>(&mut self, fx: &'a mut FxPool) -> Option<&'a mut [f32]> {
+        if std::mem::take(&mut self.rezero) {
+            fx.reassign(self.kind, self.slot);
+        }
+        fx.buffer(self.kind, self.slot)
+    }
+}
+
+/// A wet-only DSP core whose memory is an FX-pool slot (the mixer's
+/// [`DelayCore`](crate::dsp::DelayCore) and [`ReverbCore`](crate::dsp::ReverbCore)).
+pub(crate) trait PooledCore {
+    /// Replace `l`/`r` (the dry input) by the wet signal, with `buf` as memory.
+    fn wet(&mut self, buf: &mut [f32], l: &mut [f32], r: &mut [f32]);
+    /// Clear the DSP state (not the memory).
+    fn clear(&mut self);
+}
+
+impl PooledCore for crate::dsp::DelayCore {
+    fn wet(&mut self, buf: &mut [f32], l: &mut [f32], r: &mut [f32]) {
+        self.process(buf, l, r);
+    }
+    fn clear(&mut self) {
+        self.reset();
+    }
+}
+
+impl PooledCore for crate::dsp::ReverbCore {
+    fn wet(&mut self, buf: &mut [f32], l: &mut [f32], r: &mut [f32]) {
+        self.process(buf, l, r);
+    }
+    fn clear(&mut self) {
+        self.reset();
+    }
+}
+
+/// The body shared by the Delay and Reverb modules (their params already set
+/// on `core`): the stereo input (`stereo_in`), the wet signal from `core` on
+/// the slot's memory (silent, with the core cleared, while the slot is being
+/// zeroed or missing), then `out = dry + mix·(wet − dry)` with `mix` smoothed
+/// per sample toward `mix_target`, written as 1-channel `l`/`r`.
+pub(crate) fn pooled_dry_wet(
+    core: &mut impl PooledCore,
+    pool: &mut PoolSlot,
+    fx: &mut FxPool,
+    mix: &mut Smooth,
+    mix_target: f32,
+    ins: &[PortBuf],
+    outs: &mut [PortBuf],
+) {
+    let (dry_l, dry_r) = stereo_in(ins);
+    let (mut wl, mut wr) = (dry_l, dry_r);
+    match pool.buffer(fx) {
+        Some(buf) => core.wet(buf, &mut wl, &mut wr),
+        None => {
+            (wl, wr) = ([0.0; RACK_BLOCK], [0.0; RACK_BLOCK]);
+            core.clear();
+        }
+    }
+    for i in 0..RACK_BLOCK {
+        let m = mix.next(mix_target);
+        wl[i] = dry_l[i] + m * (wl[i] - dry_l[i]);
+        wr[i] = dry_r[i] + m * (wr[i] - dry_r[i]);
+    }
+    write_stereo(outs, &wl, &wr);
+}
+
 /// Smoothing time constant for `smooth` params.
 pub const SMOOTH_SECONDS: f32 = 0.005;
 

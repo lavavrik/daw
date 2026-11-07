@@ -8,7 +8,7 @@
 //! * The ring is an FX-pool slot (`rack/fx_pool.rs`); while a reused slot is
 //!   still being zeroed (or without a slot) the output is the dry signal.
 
-use super::{param, stereo_in, write_stereo};
+use super::{param, stereo_in, write_stereo, PoolSlot};
 use crate::dsp::ChorusCore;
 use crate::rack::catalog::ModuleKind;
 use crate::rack::fx_pool::{FxKind, FxPool};
@@ -21,28 +21,25 @@ const MIX: usize = 2;
 
 #[derive(Clone)]
 pub struct Chorus {
-    slot: u8,
-    /// Set by `reset`: the next `process` restarts the slot's zeroing
-    /// (`FxPool::reassign`), so stale ring content never plays.
-    rezero: bool,
+    pool: PoolSlot,
     core: ChorusCore,
 }
 
 impl Chorus {
     /// A chorus on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Chorus {
-        Chorus { slot, rezero: false, core: ChorusCore::new(sr) }
+        Chorus { pool: PoolSlot::new(FxKind::Chorus, slot), core: ChorusCore::new(sr) }
     }
 
     pub fn slot(&self) -> u8 {
-        self.slot
+        self.pool.slot()
     }
 
     /// Clear the DSP state; the ring (pool memory) is re-zeroed, in bounded
     /// steps, from the next `process` on (silent wet signal meanwhile).
     pub fn reset(&mut self) {
         self.core.reset();
-        self.rezero = true;
+        self.pool.rezero();
     }
 
     pub fn process(&mut self, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
@@ -50,10 +47,7 @@ impl Chorus {
         self.core.set_rate(param(params, K, RATE));
         self.core.set_depth(param(params, K, DEPTH));
         self.core.set_mix(param(params, K, MIX));
-        if std::mem::take(&mut self.rezero) {
-            fx.reassign(FxKind::Chorus, self.slot);
-        }
-        match fx.buffer(FxKind::Chorus, self.slot) {
+        match self.pool.buffer(fx) {
             Some(buf) => self.core.process(buf, &mut l, &mut r),
             None => self.core.reset(),
         }

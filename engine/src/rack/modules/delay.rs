@@ -11,13 +11,12 @@
 //!   still zeroing a reused slot (or without a slot) the wet signal is
 //!   silent and the dry part still passes.
 
-use super::{param, stereo_in, write_stereo, Ctx, Smooth};
+use super::{param, pooled_dry_wet, Ctx, PoolSlot, Smooth};
 use crate::dsp::DelayCore;
 use crate::mixer::catalog::DELAY_DIVISION_BEATS;
 use crate::rack::catalog::ModuleKind;
 use crate::rack::fx_pool::{FxKind, FxPool};
 use crate::rack::port::PortBuf;
-use crate::RACK_BLOCK;
 
 const K: ModuleKind = ModuleKind::Delay;
 const DIVISION: usize = 0;
@@ -28,10 +27,7 @@ const HICUT: usize = 4;
 
 #[derive(Clone)]
 pub struct Delay {
-    slot: u8,
-    /// Set by `reset`: the next `process` restarts the slot's zeroing
-    /// (`FxPool::reassign`), so stale ring content never plays.
-    rezero: bool,
+    pool: PoolSlot,
     core: DelayCore,
     mix: Smooth,
 }
@@ -39,22 +35,21 @@ pub struct Delay {
 impl Delay {
     /// A delay on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Delay {
-        Delay { slot, rezero: false, core: DelayCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
+        Delay { pool: PoolSlot::new(FxKind::Delay, slot), core: DelayCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
     }
 
     pub fn slot(&self) -> u8 {
-        self.slot
+        self.pool.slot()
     }
 
     /// Clear the DSP state; the ring (pool memory) is re-zeroed, in bounded
     /// steps, from the next `process` on (silent wet signal meanwhile).
     pub fn reset(&mut self) {
         self.core.reset();
-        self.rezero = true;
+        self.pool.rezero();
     }
 
     pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
-        let (dry_l, dry_r) = stereo_in(ins);
         let div = param(params, K, DIVISION) as usize;
         let beats = DELAY_DIVISION_BEATS.get(div).copied().unwrap_or(0.75);
         self.core.set_time_beats(beats);
@@ -62,23 +57,7 @@ impl Delay {
         self.core.set_feedback(param(params, K, FEEDBACK));
         self.core.set_ping_pong(param(params, K, PINGPONG) >= 0.5);
         self.core.set_high_cut(param(params, K, HICUT));
-        let (mut wl, mut wr) = (dry_l, dry_r);
-        if std::mem::take(&mut self.rezero) {
-            fx.reassign(FxKind::Delay, self.slot);
-        }
-        match fx.buffer(FxKind::Delay, self.slot) {
-            Some(buf) => self.core.process(buf, &mut wl, &mut wr),
-            None => {
-                (wl, wr) = ([0.0; RACK_BLOCK], [0.0; RACK_BLOCK]);
-                self.core.reset();
-            }
-        }
-        let target = param(params, K, MIX);
-        for i in 0..RACK_BLOCK {
-            let m = self.mix.next(target);
-            wl[i] = dry_l[i] + m * (wl[i] - dry_l[i]);
-            wr[i] = dry_r[i] + m * (wr[i] - dry_r[i]);
-        }
-        write_stereo(outs, &wl, &wr);
+        let mix = param(params, K, MIX);
+        pooled_dry_wet(&mut self.core, &mut self.pool, fx, &mut self.mix, mix, ins, outs);
     }
 }

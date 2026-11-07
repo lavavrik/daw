@@ -14,6 +14,7 @@ import { BAR_TICKS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, Op } from '../aud
 import { MAX_ROWS, MAX_STEPS, currentPattern, synthTrack } from './project.svelte';
 import type { DrumPattern, Note, NotePatternState, Project, SynthTrack, Track } from './project.svelte';
 import type { CommandSink } from './actions';
+import { markEdited } from './edits';
 
 export const MAX_NOTE_LEN = 61440;
 /** Last start tick the engine accepts (MAX_PATTERN_BARS bars). */
@@ -303,6 +304,7 @@ export function renamePattern(p: Project, _sink: CommandSink, trackId: string, p
   const n = name.trim();
   if (!pat || !n) return false;
   pat.name = n;
+  markEdited(p); // no engine command, so mark it here
   return true;
 }
 

@@ -42,7 +42,12 @@ export class AudioEngine {
    * `rollbackRefusedAdd`). Rare: the UI only sends adds it counts as fitting.
    */
   onRackAddRefused?: (slot: number, idx: number, kind: number) => void;
-  /** Fires once if the engine stops working after start (see `failure`). */
+  /**
+   * Every command queued through send() (op only), before it is queued. App
+   * uses it to mark project edits (state/edits.ts); keep it O(1).
+   */
+  onCommand?: (op: number) => void;
+    /** Fires once if the engine stops working after start (see `failure`). */
   onError?: (message: string) => void;
   /**
    * Commands have been waiting > 2 s for room in the ring, or the backlog is
@@ -179,6 +184,7 @@ export class AudioEngine {
    */
   send(op: number, a = 0, b = 0, c = 0, d = 0): boolean {
     if (this.failMsg !== null) return false;
+    this.onCommand?.(op);
     this.sender.send(op, a, b, c, d);
     return true;
   }

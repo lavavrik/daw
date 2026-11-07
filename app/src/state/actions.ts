@@ -3,6 +3,7 @@ import { BAR_TICKS, Op } from '../audio/protocol';
 import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, newChannel } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
+import { markEdited } from './edits';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -69,6 +70,7 @@ export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow
   const track = p.tracks.find((t) => t.id === trackId);
   if (!track || track.kind !== 'drum' || track.rows.length >= MAX_ROWS) return null;
   track.rows.push(makeRow(track.rows.length + 1));
+  markEdited(p); // no engine command, so mark it here
   return track.rows[track.rows.length - 1];
 }
 

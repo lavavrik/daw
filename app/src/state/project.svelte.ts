@@ -179,8 +179,14 @@ export class Project {
    * null before the session starts. App keeps `dirty` = "differs from it".
    */
   savedFingerprint = $state<string | null>(null);
-  /** Unsaved changes ("● unsaved" in the top bar). Written by App only. */
+  /**
+   * Unsaved changes ("● unsaved" in the top bar): set by every edit
+   * (state/edits.ts markEdited), cleared by save/load/New and by the
+   * debounced fingerprint check (project/dirtyCheck.ts).
+   */
   dirty = $state(false);
+  /** Bumped by every edit (markEdited). Task 4's autosave subscribes to it. */
+  version = $state(0);
   /**
    * A load / New is replacing the session (project/load.ts): edits, drops,
    * shortcuts and the transport are ignored and App shows "Loading…".

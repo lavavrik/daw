@@ -58,6 +58,13 @@ unusable (`contextTime <= 0`, early or headless), the clock falls back to
 tick. Details that matter: pedal (sustain) aware; the 60-tick grace window covers ticks in [-60, 0) (see Count-in); length is at least 1
 (jitter-safe); notes overdub (identical pitch and start in a pass is not
 duplicated); "Undo take" removes exactly the notes the last pass added.
+Switching the live-input track mid-pass (selecting, adding or removing a
+synth track) ends every held recorded note at that heard tick on the old track
+-- where the engine cuts the live pitches -- and later notes record on the new
+input track as a new take (`Recorder.onInputChanged`, called from an App
+`$effect` on `liveInputTrack()`). A UI Play starts the recording pass at once;
+the 60 Hz telemetry watcher (`transportSync`) only catches transport changes
+the UI did not make.
 The e2e test `record from the keyboard, notes land on the heard beat`
 mocks a 250 ms latency and asserts the note lands within 60 ticks of the heard
 beat, not ~480 ticks late.

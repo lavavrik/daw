@@ -175,7 +175,7 @@
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} />{/key}
     {:else if track && track.kind === 'audio'}
-      <ClipPanel {p} {engine} {track} />
+      <ClipPanel {p} {engine} {clock} {track} />
     {/if}
   </div>
 </section>

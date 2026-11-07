@@ -9,7 +9,9 @@ Code: `engine/src/vis.rs`, `engine/src/mixer/mod.rs` (the tap),
 activity), `app/src/audio/{visLayout,visCopy,worklet,engine}.ts`,
 `app/src/ui/vis/frameLoop.ts`; the analyser: `app/src/ui/vis/{fft,spectrum,
 stereo,analyserBus}.ts`, `{Spectrum,Goniometer}.svelte`,
-`app/src/ui/mixer/AnalyserPanel.svelte`.
+`app/src/ui/mixer/AnalyserPanel.svelte`; waveforms:
+`app/src/ui/vis/{waveMath.ts,WaveformView.svelte}`,
+`app/src/audio/fineSamples.ts`.
 
 ## Data path
 
@@ -220,3 +222,81 @@ only 0.33 % of the main thread; mixer + analyser on the Master (goniometer
 included) + top bar 1.5 %; the same on a strip 0.8 % — within the 5 %
 budget.
 
+
+## Waveforms
+
+The Clip tab's waveform and the drum-row strip (plan 12 Task 4): one
+component, `app/src/ui/vis/WaveformView.svelte`, over the pure
+`ui/vis/waveMath.ts` and `audio/fineSamples.ts`.
+
+```
+ zoom (frames per device px)   source                       memory
+ ───────────────────────────   ──────                       ──────
+ whole file .. 256             peaks pyramid (plan 9)       ~1/128 of the floats, always there
+   (coarsest level with ≥ 1 pair per px: peaksLevel)
+ < 256 .. 1/16 per CSS px      the sample's floats,         ONE sample cached, ≤ 256 MiB
+   (16 px per sample)          decoded on demand
+```
+
+**Two sources.** At 256 frames per pixel and above, a column is the min/max
+of every peaks pair it touches at the coarsest level that still has a pair
+per pixel. The pairs are quantised outward (plan 9), so a column is never
+smaller than the truth and at most one pair plus 1/127 bigger. Below 256 the
+peaks have nothing finer, so the view asks `fineSamples` for the sample's
+floats: the kept original bytes (`p.sampleFiles`) decoded with the engine's
+own `AudioContext` (`decodeBytes`), so the frames are exactly the ones the
+engine plays (its rate, its 2 ms tail fade). A column is then the exact
+min/max of the frames it touches (`waveMath.test.ts`, *columns equal
+brute-force min/max at every zoom*). A stem never needs its samples until
+someone zooms into it.
+
+**The budget.** `fineSamples` keeps one sample, up to 256 MiB of floats
+(about 11 minutes of 48 kHz stereo); a new sample evicts the old before it
+decodes, and a decode overtaken by another sample is dropped. A file whose
+floats would not fit (estimated from `sampleMeta` before decoding) is never
+decoded: the zoom stops at 256 frames per pixel with the note
+"Sample-level zoom: files up to 256 MB". A failed decode is remembered and
+the view keeps the peaks at the same limit. While the floats decode, level
+0 is drawn stretched, never a blank.
+
+**Axis.** A view shows "view frames": file frames at the rate the peaks
+were made at. The drum strip maps them to the file as is; the Clip tab
+shows clip time (0..len at the tempo) through the clip's offset (rounded to
+a frame as the engine's `stage_source` does), repeating at the file length
+when it loops (`clipMap`, `seamFrames`) and showing nothing past a
+one-shot's end. Floats decoded at another rate (an audio restart keeps the
+old peaks) are scaled by their own length.
+
+**Drawing.** The waveform is rendered into an offscreen buffer only when
+the zoom, the scroll, the data or the size changes; the visible canvas is
+that buffer plus the caller's overlay (the Clip tab's beat grid, dashed loop
+seams and the gain × fades envelope from `clipEnvelope`, which is the
+engine's `user_fades` × the clip gain), recomposited only when the overlay
+changes. Stereo is two lanes. Below 1 frame per device pixel a line runs
+through the samples, with dots from 6 px per sample; a sample at |x| ≥ 1 is
+marked red at its lane's edges (columns mark it only when drawn from floats:
+the peaks clamp at full scale). The work runs in a want-0 frame-loop
+consumer on the view's element, so it costs nothing off screen.
+
+**Why the playhead is a DOM element.** Moving a 1 px element with a CSS
+transform is a compositor job; redrawing even the cached buffer would cost a
+full-canvas copy 60 times a second while playing. The consumer reads the
+heard position each frame and writes the transform only when the pixel
+changes, so playback never redraws a canvas. The Clip tab shows it while the
+song playhead is inside the clip (Song mode).
+
+**Controls.** ⌘/Ctrl-wheel or a trackpad pinch zooms at the pointer (the
+frame under it stays put); the wheel or Shift-wheel scrolls (a plain wheel
+passes to the panel while the whole file is shown); a double-click fits.
+The readout shows the visible span ("1.25 s", "2.6 ms · 125 samples").
+Test hooks: the canvas's `data-draw` (`none`, `peaks`, `floats`, `line`,
+`dots`) and `data-fpp`; `cliptab-wave`, `row-wave-<r>`, `row-wave-btn-<r>`,
+`wave-zoom-text`.
+
+**Drum rows.** "≈" on a row with a sample opens a 72 px strip under the
+rows (file time, the whole file at first; one row at a time; not saved).
+It has no start/end/fade markers and no playhead: drum rows have no such
+engine params yet (spec §4's per-row start offset is unbuilt) and drum
+voices report no position, so the strip draws nothing it cannot back. Both
+are follow-ups, as are drag handles for clip fades and trim (the Clip tab's
+waveform is display only; editing stays in the fields).

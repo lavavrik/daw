@@ -3,6 +3,13 @@
   // step cells), plus add-row / step-count / swing controls. Rows accept
   // dropped audio files (Finder) and library samples (Browser pane). All
   // edits go through actions.ts (state + engine).
+  //
+  // Row waveform (plan 12): "≈" on a row with a sample opens a 72 px
+  // waveform strip under the rows for that row (ui/vis/WaveformView: file
+  // time, the whole file at first, zoomable to single samples). One row at a
+  // time, not saved, display only. It draws no start/end/fade markers and no
+  // playhead: drum rows have no such engine params yet and drum voices
+  // report no position (follow-ups).
   import { onMount } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
@@ -18,6 +25,9 @@
   import { importSample } from '../state/sampleImport';
   import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
   import type { DrumTrack, Project } from '../state/project.svelte';
+  import { decodeBytes } from '../audio/samples';
+  import WaveformView from './vis/WaveformView.svelte';
+  import { fileMap, waveBase } from './vis/waveMath';
 
   let { p, engine, clock, track, onerror }: {
     p: Project;
@@ -47,6 +57,29 @@
       onerror(`Couldn't preview "${name}"`);
     }
   }
+
+  // ---- row waveform -----------------------------------------------------
+  /** The row whose strip is open (view state: not saved, not an edit). */
+  let waveRowId = $state<string | null>(null);
+  const waveRow = $derived.by(() => {
+    void p.peaksVersion; // sampleMeta is a plain Map
+    const r = track.rows.findIndex((x) => x.id === waveRowId);
+    const row = track.rows[r];
+    if (!row || row.sampleId === null) return null;
+    const meta = p.sampleMeta.get(row.sampleId);
+    if (!meta) return null;
+    const base = waveBase(meta, engine.sampleRate);
+    const f = p.sampleFiles.get(row.sampleId);
+    const rate = engine.sampleRate;
+    const fine = f
+      ? {
+          key: `${f.hash}@${rate}`, bytes: f.bytes, name: f.name,
+          floats: Math.ceil(meta.seconds * rate) * Math.min(2, meta.channels),
+          decode: (b: ArrayBuffer, n: string) => decodeBytes(b.slice(0), n, engine.context),
+        }
+      : null;
+    return { r, row, sampleId: row.sampleId, base, map: fileMap(base.frames), fine };
+  });
 
   /** The pattern being edited (steps, step count, swing); rows stay per track. */
   const pat = $derived(currentPattern(track));
@@ -178,7 +211,7 @@
 
 <div class="grid" style:--c={track.color}>
   <div class="hdr" aria-hidden="true">
-    <span class="name">Sample</span><span class="mute-h">Mute</span>
+    <span class="name">Sample</span><span class="wave-h"></span><span class="mute-h">Mute</span>
     <span class="knob-h">Gain</span><span class="knob-h">Pan</span><span class="cells-h">Steps</span>
   </div>
   {#each track.rows as row, r (row.id)}
@@ -195,6 +228,7 @@
     >
       {#if row.sampleId === null}
         <span class="name empty" data-testid="row-name" title={row.name}>drop sample</span>
+        <span class="wave-h"></span>
       {:else}
         {@const sid = row.sampleId}
         {@const on = previewState.key === rowKey(sid)}
@@ -204,6 +238,11 @@
           aria-label="Preview {row.name}" aria-pressed={on}
           onclick={() => void previewRow(sid, row.name)}
         >{row.name}</button>
+        <button
+          type="button" class="wave" class:on={waveRowId === row.id} data-testid="row-wave-btn-{r}"
+          title="Waveform of {row.name}" aria-label="Waveform of {row.name}" aria-pressed={waveRowId === row.id}
+          onclick={() => (waveRowId = waveRowId === row.id ? null : row.id)}
+        >≈</button>
       {/if}
       <button
         class="mute" class:on={row.mute} aria-pressed={row.mute}
@@ -246,6 +285,19 @@
       </div>
     </div>
   {/each}
+
+  {#if waveRow}
+    {@const w = waveRow}
+    <div class="strip">
+      <span class="strip-name" title={w.row.name}>{w.row.name}</span>
+      {#key `${w.row.id}:${w.sampleId}`}
+        <WaveformView
+          base={w.base} map={w.map} fine={w.fine} height={72} color={track.color}
+          testid="row-wave-{w.r}" label="Waveform of {w.row.name}"
+        />
+      {/key}
+    </div>
+  {/if}
 
   <div class="foot">
     <button
@@ -295,6 +347,12 @@
   .hdr { display: flex; gap: 6px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #6a6d79; }
   .hdr .name { color: #6a6d79; }
   .mute-h { width: 22px; flex: none; text-align: center; }
+  .wave-h, .wave { width: 18px; flex: none; }
+  .wave { font: inherit; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #7d808c; cursor: pointer; }
+  .wave:hover, .wave.on { color: #e4e5ea; background: #2a2c33; }
+  .wave:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
+  .strip { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
+  .strip-name { width: 90px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9a9da8; font-size: 11px; }
   .knob-h { width: 64px; flex: none; text-align: center; }
   .cells { display: flex; gap: 2px; flex: 1; min-width: 0; user-select: none; }
   .cell {

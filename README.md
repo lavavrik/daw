@@ -71,7 +71,8 @@ the last session or opening a project does not add it.
 
 Click a row's name to hear its sample (the Browser's preview bar shows it,
 with **■ Stop**; click the name again to stop). Each row has **M** (mute),
-gain and pan. Under the grid: **Steps** (16, 32 or
+gain and pan. **≈** next to the name opens that row's waveform under the
+grid (one row at a time; zoom like the Clip tab's). Under the grid: **Steps** (16, 32 or
 64) and **Swing**. Up to 16 rows per drum track and 32 tracks per project (the
 add buttons grey out at 32).
 
@@ -257,7 +258,13 @@ SONG mode, at their recorded speed.
 - **Clip tab** (**Alt+5**, or click / double-click a clip): the clip's sample,
   length and channels; **Gain** (−∞ to +12 dB; double-click resets),
   **Fade in** / **Fade out** in beats (type the exact value, Enter), and
-  **Loop to fill**. An audio track has no Step grid, Piano roll or Instrument.
+  **Loop to fill**. Above them the clip's waveform with a beat grid, the gain
+  and fades as a yellow line, dashed lines where a loop repeats, and the
+  playhead while it plays. **⌘/Ctrl-wheel** or a pinch zooms, down to single
+  samples (dots); the wheel scrolls; double-click shows the whole clip. The
+  corner says how much is visible ("2.6 ms · 125 samples"); samples that hit
+  full scale are marked red. Sample-level zoom works for files up to 256 MB.
+  An audio track has no Step grid, Piano roll or Instrument.
 - Audio tracks are silent in PAT mode. Each has its own mixer strip (fader,
   sends, inserts, sidechain key).
 - **Sample memory** is 1 GB (about 46 minutes of stereo at 48 kHz); the

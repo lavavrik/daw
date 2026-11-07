@@ -14,18 +14,36 @@
   //   Loop to fill
   //             a toggle: the file repeats until the clip ends.
   //
+  //   waveform  above the controls, full width, 120 px (ui/vis/WaveformView,
+  //             plan 12): x = clip time 0..len with a beat grid; the file as
+  //             the clip plays it (offset, loop) drawn pre-gain, the gain ×
+  //             fades envelope as a line over it, loop seams dashed, and the
+  //             playhead while the song playhead is inside the clip. Zooms
+  //             down to single samples. Display only: editing stays in the
+  //             fields (drag handles are a follow-up).
+  //
   // Every change goes through state/audio-actions.ts setAudioClip (one
   // undoable edit; SOURCE, GAIN, SET to the engine).
   // Test ids start with `cliptab-`, never `clip-` (that prefix is the
   // timeline's clips: tests count `[data-testid^="clip-"]`).
-  import type { CommandSink } from '../state/actions';
+  import type { AudioEngine } from '../audio/engine';
+  import type { AudioClock } from '../audio/audioClock';
+  import { decodeBytes } from '../audio/samples';
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
-  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, fileSeconds, setAudioClip } from '../state/audio-actions';
+  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, setAudioClip, ticksPerSecond } from '../state/audio-actions';
+  import WaveformView from './vis/WaveformView.svelte';
+  import { clipEnvelope, clipMap, seamFrames, waveBase } from './vis/waveMath';
+  import type { WaveOverlay } from './vis/waveMath';
   import { clipFocus, sampleName } from './song/clipFocus.svelte';
   import { banners } from '../state/banners.svelte';
   import { pendingSampleIds, sampleFailed } from '../state/sampleLoads';
 
-  let { p, engine, track }: { p: Project; engine: CommandSink; track: AudioTrack } = $props();
+  let { p, engine, clock = null, track }: {
+    p: Project;
+    engine: AudioEngine;
+    clock?: AudioClock | null;
+    track: AudioTrack;
+  } = $props();
 
   const BEAT = 960;
   const clip = $derived<AudioClip | null>(track.clips.find((c) => c.id === clipFocus.id) ?? null);
@@ -43,6 +61,85 @@
     return sampleFailed(id) ? 'failed' : pendingSampleIds().includes(id) ? 'pending' : null;
   });
   const gainId = $props.id();
+
+  // ---- waveform ---------------------------------------------------------
+  /** The sample's axis (peaks' rate) and the clip's map onto it; null without a known sample. */
+  const wave = $derived.by(() => {
+    if (!clip || !meta) return null;
+    const base = waveBase(meta, engine.sampleRate);
+    return { base, map: clipMap(clip, p.tempo, base.rate, base.frames) };
+  });
+  /** Sample-level data: the kept bytes, decoded with the engine's context (its rate is in the key). */
+  const fine = $derived.by(() => {
+    void p.peaksVersion;
+    const id = clip?.sampleId ?? null;
+    const f = id !== null ? p.sampleFiles.get(id) : undefined;
+    if (!f || !meta) return null;
+    const rate = engine.sampleRate;
+    return {
+      key: `${f.hash}@${rate}`, bytes: f.bytes, name: f.name,
+      floats: Math.ceil(meta.seconds * rate) * Math.min(2, meta.channels),
+      decode: (b: ArrayBuffer, n: string) => decodeBytes(b.slice(0), n, engine.context),
+    };
+  });
+  const overlayKey = $derived(clip ? [clip.gain, clip.fadeIn, clip.fadeOut, clip.len, clip.offset, clip.loop, p.tempo].join('|') : '');
+
+  /** Beat grid (bars brighter), loop seams (dashed) and the gain × fades envelope, in CSS px. */
+  function drawOverlay(ctx: CanvasRenderingContext2D, o: WaveOverlay) {
+    const c = clip;
+    const w = wave;
+    if (!c || !w) return;
+    const fpt = w.base.rate / ticksPerSecond(p.tempo); // view frames per tick
+    const f0 = o.view.frame0;
+    const f1 = f0 + o.width * o.view.framesPerPx;
+    const beatF = BEAT * fpt;
+    const step = beatF / o.view.framesPerPx >= 4 ? 1 : (4 * beatF) / o.view.framesPerPx >= 4 ? 4 : 0;
+    if (step) {
+      for (let k = Math.ceil(f0 / beatF / step) * step; k * beatF <= f1; k += step) {
+        ctx.fillStyle = k % 4 === 0 ? '#ffffff2e' : '#ffffff12';
+        ctx.fillRect(Math.round(o.x(k * beatF)), 0, 1, o.height);
+      }
+    }
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = '#c9cbd3a0';
+    ctx.lineWidth = 1;
+    for (const f of seamFrames(w.map, f0, f1)) {
+      const x = Math.round(o.x(f)) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, o.height);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // The envelope: lane edge = 1 (0 dB); louder gains sit at the edge.
+    const env = clipEnvelope(c);
+    const laneH = o.height / o.lanes;
+    ctx.strokeStyle = '#ffd98a';
+    ctx.lineWidth = 1.5;
+    for (let l = 0; l < o.lanes; l++) {
+      const mid = l * laneH + laneH / 2;
+      const amp = laneH / 2 - 1;
+      ctx.beginPath();
+      env.points.forEach(([t, v], i) => {
+        const x = o.x(t * fpt);
+        const y = mid - Math.min(1, v) * amp;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+  }
+
+  /** The heard song position as a view frame while it is inside the clip (Song mode, playing). */
+  function playhead(): number | null {
+    const c = clip;
+    const w = wave;
+    if (!c || !w || !clock || !p.playing || p.mode !== 'song') return null;
+    const t = clock.heardTicks();
+    if (!(t >= c.start && t < c.start + c.len)) return null;
+    return ((t - c.start) / ticksPerSecond(p.tempo)) * w.base.rate;
+  }
 
   /** "−6.0 dB", "+3.5 dB", "−∞ dB" (the minimum is silence). */
   function gainText(db: number) {
@@ -103,6 +200,15 @@
       {#if meta}<span>{meta.seconds.toFixed(2)} s file · {chText(meta.channels)}</span>{/if}
       {#if c.loop}<span class="tag">loops</span>{/if}
     </div>
+    {#if wave}
+      {#key c.id}
+        <WaveformView
+          base={wave.base} map={wave.map} {fine} height={120} color={track.color}
+          testid="cliptab-wave" label="Waveform of {name}"
+          overlay={drawOverlay} {overlayKey} {playhead}
+        />
+      {/key}
+    {/if}
     <div class="ctl">
       <label class="gain">
         <span class="lbl">Gain</span>

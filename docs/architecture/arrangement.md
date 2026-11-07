@@ -163,6 +163,12 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
   key): the clip in `clipFocus` (set by clicking, placing or selecting one
   audio clip; clicking also selects its track). Gain fader in dB, fades in
   beats typed exactly, Loop to fill; every change is one `setAudioClip`.
+  Above the controls a 120 px waveform (`ui/vis/WaveformView`; visuals.md
+  *Waveforms*): x = clip time 0..len with a beat grid, the file through the
+  clip's offset and loop drawn pre-gain, the gain × fades envelope as a line
+  (`waveMath.clipEnvelope`, the engine's `user_fades`), dashed loop seams,
+  and a DOM playhead while the song playhead is inside the clip. It zooms
+  from the whole clip to single samples and is display only (no handles).
   `shortcuts.ts tabFor` says which tab fits which track kind.
 
 ## Limits

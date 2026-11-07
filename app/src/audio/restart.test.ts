@@ -12,6 +12,7 @@ import { addAudioClip, addAudioTrack } from '../state/audio-actions';
 import { deleteClips } from '../state/song-actions';
 import { MAX_ARENA_FLOATS } from './protocol';
 import { sampleFile } from '../state/sampleFiles';
+import { installSampleLoads, pendingSampleLoads } from '../state/sampleLoads';
 import {
   LATENCY_HINT_KEY, RESTART_TIMEOUT_MS, customHint, hintLabel, loadLatencyHint, parseLatencyHint, replayTimeoutMs, restartAudio,
   saveLatencyHint,
@@ -421,6 +422,39 @@ describe('restartAudio', () => {
       // fakeAudio(n) decodes to n frames: used 10, 11, 12, 17 and the late unused 13.
       expect(l.p.arenaFloats).toBe(10 + 11 + 12 + 17 + 13);
       expect(l.p.sampleMeta.get(7)).toEqual({ seconds: 17 / 48000, channels: 1, peaks: null });
+    });
+
+    it('a late upload the engine parks (DEFERRED): counted, but bound only when it lands OK; a failure gives the floats back', async () => {
+      for (const outcome of [Err.OK, Err.OUT_OF_MEMORY]) {
+        const l = await live();
+        const t = addAudioTrack(l.p, l.old)!;
+        const c = addAudioClip(l.p, l.old, t.id, { sampleId: 3, start: 3840, len: 960 })!;
+        deleteClips(l.p, l.old, [c.id]);
+        let made!: Fake;
+        const { d } = deps(l, {
+          start: async () => {
+            made = engineFor(l.steps, 'new', { sampleCode: (id) => (id === 3 ? Err.DEFERRED : Err.OK) });
+            installSampleLoads(l.p, made as unknown as Parameters<typeof installSampleLoads>[1]);
+            return made;
+          },
+        });
+        const r = await restartAudio(l.p, 'interactive', d);
+        l.h.undo(); // the clip is back on sample 3, which the engine has only parked
+        expect(await r!.later).toEqual([]);
+        const sets = () => made.log.filter((x) => 'op' in x && x.op === Op.AUDIO_CLIP_SET).length;
+        const before = sets();
+        const afterRestart = l.p.arenaFloats;
+        expect(pendingSampleLoads()).toBe(1);
+        made.onSampleLoaded!(3, outcome); // Stop settles it
+        if (outcome === Err.OK) {
+          expect(l.p.arenaFloats).toBe(afterRestart);
+          expect(sets()).toBe(before + 1); // bound now (never before)
+        } else {
+          expect(l.p.arenaFloats).toBe(afterRestart - 13); // reservation returned
+          expect(sets()).toBe(before);
+        }
+        expect(pendingSampleLoads()).toBe(0);
+      }
     });
 
     it('an unused sample nothing points at when it lands: nothing is re-sent', async () => {

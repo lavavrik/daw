@@ -46,6 +46,7 @@ import type { ChannelState, Peaks, Project, SampleFile, Track } from '../state/p
 import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
 import { sampleFloats } from '../state/sampleBudget';
+import { deferSampleAssign } from '../state/sampleLoads';
 import { projectCommands, trackState } from './commands';
 import type { EngineCommand } from './commands';
 import { serialize } from './serialize';
@@ -331,11 +332,16 @@ export async function replayInto(
         continue;
       }
       if (!current(id, f)) continue;
-      if (c === Err.OK || c === Err.DEFERRED) {
+      if (c === Err.OK) {
         p.arenaFloats += n;
         onLanded?.(id);
-      }
-      else if (c !== Err.OUT_OF_MEMORY) out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
+      } else if (c === Err.DEFERRED) {
+        // Playback was started first: the engine parks the upload until Stop.
+        // Reserve its floats now, but bind (onLanded) only once it landed OK;
+        // a failure at Stop gives the floats back (sampleLoads.settle).
+        p.arenaFloats += n;
+        deferSampleAssign(id, f.name, () => onLanded?.(id));
+      } else if (c !== Err.OUT_OF_MEMORY) out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
     }
     return out;
   };

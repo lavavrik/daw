@@ -207,6 +207,21 @@ test('Project menu: New asks inline before discarding unsaved changes', async ({
   await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.map((t) => t.kind))).toEqual(['drum']);
 });
 
+test('⌘O / Ctrl+O on a dirty project asks the same "Discard and open…" question (I1)', async ({ page }) => {
+  await startAudio(page);
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
+  await expect(page.getByTestId('project-name')).toContainText('● unsaved');
+  await page.keyboard.press('ControlOrMeta+O');
+  await expect(page.getByTestId('project-discard')).toBeVisible();
+  await expect(page.getByTestId('project-discard')).toHaveText(/Discard and open/);
+  await expect(page.getByTestId('project-discard-warning')).toHaveText('Unsaved changes in "Untitled" will be lost.');
+  await page.getByTestId('project-discard-cancel').click();
+  await expect(page.getByTestId('project-discard')).toBeHidden();
+  // Nothing was replaced.
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.map((t) => t.kind))).toEqual(['drum', 'synth']);
+  await expect(page.getByTestId('project-name')).toContainText('● unsaved');
+});
+
 test('restore banner appears and restores', async ({ page }) => {
   test.setTimeout(60_000);
   await startAudio(page);
@@ -232,6 +247,12 @@ test('restore banner appears and restores', async ({ page }) => {
   await expect(offer).toBeVisible();
   await expect(offer).toContainText('Night Drive');
   expect(await summary(page)).not.toEqual(want); // a fresh session until Restore
+  // The fresh session is not dirty, but Open / New would discard the offer: they ask first (I1).
+  await page.keyboard.press('ControlOrMeta+O');
+  await expect(page.getByTestId('project-discard-warning')).toContainText('Discard the unrestored session "Night Drive"?');
+  await page.getByTestId('project-discard-cancel').click();
+  await page.getByTestId('project-menu').click(); // close the menu
+  await expect(offer).toBeVisible();
   await offer.getByRole('button', { name: 'Restore last session' }).click();
   await expect(offer).toBeHidden();
   await expect.poll(() => summary(page)).toEqual(want);

@@ -51,6 +51,8 @@
   let rec = $state<RecStatus>({ armed: false, state: 'off', takeNotes: 0 });
   let stopWatch: (() => void) | null = null;
   let session = $state.raw<ProjectSession | null>(null);
+  /** The top bar: ⌘O goes through its Project menu (the same "Discard and open…" guard). */
+  let topBar = $state.raw<{ request(cmd: 'new' | 'open'): void } | null>(null);
 
   // "● unsaved": every edit command sets project.dirty and bumps
   // project.version (state/edits.ts, via engine.onCommand); once edits pause,
@@ -126,11 +128,21 @@
   async function restoreLastSession() {
     if (!session || restoring) return;
     restoring = true;
+    const offer = restoreOffer;
     restoreOffer = null;
     try {
-      const saved = await locked(readAutosave);
-      if (!saved) throw new Error('the autosave is gone');
-      await session.restore(saved.json, saved.files);
+      // The read runs inside the session's one-operation guard (with the
+      // Loading overlay), so ⌘O cannot start an Open while it reads.
+      const done = await session.restore(async () => {
+        const saved = await locked(readAutosave);
+        if (!saved) throw new Error('the autosave is gone');
+        return saved;
+      });
+      if (done === null) {
+        // An Open / Save was still running: nothing happened, ask again.
+        restoreOffer = offer;
+        return;
+      }
       autosave.cancel(); // the restored state is what the autosave holds
       banners.error = null;
       flashHint(`Restored "${project.name}" — not saved to a folder yet`);
@@ -141,7 +153,7 @@
       banners.error = `Couldn't restore the last session — ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       restoring = false;
-      autosave.hold(false);
+      if (restoreOffer === null) autosave.hold(false); // still offered: still held
     }
   }
 
@@ -301,8 +313,9 @@
       // samples decoded): stop like the Stop button does, so the recorder
       // closes held notes at the heard tick; release held piano keys.
       beforeLoad: () => {
-        // A New / Open while the restore offer is open answers it: that
-        // project replaces the session, and later edits autosave over it.
+        // A New / Open while the restore offer is open answers it (the user
+        // confirmed "Discard the unrestored session", project/discard.ts):
+        // that project replaces the session, and later edits autosave over it.
         if (restoreOffer && !restoring) {
           restoreOffer = null;
           autosave.hold(false);
@@ -332,7 +345,7 @@
       onToggleArm: toggleArm,
       onSave: () => void s.save(),
       onSaveAs: () => void s.saveAs(),
-      onOpen: () => void s.open(),
+      onOpen: () => topBar?.request('open'),
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
@@ -374,7 +387,11 @@
 <div class="app">
   {#if engine}
     {#if recorder && session}
-      <TopBar p={project} {engine} {octave} {midi} {recorder} {rec} {session} onTogglePlay={transportToggle} onToggleArm={toggleArm} />
+      <TopBar
+        bind:this={topBar}
+        p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer}
+        onTogglePlay={transportToggle} onToggleArm={toggleArm}
+      />
     {/if}
     {#if restoreOffer}
       {@const offer = restoreOffer}

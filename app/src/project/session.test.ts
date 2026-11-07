@@ -24,6 +24,8 @@ describe('project session', () => {
     expect(dir.log).toEqual([]); // nothing written yet
     expect(p.folder).toBeNull();
     expect(banners.ask?.text).toMatch(/Replace the project in "Library"/);
+    // What really happens: the samples the old project.json lists are swept (M2).
+    expect(banners.ask?.text).toMatch(/Its project\.json and the samples it lists will be replaced/);
     await banners.ask!.run();
     expect(banners.ask).toBeNull();
     expect(dir.log).toContain('move project.json.tmp -> project.json');
@@ -97,7 +99,7 @@ describe('project session', () => {
       beforeLoad: () => calls.push('before'), afterLoad: () => calls.push('after'), onSaved: () => void calls.push('saved'),
       pick: async () => asDir(dir),
     });
-    const warnings = await s.restore(serialize(src), new Map(projectFiles(src, serialize(src))));
+    const warnings = await s.restore(async () => ({ json: serialize(src), files: new Map(projectFiles(src, serialize(src))) }));
     expect(warnings).toEqual([]);
     expect(calls).toEqual(['before', 'after']);
     expect(p.name).toBe('Late Night');
@@ -132,5 +134,36 @@ describe('project session', () => {
     expect(p.dirty).toBe(true);
     expect(projectFingerprint(p)).not.toBe(p.savedFingerprint);
   });
-});
 
+  it('restore is one operation: Open / New wait while the autosave is read, and the read shows Loading (M1)', async () => {
+    const { p: src } = buildFixture();
+    const p = new Project();
+    let picks = 0;
+    const s = createProjectSession(p, engine(), { pick: async () => (picks++, null) });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const restoring = s.restore(async () => {
+      await gate; // big samples still being read
+      return { json: serialize(src), files: new Map(projectFiles(src, serialize(src))) };
+    });
+    await Promise.resolve();
+    expect(p.loading).toBe(true); // the overlay blocks the editors during the read
+    await s.open();
+    await s.newProject();
+    expect(picks).toBe(0); // ignored: a restore is running
+    expect(await s.restore(async () => ({ json: serialize(src), files: new Map() }))).toBeNull(); // busy: nothing done
+    release();
+    expect(await restoring).toEqual([]);
+    expect(p.loading).toBe(false);
+    expect(p.name).toBe('Fixture');
+  });
+
+  it('a failed autosave read leaves the session as it was (M1)', async () => {
+    const p = new Project();
+    p.name = 'Mine';
+    const s = createProjectSession(p, engine());
+    await expect(s.restore(async () => { throw new Error('the autosave is gone'); })).rejects.toThrow(/gone/);
+    expect(p.loading).toBe(false);
+    expect(p.name).toBe('Mine');
+  });
+});

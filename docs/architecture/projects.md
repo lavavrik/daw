@@ -142,8 +142,22 @@ only the sample files it lists.
 
 Save As names the project after the chosen folder. A folder that already
 holds a `project.json` or anything in `samples/` (and is not this project's
-own folder) is written only after an inline "Replace the project in …?"
-(`banners.ask`, never `confirm()`).
+own folder) is written only after an inline "Replace the project in …?
+Its project.json and the samples it lists will be replaced." (`banners.ask`,
+never `confirm()`; the samples that folder's old project.json listed are
+swept as above, everything else stays).
+
+**One operation at a time, one discard guard.** New, Open, Save, Save As and
+Restore run one at a time (`session.ts` `once`; a second one is ignored —
+`restore` resolves `null` then). Restore reads the autosave *inside* that
+guard with `p.loading` set, so ⌘O cannot start an Open while big samples are
+read. New, Open… and ⌘O / Ctrl+O all go through the Project menu
+(`TopBar.request`), which asks inline "Discard and start new / open…"
+whenever `discardWarning` (`project/discard.ts`) says something would be
+lost: unsaved changes, or an open "Restore last session" offer ("Discard
+the unrestored session …?" — the fresh session is not dirty, but answering
+the offer this way lets the next edit autosave over it). ⌘N is the
+browser's own and is not taken over.
 
 ## Autosave (`autosave.ts`)
 
@@ -223,10 +237,12 @@ newer than the **last explicit save** (Save / Save As record `Date.now()` in
 counts), an inline banner above the editors offers **Restore last session**
 or **Start fresh** (never `confirm()`). Until it is answered the autosave is
 **held**, so new edits cannot overwrite the session on offer (they are
-written once it is answered). A New / Open while it is open answers it
-(that project replaces the session).
+written once it is answered). A New / Open while it is open asks "Discard
+the unrestored session …?" first; confirmed, it answers the offer (that
+project replaces the session).
 
-- **Restore last session** → `session.restore(json, files)`: the same
+- **Restore last session** → `session.restore(read)` (`read` = the
+  autosave read under the autosave lock, run inside the session guard): the same
   `loadProject` as Open (validation, `beforeLoad` / `afterLoad`, the
   warnings banner). The project keeps its name, has **no folder**
   (`p.folder = null`: a directory handle is not stored in the autosave; the

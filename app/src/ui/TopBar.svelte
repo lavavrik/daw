@@ -10,9 +10,11 @@
   // and Rec offset persist in localStorage (state/recorder.ts).
   //
   // Project menu (left): the project name with a "● unsaved" mark, and New,
-  // Open…, Save (⌘S), Save As… (⇧⌘S). New / Open with unsaved changes ask
-  // inline in the menu (no confirm()); results and errors are banners
-  // (project/session.ts).
+  // Open…, Save (⌘S), Save As… (⇧⌘S). New / Open — from the menu or ⌘O,
+  // which opens the menu through `request` — ask inline in the menu (no
+  // confirm()) when something would be lost: unsaved changes, or an open
+  // "Restore last session" offer (project/discard.ts). Results and errors are
+  // banners (project/session.ts).
   //
   // Layout: one row that never wraps at 1280 px (tight since the Project menu:
   // 5 px gaps, "Metro", narrow BPM field). Every control is nowrap;
@@ -28,6 +30,7 @@
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
+  import { discardWarning } from '../project/discard';
 
   let {
     p,
@@ -39,6 +42,7 @@
     onTogglePlay,
     onToggleArm,
     session,
+    restoreOffer = null,
   }: {
     p: Project;
     engine: AudioEngine;
@@ -50,12 +54,15 @@
     onTogglePlay: () => void;
     onToggleArm: () => void;
     session: ProjectSession;
+    /** The "Restore last session" offer, while it is open (New / Open would discard it). */
+    restoreOffer?: { name: string } | null;
   } = $props();
 
   // ---- Project menu --------------------------------------------------------
   let menu = $state<HTMLDetailsElement | null>(null);
-  /** New/Open waiting for "Discard changes" (only asked while dirty). */
+  /** New/Open waiting for "Discard and …" (only asked when something would be lost). */
   let confirming = $state<'new' | 'open' | null>(null);
+  const warning = $derived(discardWarning(p, restoreOffer));
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const mod = isMac ? '⌘' : 'Ctrl+';
   function closeMenu() {
@@ -63,7 +70,7 @@
     if (menu) menu.open = false;
   }
   function run(cmd: 'new' | 'open' | 'save' | 'saveAs') {
-    if ((cmd === 'new' || cmd === 'open') && p.dirty && confirming !== cmd) {
+    if ((cmd === 'new' || cmd === 'open') && discardWarning(p, restoreOffer) !== null && confirming !== cmd) {
       confirming = cmd;
       return;
     }
@@ -72,6 +79,17 @@
     else if (cmd === 'open') void session.open();
     else if (cmd === 'save') void session.save();
     else void session.saveAs();
+  }
+
+  /**
+   * ⌘O / Ctrl+O (App's shortcut): the same as the menu item, so it asks the
+   * same question — the menu opens on the "Discard and open…" prompt when
+   * something would be lost, else the folder picker opens at once (still
+   * inside the key press, as the picker needs a user gesture).
+   */
+  export function request(cmd: 'new' | 'open') {
+    if (discardWarning(p, restoreOffer) !== null && menu) menu.open = true;
+    run(cmd);
   }
 
   // Mirrors of the recorder's persisted settings (the Recorder is not reactive).
@@ -159,12 +177,12 @@
     </summary>
     <div class="panel menu" role="menu">
       {#if confirming}
-        <p class="warn">Unsaved changes in "{p.name}" will be lost.</p>
+        <p class="warn" data-testid="project-discard-warning">{warning}</p>
         <div class="row">
           <button class="danger" data-testid="project-discard" onclick={() => run(confirming!)}>
             Discard and {confirming === 'new' ? 'start new' : 'open…'}
           </button>
-          <button onclick={() => (confirming = null)}>Cancel</button>
+          <button data-testid="project-discard-cancel" onclick={() => (confirming = null)}>Cancel</button>
         </div>
       {:else}
         <button role="menuitem" data-testid="project-new" onclick={() => run('new')}>New</button>

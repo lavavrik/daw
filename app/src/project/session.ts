@@ -29,9 +29,14 @@ export interface ProjectSession {
   /**
    * Load an autosave (project/autosave.ts) as an unsaved project with no
    * folder: same validation and warnings banner as Open; the name is kept.
-   * Throws on failure. Returns the load warnings.
+   * `read` gives the autosave (project.json + samples); it runs inside the
+   * one-operation-at-a-time guard with Project.loading set (the "Loading…"
+   * overlay), so no Open / New can start while big samples are read.
+   * Throws on failure (the session is unchanged if `read` fails). Returns
+   * the load warnings, or null if another New / Open / Save was running
+   * (nothing done).
    */
-  restore(json: unknown, files: Map<string, ArrayBuffer>): Promise<string[]>;
+  restore(read: () => Promise<{ json: unknown; files: Map<string, ArrayBuffer> }>): Promise<string[] | null>;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -82,11 +87,12 @@ export interface SessionOptions {
 export function createProjectSession(p: Project, engine: SessionEngine, opts: SessionOptions = {}): ProjectSession {
   const pick = opts.pick ?? pickProjectFolder;
   let busy = false;
-  const once = async (fn: () => Promise<void>) => {
-    if (busy) return;
+  /** One New / Open / Save / restore at a time: undefined (nothing run) while another runs. */
+  const once = async <T,>(fn: () => Promise<T>): Promise<T | undefined> => {
+    if (busy) return undefined;
     busy = true;
     try {
-      await fn();
+      return await fn();
     } finally {
       busy = false;
     }
@@ -135,8 +141,17 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
     return warnings;
   }
 
-  async function restore(json: unknown, files: Map<string, ArrayBuffer>): Promise<string[]> {
-    const warnings = await replace(json, files);
+  async function restore(read: () => Promise<{ json: unknown; files: Map<string, ArrayBuffer> }>): Promise<string[]> {
+    let saved: { json: unknown; files: Map<string, ArrayBuffer> };
+    // Reading big samples takes a while: block the editors meanwhile, like
+    // the load itself does (loadProject sets loading again and clears it).
+    p.loading = true;
+    try {
+      saved = await read();
+    } finally {
+      p.loading = false;
+    }
+    const warnings = await replace(saved.json, saved.files);
     // No folder (the handle is not kept in an autosave) and never saved:
     // NEVER_SAVED matches no fingerprint, so the idle dirty check keeps the
     // "● unsaved" mark until a Save.
@@ -173,7 +188,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
       if (!ours && (await folderInUse(dir))) {
         const target = dir;
         banners.ask = {
-          text: `Replace the project in "${target.name}"? Its project.json is overwritten (other files are kept).`,
+          text: `Replace the project in "${target.name}"? Its project.json and the samples it lists will be replaced.`,
           ok: 'Replace',
           run: async () => {
             banners.ask = null;
@@ -192,7 +207,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
   return {
     saveTo,
     openFrom,
-    restore,
+    restore: async (read) => (await once(() => restore(read))) ?? null,
     saveAs: () => once(saveAs),
     save: () => once(() => (p.folder ? saveInto(p.folder, p.name) : saveAs())),
     open: () =>

@@ -44,7 +44,7 @@
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
     // Real song actions for e2e (no-ops before audio starts).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
-    // Used by the spec 6 perf e2e (tests/e2e/perf.spec.ts) to build its scenario
+    // Used by the spec 6 perf e2e (tests/e2e/serial.spec.ts) to build its scenario
     // through the same code paths as the UI.
     addDrumTrack: () => (engine ? addDrumTrack(project, engine) : null),
     addSynthTrack: (patchName) =>

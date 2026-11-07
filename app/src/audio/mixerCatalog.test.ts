@@ -20,7 +20,7 @@ describe('mixer catalog', () => {
     }
     expect(defaultMixParams()).toHaveLength(MIX_PARAMS.length);
   });
-  it('clampMix', () => {
+  it('clampParam', () => {
     expect(clampParam(mixParam('fader'), -Infinity)).toBe(-60);
     expect(clampParam(mixParam('fader'), 20)).toBe(6);
     expect(clampParam(mixParam('fader'), NaN)).toBe(0);

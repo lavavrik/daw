@@ -29,7 +29,7 @@
   // Which tab is shown follows the selected track's kind: drum -> Step grid;
   // synth -> Piano roll or Instrument, whichever was picked last this session.
   // The Mixer tab is enabled for any selection (or none) and shows the whole
-  // mixer. `p.p.mixerOpen` (project state, so the timeline can reach it): clicking
+  // mixer. `p.mixerOpen` (project state, so the timeline can reach it): clicking
   // a strip name inside the mixer keeps it open, but selecting a track from the
   // timeline's track headers closes it (TrackHeaders.svelte) so the bottom panel
   // shows that track's editor (the remembered Piano roll / Instrument tab, or

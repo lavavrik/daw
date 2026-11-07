@@ -29,7 +29,7 @@ release notes only, so effect tails, compressor and limiter state survive them.
                                             -> master bus  <---------+
                                                                      |
  master bus -> x legacy gain (SET_MASTER_GAIN, 0.8) -> [EQ] -> fader |
-   -> Limiter (lookahead 72 samples, release 50 ms, ceiling -0.3 dBFS)
+   -> Limiter (lookahead 1.5 ms, release 50 ms, ceiling -0.3 dBFS)
    -> + metronome click (soft clip only around clicks) -> NaN-safe +-1 clamp
    -> output
 ```
@@ -90,22 +90,31 @@ compressor's reduction ramps to unity over 2 ms.
 
 ## Pan law
 
-Equal-power, normalised so **centre is unity** (`gL = sqrt2 cos t`, `gR = sqrt2
-sin t`, `t = (pan+1) pi/4`). Hard pan therefore gives +3 dB on the active side
-(and silence on the other); a default mix is bit-exact unity. Mono sources
-panned hard are 3 dB louder than centred, the usual trade for a unity centre.
+**Strip pan** (mixer, every track and return): equal-power, normalised so
+**centre is unity** (`gL = sqrt2 cos t`, `gR = sqrt2 sin t`, `t = (pan+1)
+pi/4`). Hard pan therefore gives +3 dB on the active side (and silence on the
+other); a default mix is bit-exact unity. Mono sources panned hard are 3 dB
+louder than centred, the usual trade for a unity centre.
+
+**Drum-row pan** (step-grid row pan, `drums.rs`, applied per voice before
+the strip): plain equal-power, **-3 dB at centre** (`gL = cos t`, `gR = sin
+t`, same `t`): a centred row plays at 0.707 on both sides, a hard-panned row
+at 1.0 on one side. So the two laws differ by exactly 3 dB: a row's pan keeps
+constant power, while the strip's pan keeps a centred mix at unity. They
+stack (gains multiply): row and strip both centred = 0.707 x 1 (-3 dB per
+side); both hard left = 1.0 x sqrt2 (+3 dB on L).
 
 ## Limiter and latency
 
-The master limiter is a brickwall lookahead limiter: **72 samples** of
-lookahead at 48 kHz (1.5 ms), release 50 ms, ceiling default -0.3 dBFS (range
+The master limiter is a brickwall lookahead limiter: **1.5 ms** of
+lookahead (72 samples at 48 kHz), release 50 ms, ceiling default -0.3 dBFS (range
 -6..0). The output never exceeds the ceiling (gain reduction is computed on
 the look-ahead peak, so it is down before the peak arrives).
 
-The lookahead delays the whole output by 72 samples. Two compensations:
+The lookahead delays the whole output by 1.5 ms (72 at 48 kHz). Two compensations:
 
-* **Heard time.** The worklet reads `engine_latency()` (72 frames, 0 when no
-  lookahead) once, and publishes `TELEMETRY.frame = currentFrame + n +
+* **Heard time.** The worklet reads `engine_latency()` (72 frames at 48 kHz, 0
+  when no lookahead) once, and publishes `TELEMETRY.frame = currentFrame + n +
   latency`: the context frame at which the published `ticks` are *heard*.
   `audioClock` builds the playhead and the recorder's note timing from that, so
   the playhead is not 1.5 ms early.
@@ -183,7 +192,29 @@ project so no other worker competes for the CPU).
 The strip processors are plain stereo DSP structs in `engine/src/dsp/`
 (`Eq3`, `Compressor`, `Reverb`, `Delay`, `Limiter`), with no mixer
 knowledge: they take `&mut [f32]` L/R slices, glide their own params and reset
-via `reset()`. Plan 6 wraps them as rack modules (`engine/src/rack/`) with
-audio ports and catalog entries, and the strip's EQ/Comp inserts become the
-default rack-per-track chain. Parameter tables stay in the golden JSON style
-(`mixer_catalog.json`), which is why the UI never hand-copies ranges.
+via `reset()`. They can **not** simply be wrapped as rack modules, though:
+
+* A rack `Module` (`engine/src/rack/modules/mod.rs`) is an inline,
+  fixed-size enum stored in preallocated slots, so **adding a module never
+  allocates** (it runs on the audio thread via the command ring).
+* `Eq3` and `Compressor` are inline state (biquads, envelopes): they fit that
+  model and can become `Module` variants as they are.
+* `Delay` and `Reverb` own heap rings sized in `new()`: the Delay ~1 MiB at
+  48 kHz (2 s stereo, power-of-two rounded; ~2 MiB at 96 kHz), the Reverb
+  ~256 KiB of comb lines plus its predelay ring. Constructing one on
+  `add_module` would allocate on the audio thread, and storing them inline
+  would make every `Module` slot that big.
+
+So rack effect modules need an **engine-owned FX memory pool**: a fixed
+per-track budget (e.g. N delay-sized and M reverb-sized blocks per track,
+an explicit cap like the sidechain `MAX_KEYS`) allocated once in
+`Engine::new`, and **borrowed-buffer constructors** (`Delay::with_buffer(sr,
+&mut [f32])`-style, or the module holding a pool slot index and receiving the
+slice at `process` time). Adding an FX module then claims a free pool block
+(refused with `BAD_VALUE` when the budget is used up, which the UI mirrors
+like the key cap) and removing it returns the block after its tail fades.
+The mixer's own Reverb/Delay returns keep their dedicated buffers.
+
+The strip's EQ/Comp inserts can become the default rack-per-track chain.
+Parameter tables stay in the golden JSON style (`mixer_catalog.json`), which
+is why the UI never hand-copies ranges.

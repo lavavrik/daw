@@ -514,15 +514,17 @@ impl Engine {
                 }
                 SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
-            // Clips: drum or synth slots. A real edit (or removal) releases
-            // the notes the clip owns. A drum clip latches its swing afresh
-            // only if nothing of the new mapping has played at the playhead:
-            // stopped, the clip (old or new) not yet started or not playing
-            // there, or a new start / offset / pattern. A clip that keeps its
-            // mapping under the playhead (e.g. only lengthened / shortened)
-            // keeps its latch until the next pair boundary (R12: otherwise a
-            // pending swing could move an odd step that already fired in this
-            // pair ahead of the playhead and fire it again).
+            // Clips: drum or synth slots. A clip that keeps its mapping under
+            // the playhead (same start / offset / pattern, playing, and the
+            // playhead inside both the old and the new span: e.g. only its
+            // right edge dragged, which sends a ClipSet every frame) changes
+            // nothing that already sounds: its synth notes keep sounding (the
+            // render cuts them at the new end, if earlier) and a drum clip
+            // keeps its swing latch until the next pair boundary (R12:
+            // otherwise a pending swing could move an odd step that already
+            // fired in this pair ahead of the playhead and fire it again).
+            // Any other real edit (or removal) releases the notes the clip
+            // owns, and a drum clip latches its swing afresh.
             Command::ClipSet { slot, idx, clip } => {
                 let kind = self.kind(slot);
                 if kind == SlotKind::Empty {
@@ -531,13 +533,13 @@ impl Engine {
                 let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
                 let old = a.clip(idx).unwrap_or(Clip::OFF);
                 if a.set(idx, clip) {
-                    self.synths.release_clip(slot, idx);
                     let t = self.transport.ticks;
                     let playing_here = |c: &Clip| c.active && c.start as f64 <= t && t < c.end() as f64;
                     let same_mapping =
                         old.start == clip.start && old.offset == clip.offset && old.pattern == clip.pattern;
                     let fired = self.transport.playing && playing_here(&old) && playing_here(&clip);
                     if !(fired && same_mapping) {
+                        self.synths.release_clip(slot, idx);
                         self.drums.latch_clip(slot, idx, clip);
                     }
                 }
@@ -574,9 +576,24 @@ impl Engine {
                     self.sync_transport_telemetry();
                 }
             }
+            // A loop set *behind* the playhead while the song plays (the
+            // user drags a loop over bars 1-4 while bar 6 plays) jumps to the
+            // loop start at once, like a wrap; otherwise the playhead would
+            // play on past `loop_end` to the song end (`Transport::split`
+            // only wraps a playhead that reaches `loop_end` from before it).
+            // A loop around or ahead of the playhead, or set while stopped
+            // (a seek behind the loop is then the user's choice), does not
+            // move it.
             Command::SetLoop { start, end } => {
                 self.transport.loop_start = start as f64;
                 self.transport.loop_end = end as f64;
+                let tr = &self.transport;
+                if tr.playing && tr.mode == Mode::Song && tr.loop_on() && tr.ticks >= tr.loop_end {
+                    self.transport.ticks = self.transport.loop_start;
+                    self.synths.release_song();
+                    self.latch_all_clips();
+                    self.sync_transport_telemetry();
+                }
             }
             Command::Seek { ticks } => {
                 if self.transport.mode == Mode::Song {
@@ -2543,7 +2560,7 @@ mod tests {
         mode(&mut e, true);
         // Each edit of clip 0 while its note sounds releases it.
         let edits: [&dyn Fn(&mut Engine) -> i32; 5] = [
-            &|e| clip_cmd(e, 0, 0, 0, 0, 7680, 0),  // shorten (still under the playhead)
+            &|e| clip_cmd(e, 0, 0, 0, 0, 240, 0), // shorten to end before the playhead
             &|e| clip_cmd(e, 0, 0, 0, 3840, 15360, 0), // move
             &|e| clip_cmd(e, 0, 0, 1, 0, 15360, 0), // another pattern
             &|e| e.command(OP_CLIP_REMOVE, 0.0, 0.0, 0.0, 0.0),
@@ -2564,6 +2581,76 @@ mod tests {
             let s = render(&mut e, 12800);
             assert!(silent(&s[32..]), "edit {k}: released");
         }
+    }
+
+    #[test]
+    fn resizing_a_synth_clip_under_the_playhead_keeps_its_notes() {
+        // A pad note (tick 0..8000) in a clip 0..7680. Dragging the right
+        // edge sends a ClipSet every frame; while start / offset / pattern
+        // stay and the playhead stays inside the clip, the note must not be
+        // cut (a cut shows as silence: nothing re-triggers it mid-note).
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        set_clip(&mut e, 0, 0, 0, 0, 7680, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 12800)[32..], 0.2), "sounding");
+        for len in [8000, 9000, 15360, 7680, 1000] {
+            set_clip(&mut e, 0, 0, 0, 0, len, 0); // lengthen, then shorten (still covering)
+            assert!(all_near(&render(&mut e, 128), 0.2), "len {len}: not cut");
+        }
+        // Shortened to end before the playhead: the clip no longer covers it.
+        set_clip(&mut e, 0, 0, 0, 0, 400, 0);
+        assert!(silent(&render(&mut e, 1280)[32..]), "released");
+        assert_eq!(e.synths.sequenced_sounding(0), 0);
+    }
+
+    #[test]
+    fn set_loop_behind_the_playhead_jumps_to_the_loop_start() {
+        // Playing at bar 6 (tick 19200); the user drags a loop over bars
+        // 1-4 (0..15360). The playhead must jump to the loop start (like a
+        // wrap: clip notes released, swings re-latched), not play on to the
+        // song end. A drum hit sits at song tick 0; a synth note sounds at
+        // bar 6.
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        set_clip(&mut e, 1, 0, 0, 0, 3840, 0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        set_clip(&mut e, 0, 0, 0, 19200, 3840, 0);
+        mode(&mut e, true);
+        seek(&mut e, 19200.0);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 12800)[32..], 0.2), "note at bar 6");
+        set_loop(&mut e, 0.0, 15360.0);
+        assert_eq!(ticks(&e), 0.0, "telemetry jumps at once");
+        let s = render(&mut e, 12800);
+        assert_eq!(rising(&s), vec![0], "the hit at the loop start");
+        assert!(silent(&s[32..]), "the bar-6 note is released");
+        assert_eq!(e.synths.sequenced_sounding(0), 0);
+        // A loop around or ahead of the playhead does not move it.
+        let at = ticks(&e);
+        set_loop(&mut e, 0.0, 7680.0);
+        assert_eq!(ticks(&e), at, "around");
+        set_loop(&mut e, 7680.0, 11520.0);
+        assert_eq!(ticks(&e), at, "ahead");
+        // Loop off, stopped, or Pattern mode: no jump.
+        seek(&mut e, 19200.0);
+        set_loop(&mut e, 3840.0, 0.0);
+        assert_eq!(ticks(&e), 19200.0, "loop off");
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        set_loop(&mut e, 0.0, 0.0); // off: Stop went home to song_start
+        seek(&mut e, 19200.0);
+        set_loop(&mut e, 0.0, 3840.0);
+        assert_eq!(ticks(&e), 19200.0, "stopped: a seek behind the loop is the user's choice");
+        mode(&mut e, false);
+        play(&mut e, 0.0);
+        render(&mut e, 12800);
+        let at = ticks(&e);
+        set_loop(&mut e, 0.0, 1.0);
+        assert_eq!(ticks(&e), at, "Pattern mode ignores the loop");
     }
 
     #[test]

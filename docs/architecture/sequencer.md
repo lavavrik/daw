@@ -154,9 +154,11 @@ wrap's Off and its own On on the wrap frame (a retrigger).
   split at the wrap and each piece rendered with its own window (see
   `audio-path.md`); the wrap frame plays exactly the loop start, so every pass
   has the same whole number of frames. A playhead exactly at the loop end
-  wraps at once; one already *after* the loop end when the loop is set (or
-  seeked there) plays on. Synced LFOs follow song time, so after a wrap they
-  are back at their loop-start phase.
+  wraps at once. A loop set *behind* the playhead while playing (the user
+  drags bars 1-4 while bar 6 plays) jumps to the loop start at once, like a
+  wrap (clip notes released, swings re-latched); a playhead seeked after the
+  loop end plays on. Synced LFOs follow song time, so after a wrap they are
+  back at their loop-start phase.
 - Mode switch releases every sequenced note. Pattern -> Song jumps to the song
   start; Song -> Pattern goes to 0 when stopped and keeps the playhead while
   playing (patterns continue at `ticks mod period`).

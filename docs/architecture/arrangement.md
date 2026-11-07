@@ -9,7 +9,9 @@ in one place: what the user can build and what the engine guarantees.
   pattern holds the steps of all rows plus its step count and swing; rows
   (sample, gain, pan, mute) stay per track. A synth pattern is the plan-3 note
   pattern (notes plus bars).
-- Pattern 0 always exists, and a track always keeps at least one.
+- A track always has at least one pattern; a new track starts on engine
+  slot 0 (any pattern no clip uses, slot 0 included, can be deleted while
+  others remain).
 - Each track has a **current pattern** (default 0): the one the step grid /
   piano roll edits, Pattern mode loops, and recording writes to. The bottom
   panel header reads `<track> · <pattern name>`.
@@ -41,6 +43,7 @@ in one place: what the user can build and what the engine guarantees.
   toggles; Song mode only): with `start < end`, playback wraps from end to
   start exactly. The block is split at the wrap, so nothing double-fires or
   skips, and synced LFOs stay phase-continuous (they follow song ticks).
+  Setting a loop behind the playing playhead jumps to its start at once.
 - **Stop**: Pattern mode resets to 0; Song mode returns to the loop start with
   the loop on, else to where playback last started (FL-like).
 - No note chase: after a jump (wrap, seek, mode switch) a note that began
@@ -51,7 +54,10 @@ Each clip slot of a synth track has its own voicing, so every sounding
 sequenced note belongs to one clip (or, in Pattern mode, to its pattern). Its
 `Off` is sent at the clip's end, whenever the clip stops playing in a block,
 when it is edited, removed or cleared, when song time jumps, and when its
-pattern is edited. Overlapping clips share the rack's per-pitch MIDI In, so one
+pattern is edited. Resizing a clip under the playhead (same start, offset
+and pattern, playhead still inside it, e.g. dragging its right edge) is not
+an edit of what sounds: its notes keep sounding (cut at the new end if that
+is earlier). Overlapping clips share the rack's per-pitch MIDI In, so one
 clip's `Off` can cut the same pitch from another (accepted, FL-like) but never
 strands a note. Drums have nothing to release: hits stop retriggering and ring
 out.

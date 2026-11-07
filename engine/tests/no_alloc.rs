@@ -425,6 +425,7 @@ fn song_mode_loops_and_clip_edits_do_not_allocate() {
     for b in 0..4000u32 {
         match b {
             100 => ok(e.command(OP_CLIP_SET, clip(s, 2.), po(1., 0.), 3840., 3840.)), // edit a playing clip
+            105 => ok(e.command(OP_CLIP_SET, clip(s, 2.), po(1., 0.), 3840., 7680.)), // lengthen it in place
             110 => ok(e.command(OP_CLIP_SET, clip(d, 2.), po(1., 0.), 3840., 3840.)),
             120 => ok(e.command(OP_CLIP_REMOVE, clip(s, 3.), 0., 0., 0.)),
             130 => ok(e.command(OP_NOTE_SET, addr(5.), pv(70., 90.), 100., 2000.)), // clip-owned notes
@@ -436,7 +437,7 @@ fn song_mode_loops_and_clip_edits_do_not_allocate() {
             1700 => ok(e.command(OP_SET_MODE, 0., 0., 0., 0.)), // pattern mode, playing
             1800 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)),
             2000 => ok(e.command(OP_SET_LOOP, 4000., 4001., 0., 0.)), // 1 tick: wraps every ~18 frames
-            2100 => ok(e.command(OP_SET_LOOP, 0., 3840., 0., 0.)),
+            2100 => ok(e.command(OP_SET_LOOP, 0., 3840., 0., 0.)), // behind the playhead: jumps
             2200 => ok(e.command(OP_SET_TEMPO, 97., 0., 0., 0.)),
             2600 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
             2610 => ok(e.command(OP_CLIP_CLEAR, d, 0., 0., 0.)),

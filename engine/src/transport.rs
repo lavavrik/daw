@@ -21,8 +21,9 @@
 //! `ceil(loopLength * samplesPerTick)` frames and an event at `loop_start`
 //! fires on the wrap frame itself: nothing double-fires or skips. A playhead
 //! exactly at `loop_end` wraps at once; one already *after* `loop_end` when it
-//! starts (seeked there, or the loop was set behind it) plays on without
-//! looping.
+//! starts (seeked there while stopped) plays on without looping. A loop set
+//! behind a playing song playhead is handled by the engine (`SetLoop` jumps
+//! to `loop_start`), so `split` never sees that case while playing.
 
 use crate::PPQ;
 

@@ -21,6 +21,7 @@
   import { STARTER_PATCHES } from './state/patches';
   import { installShortcuts } from './input/shortcuts';
   import { connectMidi } from './input/midi';
+  import { DEFAULT_OCTAVE } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
@@ -51,7 +52,7 @@
   let uninstall: (() => void) | null = null;
   let uninstallMidi: (() => void) | null = null;
   let uninstallLoads: (() => void) | null = null;
-  let octave = $state(4);
+  let octave = $state(DEFAULT_OCTAVE);
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */

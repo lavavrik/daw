@@ -7,7 +7,7 @@ import { togglePlay } from '../state/actions';
 import { setMode } from '../state/song-actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
-import { keyToNote } from './qwertyPiano';
+import { DEFAULT_OCTAVE, keyToNote } from './qwertyPiano';
 import type { NoteInput } from './noteInput';
 
 const PIANO_VELOCITY = 100;
@@ -74,7 +74,7 @@ export function createShortcutHandlers(
   p: Project, sink: CommandSink, input: NoteInput, opts: ShortcutOptions = {},
 ): ShortcutHandlers {
   const { onOctave } = opts;
-  let octave = 4;
+  let octave = DEFAULT_OCTAVE;
   // KeyboardEvent.code -> note that was actually started, so changing the
   // octave while a key is held still releases the right note.
   const held = new Map<string, number>();
@@ -144,6 +144,10 @@ export function createShortcutHandlers(
       if (e.repeat) return;
       const note = keyToNote(e.code, octave);
       if (note === null || held.has(e.code)) return;
+      // Another held key already sounds this pitch (K at octave 4 = A at
+      // octave 5 after X): the first key owns it. Starting it twice would
+      // let either key-up end both the sound and the recorded note.
+      for (const n of held.values()) if (n === note) return;
       held.set(e.code, note);
       input.on(note, PIANO_VELOCITY, stamp(e), QWERTY_SOURCE);
     },

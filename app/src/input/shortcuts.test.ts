@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
 import { createShortcutHandlers, releaseHeldKeys, installShortcuts } from './shortcuts';
 import { createNoteInput } from './noteInput';
+import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
 const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void } = {}, project: object = { playing: false }) => {
@@ -125,6 +126,24 @@ describe('shortcut handlers', () => {
     sent.length = 0;
     h.onKeyUp(key('KeyA'));
     expect(sent).toEqual([[Op.NOTE_OFF, 60]]);
+  });
+  it('a key whose pitch another held key already sounds (after an octave change) is ignored', () => {
+    const { sent, heard, h } = mk();
+    h.onKeyDown(key('KeyK')); // C5 at octave 4
+    h.onKeyDown(key('KeyX')); // octave 5: KeyA is C5 too
+    h.onKeyDown(key('KeyA'));
+    expect(sent.filter((x) => x[0] === Op.NOTE_ON)).toHaveLength(1);
+    h.onKeyUp(key('KeyA')); // never started: releases nothing (K's note keeps sounding and recording)
+    expect(sent.filter((x) => x[0] === Op.NOTE_OFF)).toHaveLength(0);
+    expect(heard.filter((x) => x[0] === 'off')).toHaveLength(0);
+    h.onKeyUp(key('KeyK'));
+    expect(sent.filter((x) => x[0] === Op.NOTE_OFF)).toEqual([[Op.NOTE_OFF, 72]]);
+  });
+  it('the default octave is 4 (KeyA = 60), the one DEFAULT_OCTAVE', () => {
+    const { sent, h } = mk();
+    h.onKeyDown(key('KeyA'));
+    expect(sent).toEqual([[Op.NOTE_ON, 60, 100]]);
+    expect(DEFAULT_OCTAVE).toBe(4);
   });
   it('blur and hidden visibility release all', () => {
     const { sent, h } = mk();

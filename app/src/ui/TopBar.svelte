@@ -42,6 +42,7 @@
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
+  import { DEFAULT_OCTAVE } from '../input/qwertyPiano';
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
@@ -52,7 +53,7 @@
   let {
     p,
     engine,
-    octave = 4,
+    octave = DEFAULT_OCTAVE,
     midi = { state: 'no-devices', devices: [] },
     recorder,
     rec,

@@ -30,6 +30,8 @@ export interface ShortcutHandlers {
   onBlur(): void;
   /** Call with document.hidden on visibilitychange; releases when hidden. */
   onVisibility(hidden: boolean): void;
+  /** NOTE_OFF for every held piano key. */
+  releaseAll(): void;
 }
 
 /**
@@ -83,12 +85,32 @@ export function createShortcutHandlers(p: Project, sink: CommandSink, onOctave?:
     onVisibility(hidden) {
       if (hidden) releaseAll();
     },
+    releaseAll,
   };
+}
+
+/** Handlers of the installed shortcuts (one per session), for releaseHeldKeys. */
+let installed: ShortcutHandlers | null = null;
+
+/** Release every held piano key now (no-op when shortcuts aren't installed). */
+export function releaseHeldKeys() {
+  installed?.releaseAll();
+}
+
+/**
+ * Native confirm() that can't strand a note: the dialog blocks the main
+ * thread and swallows the keyup of a piano key held while it is open, so the
+ * note would hang after Cancel. Release held keys first. `ask` is for tests.
+ */
+export function confirmReleasingKeys(message: string, ask: (m: string) => boolean = (m) => window.confirm(m)): boolean {
+  releaseHeldKeys();
+  return ask(message);
 }
 
 /** Returns an uninstall function. `onOctave` fires (with the new octave) on Z/X. */
 export function installShortcuts(p: Project, sink: CommandSink, onOctave?: (o: number) => void): () => void {
   const h = createShortcutHandlers(p, sink, onOctave);
+  installed = h;
   const onVis = () => h.onVisibility(document.hidden);
   window.addEventListener('keydown', h.onKeyDown);
   window.addEventListener('keyup', h.onKeyUp);
@@ -96,6 +118,7 @@ export function installShortcuts(p: Project, sink: CommandSink, onOctave?: (o: n
   document.addEventListener('visibilitychange', onVis);
   return () => {
     h.onBlur();
+    if (installed === h) installed = null;
     window.removeEventListener('keydown', h.onKeyDown);
     window.removeEventListener('keyup', h.onKeyUp);
     window.removeEventListener('blur', h.onBlur);

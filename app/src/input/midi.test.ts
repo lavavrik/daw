@@ -27,6 +27,10 @@ describe('parseMidi', () => {
     expect(parseMidi(u(60, 100))).toBeNull();
     expect(parseMidi(u(0x90, 60))).toBeNull();
   });
+  it('CC120 All Sound Off / CC123 All Notes Off -> panic (any value)', () => {
+    expect(parseMidi(u(0xb0, 120, 0))).toEqual({ t: 'panic' });
+    expect(parseMidi(u(0xbf, 123, 0))).toEqual({ t: 'panic' });
+  });
   it('accepts channel 10 (omni)', () => expect(parseMidi(u(0x99, 36, 90))).toEqual({ t: 'on', note: 36, vel: 90 }));
 });
 
@@ -76,6 +80,24 @@ describe('connectMidi', () => {
     const s: MidiStatus[] = [];
     await connectMidi(mkSink(), (x) => s.push(x));
     expect(s.at(-1)).toEqual({ state: 'no-devices', devices: [] });
+  });
+  it('a panic CC releases that input\'s held notes and the pedal', async () => {
+    const a = mkInput('a');
+    const b = mkInput('b');
+    install(fakeAccess([a, b]));
+    const sink = mkSink();
+    await connectMidi(sink, () => {});
+    a.onmidimessage!({ data: u(0x90, 60, 100) });
+    a.onmidimessage!({ data: u(0x90, 64, 100) });
+    a.onmidimessage!({ data: u(0xb0, 64, 127) });
+    b.onmidimessage!({ data: u(0x90, 72, 100) });
+    sink.sent.length = 0;
+    a.onmidimessage!({ data: u(0xb0, 123, 0) });
+    expect(sink.sent).toEqual([[Op.NOTE_OFF, 60], [Op.NOTE_OFF, 64], [Op.SUSTAIN, 0]]);
+    // Nothing left to release for `a` afterwards; `b`'s note is untouched.
+    sink.sent.length = 0;
+    a.onmidimessage!({ data: u(0xb0, 120, 0) });
+    expect(sink.sent).toEqual([[Op.SUSTAIN, 0]]);
   });
   it('unplugging a device releases its held notes and pedal', async () => {
     const a = mkInput('a');

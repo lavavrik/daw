@@ -10,7 +10,9 @@ export type MidiEvent =
   | { t: 'off'; note: number }
   | { t: 'bend'; v: number } // -1..1
   | { t: 'mod'; v: number } // 0..1
-  | { t: 'sustain'; on: boolean };
+  | { t: 'sustain'; on: boolean }
+  /** CC120 All Sound Off / CC123 All Notes Off (keyboards' panic button). */
+  | { t: 'panic' };
 
 export interface MidiStatus {
   state: 'unsupported' | 'denied' | 'no-devices' | 'connected';
@@ -33,6 +35,7 @@ export function parseMidi(data: Uint8Array): MidiEvent | null {
     case 0xb0:
       if (d1 === 1) return { t: 'mod', v: d2 / 127 };
       if (d1 === 64) return { t: 'sustain', on: d2 >= 64 };
+      if (d1 === 120 || d1 === 123) return { t: 'panic' };
       return null;
     default:
       return null;
@@ -103,6 +106,15 @@ export async function connectMidi(sink: CommandSink, onStatus: (s: MidiStatus) =
       case 'sustain':
         h.pedal = ev.on;
         sink.send(Op.SUSTAIN, ev.on ? 1 : 0);
+        break;
+      case 'panic':
+        // Release this input's held notes and lift the pedal (always: a
+        // panic must not depend on our bookkeeping being right). Other
+        // inputs' and the QWERTY piano's notes are left alone.
+        for (const n of h.notes) sink.send(Op.NOTE_OFF, n);
+        h.notes.clear();
+        h.pedal = false;
+        sink.send(Op.SUSTAIN, 0);
         break;
     }
   };

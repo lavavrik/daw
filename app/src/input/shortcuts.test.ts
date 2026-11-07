@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
-import { createShortcutHandlers } from './shortcuts';
+import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from './shortcuts';
 
 const mk = () => {
   const sent: number[][] = [];
@@ -57,5 +57,33 @@ describe('shortcut handlers', () => {
     expect(octs).toEqual([5, 4, 3]);
     for (let i = 0; i < 10; i++) h.onKeyDown(key('KeyZ'));
     expect(octs.at(-1)).toBe(0);
+  });
+
+  it('confirmReleasingKeys releases held keys before the (blocking) dialog', () => {
+    // Minimal window/document so installShortcuts can register its listeners.
+    const listeners = new Map<string, (e: unknown) => void>();
+    const target = {
+      addEventListener: (t: string, f: (e: unknown) => void) => listeners.set(t, f),
+      removeEventListener: (t: string) => listeners.delete(t),
+    };
+    const g = globalThis as Record<string, unknown>;
+    const [w, d] = [g.window, g.document];
+    g.window = target;
+    g.document = { ...target, hidden: false };
+    try {
+      const sent: number[][] = [];
+      const uninstall = installShortcuts({ playing: false } as any, { send: (...a: number[]) => (sent.push(a), true) });
+      listeners.get('keydown')!(key('KeyA'));
+      let atDialog: number[][] = [];
+      const ok = confirmReleasingKeys('Remove?', () => ((atDialog = [...sent]), false));
+      expect(ok).toBe(false);
+      expect(atDialog).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+      // The keyup the dialog swallowed never comes; nothing is left to release.
+      uninstall();
+      expect(sent).toHaveLength(2);
+    } finally {
+      g.window = w;
+      g.document = d;
+    }
   });
 });

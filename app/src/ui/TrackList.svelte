@@ -7,12 +7,14 @@
   import { addDrumTrack, removeTrack, selectTrack } from '../state/actions';
   import { addSynthTrack } from '../state/rack-actions';
   import { STARTER_PATCHES } from '../state/patches';
+  import { confirmReleasingKeys } from '../input/shortcuts';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
   const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
 
   function remove(id: string, name: string) {
-    if (confirm(`Remove track "${name}"?`)) removeTrack(p, engine, id);
+    // confirmReleasingKeys: a piano key held during the dialog would hang.
+    if (confirmReleasingKeys(`Remove track "${name}"?`)) removeTrack(p, engine, id);
   }
 </script>
 

@@ -10,14 +10,14 @@
     addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
   import { MAX_ROWS, MAX_SAMPLES } from '../state/project.svelte';
+  import { deferSampleLoad } from '../state/sampleLoads';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
-  let { p, engine, track, onerror, onnotice }: {
+  let { p, engine, track, onerror }: {
     p: Project;
     engine: AudioEngine;
     track: DrumTrack;
     onerror: (msg: string | null) => void;
-    onnotice: (msg: string | null) => void;
   } = $props();
 
   const GHOST = 60;
@@ -62,23 +62,10 @@
   });
 
   // ---- sample drop ----------------------------------------------------
-  /** Deferred loads: sample id -> where to attach it once the worklet has it. */
-  const pending = new Map<number, { tid: string; rowId: string; name: string }>();
+  // Deferred loads (dropped while playing) are tracked in state/sampleLoads.ts,
+  // not here: this grid unmounts while a synth track is selected, and the
+  // load must still land in its row when it settles on Stop.
   let dragOver = $state<string | null>(null); // row id, or 'add'
-
-  $effect(() => {
-    // Every deferred load ends here exactly once: loaded, or failed (retry
-    // failed, evicted from the worklet's queue, engine stopped).
-    engine.onSampleLoaded = (id, code) => {
-      const w = pending.get(id);
-      if (!w) return;
-      pending.delete(id);
-      if (code === Err.OK) setRowSample(p, engine, w.tid, w.rowId, id, w.name);
-      else onerror(`Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`);
-      if (pending.size === 0) onnotice(null);
-    };
-    return () => (engine.onSampleLoaded = undefined);
-  });
 
   /**
    * Decode first; only then resolve the target row (for "+ Add row" this
@@ -107,8 +94,7 @@
       setRowSample(p, engine, tid, rowId, id, decoded.name);
       onerror(null);
     } else {
-      pending.set(id, { tid, rowId, name: decoded.name });
-      onnotice(`"${decoded.name}" will load when playback stops`);
+      deferSampleLoad(id, tid, rowId, decoded.name);
     }
   }
 

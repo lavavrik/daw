@@ -5,9 +5,8 @@
   import { onMount } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
-  import { setMetronome, setTempo, togglePlay } from '../state/actions';
+  import { liveInputTrack, setMetronome, setTempo, togglePlay } from '../state/actions';
   import type { Project } from '../state/project.svelte';
-  import { liveInputTrack } from '../state/actions';
   import type { MidiStatus } from '../input/midi';
 
   let {

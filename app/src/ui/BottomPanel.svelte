@@ -42,7 +42,7 @@
       </div>
     {/if}
     {#if track && track.kind === 'drum'}
-      <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} onnotice={(m) => (banners.notice = m)} />
+      <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} />{/key}
     {/if}

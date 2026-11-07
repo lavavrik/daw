@@ -3,6 +3,12 @@
 // 2 tri, 3 sine; filter mode: 0 LP24, 1 LP12; midi_in mode: 0 poly, 1 mono;
 // lfo wave: 0 sine, 1 tri). patches.test.ts checks every value is in range.
 // In every patch MIDI In `pitch` feeds each Osc and `gate` feeds each ADSR.
+//
+// Levels: Out sums poly voices unnormalised, so the poly patches (Chord Stab,
+// Pad, Pluck) set a low Out `level` to keep a 4-note chord (5 for Pad) under
+// ~0.9 before the master clamp. engine/tests/starter_patches.rs measures this
+// from engine/tests/fixtures/starter_patches.txt; after editing a patch,
+// regenerate that fixture (see patches.fixture.test.ts) and rerun cargo test.
 
 export interface Patch {
   name: string;
@@ -45,7 +51,7 @@ export const STARTER_PATCHES: Patch[] = [
       { idx: 2, id: 'filter', params: { mode: 0, cutoff: 500, reso: 0.3, cv_amt: 4 } },
       { idx: 3, id: 'adsr', params: { attack: 0.002, decay: 0.18, sustain: 0, release: 0.15 } },
       { idx: 4, id: 'vca' },
-      { idx: 5, id: 'out' },
+      { idx: 5, id: 'out', params: { level: 0.4 } },
     ],
     cables: [
       { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -67,7 +73,7 @@ export const STARTER_PATCHES: Patch[] = [
       { idx: 3, id: 'lfo', params: { wave: 0, rate: 0.25 } },
       { idx: 4, id: 'adsr', params: { attack: 0.6, decay: 1, sustain: 0.8, release: 1.5 } },
       { idx: 5, id: 'vca' },
-      { idx: 6, id: 'out' },
+      { idx: 6, id: 'out', params: { level: 0.25 } },
     ],
     cables: [
       { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -112,7 +118,7 @@ export const STARTER_PATCHES: Patch[] = [
       { idx: 4, id: 'filter', params: { mode: 0, cutoff: 200, cv_amt: 5 } },
       { idx: 5, id: 'adsr', params: { attack: 0.001, decay: 0.12, sustain: 0, release: 0.12 } },
       { idx: 6, id: 'vca' },
-      { idx: 7, id: 'out' },
+      { idx: 7, id: 'out', params: { level: 0.3 } },
     ],
     cables: [
       { from: [0, 'pitch'], to: [1, 'pitch'] },

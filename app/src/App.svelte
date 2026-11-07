@@ -13,11 +13,13 @@
   import { connectMidi } from './input/midi';
   import type { MidiStatus } from './input/midi';
   import { banners } from './state/banners.svelte';
+  import { installSampleLoads } from './state/sampleLoads';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
   let uninstall: (() => void) | null = null;
   let uninstallMidi: (() => void) | null = null;
+  let uninstallLoads: (() => void) | null = null;
   let octave = $state(4);
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
 
@@ -27,6 +29,9 @@
   function onstarted(e: AudioEngine) {
     engine = e;
     window.__daw.engine = e;
+    // Session-lifetime: deferred sample loads must land even while the step
+    // grid is unmounted (a synth track selected).
+    uninstallLoads = installSampleLoads(project, e);
     addDrumTrack(project, e); // default track so the UI has something to show
     uninstall = installShortcuts(project, e, (o) => (octave = o));
     // Not awaited: the permission prompt must never block startup/rendering.
@@ -36,6 +41,7 @@
   onDestroy(() => {
     uninstall?.();
     uninstallMidi?.();
+    uninstallLoads?.();
   });
 
   // Window-level drop guard. A file dropped where no row handles it (Browser

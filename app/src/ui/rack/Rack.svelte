@@ -30,6 +30,7 @@
   import { CATALOG, moduleDef } from '../../audio/catalog';
   import type { SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
+  import { confirmReleasingKeys } from '../../input/shortcuts';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { addModule, connect, disconnect, loadPatch, removeModule, setParam } from '../../state/rack-actions';
@@ -249,7 +250,8 @@
   function load(name: string): boolean {
     const patch = STARTER_PATCHES.find((x) => x.name === name);
     if (!patch) return false;
-    if (isEdited && !confirm(`Discard your edits to "${track.patchName}"?`)) return false;
+    // confirmReleasingKeys: a piano key held during the dialog would hang.
+    if (isEdited && !confirmReleasingKeys(`Discard your edits to "${track.patchName}"?`)) return false;
     loadPatch(p, engine, track.id, patch);
     edited.delete(track.id);
     return true;

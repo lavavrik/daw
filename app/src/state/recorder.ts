@@ -23,8 +23,11 @@
 //   tick. Re-striking a pedal-held pitch ends the old note there.
 // - The note is written (addNote) on release. Notes still held when recording
 //   becomes inactive (stop, disarm) close at that moment's heard tick.
-// - The target track is captured at the first recorded note-on of the pass
-//   and kept for the whole pass, even if another track gets selected.
+// - The target track is captured at the first recorded note-on and kept
+//   until the live input changes: onInputChanged(ticksNow) (App calls it when
+//   liveInputTrack() changes) closes every open note on the old track at that
+//   tick -- the engine cuts live-held pitches there too -- and ends the take;
+//   the next note-on retargets and starts a fresh take on the new track.
 // - Overdub: notes merge into the pattern; the same pitch at the same start
 //   twice in one pass is written once.
 // - A *take* is the notes one pass added; undoLastTake() removes exactly those.
@@ -143,6 +146,17 @@ export class Recorder implements NoteListener {
     if (playing) this.#beginPass();
   }
 
+  /**
+   * The live-input track changed (select, remove, add). `ticksNow` is the
+   * heard tick at the switch: held notes end there on the old track, and the
+   * next recorded note-on picks the new target and starts a new take (the
+   * previous take stays undoable until then). Safe to call at any time.
+   */
+  onInputChanged(ticksNow: number) {
+    this.#closeAll(ticksNow);
+    this.#newTarget();
+  }
+
   noteOn(pitch: number, vel: number, perfMs: number, source = '') {
     if (!this.armed || !this.#playing) return;
     let tick = this.deps.clock.ticksForEvent(perfMs, this.#offsetMs);
@@ -213,6 +227,11 @@ export class Recorder implements NoteListener {
 
   #beginPass() {
     this.#open.clear();
+    this.#newTarget();
+  }
+
+  /** Forget the target; the next recorded note-on picks one and starts a new take. */
+  #newTarget() {
     this.#track = null;
     this.#takeStarted = false;
     this.#written.clear();

@@ -733,6 +733,28 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   expect(await slot(page, 2)()).toBeGreaterThanOrEqual(0);
 });
 
+test('record: switching the input track mid-pass ends held notes there and records later notes on the new track', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click(); // slot 1
+  await page.getByTestId('add-synth-track').click(); // slot 2, selected: keys -> it
+  await page.keyboard.press('KeyR');
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
+  await page.keyboard.down('KeyA'); // C, held across the switch
+  await page.waitForTimeout(150);
+  await page.getByTestId('track-1').click();
+  await page.waitForTimeout(100);
+  await page.keyboard.up('KeyA');
+  await page.keyboard.down('KeyD'); // E, played on track 1
+  await page.waitForTimeout(150);
+  await page.keyboard.up('KeyD');
+  await page.keyboard.press('Space');
+  const pitches = (i: number) =>
+    page.evaluate((i) => (window as unknown as DawWindow).__daw!.project.tracks[i].pattern!.notes.map((n) => n.pitch % 12), i);
+  await expect.poll(() => pitches(2)).toEqual([0]);
+  await expect.poll(() => pitches(1)).toEqual([4]);
+});
+
 // ---- Recording e2e with simulated Bluetooth latency (plan 3, Task 6) ----
 
 test('record from the keyboard, notes land on the heard beat (simulated Bluetooth, 250 ms)', async ({ page }) => {

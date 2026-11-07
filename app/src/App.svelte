@@ -10,7 +10,7 @@
   import type { AudioClock } from './audio/audioClock';
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
-  import { addDrumTrack, play, stop } from './state/actions';
+  import { addDrumTrack, liveInputTrack, play, stop } from './state/actions';
   import { installShortcuts } from './input/shortcuts';
   import { connectMidi } from './input/midi';
   import { createNoteInput } from './input/noteInput';
@@ -54,6 +54,20 @@
     }
     refreshRec();
   }
+
+  /**
+   * Live-input switches (select, remove, add a synth track — from any code
+   * path) reach the recorder here: notes held across the switch end at the
+   * heard tick now on the old track, later ones record on the new input.
+   * The effect runs in the same task as the change (before the next key event).
+   */
+  let inputId: string | null = null;
+  $effect(() => {
+    const id = liveInputTrack(project)?.id ?? null;
+    if (id === inputId) return;
+    inputId = id;
+    if (recorder && clock) recorder.onInputChanged(clock.heardTicks());
+  });
 
   function toggleArm() {
     recorder?.toggleArm();

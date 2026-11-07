@@ -150,7 +150,8 @@ describe('Recorder', () => {
     s.rec.noteOn(60, 100, 0);
     s.rec.noteOff(60, 100);
     s.rec.onTransport(false, 500);
-    // Pass 2 records on track a, even though b gets selected mid-pass.
+    // Pass 2 records on track a: the target changes without onInputChanged,
+    // so the pass keeps its track (see the input-switch test).
     s.rec.onTransport(true, 0);
     s.rec.noteOn(62, 100, 200);
     s.setTarget(s.tracks.b);
@@ -182,6 +183,42 @@ describe('Recorder', () => {
     s.rec.noteOff(61, 400);
     expect(s.notes(s.tracks.b).map((n) => n.pitch)).toEqual([61]);
     expect(s.notes()).toEqual([]);
+  });
+
+  it('input switch closes held notes at the switch tick and retargets', () => {
+    const s = setup(4);
+    rolling(s);
+    s.rec.noteOn(60, 100, 100); // done before the switch
+    s.rec.noteOff(60, 200);
+    s.rec.noteOn(62, 100, 300); // held across the switch
+    s.rec.sustain(true, 0, 'midi:a');
+    s.rec.noteOn(64, 90, 350, 'midi:a');
+    s.rec.noteOff(64, 400, 'midi:a'); // pedal-held across the switch
+    s.setTarget(s.tracks.b);
+    s.rec.onInputChanged(1000);
+    // Both close on the old track at the switch tick (the engine cut them there).
+    expect(s.notes().map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 100, 100], [62, 300, 700], [64, 350, 650]]);
+    // Their real key-up / pedal-up afterwards changes nothing.
+    s.rec.noteOff(62, 1500);
+    s.rec.sustain(false, 1600, 'midi:a');
+    expect(s.notes()).toHaveLength(3);
+    // Later notes go to the new input track, as a new take.
+    s.rec.noteOn(67, 100, 2000);
+    s.rec.noteOff(67, 2100);
+    expect(s.notes(s.tracks.b).map((n) => [n.pitch, n.start, n.len])).toEqual([[67, 2000, 100]]);
+    expect(s.rec.lastTakeTrackId).toBe('b');
+    expect(s.rec.lastTakeIds).toHaveLength(1);
+    s.rec.undoLastTake();
+    expect(s.notes(s.tracks.b)).toEqual([]);
+    expect(s.notes()).toHaveLength(3); // the old track's take is kept
+    // Same pitch and start as on the old track: not a duplicate on the new one.
+    s.rec.noteOn(60, 100, 100 + 4 * BAR_TICKS);
+    s.rec.noteOff(60, 200 + 4 * BAR_TICKS);
+    expect(s.notes(s.tracks.b).map((n) => [n.pitch, n.start])).toEqual([[60, 100]]);
+    // Switching while stopped or disarmed is harmless.
+    s.rec.onTransport(false, 5000);
+    s.setTarget(s.tracks.a);
+    expect(() => s.rec.onInputChanged(5000)).not.toThrow();
   });
 
   it('a full pattern is reported once per pass; a vanished track is not "full"', () => {

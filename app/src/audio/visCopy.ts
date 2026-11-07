@@ -10,7 +10,8 @@
 //   2 tap     the engine's strip tap (n frames) into the tap ring, the
 //             tapped channel, then its head;
 //   4 voices  voice levels with the meters' ballistics (instant attack,
-//             METER_FALL_DB_PER_S fall), gates copied as is;
+//             METER_FALL_DB_PER_S fall, dark below −60 dB like the engine),
+//             gates copied as is;
 //   8 scopes  Task 2.
 //
 // ORDERING RULE: a ring's head is published with Atomics.store only after
@@ -20,8 +21,12 @@ import { VIS_HDR, VIS_WANT, ENGINE_VIS, type VisViews } from './visLayout';
 import { VIS_TAP_RING, VIS_VOICE_LEN } from './protocol';
 
 const MASK = VIS_TAP_RING - 1;
-/** Voice levels below this (−120 dBFS) flush to 0 (as the meters). */
-const FLOOR = 1e-6;
+/**
+ * Voice levels below this (−60 dBFS) flush to 0: the engine's VOICE_FLOOR
+ * (engine/src/vis.rs), so a falling LED goes dark at the same level the
+ * engine stops reporting a voice.
+ */
+const FLOOR = 1e-3;
 
 /**
  * Copy `n` frames into ring `l`/`r` at frame `head` (wrapping), from `sl` at
@@ -64,8 +69,8 @@ export function copyVis(v: VisViews, outL: Float32Array, outR: Float32Array, eng
     for (let k = 0; k < VIS_VOICE_LEN; k += 2) {
       const s = eng[base + k];
       const prev = dst[k] * fall;
-      let lv = s > prev ? s : prev; // NaN s -> prev
-      if (!(lv >= FLOOR)) lv = 0; // NaN and tiny -> 0
+      let lv = s > prev && s < Infinity ? s : prev; // NaN / infinite s -> prev
+      if (!(lv >= FLOOR)) lv = 0; // NaN and below the floor -> 0
       dst[k] = lv;
       const g = eng[base + k + 1];
       dst[k + 1] = g === g ? g : 0;

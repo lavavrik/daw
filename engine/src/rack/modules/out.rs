@@ -8,7 +8,8 @@
 //! Voice activity (plan 12, `vis.rs`): beside the sum, which is computed
 //! exactly as before, Out records each input channel's peak over the
 //! sub-block, `peak[k] = max(|l_k|, |r_k|) × level` (channel `k` of the poly
-//! cable is voice `k`; channels past the inputs' read 0). The rack takes the
+//! cable is voice `k`; channels past the inputs' read 0; non-finite samples
+//! are skipped, as the sum zeroes them). The rack takes the
 //! max over its Outs. It only reads the inputs: the output is unchanged.
 
 use super::{default, param, Smooth};
@@ -70,7 +71,8 @@ impl Out {
                 let a = if k < nl { l.data[k][i].abs() } else { 0.0 };
                 let b = if k < nr { r.data[k][i].abs() } else { 0.0 };
                 let v = a.max(b) * level;
-                if v > *p {
+                // `a.max(b)` drops a NaN; an infinite sample never counts.
+                if v > *p && v.is_finite() {
                     *p = v;
                 }
             }
@@ -165,5 +167,22 @@ mod tests {
         assert!(out.peak[4..].iter().all(|&p| p == 0.0));
         out.reset();
         assert!(out.peak.iter().all(|&p| p == 0.0));
+    }
+
+    #[test]
+    fn out_peaks_skip_non_finite_samples() {
+        // A NaN or infinite sample (which the sum turns into 0) never
+        // reaches the voice LEDs: the peak stays the finite maximum.
+        let mut out = Out::new(48000.0);
+        let mut l = PortBuf::new();
+        l.channels = 2;
+        for i in 0..RACK_BLOCK {
+            l.data[0][i] = if i == 5 { f32::INFINITY } else { 0.25 };
+            l.data[1][i] = if i == 9 { f32::NAN } else if i == 10 { f32::NEG_INFINITY } else { -0.5 };
+        }
+        out.snap();
+        out.process(&[1.0], &[l, PortBuf::new()]);
+        assert_eq!(&out.peak[..2], &[0.25, 0.5]);
+        assert!(out.peak.iter().all(|p| p.is_finite()));
     }
 }

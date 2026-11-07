@@ -142,6 +142,27 @@ describe('visCopy (worklet step 4b)', () => {
     expect(v.voices.every((x) => x === 0)).toBe(true);
   });
 
+  it('voice levels use the engine floor (-60 dB) and ignore non-finite input', () => {
+    const v = fresh();
+    v.hdr[VIS_HDR.want] = VIS_WANT.voices;
+    const e = engineBlock(0, -1);
+    const V = ENGINE_VIS.voices;
+    e[V + 0] = 2e-3; // above -60 dB: shown
+    e[V + 2] = 5e-4; // below: 0, as the engine's VOICE_FLOOR
+    e[V + 4] = Infinity;
+    e[V + 6] = NaN;
+    copyVis(v, out(128, 0), out(128, 0), e, 128, 0.999);
+    expect([v.voices[0], v.voices[2], v.voices[4], v.voices[6]]).toEqual([Math.fround(2e-3), 0, 0, 0]);
+    // A held level is not wiped by a later non-finite value: it falls.
+    e[V + 0] = Infinity;
+    copyVis(v, out(128, 0), out(128, 0), e, 128, 0.999);
+    expect(v.voices[0]).toBeCloseTo(2e-3 * 0.999, 9);
+    // Below the floor while falling: 0.
+    e[V + 0] = 0;
+    for (let i = 0; i < 1000; i++) copyVis(v, out(128, 0), out(128, 0), e, 128, 0.999);
+    expect(v.voices[0]).toBe(0);
+  });
+
   it('the layout fits the plan (about 400 KB) and the engine block mirrors vis.rs', () => {
     expect(visBytes()).toBeGreaterThan(390_000);
     expect(visBytes()).toBeLessThan(410_000);

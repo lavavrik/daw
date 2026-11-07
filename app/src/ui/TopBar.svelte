@@ -205,6 +205,13 @@
   });
 
   /** Commit on change/Enter, then release focus so Space and the piano work again. */
+  /**
+   * Enter in a number field only blurs it: the blur commits through
+   * `change` (once -- calling the commit here as well sent SET_TEMPO twice).
+   */
+  function blurOnEnter(e: KeyboardEvent) {
+    if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+  }
   function commitTempo(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     setTempo(p, engine, input.valueAsNumber);
@@ -300,7 +307,7 @@
           value={offsetMs}
           data-testid="rec-offset"
           onchange={commitOffset}
-          onkeydown={(e) => e.key === 'Enter' && commitOffset(e)}
+          onkeydown={blurOnEnter}
         /> ms
       </label>
       <p>Recorded notes are placed where you heard the beat. If they still land late, raise this (positive = earlier). −200…200.</p>
@@ -323,7 +330,7 @@
       step="1"
       value={p.tempo}
       onchange={commitTempo}
-      onkeydown={(e) => e.key === 'Enter' && commitTempo(e)}
+      onkeydown={blurOnEnter}
     />
   </label>
   <button class="metro" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome" aria-label="Metronome">

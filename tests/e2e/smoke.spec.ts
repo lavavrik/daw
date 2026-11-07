@@ -938,3 +938,21 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   await page.getByTestId('undo-take').click();
   await expect(page.getByTestId('pr-readout')).toContainText('0 notes');
 });
+
+test('BPM: Enter sends SET_TEMPO once and gives the keys back to the piano', async ({ page }) => {
+  await startAudio(page);
+  await page.evaluate(() => {
+    const d = (window as any).__daw;
+    const e = d.engine;
+    const orig = e.send.bind(e);
+    d.tempoSends = 0;
+    e.send = (op: number, ...a: number[]) => { if (op === d.Op.SET_TEMPO) d.tempoSends++; return orig(op, ...a); };
+  });
+  const bpm = page.getByLabel('BPM');
+  await bpm.fill('128');
+  await bpm.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__daw.project.tempo)).toBe(128);
+  await expect(bpm).not.toBeFocused();
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => (window as any).__daw.tempoSends)).toBe(1);
+});

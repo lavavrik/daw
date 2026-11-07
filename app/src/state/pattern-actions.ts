@@ -31,7 +31,8 @@ export const patternTicks = (t: SynthTrack) => currentPattern(t).bars * BAR_TICK
 const clampInt = (v: number, lo: number, hi: number) =>
   Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : lo;
 
-function send(sink: CommandSink, t: SynthTrack, n: Note) {
+/** NOTE_SET for note `n` of track `t`'s current engine pattern (also used by project load). */
+export function sendNote(sink: CommandSink, t: SynthTrack, n: Note) {
   sink.send(Op.NOTE_SET, t.slot * MAX_NOTES + n.idx, n.pitch * 128 + n.vel, n.start, n.len);
 }
 
@@ -73,7 +74,7 @@ export function addNote(
     len: clampInt(o.len, 1, MAX_NOTE_LEN),
   });
   const n = pat.notes[pat.notes.length - 1]; // reactive proxy
-  send(sink, t, n);
+  sendNote(sink, t, n);
   return n;
 }
 
@@ -106,7 +107,7 @@ export function updateNotes(
     n.vel = vel;
     n.start = start;
     n.len = len;
-    send(sink, t, n);
+    sendNote(sink, t, n);
   }
 }
 

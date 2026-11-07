@@ -162,6 +162,8 @@ export interface SampleFile {
   /** MIME type as the browser reported it ("" if unknown). */
   type: string;
   bytes: ArrayBuffer;
+  /** contentHash(bytes) (state/sampleFiles.ts); part of the saved file name. */
+  hash: string;
 }
 
 export const newChannel = (): ChannelState => ({ params: defaultMixParams(), key: null });
@@ -179,6 +181,11 @@ export class Project {
   savedFingerprint = $state<string | null>(null);
   /** Unsaved changes ("● unsaved" in the top bar). Written by App only. */
   dirty = $state(false);
+  /**
+   * A load / New is replacing the session (project/load.ts): edits, drops,
+   * shortcuts and the transport are ignored and App shows "Loading…".
+   */
+  loading = $state(false);
   /** Where Save writes (null: Save does a Save As). Not reactive. */
   folder: FileSystemDirectoryHandle | null = null;
   /**

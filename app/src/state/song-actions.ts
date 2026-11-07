@@ -43,7 +43,8 @@ function freeClipIdx(t: Track): number | null {
   return null;
 }
 
-function sendClip(sink: CommandSink, t: Track, c: Clip) {
+/** CLIP_SET for clip `c` of track `t` (also used by project load). */
+export function sendClip(sink: CommandSink, t: Track, c: Clip) {
   const pat = patternOf(t, c.patternId)!; // clips only reference patterns of their track
   sink.send(Op.CLIP_SET, t.slot * MAX_CLIPS + c.idx, c.offset * 16 + pat.engineIdx, c.start, c.len);
 }

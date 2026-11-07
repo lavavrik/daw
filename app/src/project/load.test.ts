@@ -5,6 +5,7 @@ import { liveInputTrack } from '../state/actions';
 import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
 import { loadProject, ProjectLoadError } from './load';
+import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
 import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from './testFixture';
 import type { ProjectJson } from './schema';
@@ -106,8 +107,8 @@ describe('loadProject', () => {
     const { p: src } = buildFixture();
     const json = roundJson(serialize(src));
     const files = filesOf(json, src);
-    files.delete('samples/0-kick.wav'); // gone from the folder
-    files.set('samples/1-snare.wav', new ArrayBuffer(0)); // undecodable
+    files.delete(json.samples[0].file); // gone from the folder
+    files.set(json.samples[1].file, new ArrayBuffer(0)); // undecodable
     const p = new Project();
     const e = fakeEngine();
     const warnings = await loadProject(p, e, json, files, fakeDecoder);
@@ -130,8 +131,8 @@ describe('loadProject', () => {
   it('reassigns sample ids compactly and remaps SamplePlayer params', async () => {
     const { p: src, drums, synth } = buildFixture();
     // Burned ids: 7 on the kick row, 12 on the SamplePlayer, 40 not in the folder.
-    src.sampleFiles.set(7, { name: 'kick.wav', type: 'audio/wav', bytes: fakeAudio(9) });
-    src.sampleFiles.set(12, { name: 'vox.wav', type: 'audio/wav', bytes: fakeAudio(9) });
+    src.sampleFiles.set(7, sampleFile('kick.wav', 'audio/wav', fakeAudio(9)));
+    src.sampleFiles.set(12, sampleFile('vox.wav', 'audio/wav', fakeAudio(9)));
     drums.rows[0].sampleId = 7;
     const spIdx = synth.modules.find((m) => m.kind === moduleDef('sample_player').kind)!.idx;
     synth.modules.find((m) => m.idx === spIdx)!.params[paramIndex(moduleDef('sample_player'), 'sample')] = 12;
@@ -177,5 +178,55 @@ describe('loadProject', () => {
     const warnings = await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder);
     expect(warnings.join('\n')).toMatch(/key/i);
     expect(p.mixer.channels[p.tracks[2].id].key).toBeNull();
+  });
+
+  it('a failed load leaves no folder to save over (fix 1)', async () => {
+    const { p: src } = buildFixture();
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    p.folder = { name: 'Old Song' } as FileSystemDirectoryHandle;
+    const e = fakeEngine({ holdReset: true });
+    const done = loadProject(p, e, json, filesOf(json, src), fakeDecoder);
+    await new Promise((r) => setTimeout(r, 0));
+    e.ack(-3);
+    await expect(done).rejects.toBeInstanceOf(ProjectLoadError);
+    expect(p.folder).toBeNull();
+    expect(p.loading).toBe(false);
+    // A failure before anything changed (invalid file) keeps the folder.
+    const q = new Project();
+    q.folder = { name: 'Old Song' } as FileSystemDirectoryHandle;
+    await expect(loadProject(q, fakeEngine(), { schemaVersion: 7 }, new Map(), fakeDecoder)).rejects.toThrow();
+    expect(q.folder).not.toBeNull();
+  });
+
+  it('p.loading is set while the session is being replaced (fix 3)', async () => {
+    const { p: src } = buildFixture();
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    const e = fakeEngine({ holdReset: true });
+    const done = loadProject(p, e, json, filesOf(json, src), fakeDecoder);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(p.loading).toBe(true);
+    e.ack(0);
+    await done;
+    expect(p.loading).toBe(false);
+  });
+
+  it('beforeLoad runs after validation and decoding, right before STOP (fix 4)', async () => {
+    const { p: src } = buildFixture();
+    const json = roundJson(serialize(src));
+    const order: string[] = [];
+    const decoder = {
+      decodeAudioData: async (b: ArrayBuffer) => (order.push('decode'), fakeDecoder.decodeAudioData(b)),
+    } as typeof fakeDecoder;
+    const e = fakeEngine();
+    const send = e.send.bind(e);
+    e.send = (op: number, ...a: number[]) => (order.push(`op${op}`), send(op, ...a));
+    await loadProject(new Project(), e, json, filesOf(json, src), decoder, { beforeLoad: () => order.push('before') });
+    expect(order.slice(0, 5)).toEqual(['decode', 'decode', 'decode', 'before', `op${Op.STOP}`]);
+    // Never for a file that does not validate.
+    let called = false;
+    await expect(loadProject(new Project(), fakeEngine(), {}, new Map(), fakeDecoder, { beforeLoad: () => (called = true) })).rejects.toThrow();
+    expect(called).toBe(false);
   });
 });

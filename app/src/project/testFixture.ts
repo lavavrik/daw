@@ -15,6 +15,7 @@ import { addNote, newPattern, selectPattern, setPatternBars } from '../state/pat
 import { addModule, addSynthTrack, connect, setParam } from '../state/rack-actions';
 import { addClip, setLoop, setMode } from '../state/song-actions';
 import { STARTER_PATCHES } from '../state/patches';
+import { sampleFile } from '../state/sampleFiles';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, Project } from '../state/project.svelte';
 import type { DrumTrack, SynthTrack } from '../state/project.svelte';
 import type { LoadEngine, SampleDecoder } from './load';
@@ -36,7 +37,7 @@ export function buildFixture(): { p: Project; drums: DrumTrack; synth: SynthTrac
   const drums = addDrumTrack(p, s)!;
   // Samples 0 and 1 on rows 0/1; id 2 is used only by the SamplePlayer.
   for (const [id, name] of [[0, 'kick'], [1, 'snare'], [2, 'vox']] as const) {
-    p.sampleFiles.set(id, { name: `${name}.wav`, type: 'audio/wav', bytes: fakeAudio(10 + id) });
+    p.sampleFiles.set(id, sampleFile(`${name}.wav`, 'audio/wav', fakeAudio(10 + id)));
   }
   p.nextSampleId = 3;
   setRowSample(p, s, drums.id, drums.rows[0].id, 0, 'kick');

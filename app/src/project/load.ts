@@ -16,7 +16,7 @@
 // The replay goes through the same code as the UI where one exists
 // (loadPatch, setMix, setSidechain), so a load can never send a command an
 // edit could not.
-import { Err, MAX_CLIPS, MAX_NOTES, Op } from '../audio/protocol';
+import { Err, Op } from '../audio/protocol';
 import { decodeBytes, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
 import { mixParam } from '../audio/mixerCatalog';
@@ -24,10 +24,12 @@ import { liveInputTrack } from '../state/actions';
 import type { CommandSink } from '../state/actions';
 import { setMix, setSidechain } from '../state/mixer-actions';
 import type { MixChannelTarget } from '../state/mixer-actions';
-import { makeDrumPattern, makeNotePattern } from '../state/pattern-actions';
+import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-actions';
+import { sendClip } from '../state/song-actions';
 import { loadPatch } from '../state/rack-actions';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
-import type { Clip, DrumTrack, Project, SampleFile, SynthTrack, Track } from '../state/project.svelte';
+import type { DrumTrack, Project, SampleFile, SynthTrack, Track } from '../state/project.svelte';
+import { sampleFile } from '../state/sampleFiles';
 import { validate } from './schema';
 import type { ClipJson, MixParamsJson, ProjectJson } from './schema';
 
@@ -51,54 +53,71 @@ export class ProjectLoadError extends Error {
 
 /**
  * Replace `p` (and the engine session) with the project in `json`.
- * `sampleBytes`: project path ("samples/0-kick.wav") -> file bytes, as
- * readProject returns them. Returns what was skipped or changed, as
- * warnings for a banner; throws ProjectLoadError (or the reset timeout).
+ * `sampleBytes`: project path ("samples/0-…-kick.wav") -> file bytes, as
+ * readProject returns them. `beforeLoad` runs once the file is known to be
+ * loadable (validated, samples decoded), right before STOP: the App stops
+ * the transport through its own path there (the recorder is told).
+ * Returns what was skipped or changed, as warnings for a banner; throws
+ * ProjectLoadError (or the reset timeout). A failure after the session was
+ * blanked also clears `p.folder`, so a later Save cannot write the blank
+ * session over the project it came from.
  */
 export async function loadProject(
   p: Project, engine: LoadEngine, json: unknown, sampleBytes: Map<string, ArrayBuffer>, ctx: SampleDecoder,
+  opts: { beforeLoad?: () => void } = {},
 ): Promise<string[]> {
   const v = validate(json);
   if ('error' in v) throw new ProjectLoadError(v.error);
   const proj = v.project;
   const warnings = [...v.warnings];
 
-  const decoded: { oldId: number; file: SampleFile; channels: Float32Array[] }[] = [];
-  for (const s of proj.samples) {
-    const bytes = sampleBytes.get(s.file);
-    if (!bytes) {
-      warnings.push(`Sample "${s.name}" is missing from the project folder (${s.file})`);
-      continue;
+  p.loading = true;
+  try {
+    const decoded: { oldId: number; file: SampleFile; channels: Float32Array[] }[] = [];
+    for (const s of proj.samples) {
+      const bytes = sampleBytes.get(s.file);
+      if (!bytes) {
+        warnings.push(`Sample "${s.name}" is missing from the project folder (${s.file})`);
+        continue;
+      }
+      try {
+        // decodeAudioData detaches its input: decode a copy, keep the original.
+        const channels = await decodeBytes(bytes.slice(0), s.name, ctx);
+        decoded.push({ oldId: s.id, file: sampleFile(s.name, s.type, bytes), channels });
+      } catch {
+        warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
+      }
     }
+
+    opts.beforeLoad?.();
+    engine.send(Op.STOP);
+    blankState(p);
     try {
-      // decodeAudioData detaches its input: decode a copy, keep the original.
-      const channels = await decodeBytes(bytes.slice(0), s.name, ctx);
-      decoded.push({ oldId: s.id, file: { name: s.name, type: s.type, bytes }, channels });
-    } catch {
-      warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
+      const code = await engine.resetAll();
+      if (code !== Err.OK) throw new ProjectLoadError(`The audio engine refused to reset (code ${code})`);
+
+      const ids = new Map<number, number>();
+      for (const d of decoded) {
+        const id = ids.size;
+        const c = await engine.loadSample(id, d.channels);
+        // DEFERRED cannot really happen (stopped); the worklet would finish it on its own.
+        if (c === Err.OK || c === Err.DEFERRED) {
+          ids.set(d.oldId, id);
+          p.sampleFiles.set(id, d.file);
+        } else {
+          warnings.push(`Sample "${d.file.name}" could not be loaded — ${loadErrorText(c, engine.sampleRate)}`);
+        }
+      }
+      p.nextSampleId = ids.size;
+
+      replay(p, engine, proj, ids, warnings);
+    } catch (e) {
+      p.folder = null; // the session is gone: never save it over that folder
+      throw e;
     }
+  } finally {
+    p.loading = false;
   }
-
-  engine.send(Op.STOP);
-  blankState(p);
-  const code = await engine.resetAll();
-  if (code !== Err.OK) throw new ProjectLoadError(`The audio engine refused to reset (code ${code})`);
-
-  const ids = new Map<number, number>();
-  for (const d of decoded) {
-    const id = ids.size;
-    const c = await engine.loadSample(id, d.channels);
-    // DEFERRED cannot really happen (stopped); the worklet would finish it on its own.
-    if (c === Err.OK || c === Err.DEFERRED) {
-      ids.set(d.oldId, id);
-      p.sampleFiles.set(id, d.file);
-    } else {
-      warnings.push(`Sample "${d.file.name}" could not be loaded — ${loadErrorText(c, engine.sampleRate)}`);
-    }
-  }
-  p.nextSampleId = ids.size;
-
-  replay(p, engine, proj, ids, warnings);
   return warnings;
 }
 
@@ -187,9 +206,7 @@ function replay(p: Project, sink: CommandSink, proj: ProjectJson, ids: Map<numbe
       for (const pat of t.patterns) {
         sink.send(Op.SET_CURRENT_PATTERN, t.slot, pat.engineIdx);
         sink.send(Op.SET_PATTERN_BARS, t.slot, pat.bars);
-        for (const n of pat.notes) {
-          sink.send(Op.NOTE_SET, t.slot * MAX_NOTES + n.idx, n.pitch * 128 + n.vel, n.start, n.len);
-        }
+        for (const n of pat.notes) sendNote(sink, t, n);
       }
       sink.send(Op.SET_CURRENT_PATTERN, t.slot, tj.currentPattern);
       // SamplePlayer `sample` params follow the compact sample ids (a sample
@@ -249,8 +266,7 @@ function addClips(sink: CommandSink, t: Track, clips: ClipJson[]) {
   const ps: { id: string; engineIdx: number }[] = t.patterns;
   for (const cj of clips) {
     const pat = ps.find((x) => x.engineIdx === cj.pattern)!;
-    const c: Clip = { id: crypto.randomUUID(), idx: cj.idx, patternId: pat.id, start: cj.start, len: cj.len, offset: cj.offset };
-    t.clips.push(c);
-    sink.send(Op.CLIP_SET, t.slot * MAX_CLIPS + c.idx, c.offset * 16 + pat.engineIdx, c.start, c.len);
+    t.clips.push({ id: crypto.randomUUID(), idx: cj.idx, patternId: pat.id, start: cj.start, len: cj.len, offset: cj.offset });
+    sendClip(sink, t, t.clips[t.clips.length - 1]);
   }
 }

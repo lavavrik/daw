@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SCHEMA_VERSION, validate } from './schema';
 import type { ProjectJson } from './schema';
-import { projectFingerprint, serialize } from './serialize';
+import { projectFingerprint, sampleFilePath, serialize } from './serialize';
+import { sampleFile } from '../state/sampleFiles';
 import { buildFixture } from './testFixture';
 import { Project } from '../state/project.svelte';
 
@@ -39,11 +40,13 @@ describe('project schema', () => {
     expect(sj.patch.modules.find((m) => m.id === 'filter')!.params!.cutoff).toBe(1234);
     expect(sj.patch.modules.find((m) => m.id === 'sample_player')!.params!.sample).toBe(2);
     // Samples: the drum rows' and the one only a SamplePlayer uses.
-    expect(json.samples).toEqual([
-      { id: 0, name: 'kick.wav', type: 'audio/wav', file: 'samples/0-kick.wav' },
-      { id: 1, name: 'snare.wav', type: 'audio/wav', file: 'samples/1-snare.wav' },
-      { id: 2, name: 'vox.wav', type: 'audio/wav', file: 'samples/2-vox.wav' },
+    expect(json.samples.map(({ id, name, type }) => ({ id, name, type }))).toEqual([
+      { id: 0, name: 'kick.wav', type: 'audio/wav' },
+      { id: 1, name: 'snare.wav', type: 'audio/wav' },
+      { id: 2, name: 'vox.wav', type: 'audio/wav' },
     ]);
+    // "<id>-<content hash>-<name>": a file with other bytes never reuses a name.
+    expect(json.samples[0].file).toMatch(/^samples\/0-[0-9a-f]{8}-kick\.wav$/);
     // Mixer params by catalog name; keys by slot.
     const strip = json.mixer.tracks.find((t) => t.slot === synth.slot)!;
     expect(strip.params.comp_on).toBe(1);
@@ -56,6 +59,16 @@ describe('project schema', () => {
     const r = ok(validate(roundJson(json)));
     expect(r.warnings).toEqual([]);
     expect(r.project).toEqual(json);
+  });
+
+  it('sample file names carry a content hash (fix 7)', () => {
+    const { p } = buildFixture();
+    const before = serialize(p).samples[0].file;
+    p.sampleFiles.set(0, sampleFile('kick.wav', 'audio/wav', new Uint8Array([99, 1, 2]).buffer));
+    const after = serialize(p).samples[0].file;
+    expect(after).not.toBe(before);
+    expect(after.startsWith('samples/0-')).toBe(true);
+    expect(sampleFilePath(3, 'a/b:c.wav', 'deadbeef')).toBe('samples/3-deadbeef-a_b_c.wav');
   });
 
   it('serialize is pure (same project, same output; the project is untouched)', () => {

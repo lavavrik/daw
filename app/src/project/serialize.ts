@@ -14,11 +14,14 @@ import type { ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJso
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
 
-/** "samples/<id>-<name>" with the name made safe for any file system. */
-export function sampleFilePath(id: number, name: string): string {
+/**
+ * "samples/<id>-<hash>-<name>" with the name made safe for any file system.
+ * The content hash means a different file never reuses an existing name.
+ */
+export function sampleFilePath(id: number, name: string, hash: string): string {
   let safe = name.replace(UNSAFE, '_').trim().slice(0, 100);
   if (safe === '' || safe === '.' || safe === '..') safe = 'sample';
-  return `samples/${id}-${safe}`;
+  return `samples/${id}-${hash}-${safe}`;
 }
 
 function mixParams(ch: ChannelState, kind: MixTarget, index: number): MixParamsJson {
@@ -116,7 +119,7 @@ export function serialize(p: Project): ProjectJson {
   };
   const samples = [...used].sort((a, b) => a - b).map((id) => {
     const f = p.sampleFiles.get(id)!;
-    return { id, name: f.name, type: f.type, file: sampleFilePath(id, f.name) };
+    return { id, name: f.name, type: f.type, file: sampleFilePath(id, f.name, f.hash) };
   });
   return {
     schemaVersion: SCHEMA_VERSION,

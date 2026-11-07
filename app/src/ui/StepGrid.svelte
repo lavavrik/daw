@@ -14,6 +14,7 @@
   import { MAX_ROWS, MAX_SAMPLES, currentPattern } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
   import { deferSampleLoad } from '../state/sampleLoads';
+  import { sampleFile } from '../state/sampleFiles';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
   let { p, engine, clock, track, onerror }: {
@@ -108,7 +109,7 @@
     if (code !== Err.OK && code !== Err.DEFERRED) {
       return onerror(`Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}`);
     }
-    p.sampleFiles.set(id, { name: file.name, type: file.type, bytes });
+    p.sampleFiles.set(id, sampleFile(file.name, file.type, bytes));
     const rowId = target();
     if (!rowId) return onerror(`Row limit reached (${MAX_ROWS})`);
     if (code === Err.OK) {

@@ -21,7 +21,7 @@ describe('built-in patches', () => {
   });
   it('the House set has the Sax first, and every house patch a phrase', () => {
     expect(HOUSE_GROUPS[0].patches[0]?.name).toBe('Sax');
-    for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead)$/);
+    for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead|arp)$/);
   });
   it('the House set has its 12 patches in their groups', () => {
     expect(HOUSE_GROUPS.map((g) => g.patches.map((p) => p.name))).toEqual([

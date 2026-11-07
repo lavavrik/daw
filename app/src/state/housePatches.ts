@@ -27,7 +27,8 @@ export type HousePhrase =
   | 'chord4' // C4 E4 G4 B4: keys and stabs
   | 'chord5' // C3 G3 C4 E4 B4: pads
   | 'bass' // C2, then C3 (mono)
-  | 'lead'; // C4 (mono)
+  | 'lead' // C4 (mono)
+  | 'arp'; // C4 E4 G4 B4 as 1/16 notes at 124 BPM, one bar: arp patches
 
 /**
  * Sax: a breathy, alto-like mono hook lead (plan 11 *Sax recipe*). Not a
@@ -167,15 +168,18 @@ const BRASS_STAB: Patch = {
 
 /**
  * Arp Pluck: a short, bright pluck for 1/16 arps. Saw plus a square an
- * octave up through a resonant LP24 that snaps shut; no sustain, so fast
- * notes never smear. Velocity → brighter and louder.
+ * octave up through a resonant LP24 that snaps shut, then a per-voice drive;
+ * no sustain, so fast notes never smear. Velocity → brighter and louder.
+ * Levelled on the 1/16 arp it is played as (phrase `arp`), so a held
+ * 4-note chord of it peaks above 0.9 pre-limiter (the master limiter takes
+ * it).
  */
 const ARP_PLUCK: Patch = {
   name: 'Arp Pluck',
   modules: [
     // Poly, 8 voices.
     { idx: 0, id: 'midi_in' },
-    // Body: a slightly detuned saw pair (softer onset peaks than one saw, a touch of width).
+    // Body: a slightly detuned saw pair (a touch of width).
     { idx: 1, id: 'osc', params: { wave: 0, unison: 2, detune: 10 } },
     // Sparkle: a square an octave up.
     { idx: 2, id: 'osc', params: { wave: 1, octave: 1 } },
@@ -183,16 +187,16 @@ const ARP_PLUCK: Patch = {
     { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.35 } },
     // LP24 with some resonance: the "pluck" is its envelope (up to 4 oct) snapping it shut.
     { idx: 4, id: 'filter', params: { mode: 0, cutoff: 400, reso: 0.3, cv_amt: 4 } },
-    // Filter envelope: a 4 ms snap, ~0.2 s decay to closed (the pluck); velocity → brighter.
-    { idx: 5, id: 'adsr', params: { attack: 0.004, decay: 0.2, sustain: 0, release: 0.08, vel_amt: 0.4 } },
+    // Filter envelope: a 4 ms snap, ~0.15 s decay to closed (the pluck); velocity → brighter.
+    { idx: 5, id: 'adsr', params: { attack: 0.004, decay: 0.15, sustain: 0, release: 0.08, vel_amt: 0.4 } },
     // Amp.
     { idx: 6, id: 'vca' },
-    // Amp envelope: no sustain (−20 dB at ~0.3 s held, after the saturator; a released 1/16 is cut by the 80 ms release), velocity → level.
-    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 0.55, sustain: 0, release: 0.08, vel_amt: 0.4 } },
-    // Out: sets the house level.
-    { idx: 8, id: 'out', params: { level: 0.26 } },
-    // Per-voice glue: soft-clips each note's onset spike and thickens its tail.
-    { idx: 9, id: 'saturator', params: { drive: 0.45, mix: 1 } },
+    // Amp envelope: no sustain (−20 dB at ~0.2 s held; a released 1/16 is cut by the 80 ms release), velocity → level.
+    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 0.35, sustain: 0, release: 0.08, vel_amt: 0.4 } },
+    // Per-voice drive: rounds each note's onset peak (the arp then reaches the house level under the 0.9 peak) and fattens it.
+    { idx: 8, id: 'saturator', params: { drive: 0.45, mix: 1 } },
+    // Out: sets the house level (levelled on the 1/16 arp it is played as).
+    { idx: 9, id: 'out', params: { level: 0.42 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -207,9 +211,9 @@ const ARP_PLUCK: Patch = {
     { from: [5, 'env'], to: [4, 'cv'] },
     { from: [4, 'out'], to: [6, 'in'] },
     { from: [7, 'env'], to: [6, 'cv'] },
-    { from: [6, 'out'], to: [9, 'in'] },
-    { from: [9, 'out'], to: [8, 'l'] },
-    { from: [9, 'out'], to: [8, 'r'] },
+    { from: [6, 'out'], to: [8, 'in'] },
+    { from: [8, 'out'], to: [9, 'l'] },
+    { from: [8, 'out'], to: [9, 'r'] },
   ],
 };
 
@@ -217,10 +221,13 @@ const ARP_PLUCK: Patch = {
  * Tine Keys: an FM electric piano for deep-house chords. A 1:1 sine pair
  * gives the warm, slightly barking body (its index decays and follows
  * velocity); a sine at exactly 14× the note is the tine "ping", scaled by
- * velocity twice (its envelope and a velocity VCA), so a soft touch is mellow
- * and a hard hit rings the bell. Long decay, chorus for the classic shimmer.
- * (The Osc's linear FM floors at 0 Hz, so a 1:1 pair can't go past index 1
- * without detuning; the bell is therefore its own partial.)
+ * velocity² (a soft touch is mellow, a hard hit rings the bell) and faded out
+ * over the top octave (D#6 up: 14× would pass 0.4 × 44.1 kHz and pin at the
+ * Osc's frequency cap as an inharmonic whistle). Both scalings go into the
+ * tine envelope's `vel`, so they are latched per note and glide on a steal.
+ * Long decay, chorus for the classic shimmer. (The Osc's linear FM floors at
+ * 0 Hz, so a 1:1 pair can't go past index 1 without detuning; the bell is
+ * therefore its own partial.)
  */
 const TINE_KEYS: Patch = {
   name: 'Tine Keys',
@@ -243,9 +250,9 @@ const TINE_KEYS: Patch = {
     { idx: 7, id: 'osc', params: { wave: 3, octave: 3, tune: 9.6883 } },
     // Tine amp, by its envelope.
     { idx: 8, id: 'vca' },
-    // Tine envelope: a quick ping; velocity → level.
+    // Tine envelope: a quick ping, scaled by its `vel` (velocity² × key scale, latched per note).
     { idx: 9, id: 'adsr', params: { attack: 0.001, decay: 0.25, sustain: 0, release: 0.1, vel_amt: 1 } },
-    // Tine amp, by velocity again (velocity², so the bell is mostly a hard-hit thing).
+    // Velocity² (vel × vel): the bell is mostly a hard-hit thing.
     { idx: 10, id: 'vca' },
     // Body + tine.
     { idx: 11, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.3 } },
@@ -253,6 +260,12 @@ const TINE_KEYS: Patch = {
     { idx: 12, id: 'chorus', params: { rate: 0.7, depth: 0.5, mix: 0.35 } },
     // Out: sets the house level.
     { idx: 13, id: 'out', params: { level: 0.27 } },
+    // Key scale, linear part: 0.9 − 0.4 × pitch (V/oct, 0 = C4): 0 at D#6, above 1 below ~F5.
+    { idx: 14, id: 'attenuator', params: { amount: -0.4, offset: 0.9 } },
+    // Key scale, clamp: a hard tanh (×9) holds it at 1 below ~F5 and fades it to 0 at D#6 (negative above; the ADSR clamps that to 0).
+    { idx: 15, id: 'saturator', params: { drive: 0.8, mix: 1 } },
+    // Velocity² × key scale → the tine envelope's vel.
+    { idx: 16, id: 'vca' },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -263,8 +276,13 @@ const TINE_KEYS: Patch = {
     { from: [0, 'gate'], to: [9, 'gate'] },
     { from: [0, 'vel'], to: [4, 'vel'] },
     { from: [0, 'vel'], to: [6, 'vel'] },
-    { from: [0, 'vel'], to: [9, 'vel'] },
+    { from: [0, 'vel'], to: [10, 'in'] },
     { from: [0, 'vel'], to: [10, 'cv'] },
+    { from: [0, 'pitch'], to: [14, 'in'] },
+    { from: [14, 'out'], to: [15, 'in'] },
+    { from: [10, 'out'], to: [16, 'in'] },
+    { from: [15, 'out'], to: [16, 'cv'] },
+    { from: [16, 'out'], to: [9, 'vel'] },
     { from: [2, 'out'], to: [3, 'in'] },
     { from: [4, 'env'], to: [3, 'cv'] },
     { from: [3, 'out'], to: [1, 'fm'] },
@@ -273,8 +291,7 @@ const TINE_KEYS: Patch = {
     { from: [5, 'out'], to: [11, 'in1'] },
     { from: [7, 'out'], to: [8, 'in'] },
     { from: [9, 'env'], to: [8, 'cv'] },
-    { from: [8, 'out'], to: [10, 'in'] },
-    { from: [10, 'out'], to: [11, 'in2'] },
+    { from: [8, 'out'], to: [11, 'in2'] },
     { from: [11, 'out'], to: [12, 'l'] },
     { from: [12, 'l'], to: [13, 'l'] },
     { from: [12, 'r'], to: [13, 'r'] },
@@ -358,10 +375,10 @@ const GARAGE_ORGAN: Patch = {
     { idx: 7, id: 'vca' },
     // Amp envelope: percussive, a fast decay to a low (0.25) sustain; velocity → level.
     { idx: 8, id: 'adsr', params: { attack: 0.001, decay: 0.3, sustain: 0.25, release: 0.12, vel_amt: 0.4 } },
-    // Out: sets the house level.
-    { idx: 9, id: 'out', params: { level: 0.28 } },
     // Per-voice drive (an organ through a hot amp): rounds each hit's onset peak.
-    { idx: 10, id: 'saturator', params: { drive: 0.3, mix: 1 } },
+    { idx: 9, id: 'saturator', params: { drive: 0.3, mix: 1 } },
+    // Out: sets the house level.
+    { idx: 10, id: 'out', params: { level: 0.28 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -378,9 +395,9 @@ const GARAGE_ORGAN: Patch = {
     { from: [6, 'env'], to: [5, 'cv'] },
     { from: [5, 'out'], to: [7, 'in'] },
     { from: [8, 'env'], to: [7, 'cv'] },
-    { from: [7, 'out'], to: [10, 'in'] },
-    { from: [10, 'out'], to: [9, 'l'] },
-    { from: [10, 'out'], to: [9, 'r'] },
+    { from: [7, 'out'], to: [9, 'in'] },
+    { from: [9, 'out'], to: [10, 'l'] },
+    { from: [9, 'out'], to: [10, 'r'] },
   ],
 };
 
@@ -668,7 +685,7 @@ export const HOUSE_GROUPS: { label: string; patches: Patch[] }[] = [
 export const HOUSE_PHRASES: Record<string, HousePhrase> = {
   Sax: 'lead',
   'Brass Stab': 'chord4',
-  'Arp Pluck': 'chord4',
+  'Arp Pluck': 'arp',
   'Tine Keys': 'chord4',
   'Piano Stab': 'chord4',
   'Garage Organ': 'chord4',

@@ -177,6 +177,20 @@ fn play_phrase(e: &mut Engine, phrase: Phrase, vel: u8, step: f32, release: f32)
     run(e, &ev, phrase.steps().len() as f32 * step + release)
 }
 
+/// A phrase with its own step (an arp), transposed by `tr` semitones, at
+/// `vel`, plus 1 s of release.
+fn play_arp(e: &mut Engine, phrase: Phrase, tr: i32, vel: u8) -> Render {
+    let step = phrase.step().expect("a phrase with its own step");
+    let mut ev = Vec::new();
+    for (i, notes) in phrase.steps().iter().enumerate() {
+        let t = i as f32 * step;
+        ev.extend(notes.iter().map(|&n| (t, Ev::On((n as i32 + tr) as u8, vel))));
+        ev.extend(notes.iter().map(|&n| (t + step, Ev::Off((n as i32 + tr) as u8))));
+    }
+    ev.sort_by(|a, b| a.0.total_cmp(&b.0));
+    run(e, &ev, phrase.steps().len() as f32 * step + 1.0)
+}
+
 /// A `RACK_SET_PARAM` on slot 0 by catalog param name (for A/B renders, e.g.
 /// vibrato or breath off). `module` is the patch's module idx and its kind.
 fn set(e: &mut Engine, module: (usize, ModuleKind), param: &str, value: f32) {
@@ -457,7 +471,7 @@ fn house_patches_sit_at_similar_levels() {
     let mut failed = Vec::new();
     for p in &all {
         let mut e = load_cmds(&p.cmds);
-        let r = play_phrase(&mut e, p.phrase, 100, 1.5, 0.5);
+        let r = play_phrase(&mut e, p.phrase, 100, p.phrase.step().unwrap_or(1.5), 0.5);
         let m = momentary_db(&r);
         eprintln!("{}: momentary {m:.1} dBFS ({:?})", p.name, p.phrase);
         if (m - LOUDNESS_DB).abs() > LOUDNESS_TOL {
@@ -479,14 +493,22 @@ fn house_patches_do_not_clip() {
             Phrase::Chord4 => (&chords4, 1.0),
             Phrase::Chord5 => (&chords5, 2.0),
             Phrase::Bass | Phrase::Lead => (&notes, 1.0),
+            // The arp phrase itself, transposed −2…+1 octaves (C2…C5 roots).
+            Phrase::Arp => (&[], 0.0),
         };
+        let arp = (p.phrase == Phrase::Arp).then(|| {
+            [-24i32, -12, 0, 12]
+                .iter()
+                .map(|&tr| peak_pre_limiter(&play_arp(&mut load_cmds(&p.cmds), p.phrase, tr, 127)))
+                .fold(0.0f32, f32::max)
+        });
         let worst = set
             .iter()
             .map(|c| {
                 let mut e = load_cmds(&p.cmds);
                 peak_pre_limiter(&play(&mut e, c, 127, hold, 1.0))
             })
-            .fold(0.0f32, f32::max);
+            .fold(arp.unwrap_or(0.0), f32::max);
         eprintln!("{}: pre-limiter peak {worst:.3} at vel 127", p.name);
         assert!(worst > 0.05, "{} is (nearly) silent: {worst}", p.name);
         if worst >= PEAK_LIMIT {
@@ -502,7 +524,7 @@ fn house_patches_release_to_silence() {
     for p in &house_patches() {
         let rel = longest_release(p);
         let mut e = load_cmds(&p.cmds);
-        let hold = 1.0;
+        let hold = p.phrase.step().unwrap_or(1.0);
         let r = play_phrase(&mut e, p.phrase, 100, hold, rel + 1.2);
         let end = p.phrase.steps().len() as f32 * hold;
         // From release + 1 s after the last note-off, the 100 ms RMS is < −60 dBFS.
@@ -779,6 +801,7 @@ const CHORD5: [u8; 5] = [48, 55, 60, 64, 71];
 
 #[test]
 fn house_set_is_complete() {
+    assert_eq!(patch("Arp Pluck").phrase, Phrase::Arp, "Arp Pluck is levelled as it is played: a 1/16 arp");
     let names: Vec<String> = house_patches().into_iter().map(|p| p.name).collect();
     assert_eq!(names.len(), 12, "{names:?}");
     for n in [
@@ -870,6 +893,12 @@ fn sub_bass_is_sub() {
     let low: f64 = p.iter().enumerate().filter(|(i, _)| (*i as f32 * BIN_HZ) < 200.0).map(|x| *x.1).sum();
     eprintln!("Sub Bass C2: {:.1} % of the energy below 200 Hz", 100.0 * low / total);
     assert!(low >= 0.85 * total, "only {:.1} % below 200 Hz", 100.0 * low / total);
+    // ... but not a bare sine: harmonics 2–5 (what a small speaker plays of
+    // it) carry ≥ −35 dB of h1's power together.
+    let h = harmonic_power(&r, hz(36), 0.2, 1.0);
+    let upper = 10.0 * (h[1..5].iter().sum::<f32>() / h[0]).log10();
+    eprintln!("Sub Bass C2: h2–h5 {upper:.1} dB re h1 ({:?} dB)", h[1..5].iter().map(|x| (10.0 * (x / h[0]).log10()).round()).collect::<Vec<_>>());
+    assert!(upper >= -35.0, "h2–h5 only {upper:.1} dB re h1: inaudible on small speakers");
 }
 
 /// Strings' amp ADSR (`housePatches.ts`), checked against the fixture.
@@ -940,6 +969,67 @@ fn tine_keys_bell_follows_velocity() {
     assert!(b127 - b40 >= 6.0, "vel 127 rings the bell only {:.1} dB more than vel 40", b127 - b40);
 }
 
+/// Tine Keys module indices (`housePatches.ts`), checked against the fixture.
+const TINE_MIDI: (usize, ModuleKind) = (0, ModuleKind::MidiIn);
+const TINE_BODY_VCA: (usize, ModuleKind) = (5, ModuleKind::Vca);
+
+/// Tine Keys with only its tine sounding (the body's amp VCA at 0).
+fn tine_only() -> Engine {
+    let p = patch("Tine Keys");
+    for m in [TINE_MIDI, TINE_BODY_VCA] {
+        assert_eq!(kind_at(&p, m.0), Some(m.1), "Tine Keys module {} is not {:?}: update the index", m.0, m.1);
+    }
+    let mut e = load("Tine Keys");
+    set(&mut e, TINE_BODY_VCA, "level", 0.0);
+    e
+}
+
+#[test]
+fn tine_keys_top_octave_fades() {
+    // The tine is 14× the note; the Osc caps at 0.45 × SR, so in the top
+    // octave it would pin there as an inharmonic whistle. Key scaling fades
+    // it to nothing by D#6 (14 × 1245 Hz = 17.4 kHz < 0.4 × 44.1 kHz).
+    // Tine-only renders at vel 127, 0–150 ms: the power within ±300 Hz of
+    // where the tine would sound, re the h1 power of the same render with the
+    // body on.
+    let tine_db = |note: u8| {
+        let ft = (14.0 * hz(note)).min(0.45 * SR);
+        let r = play(&mut tine_only(), &[note], 127, 0.15, 0.0);
+        let full = play(&mut load("Tine Keys"), &[note], 127, 0.15, 0.0);
+        let band = |r: &Render, f: f32, w: f32| -> f64 {
+            spectrum(r, 0.0, 0.15).iter().enumerate().filter(|(i, _)| (*i as f32 * BIN_HZ - f).abs() <= w).map(|x| *x.1).sum()
+        };
+        10.0 * (band(&r, ft, 300.0) / band(&full, hz(note), 0.25 * hz(note))).log10()
+    };
+    let low = tine_db(72);
+    eprintln!("Tine Keys tine re h1 at vel 127: C5 {low:.1} dB");
+    assert!(low >= -30.0, "the bell is gone at C5 already ({low:.1} dB)");
+    for note in [87u8, 92, 96] {
+        let d = tine_db(note);
+        eprintln!("Tine Keys tine re h1 at vel 127: note {note} {d:.1} dB");
+        assert!(d <= -60.0, "note {note}: the tine is still {d:.1} dB re h1");
+    }
+}
+
+#[test]
+fn tine_keys_steal_does_not_step() {
+    // One voice (so every note steals it), tine only: C4 at vel 127, then D4
+    // at vel 20 while the C4 tine still rings near full level (10 ms in, so
+    // the restarted attack can't hide a step). The tine's level must glide
+    // to the new velocity (the ADSR's latched 5 ms glide), not jump with the
+    // raw `vel`: no 1 ms RMS frame more than 10 dB below the previous one
+    // around the steal.
+    let mut e = tine_only();
+    set(&mut e, TINE_MIDI, "voices", 1.0);
+    let t = 0.01;
+    let r = run(&mut e, &[(0.0, Ev::On(60, 127)), (t, Ev::On(62, 20)), (0.2, Ev::Off(60)), (0.2, Ev::Off(62))], 0.2);
+    let env = rms_env_db(&r, 0.001);
+    let on = (onset(t) * 1000.0).round() as usize;
+    let worst = (on - 3..on + 15).map(|i| env[i - 1] - env[i]).fold(f32::MIN, f32::max);
+    eprintln!("Tine Keys steal: 1 ms RMS {:?} dB; largest drop {worst:.1} dB", env[on - 3..on + 15].iter().map(|x| x.round()).collect::<Vec<_>>());
+    assert!(worst <= 10.0, "the tine steps {worst:.1} dB in 1 ms at the steal");
+}
+
 #[test]
 fn brass_stab_blooms() {
     // chord4: centroid of one Hann frame over 30–60 ms vs over 0–10 ms.
@@ -951,18 +1041,16 @@ fn brass_stab_blooms() {
 
 #[test]
 fn arp_pluck_is_short() {
-    // chord4 held 1 s: 20 dB below the peak (20 ms RMS) within 350 ms of the
-    // onset even when held (no sustain). A 1/16 at 124 BPM (121 ms) is
-    // released long before that, so arps never smear. (Shorter than this and
-    // a held chord can't reach the house loudness under the 0.9 peak: a
-    // pluck's 400 ms loudness falls with its decay, its onset peak doesn't.)
+    // chord4 held 1 s: 20 dB below the peak (20 ms RMS) within 250 ms of the
+    // onset even when held (no sustain), so a held arp note is gone by the
+    // second 1/16 after the next (121 ms each at 124 BPM).
     let r = play(&mut load("Arp Pluck"), &CHORD4, 100, 1.0, 0.0);
     let env = rms_env_db(&r, 0.02);
     let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
     let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
     eprintln!("Arp Pluck: −20 dB at {t20:?} s");
     let t20 = t20.expect("falls 20 dB while held");
-    assert!(t20 <= 0.35, "falls 20 dB only after {t20:.2} s");
+    assert!(t20 <= 0.25, "falls 20 dB only after {t20:.2} s");
 }
 
 #[test]

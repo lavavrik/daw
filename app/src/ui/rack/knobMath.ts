@@ -143,3 +143,71 @@ export function formatValue(d: KnobDef, v: number): string {
       return `${sig3(v)} ${d.unit}`;
   }
 }
+
+/**
+ * Typed entry (click a knob's readout, or Enter on a focused knob): text ->
+ * value, clamped to the range (integers rounded), or null when it doesn't
+ * read as a value of this param. Accepts what formatValue shows and the
+ * obvious shorthands:
+ *   Hz   "440", "440 Hz", "1.2k", "1.2 kHz"
+ *   s    "250 ms", "1.5 s", "off" (zero-based times)
+ *   ms   "20", "20 ms", "0.02 s"
+ *   dB / st / oct / ct / :1 — the number, unit optional; "−" or "-" alike
+ *   0..1 "45%" or "45" (percent); a decimal ≤ 1 ("0.3") is the raw value
+ *   pan  "C", "L30", "R 100"; minimum labels ("−∞", "-inf", "Off")
+ * A bare number is read in the unit the readout currently shows (`shown`):
+ * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
+ */
+export function parseValue(d: KnobDef, text: string, shown = ''): number | null {
+  const t = text.trim().toLowerCase().replace(/[−–]/g, '-').replace(',', '.').replace(/\s+/g, ' ');
+  if (!t) return null;
+  const done = (v: number) => (Number.isFinite(v) ? clampParam(d, v) : null);
+
+  if (d.choices.length) {
+    const i = d.choices.findIndex((c) => c.toLowerCase() === t);
+    if (i >= 0) return i;
+    const n = Number(t);
+    return Number.isInteger(n) ? done(n) : null;
+  }
+  if (d.minLabel) {
+    const ml = minLabelText(d.minLabel).toLowerCase();
+    if (t === ml || t === d.minLabel.toLowerCase() || (d.minLabel === '-inf' && (t === '-∞' || t === '-inf' || t === 'inf'))) return d.min;
+  }
+  if (d.name === 'pan' && d.unit === '') {
+    if (t === 'c' || t === 'center' || t === 'centre') return 0;
+    const m = /^([lr]) ?(\d*\.?\d+) ?%?$/.exec(t);
+    if (m) return done(((m[1] === 'l' ? -1 : 1) * Number(m[2])) / 100);
+  }
+  if (d.unit === 's' && d.min <= 0 && t === 'off') return done(0);
+
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)) ?([a-z%:0-9]*)$/.exec(t);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const suf = m[2];
+  const sh = shown.trim().toLowerCase();
+  switch (d.unit) {
+    case 'Hz':
+      if (suf === 'k' || suf === 'khz') return done(n * 1000);
+      if (suf === 'hz') return done(n);
+      if (suf === '') return done(sh.endsWith('khz') ? n * 1000 : n);
+      return null;
+    case 's':
+      if (suf === 'ms') return done(n / 1000);
+      if (suf === 's' || suf === 'sec') return done(n);
+      if (suf === '') return done(sh.endsWith(' ms') ? n / 1000 : n);
+      return null;
+    case 'ms':
+      if (suf === 's' || suf === 'sec') return done(n * 1000);
+      if (suf === 'ms' || suf === '') return done(n);
+      return null;
+    case '':
+      if (!d.integer && d.min >= 0 && d.max <= 1) {
+        if (suf === '%') return done(n / 100);
+        if (suf !== '') return null;
+        return done(m[1].includes('.') && n <= 1 ? n : n / 100);
+      }
+      return suf === '' ? done(n) : null;
+    default:
+      return suf === '' || suf === d.unit.toLowerCase() ? done(n) : null;
+  }
+}

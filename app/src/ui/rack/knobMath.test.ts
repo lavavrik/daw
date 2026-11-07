@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { mixParam } from '../../audio/mixerCatalog';
-import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, toPos, ZERO_ZONE } from './knobMath';
+import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, parseValue, toPos, ZERO_ZONE } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
   const d = moduleDef(mod);
@@ -184,5 +184,61 @@ describe('formatValue: mixer params', () => {
     const r = mixParam('comp_ratio');
     expect(toPos(r, 1)).toBe(0);
     expect(fromPos(r, 1)).toBeCloseTo(20);
+  });
+});
+
+describe('parseValue (typed entry)', () => {
+  it('Hz: plain, k suffix, Hz/kHz; bare numbers in the unit the readout shows', () => {
+    expect(parseValue(cutoff, '440')).toBe(440);
+    expect(parseValue(cutoff, '440 Hz')).toBe(440);
+    expect(parseValue(cutoff, '1.2k')).toBeCloseTo(1200);
+    expect(parseValue(cutoff, '1.2 kHz')).toBeCloseTo(1200);
+    expect(parseValue(cutoff, '2', '1.2 kHz')).toBe(2000); // readout in kHz: "2" means 2 kHz
+    expect(parseValue(cutoff, '200 Hz', '1.2 kHz')).toBe(200);
+  });
+  it('clamps to the range; integers round', () => {
+    expect(parseValue(cutoff, '99999')).toBe(20000);
+    expect(parseValue(cutoff, '1')).toBe(20);
+    expect(parseValue(octave, '2.4')).toBe(2);
+    expect(parseValue(octave, '-1 oct')).toBe(-1);
+    expect(parseValue(octave, '−2')).toBe(-2); // real minus sign
+  });
+  it('seconds: ms / s suffixes, bare in the readout unit, "off"', () => {
+    expect(parseValue(attack, '250 ms')).toBeCloseTo(0.25);
+    expect(parseValue(attack, '1.5s')).toBeCloseTo(1.5);
+    expect(parseValue(attack, '30', '12 ms')).toBeCloseTo(0.03);
+    expect(parseValue(attack, '2', '1.5 s')).toBe(2);
+    expect(parseValue(glide, 'off')).toBe(0);
+  });
+  it('0..1 params are typed as percent', () => {
+    expect(parseValue(reso, '45%')).toBeCloseTo(0.45);
+    expect(parseValue(reso, '45')).toBeCloseTo(0.45);
+    expect(parseValue(reso, '0.3')).toBeCloseTo(0.3); // a decimal ≤ 1 is the raw value
+  });
+  it('mixer: dB with minus signs, -inf, pan L/C/R', () => {
+    const fader = mixParam('fader');
+    const pan = mixParam('pan');
+    expect(parseValue(fader, '-6')).toBe(-6);
+    expect(parseValue(fader, '−6.5 dB')).toBe(-6.5);
+    if (fader.minLabel) expect(parseValue(fader, '-inf')).toBe(fader.min);
+    expect(parseValue(pan, 'C')).toBe(0);
+    expect(parseValue(pan, 'L30')).toBeCloseTo(-0.3);
+    expect(parseValue(pan, 'r 100')).toBe(1);
+  });
+  it('rejects junk and wrong units', () => {
+    expect(parseValue(cutoff, '')).toBeNull();
+    expect(parseValue(cutoff, 'abc')).toBeNull();
+    expect(parseValue(cutoff, '3 dB')).toBeNull();
+    expect(parseValue(attack, '5 Hz')).toBeNull();
+  });
+  it('round-trips every readout it formats', () => {
+    for (const d of [cutoff, glide, reso, octave, attack, mixParam('fader'), mixParam('pan')]) {
+      for (const pos of [0, 0.13, 0.5, 0.77, 1]) {
+        const v = fromPos(d, pos);
+        const back = parseValue(d, formatValue(d, v), formatValue(d, v));
+        expect(back, `${d.label} ${formatValue(d, v)}`).not.toBeNull();
+        expect(formatValue(d, back!)).toBe(formatValue(d, v));
+      }
+    }
   });
 });

@@ -99,7 +99,12 @@ Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
 - **Save patch** stores the rack in the library folder's `patches/` (it needs
   a library folder, see [Library](#library)); it then shows in **Patch**.
 - **Knobs:** drag up or down (Shift = fine), double-click for the default, or
-  focus and use the arrow keys. The value is shown under the label. Choice
+  focus and use the arrow keys. The value is shown under the label. To type
+  an exact value, click the value (or press **Enter** on a focused knob),
+  type it and press **Enter** (**Esc** cancels): `440`, `1.2k`, `250 ms`,
+  `-6`, `45%`, `L30`. A bare number is in the unit on screen ("2" on a
+  "1.2 kHz" knob is 2 kHz); out-of-range values are clamped. Mixer knobs
+  work the same way. Choice
   parameters (wave, filter mode…) are segmented buttons.
 - **Cables** are coloured by signal: audio blue, pitch orange, gate green,
   CV purple. Drag from an output to an input to patch; an input takes one

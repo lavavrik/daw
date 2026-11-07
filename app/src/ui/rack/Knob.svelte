@@ -9,6 +9,10 @@
   //   Exp params; Exp params with min 0, like glide, have a 2% "off" zone at
   //   the bottom, then go log from max/1000); Shift = 10x finer;
   // - double-click resets to the default;
+  // - typed entry: click the readout (or press Enter on the focused knob),
+  //   type a value ("1.2k", "250 ms", "-6", "45%", "L30" — knobMath
+  //   parseValue), Enter applies, Esc cancels, clicking away applies;
+  //   something that doesn't read as a value turns the field red and stays;
   // - ArrowUp/Right +1% of travel, ArrowDown/Left -1% (integers: 1 unit),
   //   Shift = 0.1%; Home/End = min/max.
   //
@@ -19,7 +23,7 @@
   // (the latest value wins) plus the final value on pointerup, so dragging
   // never floods the engine's command ring. The engine smooths the rest.
   import { onDestroy } from 'svelte';
-  import { dragPos, formatValue, fromPos, keyStep, toPos } from './knobMath';
+  import { dragPos, formatValue, fromPos, keyStep, parseValue, toPos } from './knobMath';
   import type { KnobDef } from './knobMath';
 
   let { def, value, onchange, moduleName = '', color = '#f0a23a', testid, note = '' }: {
@@ -108,7 +112,55 @@
   }
   onDestroy(flush);
 
+  // ---- typed entry -------------------------------------------------------
+  let editing = $state(false);
+  let draft = $state('');
+  let bad = $state(false);
+  let knobEl = $state<HTMLElement | null>(null);
+  function openEntry() {
+    if (dragging) return;
+    draft = readout;
+    bad = false;
+    editing = true;
+  }
+  /** Apply the draft; false (and stay open) when it doesn't parse. */
+  function commitEntry(): boolean {
+    const v = parseValue(def, draft, readout);
+    if (v === null) {
+      bad = true;
+      return false;
+    }
+    editing = false;
+    if (v !== value) onchange(v);
+    return true;
+  }
+  function closeEntry() {
+    editing = false;
+    queueMicrotask(() => knobEl?.focus());
+  }
+  function entryKey(e: KeyboardEvent) {
+    e.stopPropagation(); // letters are text here, not the QWERTY piano
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (commitEntry()) closeEntry();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeEntry();
+    } else bad = false;
+  }
+  function entryBlur() {
+    if (!editing) return;
+    if (!commitEntry()) editing = false; // clicking away from junk: keep the old value
+  }
+  const selectAll = (el: HTMLInputElement) => { el.focus(); el.select(); };
+
   function key(e: KeyboardEvent) {
+    if (editing) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      openEntry();
+      return;
+    }
     if (dragging) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -182,9 +234,10 @@
     aria-valuemax={def.max}
     aria-valuenow={shown}
     aria-valuetext={note ? `${readout} ${note}` : readout}
-    title={`${name}: ${readout} — drag up/down (Shift = fine), double-click = reset`}
+    title={`${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one`}
     data-testid={testid}
     style:--c={color}
+    bind:this={knobEl}
     onpointerdown={down}
     onpointermove={move}
     onpointerup={up}
@@ -201,7 +254,31 @@
       <line class="ptr" x1="16" y1="16" x2="16" y2="8" transform={`rotate(${angle.toFixed(1)} 16 16)`} />
     </svg>
     <span class="label">{def.label}</span>
-    <span class="readout">{readout}</span>
+    {#if editing}
+      <input
+        class="readout entry" class:bad type="text" spellcheck="false" autocomplete="off"
+        aria-label={`Type a value for ${name}`} aria-invalid={bad}
+        title="Type a value, Enter to apply, Esc to cancel"
+        data-testid="knob-entry"
+        bind:value={draft}
+        use:selectAll
+        onpointerdown={(e) => e.stopPropagation()}
+        ondblclick={(e) => e.stopPropagation()}
+        onkeydown={entryKey}
+        onblur={entryBlur}
+      />
+    {:else}
+      <!-- Mouse shortcut only: keyboard users press Enter on the slider itself
+           (same entry), so the readout needs no role or key handler. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <span
+        class="readout typeable"
+        data-testid="knob-readout"
+        onpointerdown={(e) => { if (e.button === 0) { e.stopPropagation(); e.preventDefault(); } }}
+        onclick={openEntry}
+        ondblclick={(e) => e.stopPropagation()}
+      >{readout}</span>
+    {/if}
     {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
   </div>
 {/if}
@@ -220,6 +297,9 @@
   .note { font-size: 9px; color: #f0a43a; white-space: nowrap; }
   .readout { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7d9e0; background: #15161a; border-radius: 2px; padding: 0 3px; min-width: 40px; text-align: center; white-space: nowrap; }
 
+  .readout.typeable { cursor: text; }
+  .readout.entry { width: 52px; min-width: 0; box-sizing: border-box; border: 1px solid #f0a23a; color: #fff; background: #000; outline: none; padding: 0 2px; }
+  .readout.entry.bad { border-color: #ff5c6a; background: #3a1418; }
   .choice { display: flex; flex-direction: column; align-items: center; gap: 2px; grid-column: 1 / -1; }
   .seg { display: flex; flex-wrap: wrap; justify-content: center; gap: 1px; background: #15161a; border-radius: 3px; padding: 1px; outline: none; }
   .seg button { font: 10px/1.2 ui-sans-serif, system-ui, sans-serif; padding: 2px 5px; border: 0; border-radius: 2px; background: transparent; color: #a3a6b3; cursor: pointer; }

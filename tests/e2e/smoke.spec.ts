@@ -478,6 +478,34 @@ async function addSynth(page: Page) {
   await expect(page.getByTestId('rack')).toBeVisible();
 }
 
+test('knob values can be typed: click the readout, Enter applies, Esc cancels, junk stays red', async ({ page }) => {
+  await addSynth(page);
+  const knob = page.getByTestId('knob-4-cutoff');
+  await expect(knob).toContainText('300 Hz');
+  await knob.getByTestId('knob-readout').click();
+  const entry = knob.getByTestId('knob-entry');
+  await expect(entry).toBeFocused();
+  await entry.fill('1.2k');
+  await entry.press('Enter');
+  await expect(knob).toContainText('1.2 kHz');
+  await expect(knob).toBeFocused(); // back on the knob
+  // Letters typed in the field are text, not the QWERTY piano; junk stays open and red.
+  await knob.press('Enter');
+  await entry.fill('loud');
+  await entry.press('Enter');
+  await expect(entry).toHaveAttribute('aria-invalid', 'true');
+  await entry.press('Escape');
+  await expect(knob).toContainText('1.2 kHz');
+  // Bare number in the unit on screen (kHz), clamped to the range.
+  await knob.getByTestId('knob-readout').click();
+  await entry.fill('99');
+  await entry.press('Enter');
+  await expect(knob).toContainText('20 kHz');
+  // One undo entry per typed value.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(knob).toContainText('1.2 kHz');
+});
+
 test('rack shows the patch and knobs show values', async ({ page }) => {
   await addSynth(page);
   const names = ['MIDI In', 'Oscillator', 'Oscillator', 'Mixer', 'Filter', 'ADSR', 'VCA', 'Out'];

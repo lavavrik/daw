@@ -184,7 +184,7 @@
     <div class="main">
       <Browser />
       <div class="right">
-        <div class="song"><SongArea p={project} {engine} /></div>
+        <div class="song"><SongArea p={project} {engine} {clock} /></div>
         <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} /></div>
       </div>
     </div>

@@ -341,17 +341,22 @@ describe('lean history', () => {
     expect(t.currentPatternId).toBe(p2);
   });
 
-  it('a lazily merged pass that ends where it started is dropped (undo then undoes the entry before)', () => {
+  it('a lazily merged pass that ends where it started is dropped by the undo that names it', () => {
     const s = big(1, 0);
     const t = s.synths[0];
     const tempo = s.p.tempo;
     setTempo(s.p, s.sink, 100);
     edit(s.p, 'Record', () => addNote(s.p, s.sink, t.id, { pitch: 60, start: 0, len: 5 }), { coalesce: 'rec:1' });
     edit(s.p, 'Record', () => deleteNotes(s.p, s.sink, t.id, currentPattern(t).notes.map((n) => n.id)), { coalesce: 'rec:1' });
+    expect(s.h.labels.undo).toBe('Record'); // stale: not known to be empty yet
+    s.applied.length = 0;
+    expect(s.h.undo()).toBe(true); // the pass goes; nothing is applied, the tempo edit stays
+    expect(s.applied).toEqual([]);
+    expect(s.p.tempo).toBe(100);
+    expect(currentPattern(t).notes).toEqual([]);
+    expect(s.h.labels).toEqual({ undo: 'Tempo', redo: null });
     expect(s.h.undo()).toBe(true);
     expect(s.p.tempo).toBe(tempo);
-    expect(currentPattern(t).notes).toEqual([]);
-    expect(s.h.labels).toEqual({ undo: null, redo: 'Tempo' });
   });
 
   it('unchanged tracks are shared between snapshots', () => {

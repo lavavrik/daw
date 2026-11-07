@@ -86,8 +86,10 @@ entry kept two whole-project snapshots and two fingerprint strings.
   is not an edit: `selectPattern` (after the recorder wrote into the old
   pattern), `selectTrack`, Save As renaming the project. So the "after" is
   the state at the pass's last note, exactly as when it was eager. A pass
-  that settles back to its "before" is dropped then (undo then undoes the
-  entry before it, as before; until then the ↶ label still names it). Other
+  that settles back to its "before" is dropped then; when an undo is what
+  settles it, that undo is the pass's (the ↶ named it): nothing is applied
+  and the entry before it stays. Undo applies from settle's own snapshot
+  (no second serialize). Other
   merges (same-task one-shots) stay eager.
 - **Structural sharing.** Every snapshot goes through `shareSnapshot(prev,
   next)` (`project/serialize.ts`) against the previous one taken or applied:
@@ -114,7 +116,11 @@ entry kept two whole-project snapshots and two fingerprint strings.
   add/remove track, undo/redo in between, same-task merging on even seeds),
   then undoes everything (equal to the state before the first entry) and
   redoes it all (equal to the final state), with the modelled engine equal
-  to a fresh load at both ends.
+  to a fresh load at both ends. Every single undo and redo is also checked
+  against a shadow of each entry's expected before/after, recorded from
+  outside (serialize at op boundaries; entries identified through the
+  test-only `debugStacks()` ids and merge counts), and half the passes are
+  followed by a pattern switch, so a wrong intermediate snapshot fails.
 
 Measured (`MEASURE=1 npx vitest run src/history/history.measure.test.ts
 --pool=forks --execArgv=--expose-gc`, from `app/`): 16 drum + 16 synth
@@ -126,7 +132,7 @@ tracks (200 notes each), ~210 KB of JSON; Apple M5 Pro, Node 26.
 | main-thread history cost per recorded note | 0.83 ms | 0.02 ms |
 | retained heap per entry (100 one-track fader edits) | 756 KiB | 2.0 KiB |
 | one-shot edit (2 snapshots) | 1.50 ms | 1.55 ms |
-| undo of the 500-note pass | 1.6 ms | 3.4 ms (takes the lazy "after" first) |
+| undo of the 500-note pass | 1.6 ms | 2.5 ms (takes the lazy "after" first, then applies from it) |
 
 ## diffApply
 

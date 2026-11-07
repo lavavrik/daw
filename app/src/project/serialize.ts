@@ -166,7 +166,7 @@ export function jsonEqual(a: Json, b: Json): boolean {
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   const ka = Object.keys(a);
   if (ka.length !== Object.keys(b).length) return false;
-  for (const k of ka) if (!(k in b) || !jsonEqual(a[k], b[k])) return false;
+  for (const k of ka) if (!Object.hasOwn(b, k) || !jsonEqual(a[k], b[k])) return false;
   return true;
 }
 
@@ -200,7 +200,7 @@ function share(prev: Json, next: Json, freeze: boolean): Json {
     if (p && Object.keys(p).length !== keys.length) same = false;
     for (const k of keys) {
       next[k] = share(p?.[k], next[k], freeze);
-      if (!p || !(k in p) || next[k] !== p[k]) same = false;
+      if (!p || !Object.hasOwn(p, k) || next[k] !== p[k]) same = false;
     }
   }
   if (same) return prev;
@@ -215,8 +215,10 @@ function share(prev: Json, next: Json, freeze: boolean): Json {
  * project's. Tracks and mixer strips match by slot, everything else by index
  * or key. Returns `prev` itself when nothing changed.
  *
- * `next` must be fresh (serialize's output, sharing nothing with the live
- * project): it is completed in place. Snapshots are immutable from here on;
+ * `next` must be fresh (serialize's output): sharing nothing with the live
+ * project, and a tree, with no node reachable twice (an aliased node would
+ * be visited and rewritten twice, and could be frozen by one path while the
+ * other still writes into it). It is completed in place. Snapshots are immutable from here on;
  * with `freeze` (dev/test) every node it creates is frozen, so an accidental
  * write to a shared subtree throws instead of silently corrupting undo.
  */

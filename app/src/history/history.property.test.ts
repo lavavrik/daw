@@ -5,6 +5,13 @@
 // track adds and removes, undo/redo in between), undoing everything restores
 // the project as it was before the first entry, and redoing it all restores
 // the final state; the modelled engine matches a fresh load of each.
+//
+// Every single undo and redo (in the sequence and in the final unwind /
+// rewind) is checked too, against a shadow: the expected before/after of
+// each entry, recorded from outside the history (serialize at op
+// boundaries; entries are told apart by h.debugStacks() ids and merge
+// counts, never by the history's own snapshots). A wrong intermediate
+// before/after (one undo applying the wrong state, masked at the ends) fails.
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { addDrumTrack, removeTrack, selectTrack, setTempo, toggleStep } from '../state/actions';
@@ -57,6 +64,52 @@ async function sequence(seed: number, ops: number) {
   // 0 - n: never -0 (toEqual tells it from 0).
   const fader = (t: Track) => setMix(p, sink, t.id, 'fader', 0 - r.int(40));
 
+  const log: string[] = [];
+  const ctx = () => `seed ${seed}: ${log.join(', ')}`;
+  /** Expected states per entry id. */
+  const shadow = new Map<number, { before: ProjectJson; after: ProjectJson }>();
+  let seen = h.debugStacks();
+  /** After an op that may edit (`pre`: the state before it): new entries and merges. */
+  const track = (pre: ProjectJson) => {
+    const now = h.debugStacks();
+    const post = serialize(p);
+    const merges = new Map(seen.undo);
+    for (const [id, n] of now.undo) {
+      if (!shadow.has(id)) shadow.set(id, { before: pre, after: post });
+      else if (merges.get(id) !== n) shadow.get(id)!.after = post;
+    }
+    seen = now;
+  };
+  /** One undo or redo, checked against the shadow. */
+  const step = (dir: 'undo' | 'redo'): boolean => {
+    const pre = serialize(p);
+    const was = h.debugStacks();
+    const ok = dir === 'undo' ? h.undo() : h.redo();
+    const now = h.debugStacks();
+    seen = now;
+    expect(m.errors, ctx()).toEqual([]);
+    if (!ok) return false;
+    const [to, from] = dir === 'undo' ? [now.redo, was.redo] : [now.undo, was.undo];
+    const moved = to.at(-1);
+    if (!moved || moved[0] === from.at(-1)?.[0]) {
+      // An undo that dropped a pass which changed nothing: nothing applied.
+      expect(serialize(p), `${ctx()} (${dir}: dropped)`).toEqual(pre);
+      return true;
+    }
+    const e = shadow.get(moved[0]);
+    expect(e, ctx()).toBeDefined();
+    expect(serialize(p), `${ctx()} (${dir} of entry ${moved[0]})`).toEqual(dir === 'undo' ? e!.before : e!.after);
+    return true;
+  };
+
+  /** selectPattern: not an edit, but saved. Prefers a pattern that is not current. */
+  const switchPattern = (log: string[], t: Track | undefined) => {
+    const others = t ? (t.patterns as { id: string }[]).filter((x) => x.id !== t.currentPatternId) : [];
+    const pat = r.pick(others.length ? others : (t?.patterns ?? []) as { id: string }[]);
+    if (t && pat) (log.push('selectPattern'), selectPattern(p, sink, t.id, pat.id));
+  };
+  let lastRec: SynthTrack | null = null;
+
   const menu: ((log: string[]) => void)[] = [
     (log) => {
       const d = r.pick(drums());
@@ -88,14 +141,11 @@ async function sequence(seed: number, ops: number) {
       const k = 1 + r.int(6);
       log.push(`rec x${k} pass ${pass}`);
       for (let i = 0; i < k; i++) recNote(t);
+      lastRec = t;
     },
     (log) => (log.push('newPass'), pass++),
     // Not edits, but saved (current pattern) / snapshotted (selection).
-    (log) => {
-      const t = r.pick(p.tracks);
-      const pat = t && r.pick<{ id: string }>(t.patterns);
-      if (t && pat) (log.push('selectPattern'), selectPattern(p, sink, t.id, pat.id));
-    },
+    (log) => switchPattern(log, r.pick(p.tracks)),
     (log) => {
       const t = r.pick(p.tracks);
       if (t) (log.push('selectTrack'), selectTrack(p, sink, t.id));
@@ -132,33 +182,44 @@ async function sequence(seed: number, ops: number) {
       const osc = t?.modules.find((x) => x.kind === moduleDef('osc').kind);
       if (t && osc) (log.push('setParam'), setParam(p, sink, t.id, osc.idx, paramIndex(moduleDef('osc'), 'octave'), r.int(5) - 2));
     },
-    (log) => (log.push('undo'), h.undo()),
-    (log) => (log.push('redo'), h.redo()),
+    (log) => (log.push('undo'), step('undo')),
+    (log) => (log.push('redo'), step('redo')),
   ];
+  const UNDO = menu.length - 2;
 
-  const log: string[] = [];
   let initial = start;
   for (let i = 0; i < ops; i++) {
     // The state the bottom entry's "before" holds: just before the op that made the stack non-empty.
     if (!h.canUndo) initial = serialize(p);
-    menu[r.int(menu.length)](log);
+    const pre = serialize(p);
+    // Half the time a pass is followed by a pattern switch on its track (a
+    // saved non-edit right after a lazily merged pass: history.settle()).
+    if (lastRec && r.int(2)) {
+      switchPattern(log, lastRec);
+      lastRec = null;
+      track(pre);
+      continue;
+    }
+    lastRec = null;
+    const op = r.int(menu.length);
+    menu[op](log);
+    if (op < UNDO) track(pre);
     if (coalesceTask && r.int(3) === 0) await Promise.resolve(); // a later task
   }
   // End on an edit, so the newest entry's "after" is the final state (a
   // trailing pattern or track switch is not an edit: redo would not restore it).
   if (!h.canUndo) initial = serialize(p);
+  const pre = serialize(p);
   setTempo(p, sink, p.tempo === 200 ? 201 : 200);
+  track(pre);
   const final = serialize(p);
-  const ctx = `seed ${seed}: ${log.join(', ')}`;
   let n = 0;
-  while (h.undo()) n++;
-  expect(m.errors, ctx).toEqual([]);
-  expect(serialize(p), ctx).toEqual(initial);
-  expect(view(m, initial), ctx).toEqual(loaded(initial));
-  for (let i = 0; i < n; i++) expect(h.redo(), ctx).toBe(true);
-  expect(m.errors, ctx).toEqual([]);
-  expect(serialize(p), ctx).toEqual(final);
-  expect(view(m, final), ctx).toEqual(loaded(final));
+  while (step('undo')) n++;
+  expect(serialize(p), ctx()).toEqual(initial);
+  expect(view(m, initial), ctx()).toEqual(loaded(initial));
+  for (let i = 0; i < n; i++) expect(step('redo'), ctx()).toBe(true);
+  expect(serialize(p), ctx()).toEqual(final);
+  expect(view(m, final), ctx()).toEqual(loaded(final));
 }
 
 describe('history property', () => {

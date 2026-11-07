@@ -86,6 +86,12 @@ export interface History {
   readonly undoKey: string | null;
   /** True while undo/redo applies a snapshot (actions then just run). */
   readonly applying: boolean;
+  /**
+   * Test-only view of the stacks (oldest first): each entry's id (unique for
+   * this history) and how many edits merged into it. No snapshots: the
+   * property test keeps its own expected states per entry.
+   */
+  debugStacks(): { undo: [id: number, merges: number][]; redo: [id: number, merges: number][] };
 }
 
 interface Entry {
@@ -96,6 +102,9 @@ interface Entry {
   coalesce?: string;
   /** Keyed merges since `after` was taken (only ever the newest entry): settle() retakes it. */
   stale?: boolean;
+  /** debugStacks: identity and merge count. */
+  id: number;
+  merges: number;
 }
 
 interface Open {
@@ -122,6 +131,7 @@ export function createHistory(o: HistoryOptions): History {
   const freeze = o.freeze ?? import.meta.env.DEV;
   /** The newest snapshot taken or applied: the next one shares with it. */
   let lastSnap: ProjectJson | null = null;
+  let nextId = 1;
 
   /** A snapshot of the live project, sharing every unchanged subtree with the previous one. */
   function snap(): ProjectJson {
@@ -129,17 +139,24 @@ export function createHistory(o: HistoryOptions): History {
     return lastSnap;
   }
 
-  /** Take the newest entry's stale "after" (see the header); drop the entry if the pass changed nothing. */
-  function settle() {
+  /**
+   * Take the newest entry's stale "after" (see the header); drop the entry if
+   * the pass changed nothing. Returns the snapshot it took (the live project
+   * now) and whether the entry was dropped; null when nothing was stale.
+   */
+  function settle(): { now: ProjectJson; dropped: boolean } | null {
     const top = undo[undo.length - 1];
-    if (!top?.stale || applying) return;
+    if (!top?.stale || applying) return null;
     top.stale = false;
-    const after = snap();
-    if (sameProject(after, top.before)) {
+    const now = snap();
+    if (sameProject(now, top.before)) {
       undo.pop(); // merged back to where it started: nothing to undo
       if (last === top) last = null;
       changed();
-    } else top.after = after;
+      return { now, dropped: true };
+    }
+    top.after = now;
+    return { now, dropped: false };
   }
 
   const takeBefore = (g: Open) => {
@@ -158,6 +175,7 @@ export function createHistory(o: HistoryOptions): History {
     if (!g.before && !g.into) return;
     const top = undo[undo.length - 1];
     const merge = g.into ? g.into === top && top === last : mergeTarget(g.coalesce) !== undefined;
+    if (merge) top.merges++;
     if (merge && g.coalesce !== undefined && top.coalesce === g.coalesce) {
       top.stale = true; // a recorded note: no snapshot now (settle() takes it)
     } else if (merge) {
@@ -173,7 +191,7 @@ export function createHistory(o: HistoryOptions): History {
       if (sameProject(g.before, after)) return; // nothing (but maybe the selection) changed
       // Share the snapshot with the previous entry when nothing happened between them.
       const before = top && jsonEqual(top.after, g.before) ? top.after : g.before;
-      const e: Entry = { label: g.label ?? 'Edit', before, after, coalesce: g.coalesce };
+      const e: Entry = { label: g.label ?? 'Edit', before, after, coalesce: g.coalesce, id: nextId++, merges: 0 };
       undo.push(e);
       if (undo.length > cap) undo.splice(0, undo.length - cap);
       last = e;
@@ -197,12 +215,17 @@ export function createHistory(o: HistoryOptions): History {
     if (from.length === 0 && !open?.before) return false; // nothing to apply (and no gesture edit to commit)
     o.beforeApply?.();
     close(); // an open gesture is an edit that happened first
-    settle(); // a recording pass's "after" is the state now (or it changed nothing and goes)
+    // A recording pass's "after" is the state now. If the pass changed
+    // nothing it goes, and that is this undo: the ↶ named it, so the entry
+    // before it is not undone as well.
+    const settled = settle();
+    if (settled?.dropped && from === undo) return true;
     const e = from.pop();
     if (!e) return false;
     applying = true;
     try {
-      o.apply(snap(), target(e));
+      // settle's snapshot is still the live project (nothing ran since).
+      o.apply(settled?.now ?? snap(), target(e));
       lastSnap = target(e); // the live project now (the next snapshot shares with it)
     } catch (err) {
       // The project may be half-applied, so no entry can be trusted: drop
@@ -273,6 +296,10 @@ export function createHistory(o: HistoryOptions): History {
     settle: () => {
       if (depth === 0) settle();
     },
+    debugStacks: () => ({
+      undo: undo.map((e) => [e.id, e.merges]),
+      redo: redo.map((e) => [e.id, e.merges]),
+    }),
     get canUndo() {
       return undo.length > 0;
     },

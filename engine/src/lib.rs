@@ -3,6 +3,7 @@
 pub mod arena;
 pub mod arrangement;
 pub mod drums;
+pub mod dsp;
 pub mod engine;
 pub mod ffi;
 pub mod metronome;

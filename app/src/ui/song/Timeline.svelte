@@ -35,7 +35,10 @@
   //   in whole bars and turns the loop on. The range stays shaded (dimmer)
   //   while the loop is off or in Pattern mode;
   // - wheel scrolls lanes vertically, Shift+wheel (or a sideways swipe, or
-  //   any wheel over the ruler) scrolls time, Cmd/Ctrl+wheel zooms.
+  //   any wheel over the ruler) scrolls time, Cmd/Ctrl+wheel zooms; the
+  //   footer has a plain scrollbar for mice without a wheel;
+  // - macOS Ctrl+click is a right click: it opens the menu, never places;
+  // - Escape during a place-and-drag removes the clip that click just placed.
   // Drags apply at most once per animation frame (latest value wins, an
   // unchanged value is not re-sent) plus the final value on pointerup.
   // Escape or a lost pointer capture mid-drag puts the original values back.
@@ -77,6 +80,7 @@
   const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
   /** Pixels a press must travel before it counts as a drag (a click never moves a clip). */
   const DRAG_SLOP = 3;
+  const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   /** Bars visible when the timeline first opens. */
   const OPEN_BARS = 16;
 
@@ -126,7 +130,8 @@
       const { t, c } = byId.get(sel[0])!;
       const reps = c.len / patLenOf(t, c);
       const times = Number.isInteger(reps) ? `×${reps}` : `×${reps.toFixed(2)}`;
-      return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)} · ${times}`;
+      const inEditor = p.selectedTrackId === t.id && t.currentPatternId === c.patternId;
+      return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)} · ${times}${inEditor ? '' : ' · double-click to edit'}`;
     }
     if (sel.length > 1) return `${sel.length} clips selected`;
     if (p.mode === 'pattern' && byId.size) return 'Pattern mode: tracks loop their pattern — SONG (Shift+L) plays the timeline';
@@ -409,7 +414,7 @@
   // ---- pointer ---------------------------------------------------------------
   type Orig = { id: string; start: number; len: number; offset: number };
   type Drag =
-    | { kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: number; laneHint: boolean; wasMulti: boolean }
+    | { kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: number; laneHint: boolean; wasMulti: boolean; placed?: boolean }
     | { kind: 'left' | 'right'; orig: Orig; patLen: number; x0: number; moved: boolean; last: string }
     | { kind: 'box'; base: Set<string> }
     | { kind: 'ruler'; t0: number; x0: number; moved: boolean; last: string; loop: { on: boolean; start: number; end: number } };
@@ -446,6 +451,9 @@
 
   function down(e: PointerEvent) {
     if (e.button !== 0 || !view || !lanesEl) return;
+    // macOS: Ctrl+click is a right click (the contextmenu event follows); do
+    // not place or drag anything, and do not preventDefault so it still fires.
+    if (IS_MAC && e.ctrlKey && !e.metaKey) return;
     e.preventDefault(); // no text selection
     menu = null;
     focusLanes();
@@ -479,7 +487,18 @@
     } else {
       // Place the track's current pattern at the bar under the pointer.
       const tick = xToTick(x, v);
-      const start = Math.max(0, e.altKey ? Math.round(tick) : snapFloor(tick, BAR));
+      let start = Math.max(0, e.altKey ? Math.round(tick) : snapFloor(tick, BAR));
+      // A bar-snapped start can fall inside an earlier clip's tail (the click
+      // itself was past its end): place after that clip instead of overlapping.
+      for (let moved = true; moved;) {
+        moved = false;
+        for (const o of t.clips) {
+          if (o.start <= start && start < o.start + o.len) {
+            start = o.start + o.len;
+            moved = true;
+          }
+        }
+      }
       const len = placeLen(t.clips, start, patternLength(currentPattern(t)));
       const c = len >= 1 ? addClip(p, engine, t.id, { start, len }) : null;
       if (!c) {
@@ -488,7 +507,7 @@
       }
       selected = new Set([c.id]);
       const orig = snapshot([c.id]);
-      drag = { kind: 'move', ids: [c.id], orig, anchor: orig[0], x0: x, y0: y, moved: false, last: 0, laneHint: false, wasMulti: false };
+      drag = { kind: 'move', ids: [c.id], orig, anchor: orig[0], x0: x, y0: y, moved: false, last: 0, laneHint: false, wasMulti: false, placed: true };
     }
     lanesEl.setPointerCapture(e.pointerId);
   }
@@ -566,7 +585,11 @@
     flush();
     if (d.kind === 'box') box = null;
     else if (d.kind === 'move' && !d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
-    else if (d.kind === 'ruler' && !d.moved) seek(p, engine, seekTick(d.t0, e.altKey));
+    else if (d.kind === 'ruler' && !d.moved) {
+      seek(p, engine, seekTick(d.t0, e.altKey));
+      // In Pattern mode the engine ignores the song position until SONG is on.
+      if (p.mode === 'pattern') flashHint(`Song position set to bar ${Math.floor(p.songPosition / BAR) + 1} — plays in SONG`);
+    }
   }
 
   /** Abort the drag and put the original values back. */
@@ -582,6 +605,10 @@
       box = null;
     } else if (d.kind === 'ruler') {
       if (d.moved) setLoop(p, engine, d.loop);
+    } else if (d.kind === 'move' && d.placed) {
+      // Escape on a place-and-drag: the clip never existed.
+      deleteClips(p, engine, d.ids);
+      selected = new Set();
     } else if (d.moved) {
       const origs = d.kind === 'move' ? d.orig : [d.orig];
       for (const o of origs) resizeClip(p, engine, o.id, { start: o.start, len: o.len, offset: o.offset });
@@ -665,6 +692,17 @@
       closeMenu();
     }
   }
+  // Keep the menu inside the window: once it is measured, pull it back from
+  // the right / bottom edge (re-runs once with the corrected position, then settles).
+  $effect(() => {
+    const m = menu;
+    const el = menuEl;
+    if (!m || !el) return;
+    const r = el.getBoundingClientRect();
+    const x = Math.max(4, Math.min(m.x, window.innerWidth - r.width - 4));
+    const y = Math.max(4, Math.min(m.y, window.innerHeight - r.height - 4));
+    if (x !== m.x || y !== m.y) menu = { ...m, x, y };
+  });
   // Outside click closes the menu (capture: before anything else reacts).
   $effect(() => {
     if (!menu) return;
@@ -848,6 +886,18 @@
     <div class="foot">
       <button data-testid="add-drum-track" onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
       <button data-testid="add-synth-track" onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
+      <input
+        class="hscroll"
+        type="range"
+        data-testid="tl-hscroll"
+        aria-label="Scroll the timeline"
+        min="0"
+        max={Math.max(0, MAX_SONG_TICKS - width * (view?.ticksPerPx ?? 1))}
+        step={BAR / 4}
+        value={view?.scrollTick ?? 0}
+        oninput={(e) => { if (view) view = clampView({ ...view, scrollTick: Number(e.currentTarget.value) }); }}
+      />
       <output class="readout" class:hint={!!hint} data-testid="tl-readout">{readoutText}</output>
     </div>
   </div>
@@ -895,6 +945,7 @@
   .foot button { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; white-space: nowrap; }
   .foot button:hover { background: #2e313a; }
   .foot button:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
+  .hscroll { width: 140px; flex: none; margin-left: 8px; accent-color: #f0a23a; }
   .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9cbd3; }
   .readout.hint { color: #ffd98a; }
   .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: #24262c; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }

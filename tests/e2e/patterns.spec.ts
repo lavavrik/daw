@@ -59,15 +59,24 @@ test('new pattern, edit, switch back', async ({ page }) => {
   // has a kick on step 1, Pattern 2 is empty. Switching while playing must
   // silence / restore the track (fails if SET_CURRENT_PATTERN is never sent).
   await loadKick(page);
+  // Start on Pattern 2 with its one step removed, so it is truly empty.
+  await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 2' });
+  await page.getByTestId('step-0-5').click();
+  await expect(page.getByTestId('step-0-5')).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('button', { name: /Play/ }).click();
   await expect(page.locator('.cell.playhead').first()).toBeVisible();
-  await page.waitForTimeout(300);
-  expect(await maxPeak(page, 600)).toBeLessThan(0.001); // Pattern 2 (current): silent
+  // Pattern 2 (current) is empty: a window of two bars (1.94 s each at 124 BPM)
+  // must be silent whatever the phase of the loop.
+  expect(await maxPeak(page, 4000)).toBeLessThan(0.001);
+  // Switching is immediate (SET_CURRENT_PATTERN); a kick hits within one bar.
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 1' });
-  expect(await maxPeak(page)).toBeGreaterThan(0.1);
+  expect(await maxPeak(page, 2500)).toBeGreaterThan(0.1);
+  // Back to the empty pattern: the switch itself is immediate. Only the tail
+  // of the kick already sounding lingers (a short sample), so after a moment
+  // the output must stay silent for a whole bar-plus window.
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 2' });
-  await page.waitForTimeout(2200); // the engine may finish the running bar (~1.9 s); let the tail die
-  expect(await maxPeak(page, 1500)).toBeLessThan(0.001);
+  await page.waitForTimeout(800);
+  expect(await maxPeak(page, 2500)).toBeLessThan(0.001);
   expect(await page.evaluate(() => (window as any).__daw.engine.failure)).toBeNull();
 });
 

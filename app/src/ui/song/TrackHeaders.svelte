@@ -33,7 +33,12 @@
         <span class="mark">{sel ? '▶' : ''}</span>
         <span class="txt">
           <b class="name">{t.name}</b>
-          <span class="kind">{t.kind === 'drum' ? 'Drums' : `Synth · ${t.patchName}`}</span>
+          {#if t.kind === 'synth'}
+            <span class="kind">Synth · {t.patchName}</span>
+          {:else if !/^drum/i.test(t.name)}
+            <!-- "Drums 2" already says it; a renamed track gets the kind line. -->
+            <span class="kind">Drum track</span>
+          {/if}
         </span>
       </button>
       <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={() => remove(t.id, t.name)}>×</button>

@@ -118,7 +118,7 @@ test('arrange a song', async ({ page }) => {
   await steps(page, 0, [0, 4, 8, 12]); // Pattern 1: four on the floor
   await page.getByTestId('pattern-new').click();
   await expect(page.getByTestId('panel-title')).toContainText('· Pattern 2');
-  await steps(page, 1, [2, 6, 10, 14]); // Pattern 2: off-beat hats
+  await steps(page, 1, [2, 6, 10, 14]); // Pattern 2: off-beat hats (kick row empty)
 
   // Pattern 1 at bars 1-4: click places one bar (its length), the right edge repeats it.
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 1' });
@@ -151,6 +151,18 @@ test('arrange a song', async ({ page }) => {
   expect(heads[heads.length - 1]).toBeGreaterThan(heads[0] + 6 * BAR); // the playhead moves
   expect(peakIn(rec, 0, 4 * BAR)).toBeGreaterThan(0.1); // bars 1-4: kicks
   expect(peakIn(rec, 4 * BAR, 8 * BAR)).toBeGreaterThan(0.1); // bars 5-8: hats
+  // Distinguish the patterns by WHERE in the beat they sound (samples are
+  // 50 ms = 192 ticks): Pattern 1 hits on the beat (ticks 0, 960, ...), Pattern 2
+  // on the off-beat (480, 1440, ...). Probe the slot each pattern leaves empty.
+  const probe = (bars: [number, number], from: number, to: number) => {
+    let max = 0;
+    for (let bar = bars[0]; bar < bars[1]; bar++)
+      for (let beat = 0; beat < 4; beat++) max = Math.max(max, peakIn(rec, bar * BAR + beat * BEAT + from, bar * BAR + beat * BEAT + to));
+    return max;
+  };
+  expect(probe([0, 4], 300, 470)).toBeLessThan(0.02); // bars 1-4: nothing on the off-beat
+  expect(probe([4, 8], 480, 600)).toBeGreaterThan(0.1); // bars 5-8: the off-beat hat
+  expect(probe([4, 8], 40, 150)).toBeLessThan(0.02); // bars 5-8: nothing on the beat itself
   expect(peakIn(rec, 8 * BAR + BEAT, 8.6 * BAR)).toBeLessThan(0.001); // past the last clip: silence
   expect(await page.evaluate(() => (window as any).__daw.engine.failure)).toBeNull();
 });
@@ -359,4 +371,23 @@ test('timeline screenshot', async ({ page }) => {
   await play(page);
   await page.waitForTimeout(3500);
   await page.screenshot({ path: 'test-results/timeline.png' });
+});
+
+test('placing: Escape removes the just-placed clip; a tail click places after the clip', async ({ page }) => {
+  await start(page);
+  // Escape mid place-and-drag: the clip never existed.
+  const p0 = await at(page, 0, 100);
+  await drag(page, p0, { x: p0.x + 80, y: p0.y }, { up: false });
+  await expect(clip(page, 0, 0)).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(page.locator('[data-testid^="clip-"]')).toHaveCount(0);
+
+  // A clip cut to 1.5 bars; a click in bar 2's empty second half places the
+  // next clip at the clip's end (bar 2 + 0.5 bar), not overlapping it.
+  await clickLane(page, 0, 100);
+  await resizeRight(page, 0, 0, BAR + BAR / 2);
+  expect(await pos(page, 0, 0)).toEqual({ start: 0, len: BAR + BAR / 2 });
+  await clickLane(page, 0, BAR + BAR / 2 + 200);
+  expect((await pos(page, 0, 1)).start).toBe(BAR + BAR / 2);
 });

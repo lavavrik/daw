@@ -91,3 +91,33 @@ beat anyway. If it still feels early or late, adjust **Rec offset** (ms, in the
 top bar; positive = notes land earlier). Playing live still feels delayed;
 wired headphones or speakers fix that. Design notes:
 `docs/architecture/sequencer.md`.
+
+## Arrange a song
+
+Design notes: `docs/architecture/arrangement.md`.
+
+1. **Patterns.** Every track has patterns (up to 16): use the picker above the
+   step grid / piano roll (**+ New**, **Duplicate**, **Rename**, **Delete**).
+   The one selected is the track's *current* pattern; in **PAT** mode it simply
+   loops, as before.
+2. **Clips.** Click an empty spot in a track's lane in the timeline (top
+   centre) to place its current pattern at that bar; drag the clip's right edge
+   to repeat it (dashed lines mark each repeat) or cut it. Drag the body to
+   move (beat snap, **Alt** = free), the left edge to trim. Clips stay on
+   their own track. **Double-click** a clip to edit its pattern below.
+   **Right-click** a clip for **Make unique** (own copy of a shared pattern, so
+   edits don't change the other clips) and Delete.
+3. **PAT / SONG.** The toggle in the top bar (or **Shift+L**) switches between
+   looping each track's current pattern and playing the timeline. Click the
+   ruler to set the song position; in SONG press **Space**. Recording is
+   disabled in SONG.
+4. **Loop.** Drag on the ruler to loop whole bars (turns **Loop** on); the
+   Loop button toggles it (SONG only). Stop returns to the loop start, else to
+   where you started.
+
+Timeline keys (while its lanes are focused): **Delete** removes, **Cmd/Ctrl+D**
+duplicates, **Cmd/Ctrl+A** selects all, **← / →** nudge a beat (**Shift**: a
+bar), **Escape** cancels a drag / clears the selection, **Shift-drag** box
+selects. Wheel scrolls tracks, **Shift+wheel** scrolls time, **Cmd/Ctrl+wheel**
+zooms; the slider in the footer scrolls time too. Limits: 16 patterns and 256
+clips per track, 999 bars.

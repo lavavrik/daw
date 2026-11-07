@@ -125,6 +125,13 @@ uploads (step 3 above): they belong to the session that just ended, so each
 is answered with `sample-loaded` / `HostErr.RESET`, which the UI settles
 silently.
 
+Every `RESET_ALL` is also confirmed with `{type:'reset-done', code}`
+(`AudioEngine.resetAll()`, `app/src/audio/resetAck.ts`): the reset travels
+through the ring, but sample uploads go by `postMessage` and are handled
+between render quanta, so an upload sent right after the reset could land
+before it, load into the old session and be wiped. A project load awaits the
+ack (2 s timeout) before uploading any sample (see projects.md).
+
 Command results otherwise never come back to the UI (the ring is one-way).
 The one exception is a `RACK_ADD_MODULE` refused with `OUT_OF_MEMORY` (FX pool
 full): the worklet posts `{type:'rack-add-refused', slot, idx, kind}` (a rare

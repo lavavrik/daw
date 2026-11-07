@@ -25,7 +25,9 @@ edit is undoable as long as it is in the saved project.
   entry's "before": undoing an edit made before a pattern switch also
   switches back.
 - Consecutive entries share a snapshot object when nothing happened between
-  them. At most **200** entries (oldest dropped). A new entry clears redo.
+  them, and every snapshot shares each unchanged subtree with the previous
+  one (see **Cost**). At most **200** entries (oldest dropped). A new entry
+  clears redo.
 - History is cleared when the session is replaced: `load.ts` `blankState`
   (Open, restore, New) and after New's default drum track.
 
@@ -59,7 +61,7 @@ edit is undoable as long as it is in the saved project.
   whole pass is one entry (across retargets). "Undo take" undoes the newest
   entry when it is a pass: the history's `undoKey` (the newest entry's
   coalesce key) starts with `rec:`. A note merged into the pass takes no
-  "before" snapshot (the entry keeps its own). Before any undo/redo that has
+  snapshot at all: its "after" is taken lazily (see **Cost**). Before any undo/redo that has
   something to apply, the recorder closes its held notes (`beforeApply`), so
   they belong to the pass being undone. On a **redo** while a recorded note
   is held, that note becomes a new edit, which clears the redo stack: the
@@ -68,6 +70,63 @@ edit is undoable as long as it is in the saved project.
 Undo/redo (⌘Z / ⇧⌘Z or Ctrl+Y, ignored while typing; the top bar's ↶ ↷
 with "Undo Move notes" tooltips) first commit an open gesture, and are
 refused while `p.loading`.
+
+## Cost
+
+A snapshot is a full `serialize` (~1.5 ms on a 32-track project); before
+plan 8 every recorded note took one, plus a fingerprint string, and every
+entry kept two whole-project snapshots and two fingerprint strings.
+
+- **Lazy "after" (recording).** A transact that merges into the newest
+  entry under the same coalesce key (a recorded note) only marks that entry
+  *stale*: no snapshot, no stringify. `settle()` takes the "after" when it
+  is next needed: before the "before" of any other transact (the next
+  entry), before an undo/redo (after the recorder closed its held notes into
+  the pass), at a gesture's `commit()`, and right before a saved change that
+  is not an edit: `selectPattern` (after the recorder wrote into the old
+  pattern), `selectTrack`, Save As renaming the project. So the "after" is
+  the state at the pass's last note, exactly as when it was eager. A pass
+  that settles back to its "before" is dropped then (undo then undoes the
+  entry before it, as before; until then the ↶ label still names it). Other
+  merges (same-task one-shots) stay eager.
+- **Structural sharing.** Every snapshot goes through `shareSnapshot(prev,
+  next)` (`project/serialize.ts`) against the previous one taken or applied:
+  any subtree equal to its counterpart (tracks and mixer strips matched by
+  slot, everything else by index/key) is replaced by the previous object, so
+  an edit of one track keeps one new track subtree (and inside it, only the
+  changed patterns / rows / patch). Unchanged tracks, the mixer, strips are
+  the same objects across all entries.
+- **No fingerprint strings.** "Did this edit change anything" and "did the
+  pass end where it began" use `sameProject(a, b)` (fingerprint equality,
+  selection ignored) and the before/after sharing check uses `jsonEqual`;
+  both skip identical subtrees, so with sharing they cost O(changed part).
+  `diffApply`'s per-track compare short-circuits on identity too.
+- **Immutable, frozen in dev/test.** Snapshots are never written; with
+  `freeze` (default `import.meta.env.DEV`, so in vitest and `vite dev`)
+  every node is `Object.freeze`d, so an accidental write to a shared subtree
+  throws instead of silently changing other entries. `serialize` returns
+  fresh objects (nothing aliases the live project), which `shareSnapshot`
+  completes in place.
+- **Correctness first.** Sharing is content-checked (never assumed from a
+  revision counter), so a missed mutation path can cost memory, never an
+  undo. `history.property.test.ts` runs 200 seeded random sequences of
+  mixed edits (gestures, recording passes, pattern/track switches,
+  add/remove track, undo/redo in between, same-task merging on even seeds),
+  then undoes everything (equal to the state before the first entry) and
+  redoes it all (equal to the final state), with the modelled engine equal
+  to a fresh load at both ends.
+
+Measured (`MEASURE=1 npx vitest run src/history/history.measure.test.ts
+--pool=forks --execArgv=--expose-gc`, from `app/`): 16 drum + 16 synth
+tracks (200 notes each), ~210 KB of JSON; Apple M5 Pro, Node 26.
+
+| | before | after |
+|---|---|---|
+| snapshots (`serialize`) while recording 500 notes | 501 (1.00 / note) | 2 (0.004 / note) |
+| main-thread history cost per recorded note | 0.83 ms | 0.02 ms |
+| retained heap per entry (100 one-track fader edits) | 756 KiB | 2.0 KiB |
+| one-shot edit (2 snapshots) | 1.50 ms | 1.55 ms |
+| undo of the 500-note pass | 1.6 ms | 3.4 ms (takes the lazy "after" first) |
 
 ## diffApply
 
@@ -111,7 +170,17 @@ removed notes`).
 ## Tests
 
 - `history.test.ts`: step toggle undo/redo, drag coalescing, redo cleared by
-  a new edit, cap 200, nesting, coalesce keys, same-task merging.
+  a new edit, cap 200, nesting, coalesce keys, same-task merging; lean
+  history: 500 recorded notes take no per-note snapshot or stringify, undo
+  of a never-settled pass mid-playback restores the pre-pass state exactly,
+  a pattern switch after a pass is not part of its "after", a pass that
+  ends where it began is dropped, unchanged tracks / mixer / patch are `===`
+  across snapshots, snapshots are frozen.
+- `history.property.test.ts`: the randomized round-trip above (`SEED=n`
+  reruns one sequence).
+- `project/serialize.share.test.ts`: `jsonEqual` agrees with
+  `JSON.stringify`; sharing by slot; `sameProject` is fingerprint equality.
+- `history.measure.test.ts`: the numbers above (skipped unless `MEASURE=1`).
 - `gestures.test.ts`: lost pointerup, `<select>` change, context menu,
   blur, multi-pointer, undo mid-drag.
 - `diffApply.test.ts`: every kind of edit is undone and redone, and after

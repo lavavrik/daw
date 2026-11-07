@@ -143,3 +143,83 @@ export function projectFiles(p: Project, json: ProjectJson): Map<string, ArrayBu
   }
   return files;
 }
+
+// ---- Snapshot sharing (undo history; docs/architecture/history.md "Cost") ----
+//
+// Equality here is JSON equality (what fingerprintOf compares) up to key
+// order: serialize always writes keys in one order, and its values are plain
+// JSON (no undefined), so the two agree. Primitives compare with ===, plus
+// NaN equals NaN (JSON writes both as null).
+
+type Json = unknown;
+type Obj = Record<string, Json>;
+
+const isObj = (v: Json): v is Obj => v !== null && typeof v === 'object';
+const samePrim = (a: Json, b: Json) => a === b || (a !== a && b !== b);
+/** Arrays matched by `slot` (tracks, mixer strips): a removed track does not shift the rest. */
+const slotted = (a: Json[]) => a.length > 0 && a.every((x) => isObj(x) && typeof x.slot === 'number');
+
+/** JSON equality, with a fast path for shared (identical) subtrees. */
+export function jsonEqual(a: Json, b: Json): boolean {
+  if (a === b) return true;
+  if (!isObj(a) || !isObj(b)) return samePrim(a, b);
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (!(k in b) || !jsonEqual(a[k], b[k])) return false;
+  return true;
+}
+
+/** fingerprintOf(a) === fingerprintOf(b), without building the strings: equal but for the selection. */
+export function sameProject(a: ProjectJson, b: ProjectJson): boolean {
+  if (a === b) return true;
+  for (const k of Object.keys(a) as (keyof ProjectJson)[]) {
+    if (k !== 'selection' && !jsonEqual(a[k], b[k])) return false;
+  }
+  return Object.keys(a).length === Object.keys(b).length;
+}
+
+function share(prev: Json, next: Json, freeze: boolean): Json {
+  if (!isObj(next)) return samePrim(prev, next) ? prev : next;
+  if (prev === next) return prev;
+  const arr = Array.isArray(next);
+  const p = isObj(prev) && Array.isArray(prev) === arr ? prev : null;
+  let same = p !== null;
+  if (arr) {
+    const n = next as Json[];
+    const pa = p as Json[] | null;
+    if (pa && pa.length !== n.length) same = false;
+    // Tracks and strips by slot (an element only ever shares with its own track's old one).
+    const bySlot = pa && slotted(n) && slotted(pa) ? new Map(pa.map((x) => [(x as Obj).slot, x])) : null;
+    for (let i = 0; i < n.length; i++) {
+      n[i] = share(bySlot ? bySlot.get((n[i] as Obj).slot) : pa?.[i], n[i], freeze);
+      if (!pa || n[i] !== pa[i]) same = false;
+    }
+  } else {
+    const keys = Object.keys(next);
+    if (p && Object.keys(p).length !== keys.length) same = false;
+    for (const k of keys) {
+      next[k] = share(p?.[k], next[k], freeze);
+      if (!p || !(k in p) || next[k] !== p[k]) same = false;
+    }
+  }
+  if (same) return prev;
+  if (freeze) Object.freeze(next);
+  return next;
+}
+
+/**
+ * Structural sharing between consecutive undo snapshots: `next` with every
+ * subtree that equals (jsonEqual) its counterpart in `prev` replaced by
+ * prev's object, so an edit of one track costs that track's nodes, not the
+ * project's. Tracks and mixer strips match by slot, everything else by index
+ * or key. Returns `prev` itself when nothing changed.
+ *
+ * `next` must be fresh (serialize's output, sharing nothing with the live
+ * project): it is completed in place. Snapshots are immutable from here on;
+ * with `freeze` (dev/test) every node it creates is frozen, so an accidental
+ * write to a shared subtree throws instead of silently corrupting undo.
+ */
+export function shareSnapshot(prev: ProjectJson | null, next: ProjectJson, freeze: boolean): ProjectJson {
+  return share(prev, next, freeze) as ProjectJson;
+}

@@ -170,6 +170,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
 
   async function saveInto(dir: FileSystemDirectoryHandle, name: string) {
     const old = p.name;
+    p.history?.settle(); // the name is saved, not an edit (history.ts settle)
     p.name = name;
     try {
       await saveTo(dir);

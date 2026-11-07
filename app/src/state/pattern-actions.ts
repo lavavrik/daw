@@ -250,6 +250,9 @@ export function selectPattern(p: Project, sink: CommandSink, trackId: string, pa
   if (!t || !pat) return false;
   if (t.currentPatternId === pat.id) return true;
   p.beforePatternSwitch?.(t.id);
+  // Saved but not an edit: a pending recording pass's "after" is taken first
+  // (after the recorder wrote its held notes into the old pattern).
+  p.history?.settle();
   t.currentPatternId = pat.id;
   sink.send(Op.SET_CURRENT_PATTERN, t.slot, pat.engineIdx);
   return true;

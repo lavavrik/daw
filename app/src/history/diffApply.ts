@@ -40,7 +40,8 @@ import type { ChannelState, Clip, DrumPattern, DrumTrack, NotePatternState, Proj
 import { trackCommands, trackState } from '../project/commands';
 import type { ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from '../project/schema';
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// Snapshots share unchanged subtrees (history.ts), so identity settles most compares.
+const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
 /** Make `p` (whose snapshot is `from`) and the engine match `to`. */
 export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: ProjectJson) {

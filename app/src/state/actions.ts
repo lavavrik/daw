@@ -215,6 +215,7 @@ export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
   const t = p.tracks.find((x) => x.id === trackId);
   if (!t) return;
   const before = liveInputTrack(p);
+  p.history?.settle(); // a selection is snapshotted but not an edit: not part of a pending pass
   p.selectedTrackId = t.id;
   if (t.kind === 'synth') p.lastSynthTrackId = t.id;
   syncInput(p, sink, before);

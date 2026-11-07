@@ -116,6 +116,15 @@ export { fxPoolFullText };
  * in its removal fade). Roll the optimistic add back in state only (the
  * engine added nothing, so no command) and return the pool-full message;
  * null if that module is no longer there (already removed or replaced).
+ *
+ * Known race (accepted, P5): the module is matched by (slot, idx, kind)
+ * only. If, within the one worklet round trip (a few ms) between the
+ * refused add and this report, the user removed that module and added
+ * another of the same kind at the same idx on the same track, the newer one
+ * is rolled back instead (UI and engine then disagree on that slot until
+ * the next load). That needs two edits faster than an audio block while the
+ * pool is full; tagging each add with a sequence number the worklet echoes
+ * would close it, at the cost of a protocol field for every add.
  */
 export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: number): string | null {
   const t = p.tracks.find((x): x is SynthTrack => x.kind === 'synth' && x.slot === slot);

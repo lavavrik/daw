@@ -43,7 +43,7 @@
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
   import { DEFAULT_OCTAVE } from '../input/qwertyPiano';
-  import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings } from '../state/recorder';
+  import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings, undoTakeTitle } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
   import { discardWarning } from '../project/discard';
@@ -319,7 +319,7 @@
     data-testid="undo-take"
     onclick={() => recorder.undoLastTake()}
     aria-label="Undo take"
-    title="Undo take: undo the last recording pass (the newest undo step)"
+    title={undoTakeTitle(rec.takeEdits)}
   >↶ Take</button>
   <label class="bpm">
     <span class="lbl">BPM</span>

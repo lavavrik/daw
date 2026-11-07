@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { flushSync, onDestroy, onMount, untrack } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
   import { addClip } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
@@ -13,7 +13,7 @@
   import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
   import type { LatencyHint } from './audio/restart';
   import { Project } from './state/project.svelte';
-  import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowSample, setStep, stop } from './state/actions';
+  import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowGain, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
   import { addDefaultDrumTrack, appKitDeps, loadDefaultKit } from './state/defaultKit';
   import type { KitDeps } from './state/defaultKit';
@@ -46,6 +46,7 @@
   import type { History } from './history/history';
   import { diffApply } from './history/diffApply';
   import { createGestures, installGestures } from './history/gestures';
+  import { cancelOpenConfirms } from './ui/inlineConfirms';
   import { serialize } from './project/serialize';
 
   const project = new Project();
@@ -59,7 +60,7 @@
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
   let noteInput = $state.raw<NoteInput | null>(null);
-  let rec = $state<RecStatus>({ armed: false, state: 'off', canUndoTake: false });
+  let rec = $state<RecStatus>({ armed: false, state: 'off', canUndoTake: false, takeEdits: 0 });
   /** Undo/redo labels for the top bar's ↶ ↷ (null: nothing to undo / redo). */
   let undoLabels = $state<{ undo: string | null; redo: string | null }>({ undo: null, redo: null });
   let history = $state.raw<History | null>(null);
@@ -271,6 +272,7 @@
     removeTrack: (trackId) => engine && removeTrack(project, engine, trackId),
     setRowSample: (trackId, rowId, sampleId, name) => engine && setRowSample(project, engine, trackId, rowId, sampleId, name),
     setStep: (trackId, rowId, step, vel) => engine && setStep(project, engine, trackId, rowId, step, vel),
+    setRowGain: (trackId, rowId, gain) => engine && setRowGain(project, engine, trackId, rowId, gain),
     addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
     setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
     setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
@@ -577,12 +579,22 @@
   // pointerups after a <select> popup or a context menu end it too).
   const gestures = createGestures({ history: () => history, loading: () => project.loading });
   onMount(() => installGestures(gestures));
-  /** ⌘Z / ↶ and ⇧⌘Z / ↷: a drag still held after it continues as a new entry. */
+  /**
+   * ⌘Z / ↶ and ⇧⌘Z / ↷: a drag still held after it continues as a new entry.
+   * An open inline confirm is cancelled first, exactly like its Cancel
+   * (ui/inlineConfirms.ts: it asked about a state the undo replaces); the
+   * flush closes it (and returns focus to its anchor) before the undo applies.
+   */
+  const closeConfirms = () => {
+    if (cancelOpenConfirms()) flushSync();
+  };
   const undo = () => {
+    closeConfirms();
     history?.undo();
     gestures.afterApply();
   };
   const redo = () => {
+    closeConfirms();
     history?.redo();
     gestures.afterApply();
   };

@@ -171,3 +171,46 @@ test('a fader drag is one undo step', async ({ page }) => {
   await expect(strip.getByTestId('fader-readout')).not.toHaveText('0.0 dB');
   await expect(page.getByTestId('redo')).toBeDisabled();
 });
+
+// Plan 9 Task 1: the question was about a state the undo replaces, so an
+// undo (↶, ⌘Z) closes an open inline confirm (as its Cancel would) first.
+test('undo closes an open confirm', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  // The click's gesture has ended (its entry is named), so the next edit is its own step.
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
+  await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as { __daw: Daw }).__daw;
+    a.setMix(project.tracks[1].id, 'fader', -6);
+  });
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Set Volume/);
+  const fader = () => page.evaluate(() => {
+    const { project } = (window as unknown as { __daw: Daw }).__daw;
+    return project.mixer.channels[project.tracks[1].id].params[0];
+  });
+  const before = await fader();
+  expect(before).toBe(-6);
+
+  // ↶ while "Remove track?" is open: the popover goes, the track stays, the fader edit is undone.
+  await page.getByTestId('track-1').hover();
+  await page.getByRole('button', { name: 'Remove track Synth' }).click();
+  const ask = page.getByTestId('inline-confirm');
+  await expect(ask).toContainText('Remove track "Synth"');
+  await page.getByTestId('undo').click();
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId('track-1')).toHaveCount(1);
+  expect(await fader()).toBe(0);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
+
+  // ⌘Z with focus inside the popover (on Cancel): the same, and focus goes back to the ×.
+  await page.getByTestId('redo').click();
+  expect(await fader()).toBe(-6);
+  await page.getByTestId('track-1').hover();
+  await page.getByRole('button', { name: 'Remove track Synth' }).click();
+  await expect(page.getByTestId('inline-confirm-cancel')).toBeFocused();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId('track-1')).toHaveCount(1);
+  expect(await fader()).toBe(0);
+  await expect(page.getByRole('button', { name: 'Remove track Synth' })).toBeFocused();
+});

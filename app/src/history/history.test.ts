@@ -459,3 +459,124 @@ describe('lean history', () => {
     expect(s.p.tempo).toBe(99);
   });
 });
+
+// Plan 9 Task 1: a recording pass absorbs every edit made during it.
+describe('recording pass hold', () => {
+  function rig(opts: { coalesceTask?: boolean } = {}) {
+    const s = setup(opts);
+    const t = addSynthTrack(s.p, s.sink)!;
+    let pitch = 60;
+    const note = () => edit(s.p, 'Record', () => addNote(s.p, s.sink, t.id, { pitch: pitch++, start: 0, len: 10 }), { coalesce: 'rec:1' });
+    const fader = () => s.p.mixer.channels[s.d.id].params[mixParam('fader').id];
+    const drag = (to: number) => {
+      s.h.begin(); // pointerdown on the fader
+      for (let v = -1; v >= to; v--) setMix(s.p, s.sink, s.d.id, 'fader', v);
+      s.h.commit(); // pointerup
+    };
+    return { ...s, t, note, fader, drag };
+  }
+
+  it('edit mid-pass joins the pass', () => {
+    const s = rig();
+    setMix(s.p, s.sink, s.d.id, 'fader', -2); // before the pass's first note: its own entry
+    s.note();
+    s.h.holdOpen('rec:1'); // the recorder, at the pass's first note
+    s.note();
+    s.drag(-12);
+    s.note();
+    s.h.release(); // Stop
+    expect(s.h.labels.undo).toBe('Record');
+    expect(s.h.undoAbsorbed).toBe(1); // the drag: one edit
+    expect(currentPattern(s.t).notes).toHaveLength(3);
+    expect(s.fader()).toBe(-12);
+    expect(s.h.undo()).toBe(true); // one entry: every note and the drag
+    expect(currentPattern(s.t).notes).toEqual([]);
+    expect(s.fader()).toBe(-2); // the pre-pass value
+    expect(s.h.labels.undo).toBe('Set Volume');
+    expect(s.h.redo()).toBe(true);
+    expect(currentPattern(s.t).notes).toHaveLength(3);
+    expect(s.fader()).toBe(-12);
+  });
+
+  it('one-shots merge too and count once per task; released, edits are their own entries again', async () => {
+    const s = rig({ coalesceTask: true });
+    await Promise.resolve(); // the track add was its own task
+    s.note();
+    s.h.holdOpen('rec:1');
+    await Promise.resolve();
+    setTempo(s.p, s.sink, 99);
+    s.toggle(1); // same task as the tempo: one edit
+    await Promise.resolve();
+    s.toggle(2);
+    await Promise.resolve();
+    s.note();
+    expect(s.h.undoAbsorbed).toBe(2);
+    s.h.release();
+    await Promise.resolve();
+    s.toggle(3); // after the pass: its own entry
+    expect(s.h.labels.undo).toBe('Toggle step');
+    expect(s.h.undoAbsorbed).toBe(0);
+    s.h.undo();
+    expect(s.h.labels.undo).toBe('Record');
+    s.h.undo();
+    expect([s.step(1), s.step(2), s.step(3)]).toEqual([0, 0, 0]);
+    expect(s.p.tempo).not.toBe(99);
+    expect(currentPattern(s.t).notes).toEqual([]);
+  });
+
+  it('a held merge is lazy: no snapshot until settle', () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addSynthTrack(p, sink)!;
+    let snaps = 0;
+    const h = createHistory({ snapshot: () => (snaps++, serialize(p)), apply: (f, to) => diffApply(p, sink, f, to) });
+    p.history = h;
+    edit(p, 'Record', () => addNote(p, sink, t.id, { pitch: 60, start: 0, len: 10 }), { coalesce: 'rec:1' });
+    h.holdOpen('rec:1');
+    const n0 = snaps;
+    for (let i = 0; i < 5; i++) setTempo(p, sink, 100 + i);
+    expect(snaps).toBe(n0);
+    h.settle();
+    expect(snaps).toBe(n0 + 1);
+  });
+
+  it('a gesture open when the hold starts becomes the pass; a drag that outlives the pass stays one entry', () => {
+    const s = rig();
+    s.h.begin(); // mouse held on a knob, nothing edited yet
+    s.note(); // the first note lands inside the gesture
+    s.h.holdOpen('rec:1');
+    s.h.commit();
+    expect(s.h.undoKey).toBe('rec:1');
+    s.h.begin(); // a drag during the pass ...
+    setMix(s.p, s.sink, s.d.id, 'fader', -3);
+    s.h.release(); // ... and the pass ends mid-drag (Space)
+    setMix(s.p, s.sink, s.d.id, 'fader', -4);
+    setMix(s.p, s.sink, s.d.id, 'fader', -5);
+    s.h.commit();
+    expect(s.h.labels.undo).toBe('Set Volume'); // the rest of the drag: one entry
+    s.h.undo();
+    expect(s.fader()).toBe(-3);
+    expect(s.h.labels.undo).toBe('Record');
+    s.h.undo();
+    expect(s.fader()).toBe(0);
+    expect(currentPattern(s.t).notes).toEqual([]);
+  });
+
+  it('after an undo mid-pass, the hold waits for the pass\'s next entry', () => {
+    const s = rig();
+    s.note();
+    s.h.holdOpen('rec:1');
+    s.h.undo(); // the pass so far
+    s.toggle(4); // not part of any pass now
+    expect(s.h.labels.undo).toBe('Toggle step');
+    s.note(); // the pass goes on: a new entry, and later edits join it
+    s.toggle(5);
+    expect(s.h.labels.undo).toBe('Record');
+    s.h.undo();
+    expect([s.step(4), s.step(5)]).toEqual([100, 0]);
+    s.h.clear();
+    s.note();
+    s.toggle(6);
+    expect(s.h.labels.undo).toBe('Toggle step'); // clear() ended the hold
+  });
+});

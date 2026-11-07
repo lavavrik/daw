@@ -3,10 +3,10 @@ import { BAR_TICKS, MAX_NOTES, Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { NotePatternState, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
-import { removeTrack, selectTrack } from './actions';
+import { removeTrack, selectTrack, setTempo } from './actions';
 import { newPattern, selectPattern } from './pattern-actions';
 import { setMode } from './song-actions';
-import { RECORD_LABEL, Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync } from './recorder';
+import { RECORD_LABEL, Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync, undoTakeTitle } from './recorder';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
@@ -553,6 +553,7 @@ describe('recorderFor (real project + actions)', () => {
     rec.onTransport(true, 0);
     rec.noteOn(60, 100, 100);
     rec.noteOff(60, 200);
+    rec.onTransport(false, 300); // the pass ends (an edit during it would join it)
     removeTrack(p, sink, t.id);
     expect(rec.status().canUndoTake).toBe(false);
     rec.undoLastTake(); // not a pass on top: nothing
@@ -566,5 +567,37 @@ describe('recorderFor (real project + actions)', () => {
     setMode(p, sink, 'song');
     rec.toggleArm();
     expect(rec.armed).toBe(false);
+  });
+  it('undo take undoes edits made during it', () => {
+    const { sink, p, t, rec, h } = rig();
+    const tempo = p.tempo;
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    setTempo(p, sink, 100); // before the pass's first note: its own entry
+    rec.noteOn(60, 100, 100);
+    rec.noteOff(60, 200);
+    setTempo(p, sink, 140); // mid-pass: joins the take
+    rec.noteOn(62, 100, 300);
+    rec.noteOff(62, 400);
+    const st = rec.status();
+    expect(st.canUndoTake).toBe(true);
+    expect(st.takeEdits).toBe(1);
+    expect(undoTakeTitle(st.takeEdits)).toBe('Undo take (also undoes 1 edit made during it)');
+    expect(undoTakeTitle(3)).toBe('Undo take (also undoes 3 edits made during it)');
+    expect(undoTakeTitle(0)).toMatch(/^Undo take: /);
+    expect(h.labels.undo).toBe(RECORD_LABEL);
+    rec.undoLastTake();
+    expect(currentPattern(t).notes).toEqual([]);
+    expect(p.tempo).toBe(100);
+    expect(h.labels.undo).toBe('Tempo');
+    // Undo take ended the pass's hold; Stop does too.
+    h.redo();
+    rec.onTransport(false, 500);
+    setTempo(p, sink, 150);
+    expect(h.labels.undo).toBe('Tempo');
+    expect(rec.status()).toMatchObject({ canUndoTake: false, takeEdits: 0 });
+    h.undo();
+    expect(p.tempo).toBe(140);
+    expect(tempo).not.toBe(140);
   });
 });

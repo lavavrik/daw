@@ -9,10 +9,14 @@
   // except to a <select> (the Rack's patch list): there a stray arrow key
   // would change the patch, so the keys go back to the piano instead.
   // Key events inside stop here so the global piano/transport shortcuts
-  // never see them. Held piano keys are the HOST's job: call
-  // releaseHeldKeys() before opening (a popover doesn't block the thread, but
-  // a held note must not keep sounding while the user decides).
+  // never see them -- except undo / redo (⌘Z, ⇧⌘Z, Ctrl+Y): an undo cancels
+  // every open confirm first (inlineConfirms.ts: the question was about a
+  // state the undo replaces), so those keys go on to the shortcuts. Held
+  // piano keys are the HOST's job: call releaseHeldKeys() before opening (a
+  // popover doesn't block the thread, but a held note must not keep sounding
+  // while the user decides).
   import { onDestroy, onMount } from 'svelte';
+  import { registerConfirm } from './inlineConfirms';
 
   let {
     message,
@@ -51,6 +55,8 @@
   onMount(() => {
     place();
     cancelBtn.focus();
+    // An undo/redo cancels this as its Cancel button would (inlineConfirms.ts).
+    const unregister = registerConfirm(() => oncancel());
     const outside = (e: PointerEvent) => {
       const t = e.target as Node;
       // A press on a button anchor is its own click (ignored here). A press on
@@ -60,6 +66,7 @@
     window.addEventListener('pointerdown', outside, true);
     window.addEventListener('resize', place);
     return () => {
+      unregister();
       window.removeEventListener('pointerdown', outside, true);
       window.removeEventListener('resize', place);
     };
@@ -79,6 +86,9 @@
       e.stopPropagation();
       return;
     }
+    // Undo / redo reach the shortcuts, which cancel this first (above).
+    const undoRedo = (e.metaKey || e.ctrlKey) && !e.altKey && (e.code === 'KeyZ' || (e.code === 'KeyY' && e.ctrlKey && !e.metaKey && !e.shiftKey));
+    if (undoRedo) return;
     e.stopPropagation();
     if (e.key === 'Escape') {
       e.preventDefault();

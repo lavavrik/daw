@@ -8,7 +8,7 @@ import { makeWav } from './wav';
 // after the restart.
 
 type Daw = {
-  engine: { meters(): Float32Array; latencyHint: unknown; context: BaseAudioContext } | null;
+  engine: { meters(): Float32Array; telemetry(): Float64Array; latencyHint: unknown; context: BaseAudioContext } | null;
   project: {
     name: string;
     dirty: boolean;
@@ -265,4 +265,68 @@ test('a refused restart keeps the running audio; an empty custom buffer cannot b
   await page.keyboard.press('Space');
   await expect.poll(async () => (await stripPeaks(page, [0], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.keyboard.press('Space');
+});
+
+/** Max master peak (telemetry peakL / peakR) over `ms`. */
+function masterPeak(page: Page, ms: number) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<number>((resolve) => {
+        const eng = (window as unknown as W).__daw.engine!;
+        let peak = 0;
+        const id = setInterval(() => {
+          const t = eng.telemetry();
+          peak = Math.max(peak, t[5], t[6]); // TELEMETRY.peakL, peakR
+        }, 20);
+        setTimeout(() => (clearInterval(id), resolve(peak)), ms);
+      }),
+    ms,
+  );
+}
+
+// Plan 9 Task 1: an undo applied through the new engine after an audio
+// restart is heard (the restored row gain reaches the new engine).
+test('undo audible after restart', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/');
+  await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
+  await startAudio(page);
+  // The default kit: its Kick row (row 0) gets its sample asynchronously.
+  await expect.poll(() => page.evaluate(() => (window as unknown as W).__daw.project.tracks[0]?.rows?.[0]?.sampleId ?? null), { timeout: 10_000 }).not.toBeNull();
+  await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as W).__daw;
+    const d = project.tracks[0];
+    for (const s of [0, 4, 8, 12]) a.setStep(d.id, d.rows![0].id, s, 120);
+  });
+  await page.keyboard.press('Space');
+  await expect.poll(() => masterPeak(page, 300), { timeout: 5_000 }).toBeGreaterThan(0.05);
+
+  // The Kick row's gain to 0 (its own undo step), then Stop.
+  await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as W).__daw;
+    const d = project.tracks[0];
+    a.setRowGain(d.id, d.rows![0].id, 0);
+  });
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Row gain/);
+  await page.keyboard.press('Space');
+  await expect.poll(() => page.evaluate(() => (window as unknown as W).__daw.project.playing)).toBe(false);
+
+  // Another latency hint: an audio restart.
+  await page.evaluate(() => ((window as unknown as W).__oldEngine = (window as unknown as W).__daw.engine));
+  await page.getByTestId('settings-button').click();
+  const panel = page.getByTestId('settings');
+  await panel.getByTestId('latency-hint').selectOption('playback');
+  await panel.getByTestId('settings-apply').click();
+  await expect.poll(() => page.evaluate(() => {
+    const x = window as unknown as W;
+    return x.__daw.engine !== x.__oldEngine && !document.querySelector('[data-testid="loading"]');
+  }), { timeout: 10_000 }).toBe(true);
+
+  // ⌘Z (the row gain comes back) and Play: heard within a second.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByTestId('redo')).toHaveAttribute('title', /^Redo Row gain/);
+  await page.keyboard.press('Space');
+  await expect.poll(() => masterPeak(page, 100), { timeout: 1_000, intervals: [0] }).toBeGreaterThan(0.05);
+  await page.keyboard.press('Space');
+  await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
 });

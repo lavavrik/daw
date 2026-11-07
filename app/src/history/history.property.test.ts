@@ -2,7 +2,8 @@
 // first"): structural sharing and lazy recording snapshots must never corrupt
 // an undo. For many seeded random sequences of mixed edits (one-shots,
 // gestures, recording passes, pattern / track switches that are not edits,
-// track adds and removes, undo/redo in between), undoing everything restores
+// track adds and removes, undo/redo in between; plan 9: gestures and
+// one-shots made while a pass is held open join it), undoing everything restores
 // the project as it was before the first entry, and redoing it all restores
 // the final state; the modelled engine matches a fresh load of each.
 //
@@ -59,8 +60,13 @@ async function sequence(seed: number, ops: number) {
   const synths = () => p.tracks.filter((t): t is SynthTrack => t.kind === 'synth');
   const drums = () => p.tracks.filter((t): t is DrumTrack => t.kind === 'drum');
   let pass = 1;
-  const recNote = (t: SynthTrack) =>
+  // As the recorder does (plan 9): each note is written under the pass's key,
+  // and the pass is held open from its first note until it ends (newPass),
+  // so every edit made in between joins it.
+  const recNote = (t: SynthTrack) => {
     edit(p, 'Record', () => addNote(p, sink, t.id, { pitch: 30 + r.int(60), start: r.int(3840), len: 1 + r.int(400) }), { coalesce: `rec:${pass}` });
+    h.holdOpen(`rec:${pass}`);
+  };
   // 0 - n: never -0 (toEqual tells it from 0).
   const fader = (t: Track) => setMix(p, sink, t.id, 'fader', 0 - r.int(40));
 
@@ -80,6 +86,12 @@ async function sequence(seed: number, ops: number) {
     }
     seen = now;
   };
+  /**
+   * The state the bottom entry's "before" holds: taken just before the op
+   * that made the stack non-empty, or (a redo onto an empty undo stack, after
+   * a saved non-edit such as a pattern switch) that entry's shadow "before".
+   */
+  let initial = start;
   /** One undo or redo, checked against the shadow. */
   const step = (dir: 'undo' | 'redo'): boolean => {
     const pre = serialize(p);
@@ -99,6 +111,7 @@ async function sequence(seed: number, ops: number) {
     const e = shadow.get(moved[0]);
     expect(e, ctx()).toBeDefined();
     expect(serialize(p), `${ctx()} (${dir} of entry ${moved[0]})`).toEqual(dir === 'undo' ? e!.before : e!.after);
+    if (dir === 'redo' && was.undo.length === 0) initial = e!.before;
     return true;
   };
 
@@ -143,7 +156,22 @@ async function sequence(seed: number, ops: number) {
       for (let i = 0; i < k; i++) recNote(t);
       lastRec = t;
     },
-    (log) => (log.push('newPass'), pass++),
+    (log) => (log.push('newPass'), h.release(), pass++),
+    // A jam: notes, a gesture and a one-shot made mid-pass, more notes.
+    (log) => {
+      const t = r.pick(synths());
+      const u = r.pick(p.tracks);
+      if (!t || !u) return;
+      log.push(`jam pass ${pass}`);
+      recNote(t);
+      h.begin();
+      for (let i = r.int(3); i >= 0; i--) fader(u);
+      h.commit();
+      if (r.int(2)) setTempo(p, sink, 60 + r.int(120));
+      else setMix(p, sink, 'reverb', 'rev_size', r.next());
+      for (let i = r.int(3); i >= 0; i--) recNote(t);
+      lastRec = t;
+    },
     // Not edits, but saved (current pattern) / snapshotted (selection).
     (log) => switchPattern(log, r.pick(p.tracks)),
     (log) => {
@@ -187,7 +215,6 @@ async function sequence(seed: number, ops: number) {
   ];
   const UNDO = menu.length - 2;
 
-  let initial = start;
   for (let i = 0; i < ops; i++) {
     // The state the bottom entry's "before" holds: just before the op that made the stack non-empty.
     if (!h.canUndo) initial = serialize(p);

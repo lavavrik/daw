@@ -44,6 +44,16 @@
 //   entry. "Undo take" (undoLastTake) undoes the newest history entry when
 //   it is such a pass (status().canUndoTake); any other edit since makes it
 //   an ordinary Cmd+Z away.
+// - A pass absorbs mid-pass edits (plan 9, "merge, not split"): from the
+//   pass's first recorded note until the pass ends (Stop, disarm or Undo
+//   take), every other edit, a gesture's included, merges into the pass's
+//   entry: recorderFor holds the history open on the pass's key
+//   (History.holdOpen) at each written note and releases it at the pass end
+//   (deps.endPass). So Cmd+Z after a jam removes the take, not a third of
+//   it; a knob tweak made while jamming belongs to that take. The label
+//   stays "Record"; the Undo take tooltip names the absorbed edits
+//   (status().takeEdits, undoTakeTitle). An edit before the first note is
+//   its own entry.
 import { BAR_TICKS, MAX_NOTES } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
 import { liveInputTrack } from './actions';
@@ -57,6 +67,13 @@ import type { NoteListener } from '../input/noteInput';
 export const REC_OFFSET_MIN = -200;
 /** Undo label of a recording pass. */
 export const RECORD_LABEL = 'Record';
+
+/** The Undo take button's tooltip; `edits` = other edits made during the take (RecStatus.takeEdits). */
+export function undoTakeTitle(edits: number): string {
+  return edits > 0
+    ? `Undo take (also undoes ${edits} edit${edits === 1 ? '' : 's'} made during it)`
+    : 'Undo take: undo the last recording pass (the newest undo step)';
+}
 /** History coalesce key of recording pass `n` (one undo entry per pass). */
 const passKey = (n: number) => `rec:${n}`;
 const isPass = (key: string | null | undefined) => key?.startsWith('rec:') ?? false;
@@ -85,6 +102,10 @@ export interface RecorderDeps {
   undoPass?(): boolean;
   /** True while the newest history entry is a recording pass. */
   canUndoPass?(): boolean;
+  /** Edits made during the newest pass that merged into it (History.undoAbsorbed). */
+  passEdits?(): number;
+  /** The pass ended (Stop, disarm, Undo take): edits are their own entries again (History.release). */
+  endPass?(): void;
   /** True in Song mode: recording is disabled. */
   songMode?(): boolean;
   /** The pattern is full (MAX_NOTES); called once per pass. */
@@ -99,10 +120,12 @@ export interface RecStatus {
   state: RecState;
   /** The newest undo entry is a recording pass ("Undo take" is enabled). */
   canUndoTake: boolean;
+  /** Other edits made during that pass, which Undo take undoes too (0 when !canUndoTake). */
+  takeEdits: number;
 }
 
 export const sameStatus = (a: RecStatus, b: RecStatus) =>
-  a.armed === b.armed && a.state === b.state && a.canUndoTake === b.canUndoTake;
+  a.armed === b.armed && a.state === b.state && a.canUndoTake === b.canUndoTake && a.takeEdits === b.takeEdits;
 
 interface Open {
   pitch: number;
@@ -166,6 +189,7 @@ export class Recorder implements NoteListener {
       if (this.#playing) this.#beginPass();
     } else {
       this.#closeAll(this.deps.clock.heardTicks());
+      this.deps.endPass?.();
     }
   }
 
@@ -175,7 +199,10 @@ export class Recorder implements NoteListener {
    */
   onTransport(playing: boolean, ticksNow: number) {
     if (playing === this.#playing) return;
-    if (!playing) this.#closeAll(ticksNow);
+    if (!playing) {
+      this.#closeAll(ticksNow);
+      this.deps.endPass?.();
+    }
     this.#playing = playing;
     if (playing) this.#beginPass();
   }
@@ -253,6 +280,7 @@ export class Recorder implements NoteListener {
   /** "Undo take": undo the last recording pass through the history (if it is the newest entry). */
   undoLastTake() {
     this.deps.undoPass?.();
+    this.deps.endPass?.(); // notes played after it start a new entry (held again)
   }
 
   /** True while notes played now would be recorded. */
@@ -266,10 +294,12 @@ export class Recorder implements NoteListener {
       // Negative heard ticks without a count-in are just output latency after Play.
       state = this.deps.clock.heardTicks() >= 0 ? 'recording' : this.countIn ? 'count-in' : 'armed';
     }
-    return { armed: this.armed, state, canUndoTake: this.deps.canUndoPass?.() ?? false };
+    const canUndoTake = this.deps.canUndoPass?.() ?? false;
+    return { armed: this.armed, state, canUndoTake, takeEdits: canUndoTake ? (this.deps.passEdits?.() ?? 0) : 0 };
   }
 
   #beginPass() {
+    this.deps.endPass?.();
     this.#pass++;
     this.#open.clear();
     this.#newTarget();
@@ -343,11 +373,19 @@ export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock,
   return new Recorder({
     clock,
     target: () => liveInputTrack(p),
-    // One history entry per pass: every note of it merges into one "Record" entry.
-    addNote: (trackId, patternId, o, pass) =>
-      edit(p, RECORD_LABEL, () => addNote(p, sink, trackId, o, patternId), { coalesce: passKey(pass) }),
+    // One history entry per pass: every note of it merges into one "Record"
+    // entry, and from the first written note on, the pass is held open, so
+    // every other edit until the pass ends joins it too (holdOpen is
+    // idempotent; after an undo it waits for the pass's next entry).
+    addNote: (trackId, patternId, o, pass) => {
+      const n = edit(p, RECORD_LABEL, () => addNote(p, sink, trackId, o, patternId), { coalesce: passKey(pass) });
+      if (n) p.history?.holdOpen(passKey(pass));
+      return n;
+    },
     undoPass: () => (isPass(p.history?.undoKey) ? p.history!.undo() : false),
     canUndoPass: () => isPass(p.history?.undoKey),
+    passEdits: () => p.history?.undoAbsorbed ?? 0,
+    endPass: () => p.history?.release(),
     songMode: () => p.mode === 'song',
     onFull,
   });

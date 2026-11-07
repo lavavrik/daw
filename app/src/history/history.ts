@@ -20,6 +20,15 @@
 //     and is taken lazily by settle() (below), so a recorded note costs O(1).
 //   - coalesceTask (App): one-shot edits made in the same task merge too, so
 //     a key press or paste that runs several actions is one entry.
+//   - holdOpen(key) / release() (plan 9): while the newest entry has the held
+//     key (and nothing was undone since), EVERY edit merges into it, lazily
+//     (a recording pass absorbs the edits made during it: the recorder holds
+//     "rec:<pass>" from the pass's first note until the pass ends). begin()
+//     and commit() then neither open nor close an entry (commit still
+//     settles); a drag still running when the hold is released continues as
+//     a gesture of its own. A gesture already open when the hold starts gets
+//     the key, so its entry becomes the held one. `undoAbsorbed` counts the
+//     absorbed edits (a gesture or a same-task group counts once).
 // An entry whose before and after only differ in the track selection is
 // dropped (selecting is not an edit; projectFingerprint ignores it too).
 // A new entry clears the redo stack; at most `cap` entries are kept.
@@ -92,6 +101,17 @@ export interface History {
   /** The coalesce key of the entry undo would apply ("rec:3": a recording pass), or null. */
   readonly undoKey: string | null;
   /**
+   * Hold the newest entry with coalesce key `key` open: from now on every
+   * edit (one-shots, gestures) merges into it while it is the newest entry
+   * and nothing was undone since. One hold at a time (a new key replaces
+   * the old one). The recorder holds "rec:<pass>" from the pass's first note.
+   */
+  holdOpen(key: string): void;
+  /** End the hold (the pass ended). Harmless when nothing is held. */
+  release(): void;
+  /** Edits absorbed by the entry undo would apply while it was held (see holdOpen); 0 if none. */
+  readonly undoAbsorbed: number;
+  /**
    * A starting-point change was just applied to the live project outside
    * the history: map every stored snapshot through `fn` (pure; returns its
    * argument when the change does not apply to it), keeping them shared and
@@ -131,6 +151,8 @@ interface Entry {
   /** debugStacks (test-only): identity and merge count. */
   id: number;
   merges: number;
+  /** Other edits merged in while it was held (holdOpen): a gesture or a same-task group counts once. */
+  absorbed: number;
 }
 
 interface Open {
@@ -140,6 +162,8 @@ interface Open {
   coalesce?: string;
   /** A one-shot that will merge into this (newest) entry: needs no before-snapshot. */
   into?: Entry;
+  /** Opened by begin() (a pointer gesture), not by a transact. */
+  gesture?: boolean;
 }
 
 export function createHistory(o: HistoryOptions): History {
@@ -158,6 +182,14 @@ export function createHistory(o: HistoryOptions): History {
   /** The newest snapshot taken or applied: the next one shares with it. */
   let lastSnap: ProjectJson | null = null;
   let nextId = 1;
+  /** holdOpen's key (null: no hold). */
+  let hold: string | null = null;
+  /** begin() was skipped because of the hold, and its commit() has not come yet. */
+  let heldGesture = false;
+  /** That gesture already counted as one absorbed edit. */
+  let heldGestureCounted = false;
+  /** A same-task one-shot already counted as one absorbed edit (coalesceTask). */
+  let absorbedTask = false;
 
   /** A snapshot of the live project, sharing every unchanged subtree with the previous one. */
   function snap(): ProjectJson {
@@ -191,10 +223,31 @@ export function createHistory(o: HistoryOptions): History {
     g.before = snap();
   };
 
+  /** The held entry: the newest one, with the held key, nothing undone since. */
+  function heldTarget(): Entry | undefined {
+    const top = undo[undo.length - 1];
+    return hold !== null && top && top === last && top.coalesce === hold ? top : undefined;
+  }
+
   /** The newest entry, if an edit with coalesce key `key` made now would merge into it. */
   function mergeTarget(key: string | undefined): Entry | undefined {
     const top = undo[undo.length - 1];
+    if (heldTarget()) return top;
     return top && top === last && ((key !== undefined && top.coalesce === key) || (o.coalesceTask && taskOpen)) ? top : undefined;
+  }
+
+  /** An edit other than the held entry's own (a pass's note) merged into it: count it. */
+  function absorb(top: Entry) {
+    if (heldGesture) {
+      if (!heldGestureCounted) top.absorbed++;
+      heldGestureCounted = true;
+    } else if (!absorbedTask) {
+      top.absorbed++;
+      if (o.coalesceTask) {
+        absorbedTask = true;
+        queueMicrotask(() => (absorbedTask = false));
+      }
+    }
   }
 
   function push(g: Open) {
@@ -202,8 +255,10 @@ export function createHistory(o: HistoryOptions): History {
     const top = undo[undo.length - 1];
     const merge = g.into ? g.into === top && top === last : mergeTarget(g.coalesce) !== undefined;
     if (merge) top.merges++;
-    if (merge && g.coalesce !== undefined && top.coalesce === g.coalesce) {
-      top.stale = true; // a recorded note: no snapshot now (settle() takes it)
+    const held = merge && heldTarget() === top;
+    if (held && g.coalesce !== top.coalesce) absorb(top);
+    if (merge && ((g.coalesce !== undefined && top.coalesce === g.coalesce) || held)) {
+      top.stale = true; // a recorded note, or an edit the held pass absorbs: no snapshot now (settle() takes it)
     } else if (merge) {
       const after = snap();
       top.stale = false;
@@ -217,7 +272,7 @@ export function createHistory(o: HistoryOptions): History {
       if (sameProject(g.before, after)) return; // nothing (but maybe the selection) changed
       // Share the snapshot with the previous entry when nothing happened between them.
       const before = top && jsonEqual(top.after, g.before) ? top.after : g.before;
-      const e: Entry = { label: g.label ?? 'Edit', before, after, coalesce: g.coalesce, id: nextId++, merges: 0 };
+      const e: Entry = { label: g.label ?? 'Edit', before, after, coalesce: g.coalesce, id: nextId++, merges: 0, absorbed: 0 };
       undo.push(e);
       if (undo.length > cap) undo.splice(0, undo.length - cap);
       last = e;
@@ -302,10 +357,18 @@ export function createHistory(o: HistoryOptions): History {
     begin(label) {
       if (applying || depth > 0) return;
       close();
-      open = { label: label ?? null, before: null };
+      if (heldTarget()) {
+        // Held: the gesture's edits merge one by one into the held entry.
+        heldGesture = true;
+        heldGestureCounted = false;
+        return;
+      }
+      heldGesture = false;
+      open = { label: label ?? null, before: null, gesture: true };
     },
     commit() {
       if (depth > 0) return;
+      heldGesture = false;
       close();
       settle();
     },
@@ -317,6 +380,26 @@ export function createHistory(o: HistoryOptions): History {
       open = null;
       last = null;
       lastSnap = null;
+      hold = null;
+      heldGesture = false;
+      changed();
+    },
+    holdOpen(key) {
+      // A gesture open since before the pass's first note (which landed in
+      // it): its entry becomes the held one.
+      if (open?.gesture && !open.into) open.coalesce = key;
+      if (hold === key) return; // the recorder calls it at every note
+      hold = key;
+      changed();
+    },
+    release() {
+      if (hold === null) return;
+      hold = null;
+      if (heldGesture && depth === 0 && !open) {
+        // A drag still running: the rest of it is a gesture of its own.
+        heldGesture = false;
+        open = { label: null, before: null, gesture: true };
+      }
       changed();
     },
     settle: () => {
@@ -352,6 +435,9 @@ export function createHistory(o: HistoryOptions): History {
     },
     get undoKey() {
       return undo[undo.length - 1]?.coalesce ?? null;
+    },
+    get undoAbsorbed() {
+      return undo[undo.length - 1]?.absorbed ?? 0;
     },
     get applying() {
       return applying;

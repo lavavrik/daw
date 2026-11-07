@@ -66,10 +66,43 @@ edit is undoable as long as it is in the saved project.
   they belong to the pass being undone. On a **redo** while a recorded note
   is held, that note becomes a new edit, which clears the redo stack: the
   redo then does nothing (release the key, then redo).
+- **A pass absorbs mid-pass edits** (plan 9; decision: *merge, not split*).
+  From a pass's first recorded note until the pass ends (Stop, disarm or
+  Undo take), **every other edit**, a gesture's included, merges into the
+  pass's entry. *Why:* ⌘Z after a jam should remove the take, not a third
+  of it; a knob tweak made while jamming belongs to that take.
+  - API: `History.holdOpen(key)` / `release()`. The recorder holds
+    `rec:<pass>` at each written note (idempotent; so at the first one) and
+    releases at the pass end (`RecorderDeps.endPass`).
+  - While held (the newest entry has the key and nothing was undone
+    since), every transact merges into it **lazily** (marks it stale, like a
+    note: no snapshot), and `begin()`/`commit()` neither open nor close an
+    entry (`commit` still settles). A drag still running when the hold is
+    released continues as a gesture of its own; a gesture already open when
+    the hold starts (the first note landed in it) gets the key, so its
+    entry becomes the pass's.
+  - After an undo mid-pass the hold waits: the pass's next note makes a new
+    entry, which edits then join. `clear()` drops the hold.
+  - The label stays "Record". `undoAbsorbed` counts the absorbed edits (a
+    gesture, or a same-task group with `coalesceTask`, counts once; an edit
+    that changed nothing may count, since a lazy merge takes no snapshot):
+    the Undo take tooltip says "Undo take (also undoes N edits made during
+    it)" when N > 0 (`recorder.ts` `undoTakeTitle`, `RecStatus.takeEdits`).
+  - An edit made before the pass's first note is its own entry, as before.
 
 Undo/redo (⌘Z / ⇧⌘Z or Ctrl+Y, ignored while typing; the top bar's ↶ ↷
 with "Undo Move notes" tooltips) first commit an open gesture, and are
 refused while `p.loading`.
+
+- **Inline confirms close first** (plan 9). An open `InlineConfirm`
+  ("Remove track X?") asks about the state on screen; an undo replaces that
+  state, so the question never stays open over a different one. App's
+  undo/redo (shortcut and ↶ ↷) call `cancelOpenConfirms()`
+  (`ui/inlineConfirms.ts`: every InlineConfirm registers its `oncancel` on
+  mount) and `flushSync()` **before** applying: the confirm closes exactly
+  as its Cancel would (focus back to its anchor if still there), then the
+  undo applies. The popover lets ⌘Z / ⇧⌘Z / Ctrl+Y through to the
+  shortcuts (every other key stays inside it).
 
 - **Starting-point changes** (plan 8 Task 4): the default kit's samples land
   in a fresh session asynchronously (state/defaultKit.ts), maybe after the
@@ -191,9 +224,20 @@ removed notes`).
   of a never-settled pass mid-playback restores the pre-pass state exactly,
   a pattern switch after a pass is not part of its "after", a pass that
   ends where it began is dropped, unchanged tracks / mixer / patch are `===`
-  across snapshots, snapshots are frozen.
+  across snapshots, snapshots are frozen; recording pass hold: `edit
+  mid-pass joins the pass` (notes, a fader drag, notes: one entry; undo
+  restores the pre-pass fader and removes every note, redo restores both),
+  one-shots merge and count once per task, held merges are lazy, a gesture
+  open at the hold's start becomes the pass and a drag that outlives the
+  pass stays one entry, an undo mid-pass makes the hold wait.
 - `history.property.test.ts`: the randomized round-trip above (`SEED=n`
-  reruns one sequence).
+  reruns one sequence); recorded notes hold their pass open until a
+  `newPass` op releases it, so the random gestures and one-shots in between
+  join it, and a `jam` op (notes, a gesture, a one-shot, notes) forces that
+  mix. A redo onto an empty undo stack resets the expected bottom state.
+- `state/recorder.test.ts`: `undo take undoes edits made during it` (the
+  tooltip count is 1; Stop and Undo take end the hold).
+- `ui/inlineConfirms.test.ts`: `undo cancels an open inline confirm`.
 - `project/serialize.share.test.ts`: `jsonEqual` agrees with
   `JSON.stringify`; sharing by slot; `sameProject` is fingerprint equality.
 - `history.measure.test.ts`: the numbers above (skipped unless `MEASURE=1`).
@@ -205,4 +249,8 @@ removed notes`).
   sent for a note edit.
 - e2e `tests/e2e/history.spec.ts`: removing two tracks and undoing restores
   them (sound resumes, transport never stops); undo/redo while a note
-  sounds; a fader drag is one step.
+  sounds; a fader drag is one step; `undo closes an open confirm` (↶ and
+  ⌘Z with "Remove track?" open: popover gone, track kept, previous edit
+  undone, focus back on the ×).
+- e2e `tests/e2e/settings.spec.ts` `undo audible after restart`: a row-gain
+  edit undone after an audio restart is heard through the new engine.

@@ -113,14 +113,83 @@ slot calls `Rack::automate(module, param, value)`:
 
 ## Levels
 
+Two policies, side by side:
+
+| | Starter patches | House patches (plan 11) |
+|---|---|---|
+| Rule | Out `level` set low on poly patches so a 4-note chord (5 for Pad) peaks below ~0.9 pre-limiter | Loudness −15 dBFS ± 3 dB on the patch's typical phrase at velocity 100, and a pre-limiter peak < 0.9 at velocity 127 |
+| Where | `STARTER_PATCHES` (Chord Stab 0.4, Pad 0.25, Pluck 0.3) | `housePatches.ts` |
+| Test | `engine/tests/starter_patches.rs` (fixture `starter_patches.txt`) | `engine/tests/house_patches.rs` (fixture `house_patches.txt`) |
+| Consequence | Poly is ~9 dB quieter than mono | Patches sit at similar loudness without fader moves |
+
 Out sums every poly channel unnormalised (8 voices at full level would be
-8x one voice), times `level`. The poly starter patches therefore set a low
-Out `level` (Chord Stab 0.4, Pad 0.25, Pluck 0.3) so a 4-note chord (5 for
-Pad) peaks below ~0.9 before the master limiter (plan 5; it replaced the
-plan-1 hard clamp). `engine/tests/starter_patches.rs`
-replays each starter patch's exact UI command list from
-`engine/tests/fixtures/starter_patches.txt` (generated and parity-checked by
-`app/src/state/patches.fixture.test.ts`) and asserts this.
+8x one voice), times `level`. The starter patches are the default track
+patch and the test fixtures, so they never change; that is why the house
+set has its own rule instead of retuning them.
+
+## House patches
+
+Twelve built-in patches in `app/src/state/housePatches.ts`, grouped in the
+patch menu after the starters (`BUILTIN_GROUPS` in `patches.ts`; the group
+is not part of a `Patch`, so saved files don't carry it). Each has a purpose
+comment and a comment per module.
+
+| Group | Patch | Voice | Phrase | Role |
+|---|---|---|---|---|
+| Leads & Stabs | Sax | mono | lead | Breathy alto-like hook lead |
+| Leads & Stabs | Brass Stab | poly | chord4 | Disco-house hit; Formant + filter bloom |
+| Leads & Stabs | Arp Pluck | poly | chord4 | Short bright 1/16 pluck |
+| Keys | Tine Keys | poly | chord4 | FM e-piano; velocity rings the bell |
+| Keys | Piano Stab | poly | chord4 | Classic house piano stab |
+| Keys | Garage Organ | poly | chord4 | Percussive UKG organ, Formant wah |
+| Bass | Organ Bass | mono | bass | Hollow 90s organ bass |
+| Bass | Reese Bass | mono | bass | Detuned Reese; mod wheel opens it |
+| Bass | Acid Line | mono | bass | Velocity accent, legato slide |
+| Bass | Sub Bass | mono | bass | Clean sub, a little saturation |
+| Pads | Strings | poly | chord5 | String-machine swell + chorus |
+| Pads | Warm Pad | poly | chord5 | 2-bar LFO-swept pad + chorus |
+
+Phrases (`HOUSE_PHRASES`): chord4 = C4 E4 G4 B4, chord5 = C3 G3 C4 E4 B4,
+bass = C2 then C3, lead = C4.
+
+**Rules** (checked for every built-in by `patches.test.ts`): one MIDI In and
+one Out; MIDI In `pitch` feeds every Osc and `gate` every ADSR; at most 24
+modules (room to edit under the 32 cap); unique names, case-insensitive,
+and no trademarks. **No Delay or Reverb** in a patch: use the mixer sends,
+so loading house patches never drains the 8-slot FX banks. Chorus (16
+slots) is allowed where it defines the sound (Tine Keys, Strings, Warm
+Pad). Built-in names are refused by Save patch (`isBuiltinName`).
+
+**Sax signal flow** (19 modules, mono, glide Legato):
+
+```
+MIDI In  pitch -> Osc A (saw), Osc B (square, +5 ct), Formant.pitch
+         gate  -> amp, filter, breath and vibrato ADSRs
+         vel   -> amp, filter and breath ADSR .vel
+         mod   -> Formant.cv      (mod wheel: formants up, brighter)
+Osc A + Osc B -> Mixer -> Formant (3 peaks, track 0.15) -> LP12 (cv <- filter ADSR)
+  -> Saturator -> VCA (amp ADSR) -> Mixer 2.in1
+Noise -> BP 3.2 kHz -> VCA (breath ADSR: short chiff, quiet hiss) -> Mixer 2.in2
+Mixer 2 -> Out
+LFO 5.2 Hz -> VCA (vibrato ADSR: Delay, then fade-in) -> Osc A.fm, Osc B.fm
+```
+
+The Sax has no amplitude overshoot: the onset "push" is the filter
+envelope's brightness overshoot plus the breath chiff. Its acceptance
+numbers (formant body, chiff lead, delayed vibrato, velocity ratio, legato
+vs separated notes, mod-wheel brightening) are measured in `house_patches.rs`.
+
+**Loudness rule.** Momentary loudness = the maximum RMS of (L+R)/2 over
+400 ms windows (100 ms hop), unweighted, pre-limiter at the default master
+gain (the ×8 trick from `starter_patches.rs`). Unweighted RMS makes Sub
+Bass sound quieter on small speakers at equal RMS; that is accepted.
+
+**Retuning a patch.** Edit its `Out` `level` (or the sound) in
+`housePatches.ts`, regenerate the fixture
+(`UPDATE_FIXTURES=1 npx vitest run app/src/state/patches.fixture.test.ts`),
+then run `cargo test -p daw-engine --test house_patches` and read the
+numbers. Tune the patch, never the test band; any band change is recorded
+in `docs/followups/plan-11.md`.
 
 ## Effect modules and the FX pool
 

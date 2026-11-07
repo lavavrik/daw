@@ -498,3 +498,59 @@ test('spec 6 mix plus audio tracks and 64 automation lanes stays under the brows
   expect(ink.w).toBeGreaterThan(0);
   expect(ink.n).toBeGreaterThan(0);
 });
+
+/**
+ * Plan 11: four house tracks (Strings, Piano Stab, Reese Bass, Sax), each
+ * playing a one-bar 16-note pattern with the transport running. Strings and
+ * Piano Stab are poly (overlapping notes and release tails); Reese and Sax
+ * are mono. Same budget as the other perf cases: CPU share < 0.6, audible,
+ * no new dropouts or engine errors.
+ */
+test('four house tracks stay under budget', async ({ page }) => {
+  await startAudio(page);
+  const ok = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    ['Strings', 'Piano Stab', 'Reese Bass', 'Sax'].forEach((n) => a.addSynthTrack(n));
+    const synths = project.tracks.filter((t) => t.kind === 'synth');
+    synths.forEach((t, k) => {
+      const base = [60, 48, 36, 67][k];
+      for (let i = 0; i < 16; i++) {
+        const pitch = base + [0, 3, 7, 10][(i + k) % 4] + (i % 8 === 7 ? 2 : 0);
+        a.addNote(t.id, { pitch, start: i * 240, len: [960, 180, 200, 220][k], vel: 100 });
+      }
+    });
+    return synths.length === 4;
+  });
+  expect(ok).toBe(true);
+  const drop0 = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
+  const err0 = await slot(page, 7)();
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1);
+  await page.waitForTimeout(2500); // warm-up (telemetry CPU is written once a second)
+  const run = await page.evaluate(
+    () =>
+      new Promise<{ cpu: number[]; peak: number }>((resolve) => {
+        const eng = (window as unknown as DawWindow).__daw!.engine!;
+        const cpu: number[] = [];
+        let peak = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          const t = eng.telemetry();
+          cpu.push(t[3]);
+          peak = Math.max(peak, t[5], t[6]);
+          if (performance.now() - t0 > 6000) {
+            clearInterval(id);
+            resolve({ cpu, peak });
+          }
+        }, 100);
+      }),
+  );
+  const cpuMax = Math.max(...run.cpu);
+  const cpuMean = run.cpu.reduce((a, b) => a + b, 0) / run.cpu.length;
+  console.log(`PERF four house tracks: cpu mean=${(cpuMean * 100).toFixed(1)}% max=${(cpuMax * 100).toFixed(1)}% peak=${run.peak.toFixed(2)}`);
+  expect(cpuMax).toBeGreaterThan(0);
+  expect(cpuMax).toBeLessThan(0.6);
+  expect(run.peak).toBeGreaterThan(0.01); // audible
+  expect(await slot(page, 7)()).toBe(err0);
+  expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts())).toBe(drop0);
+});

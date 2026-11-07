@@ -92,10 +92,29 @@ track is selected, the synth track selected last.
 The **Instrument** tab shows the track's rack: module panels joined by cables.
 Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
 
-- **Patch** loads a starter patch (Deep Bass, Chord Stab, Pad, Lead, Pluck)
-  or one you saved to the library, replacing the rack. After any edit
-  **(edited)** appears; **revert** reloads the patch. Loading over edits asks
-  first (an inline "Discard your edits…?" under the control).
+- **Patch** loads a built-in patch or one you saved to the library,
+  replacing the rack. The menu lists the built-ins by group, then your
+  library. After any edit **(edited)** appears; **revert** reloads the patch.
+  Loading over edits asks first (an inline "Discard your edits…?" under the
+  control). Built-in patches:
+  - *Starter*: Deep Bass, Chord Stab, Pad, Lead, Pluck (the basics; Deep
+    Bass is the default for a new track).
+  - *House · Leads & Stabs*: **Sax** (breathy alto-like mono hook lead with
+    delayed vibrato, velocity brightness and legato glide), **Brass Stab**
+    (bright disco-house hit that blooms), **Arp Pluck** (short, bright, for
+    1/16 arps).
+  - *House · Keys*: **Tine Keys** (FM electric piano for deep-house chords;
+    play harder for more bell), **Piano Stab** (the classic house piano
+    chord stab), **Garage Organ** (percussive UK-garage organ with a wah
+    bounce).
+  - *House · Bass*: **Organ Bass** (hollow 90s organ bass), **Reese Bass**
+    (detuned, phasing Reese), **Acid Line** (squelchy; velocity is the
+    accent, overlapping notes slide), **Sub Bass** (clean deep-house sub).
+  - *House · Pads*: **Strings** (string-machine section with a slow swell),
+    **Warm Pad** (a pad that moves, with a 2-bar filter sweep).
+  Built-in names can't be used for **Save patch**. Tip: the **mod wheel**
+  (a MIDI keyboard's) opens the Sax (brighter, "pushed") and the Reese (up
+  to four octaves of filter), and rides the Acid Line's cutoff.
 - **Save patch** stores the rack in the library folder's `patches/` (it needs
   a library folder, see [Library](#library)); it then shows in **Patch**.
 - **Knobs:** drag up or down (Shift = fine), double-click for the default, or
@@ -121,15 +140,23 @@ Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
 **Effects in the rack.** Besides the sources and shapers, + Add module lists
 **Delay** (tempo-synced, up to 2 s), **Reverb**, **Chorus**, **EQ**,
 **Compressor** (with a sidechain input), **Saturator**, **Attenuator** (level
-and offset, handy for scaling a CV) and the **Sample Player** (plays a project
+and offset, handy for scaling a CV), **Formant** (three resonant peaks that
+give a sound a vowel-like or horn-like body; they can follow the note and
+take a CV, as in the Sax's body and the Garage Organ's "wah") and the
+**Sample Player** (plays a project
 sample, optionally pitched from the keys; follow it with an ADSR and a VCA for
 gated notes; drop a sample on its panel). Delay, Reverb and Chorus share
 memory across the project: at most 8 delays, 8 reverbs and 16 choruses over
 all tracks. When a bank is full the menu greys the module out ("All 8 delays
 in use").
 
-Poly patches (Chord Stab, Pad, Pluck) are about 9 dB quieter than the mono
-ones (Deep Bass, Lead) so chords don't clip: raise their faders in the mixer.
+The starter poly patches (Chord Stab, Pad, Pluck) are about 9 dB quieter
+than the starter mono ones (Deep Bass, Lead) so chords don't clip: raise
+their faders in the mixer. The house patches are levelled instead: each
+reads about −15 dBFS (momentary loudness, within ±3 dB) on its typical
+phrase at velocity 100, so they sit at similar levels without touching the
+faders. The ADSR also has **Delay** and **Velocity** knobs now, and MIDI In
+a **Glide mode** (Always, or Legato for slides on overlapping notes only).
 
 ## Recording
 

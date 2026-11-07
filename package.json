@@ -9,7 +9,7 @@
     "build:engine": "node scripts/build-engine.mjs",
     "dev": "npm run build:engine && vite",
     "preview": "npm run build:engine && vite build && vite preview",
-    "test": "cargo test --workspace && vitest run",
+    "test": "cargo test --workspace && npm run build:engine && vitest run",
     "test:e2e": "playwright test"
   },
   "author": "",

@@ -12,6 +12,7 @@
   import { mod } from '../audio/audioClock';
   import type { AudioClock } from '../audio/audioClock';
   import { MAX_ROWS, MAX_SAMPLES, currentPattern } from '../state/project.svelte';
+  import { patternPosAt } from '../state/song-actions';
   import { deferSampleLoad } from '../state/sampleLoads';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
@@ -52,9 +53,15 @@
       const t = engine.telemetry();
       // Heard position (latency-compensated). Negative = count-in: no column.
       const ticks = clock !== null ? clock.heardTicks() : t[TELEMETRY.ticks];
-      const next = t[TELEMETRY.playing] === 1 && ticks >= 0
-        ? Math.floor(mod(ticks, pat.stepCount * 240) / 240)
-        : -1;
+      // Pattern mode: ticks loop the current pattern. Song mode: ticks are song
+      // time, so ask the clips; no clip of this pattern playing -> no column.
+      let next = -1;
+      if (t[TELEMETRY.playing] === 1 && ticks >= 0) {
+        if (p.mode === 'song') {
+          const pos = patternPosAt(track, pat.id, ticks);
+          if (pos !== null) next = Math.floor(pos / 240);
+        } else next = Math.floor(mod(ticks, pat.stepCount * 240) / 240);
+      }
       if (next !== playStep) playStep = next;
       raf = requestAnimationFrame(loop);
     };

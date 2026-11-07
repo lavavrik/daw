@@ -15,6 +15,7 @@
   import { onMount, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
+  import { setLoop, setMode } from '../state/song-actions';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
@@ -124,6 +125,19 @@
   <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)">
     {p.playing ? '■ Stop' : '▶ Play'}
   </button>
+  <span class="seg" role="group" aria-label="Playback mode" data-testid="mode-toggle" data-mode={p.mode} title="Pattern or Song playback (Shift+L)">
+    <button class:on={p.mode === 'pattern'} aria-pressed={p.mode === 'pattern'} data-testid="mode-pat" onclick={() => setMode(p, engine, 'pattern')}>PAT</button>
+    <button class:on={p.mode === 'song'} aria-pressed={p.mode === 'song'} data-testid="mode-song" onclick={() => setMode(p, engine, 'song')}>SONG</button>
+  </span>
+  <button
+    class="small"
+    class:on={p.loop.on && p.mode === 'song'}
+    aria-pressed={p.loop.on}
+    data-testid="loop-toggle"
+    disabled={p.mode !== 'song'}
+    onclick={() => setLoop(p, engine, { on: !p.loop.on })}
+    title={p.mode === 'song' ? 'Loop the loop range while playing the song' : 'Loop range applies to Song mode'}
+  >Loop</button>
   <button
     class="rec"
     class:armed={rec.armed}
@@ -134,7 +148,7 @@
     onclick={onToggleArm}
     disabled={p.mode === 'song' && !rec.armed}
     title={p.mode === 'song'
-      ? 'Recording is Pattern-mode only (switch to PAT).'
+      ? 'Recording works in Pattern mode'
       : 'Record arm (R). Records into the Keys → track\'s current pattern while playing.'}
   >{recLabel}</button>
   <button
@@ -219,6 +233,10 @@
   button:hover { background: #33353e; }
   button.on { background: #f0a23a; color: #111; border-color: #f0a23a; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .seg { display: inline-flex; flex: none; }
+  .seg button { border-radius: 0; font-size: 11px; padding: 4px 8px; }
+  .seg button:first-child { border-radius: 4px 0 0 4px; }
+  .seg button:last-child { border-radius: 0 4px 4px 0; }
   .small { font-size: 11px; padding: 4px 8px; }
   .rec { min-width: 84px; color: #e06666; }
   .rec.armed { background: #c92a2a; border-color: #c92a2a; color: #fff; font-weight: 700; }

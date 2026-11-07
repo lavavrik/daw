@@ -7,6 +7,8 @@
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
+  import PatternPicker from './PatternPicker.svelte';
+  import { currentPattern } from '../state/project.svelte';
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
@@ -37,7 +39,8 @@
   <div class="head">
     {#if track}
       <span class="swatch" style:background={track.color}></span>
-      <b>{track.name}</b>
+      <b data-testid="panel-title">{track.name} · {currentPattern(track).name}</b>
+      <PatternPicker {p} {engine} {track} />
     {:else}
       <span class="none">No track selected</span>
     {/if}

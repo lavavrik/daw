@@ -1,5 +1,6 @@
 <script module lang="ts">
   import type { GridKey } from './prMath';
+  import { patternPosAt } from '../../state/song-actions';
   /** Grid size survives track switches for the session (the roll remounts per track). */
   let lastGrid: GridKey = '1/16';
 </script>
@@ -425,7 +426,10 @@
     let raf = 0;
     const loop = () => {
       const t = c.heardTicks();
-      playTick = Number.isFinite(t) && t >= 0 ? mod(t, pat.bars * BAR) : null;
+      // Song mode: t is song time; only a clip of this pattern shows the playhead.
+      playTick = !Number.isFinite(t) || t < 0 ? null
+        : p.mode === 'song' ? patternPosAt(track, pat.id, t)
+        : mod(t, pat.bars * BAR);
       draw();
       raf = requestAnimationFrame(loop);
     };

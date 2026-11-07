@@ -177,3 +177,23 @@ export function seek(p: Project, sink: CommandSink, ticks: number) {
   p.songPosition = Math.min(MAX_SONG_TICKS, Math.max(0, Math.round(ticks)));
   sink.send(Op.SEEK, p.songPosition);
 }
+
+/**
+ * Where inside pattern `patternId` the song is at `songTick`, for the playheads:
+ * the position (ticks, 0..pattern length) of the clip of that pattern playing
+ * on this track, or null when none is. Same mapping as the engine:
+ * (offset + tick - start) mod pattern length. Where clips overlap, the one that
+ * started latest wins (the editor shows one playhead).
+ */
+export function patternPosAt(t: Track, patternId: string, songTick: number): number | null {
+  const pat = patternOf(t, patternId);
+  if (!pat || !Number.isFinite(songTick)) return null;
+  let best: Clip | null = null;
+  for (const c of t.clips) {
+    if (c.patternId !== patternId || songTick < c.start || songTick >= c.start + c.len) continue;
+    if (!best || c.start > best.start) best = c;
+  }
+  if (!best) return null;
+  const len = patternLength(pat);
+  return (((best.offset + songTick - best.start) % len) + len) % len;
+}

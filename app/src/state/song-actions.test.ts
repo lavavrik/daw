@@ -6,7 +6,7 @@ import { addDrumTrack, stop } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 import {
-  addClip, deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, setMode,
+  addClip, deleteClips, duplicateClips, makeUnique, moveClips, patternPosAt, resizeClip, seek, setLoop, setMode,
 } from './song-actions';
 
 function setup() {
@@ -220,5 +220,45 @@ describe('mode, loop, seek', () => {
     expect(currentPattern(d).steps).toHaveLength(16);
     expect(currentPattern(s).bars).toBe(4);
     expect(d.clips).toEqual([]);
+  });
+});
+
+describe('patternPosAt', () => {
+  it('maps song ticks inside a clip, null outside or for another pattern', () => {
+    const { p, sink, d0 } = setup();
+    const pid = d0.patterns[0].id; // 16 steps = 3840 ticks
+    addClip(p, sink, d0.id, { start: 1000, len: 2000 });
+    expect(patternPosAt(d0, pid, 1000)).toBe(0);
+    expect(patternPosAt(d0, pid, 1500)).toBe(500);
+    expect(patternPosAt(d0, pid, 2999)).toBe(1999);
+    expect(patternPosAt(d0, pid, 3000)).toBeNull(); // end is exclusive
+    expect(patternPosAt(d0, pid, 999)).toBeNull();
+    newPattern(p, sink, d0.id);
+    expect(patternPosAt(d0, d0.currentPatternId, 1500)).toBeNull(); // clip plays another pattern
+  });
+
+  it('applies offset and repeats via mod pattern length', () => {
+    const { p, sink, d0 } = setup();
+    const pid = d0.patterns[0].id;
+    addClip(p, sink, d0.id, { start: 0, len: 10000, offset: 240 });
+    expect(patternPosAt(d0, pid, 0)).toBe(240);
+    expect(patternPosAt(d0, pid, 3600)).toBe(0); // 240+3600 = 3840 wraps
+    expect(patternPosAt(d0, pid, 9000)).toBe((240 + 9000) % 3840);
+  });
+
+  it('overlap: the clip that started latest wins', () => {
+    const { p, sink, d0 } = setup();
+    const pid = d0.patterns[0].id;
+    addClip(p, sink, d0.id, { start: 0, len: 8000 });
+    addClip(p, sink, d0.id, { start: 1000, len: 1000, offset: 100 });
+    expect(patternPosAt(d0, pid, 500)).toBe(500);
+    expect(patternPosAt(d0, pid, 1500)).toBe(600); // later clip: 100 + 500
+    expect(patternPosAt(d0, pid, 2500)).toBe(2500); // back to the first
+  });
+
+  it('non-finite tick is null', () => {
+    const { p, sink, d0 } = setup();
+    addClip(p, sink, d0.id, { start: 0 });
+    expect(patternPosAt(d0, d0.patterns[0].id, NaN)).toBeNull();
   });
 });

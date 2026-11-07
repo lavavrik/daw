@@ -1,8 +1,9 @@
 // Global keyboard shortcuts: Space = play/stop, R = record arm, Z/X = octave
-// down/up, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
+// down/up, Shift+L = PAT/SONG, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
 // through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
 // timeStamp, so the recorder can place them at the heard time.
 import { togglePlay } from '../state/actions';
+import { setMode } from '../state/song-actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
 import { keyToNote } from './qwertyPiano';
@@ -19,6 +20,8 @@ export interface ShortcutOptions {
   onTogglePlay?: () => void;
   /** R: toggle record arm. */
   onToggleArm?: () => void;
+  /** Shift+L: toggle PAT/SONG (plain L stays a piano key). Default setMode(p, sink, other). */
+  onToggleMode?: () => void;
 }
 
 /** Performance-time stamp of an event; "now" when absent (synthetic releases). */
@@ -83,6 +86,10 @@ export function createShortcutHandlers(
       if (e.code === 'Space') {
         e.preventDefault(); // no page scroll / focused-button activation
         if (!e.repeat) (opts.onTogglePlay ?? (() => togglePlay(p, sink)))();
+        return;
+      }
+      if (e.code === 'KeyL' && e.shiftKey) {
+        if (!e.repeat) (opts.onToggleMode ?? (() => setMode(p, sink, p.mode === 'song' ? 'pattern' : 'song')))();
         return;
       }
       if (e.code === 'KeyR') {

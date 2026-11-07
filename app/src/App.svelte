@@ -36,7 +36,7 @@
   let stopWatch: (() => void) | null = null;
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op, clock: null, recorder: null };
+  window.__daw = { engine: null, Op, clock: null, recorder: null, project };
 
   /**
    * Play / Stop for the button and Space. Play while armed with Count-in on

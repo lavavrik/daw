@@ -71,3 +71,23 @@ shows its rack (code: `app/src/ui/rack/`).
   from an empty input to an output. Escape cancels a cable or knob drag.
 - **+ Add module** (grouped by category; up to 32 modules) and the × on a
   module header to remove it.
+
+## Record a bassline
+
+1. Click **+ Synth track** (opens the piano roll). Play with the computer keys
+   (A-row) or a MIDI keyboard.
+2. Arm recording with **R** or the **● Rec** button (it turns red). Turn on
+   **Count-in** for one bar of clicks before recording starts (off by default).
+3. Press **Space**. Notes you play are recorded into the track's pattern, which
+   loops; later passes overdub. **Undo take** removes exactly what the last
+   pass added.
+4. Edit in the piano roll: click to draw, drag to move, drag the right edge to
+   resize, **Alt** turns snapping off, **Q** quantizes (selection, or all
+   notes), Delete removes. Grid size and pattern length are in its toolbar.
+
+**Bluetooth headphones** add ~150-250 ms of delay. Recording maps your key
+presses to what you *heard* (via `getOutputTimestamp`), so notes land on the
+beat anyway. If it still feels early or late, adjust **Rec offset** (ms, in the
+top bar; positive = notes land earlier). Playing live still feels delayed;
+wired headphones or speakers fix that. Design notes:
+`docs/architecture/sequencer.md`.

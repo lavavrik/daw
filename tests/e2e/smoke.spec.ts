@@ -13,6 +13,8 @@ type DawWindow = {
     } | null;
     Op: Record<string, number>;
     recorder?: { lastTakeIds: string[]; armed: boolean } | null;
+    clock?: { heardTicks(): number } | null;
+    project: { tracks: { pattern?: { notes: { pitch: number; start: number; len: number }[] } }[] };
   };
 };
 
@@ -728,4 +730,66 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);
   expect(await slot(page, 2)()).toBeGreaterThanOrEqual(0);
+});
+
+// ---- Recording e2e with simulated Bluetooth latency (plan 3, Task 6) ----
+
+test('record from the keyboard, notes land on the heard beat (simulated Bluetooth, 250 ms)', async ({ page }) => {
+  // Headless Chromium reports no output latency, so install a getOutputTimestamp
+  // that says "what you hear is 250 ms behind currentTime", before the app loads.
+  const LATENCY_S = 0.25;
+  await page.addInitScript((lat) => {
+    AudioContext.prototype.getOutputTimestamp = function (this: AudioContext) {
+      return { contextTime: this.currentTime - lat, performanceTime: performance.now() };
+    };
+  }, LATENCY_S);
+
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await page.getByRole('button', { name: 'Metronome' }).click();
+  await expect(page.getByRole('button', { name: 'Metronome' })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.getByTestId('count-in').getAttribute('aria-pressed')).toBe('false');
+  await page.keyboard.press('KeyR');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'armed');
+
+  // The clock must see the mock (contextTime > 0 needs the context to be >250 ms old).
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.clock?.heardTicks() ?? NaN))
+    .toBeLessThan(1); // sanity: stopped, heard ticks are the idle value
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
+
+  // Wait (by polling the heard clock, no fixed sleeps) until the heard playhead
+  // nears beat 2 (tick 960), then play A (C4) for ~200 ms.
+  const BEAT = 960;
+  await page.waitForFunction(
+    (beat) => ((window as unknown as DawWindow).__daw!.clock!.heardTicks() >= beat - 20),
+    BEAT,
+    { polling: 'raf' },
+  );
+  const heardNow = () => page.evaluate(() => (window as unknown as DawWindow).__daw!.clock!.heardTicks());
+  const before = await heardNow();
+  await page.keyboard.down('KeyA');
+  const after = await heardNow();
+  await page.waitForTimeout(200); // the held length itself; not a sync point
+  await page.keyboard.up('KeyA');
+  await page.keyboard.press('Space');
+
+  await expect(page.getByTestId('pr-readout')).toContainText('1 note ');
+  const notes = await page.evaluate(() =>
+    (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.pattern?.notes ?? []).map((n) => ({ pitch: n.pitch, start: n.start, len: n.len })),
+  );
+  expect(notes).toHaveLength(1);
+  const n = notes[0];
+  expect(n.pitch).toBe(60);
+  // Landed on the heard beat (between the heard ticks sampled around the key press, +-60 grace).
+  expect(n.start).toBeGreaterThanOrEqual(before - 60);
+  expect(n.start).toBeLessThanOrEqual(after + 60);
+  // The naive "currentTime" mapping would land ~ latency * ticks/s later (~496 ticks at 124 BPM).
+  const lateBy = LATENCY_S * (124 / 60) * BEAT;
+  expect(Math.abs(n.start - (after + lateBy))).toBeGreaterThan(300);
+  expect(n.len).toBeGreaterThan(200); // ~200 ms ~ 400 ticks
+
+  await page.getByTestId('undo-take').click();
+  await expect(page.getByTestId('pr-readout')).toContainText('0 notes');
 });

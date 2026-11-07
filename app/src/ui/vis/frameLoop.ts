@@ -11,11 +11,19 @@
 //   want mask in visSab is 0, so the worklet copies nothing (visCopy.ts).
 // - The want mask is the OR of the on-screen consumers' `want` bits
 //   (VIS_WANT), written whenever that set changes.
-// - At most 60 frames a second: a frame closer than 3/4 of a 60 Hz frame
-//   to the last one drawn is skipped (high refresh-rate displays). `hz: 30`
-//   consumers run every other drawn frame (analysis ≤ 30 Hz).
-// - Every callback is timed; stats() = { busyMs, wallMs, frames } over a
-//   rolling 5 s (window.__daw.vis.stats(), the serial e2e budget).
+// - At most 60 frames a second: a display frame less than a 60 Hz period
+//   (minus 1 ms of vsync jitter) after the last drawn one is skipped, so a
+//   120/240 Hz display draws every 2nd/4th frame (60 fps) and a 144 Hz one
+//   every 3rd (48 fps), never 72. `hz: 30` consumers run every other drawn
+//   frame (analysis ≤ 30 Hz).
+// - Every callback is timed; stats() = { busyMs, wallMs, frames } over the
+//   last 5 s, where wallMs counts only the time the loop was running (a
+//   paused loop neither costs nor dilutes the ratio), so busyMs / wallMs is
+//   the honest main-thread share (window.__daw.vis.stats(), the serial e2e
+//   budget).
+// - The strip tap (OP_VIS_TAP) is chosen here too: setTap(ch) sends it to
+//   the attached engine and remembers it, and attach() re-sends it to a new
+//   engine (an audio restart starts with the tap off), like the want mask.
 // - A consumer that throws is removed and logged once: a visual must never
 //   break the app.
 //
@@ -45,6 +53,8 @@ export interface FrameStats {
 /** Anything with live vis views (AudioEngine). */
 export interface VisSource {
   vis(): VisViews;
+  /** Sends OP_VIS_TAP (AudioEngine.setVisTap); optional for test fakes. */
+  setVisTap?(ch: number): boolean;
 }
 
 type IoEntry = { target: Element; isIntersecting: boolean };
@@ -66,6 +76,11 @@ export interface FrameLoop {
   add(c: FrameConsumer): () => void;
   /** The engine whose visSab the loop serves (null: stop). */
   attach(engine: VisSource | null): void;
+  /**
+   * The strip tap: a mixer channel 0..MIX_DELAY or -1 (off). Sent to the
+   * attached engine now and to every engine attached later.
+   */
+  setTap(ch: number): void;
   stats(): FrameStats;
 }
 
@@ -73,8 +88,13 @@ export interface FrameLoop {
 const WINDOW_MS = 5000;
 /** Frames kept for the stats (5 s at 60 fps, with room). */
 const HISTORY = 512;
-/** A frame sooner than this after the last drawn one is skipped (≤ 60 fps). */
-const MIN_FRAME_MS = (1000 / 60) * 0.75;
+/** Running spans kept for the stats (older ones fall out of the window). */
+const SPANS = 64;
+/**
+ * A frame sooner than this after the last drawn one is skipped (≤ 60 fps):
+ * a 60 Hz period less 1 ms, so 60 Hz vsync jitter never drops a frame.
+ */
+const MIN_FRAME_MS = 1000 / 60 - 1;
 
 interface Entry {
   c: FrameConsumer;
@@ -94,8 +114,15 @@ export function createFrameLoop(env: FrameEnv): FrameLoop {
   const times = new Float64Array(HISTORY);
   const busy = new Float64Array(HISTORY);
   let count = 0;
-  /** When the loop first started (stats' wall time counts from here). */
-  let first = NaN;
+  // Running time for the stats: closed [start, end) spans (a ring) and the
+  // start of the current one (NaN while stopped).
+  const spanStart = new Float64Array(SPANS);
+  const spanEnd = new Float64Array(SPANS);
+  let spans = 0;
+  let runStart = NaN;
+  /** The engine served now, and the strip tap to give every engine (null: never chosen). */
+  let source: VisSource | null = null;
+  let tap: number | null = null;
 
   const io = new env.IntersectionObserver((list) => {
     for (const e of list) for (const en of byEl.get(e.target) ?? []) en.onScreen = e.isIntersecting;
@@ -115,11 +142,17 @@ export function createFrameLoop(env: FrameEnv): FrameLoop {
     const on = views !== null && !env.document.hidden ? running() : [];
     setWant(on.reduce((m, e) => m | e.c.want, 0));
     if (on.length > 0 && raf === 0) {
-      if (Number.isNaN(first)) first = env.now();
+      if (Number.isNaN(runStart)) runStart = env.now();
       raf = env.raf(frame);
-    } else if (on.length === 0 && raf !== 0) {
-      env.caf(raf);
+    } else if (on.length === 0) {
+      if (raf !== 0) env.caf(raf);
       raf = 0;
+      if (!Number.isNaN(runStart)) {
+        const at = spans++ % SPANS;
+        spanStart[at] = runStart;
+        spanEnd[at] = env.now();
+        runStart = NaN;
+      }
     }
   }
 
@@ -182,21 +215,33 @@ export function createFrameLoop(env: FrameEnv): FrameLoop {
     },
     attach(engine) {
       setWant(0);
+      source = engine;
       views = engine ? engine.vis() : null;
       want = -1;
+      // A new engine starts with the tap off: give it the chosen one.
+      if (engine && tap !== null && tap >= 0) engine.setVisTap?.(tap);
       update();
+    },
+    setTap(ch) {
+      tap = ch;
+      source?.setVisTap?.(ch);
     },
     stats() {
       const now = env.now();
+      const lo = now - WINDOW_MS;
       let b = 0;
       let n = 0;
       for (let i = 0; i < Math.min(count, HISTORY); i++) {
-        if (times[i] > now - WINDOW_MS) {
+        if (times[i] > lo) {
           b += busy[i];
           n++;
         }
       }
-      const wallMs = Number.isNaN(first) ? 0 : Math.min(WINDOW_MS, now - first);
+      // Running time inside the window only.
+      let wallMs = Number.isNaN(runStart) ? 0 : now - Math.max(runStart, lo);
+      for (let i = 0; i < Math.min(spans, SPANS); i++) {
+        wallMs += Math.max(0, spanEnd[i] - Math.max(spanStart[i], lo));
+      }
       return { busyMs: b, wallMs, frames: n };
     },
   };

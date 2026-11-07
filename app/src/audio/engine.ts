@@ -346,7 +346,8 @@ export class AudioEngine {
   /**
    * The strip the engine taps for the visuals: a mixer channel
    * 0..MIX_DELAY (track strips, returns), or -1 = off. Not an edit; a new
-   * engine (audio restart) starts with it off, so its user re-sends it.
+   * engine (audio restart) starts with it off. UI code sets it through
+   * frameLoop().setTap(ch), which remembers it and re-sends it on attach.
    */
   setVisTap(ch: number): boolean {
     return this.send(Op.VIS_TAP, ch);

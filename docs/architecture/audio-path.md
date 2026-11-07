@@ -345,7 +345,9 @@ Consequences worth knowing:
   into the master ring, the tap into the tap ring, voice levels with meter
   ballistics), each ring's head published with `Atomics.store` after its
   data. With nothing on screen the mask is 0 and step 4b is one
-  `Atomics.load`. See `docs/architecture/visuals.md`.
+  `Atomics.load`. The frame loop pauses off screen and in a hidden tab, and
+  the mixer meters ride on it: their clip lights only latch what a running
+  frame sees. See `docs/architecture/visuals.md`.
 - **Mixer params** are a catalog (`engine/mixer_catalog.json`, golden-tested
   like the rack catalog): `MIX_SET` (41) validates against it, `MIX_SET_KEY`
   (42) sets a sidechain key, `MIX_RESET` (43) restores a channel's defaults.

@@ -183,6 +183,72 @@ describe('frameLoop', () => {
     expect(s.busyMs / s.wallMs).toBeGreaterThan(0.1);
   });
 
+  it('draws at most 60 frames a second at any refresh rate', () => {
+    for (const hz of [60, 75, 120, 144, 240]) {
+      const f = fakeEnv();
+      const loop = createFrameLoop(f.env);
+      loop.attach(engine().eng);
+      let n = 0;
+      loop.add({ want: 0, frame: () => n++ });
+      for (let i = 0; i < hz; i++) f.frame(1000 / hz); // one second
+      expect(n, `${hz} Hz`).toBeLessThanOrEqual(60);
+      // Every 1st, 2nd, 3rd or 4th display frame: 60, 37, 60, 48, 60.
+      expect(n, `${hz} Hz`).toBeGreaterThanOrEqual({ 60: 60, 75: 37, 120: 60, 144: 48, 240: 60 }[hz]!);
+    }
+  });
+
+  it('stats count only the time the loop ran', () => {
+    const f = fakeEnv();
+    const loop = createFrameLoop(f.env);
+    loop.attach(engine().eng);
+    loop.add({ want: 0, frame: () => f.advance(1) });
+    for (let i = 0; i < 60; i++) f.frame(); // ~1 s running
+    f.setHidden(true);
+    f.advance(3000); // paused: not wall time
+    f.setHidden(false);
+    for (let i = 0; i < 30; i++) f.frame(); // ~0.5 s running
+    const s = loop.stats();
+    expect(s.frames).toBe(90);
+    expect(s.busyMs).toBeCloseTo(90, 6);
+    // ~1.5 s of running (plus the 1 ms callbacks), not the 4.5 s since start.
+    expect(s.wallMs).toBeGreaterThan(1500);
+    expect(s.wallMs).toBeLessThan(1700);
+    // Long after a pause, only the running time inside the last 5 s counts.
+    f.setHidden(true);
+    f.advance(10_000);
+    expect(loop.stats()).toEqual({ busyMs: 0, wallMs: 0, frames: 0 });
+    f.setHidden(false);
+    for (let i = 0; i < 60; i++) f.frame();
+    const t = loop.stats();
+    expect(t.frames).toBe(60);
+    expect(t.wallMs).toBeGreaterThan(1000);
+    expect(t.wallMs).toBeLessThan(1100);
+  });
+
+  it('remembers the strip tap and re-sends it to a new engine', () => {
+    const f = fakeEnv();
+    const loop = createFrameLoop(f.env);
+    const sent: [string, number][] = [];
+    const eng = (name: string) => ({ vis: engine().eng.vis, setVisTap: (ch: number) => (sent.push([name, ch]), true) });
+    const a = eng('a');
+    loop.attach(a);
+    expect(sent).toEqual([]); // nothing chosen yet: a new engine starts off
+    loop.setTap(3);
+    expect(sent).toEqual([['a', 3]]);
+    // An audio restart: the new engine gets the same tap.
+    loop.attach(null);
+    loop.attach(eng('b'));
+    expect(sent).toEqual([['a', 3], ['b', 3]]);
+    loop.setTap(-1);
+    loop.attach(eng('c'));
+    expect(sent).toEqual([['a', 3], ['b', 3], ['b', -1]]);
+    // Chosen while detached: sent on attach.
+    loop.attach(null);
+    loop.setTap(33);
+    loop.attach(eng('d'));
+    expect(sent.at(-1)).toEqual(['d', 33]);
+  });
+
   it('a throwing consumer is dropped, the rest keep running', () => {
     const f = fakeEnv();
     const loop = createFrameLoop(f.env);

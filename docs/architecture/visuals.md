@@ -46,13 +46,15 @@ fixed-address `VisBlock` (`vis.rs`):
   refused (`BAD_VALUE`): the worklet copies the engine output itself. The tap
   is view state: not an edit (`NON_EDIT_OPS`), never in `projectCommands`,
   kept across `RESET_ALL`; a new engine (audio restart) starts with it off,
-  so the analyser re-sends it.
+  so the UI sets it through `frameLoop().setTap(ch)`, which re-sends it on
+  every `attach`.
 - *Voice activity.* Each rack Out records its input channels' peaks beside
   its (unchanged) sum; the rack keeps the max over its Outs and the gates of
   its first MIDI In; once per block `Synths::write_voices` writes level and
   gate per voice per track slot (`[(slot × 16 + k) × 2]`, `+ 1`). Levels
   under −60 dBFS read 0 (an activity light, not a meter); a rack that did not
-  render writes zeros.
+  render writes zeros. Non-finite samples never count as a peak; the
+  worklet ignores non-finite levels and darkens below the same −60 dB.
 
 Both only read signals. `vis_tap_does_not_change_audio`, `out_sum_unchanged`
 and the untouched export hashes pin that the sound is bit-identical.
@@ -83,14 +85,22 @@ each engine; `unwireEngine` detaches it):
   remove function; `el` is watched with one `IntersectionObserver`;
 - the rAF runs only while the document is visible and at least one consumer
   is on screen (or has no `el`); otherwise it stops and the want mask is 0;
-- at most 60 frames a second (a frame within ¾ of a 60 Hz period of the
-  last is skipped); `hz: 30` consumers run every other frame (analysis);
-- every callback is timed: `stats()` = `{ busyMs, wallMs, frames }` over a
-  rolling 5 s, exposed as `window.__daw.vis.stats()` (the ≤ 5 % main-thread
-  budget is measured from it);
+- at most 60 frames a second: a display frame less than a 60 Hz period
+  (minus 1 ms of jitter) after the last drawn one is skipped, so 120 and
+  240 Hz displays draw 60 fps and a 144 Hz one 48 fps; `hz: 30` consumers
+  run every other drawn frame (analysis);
+- every callback is timed: `stats()` = `{ busyMs, wallMs, frames }` over the
+  last 5 s, where `wallMs` is only the time the loop was running (a pause
+  neither costs nor dilutes), exposed as `window.__daw.vis.stats()`; the
+  ≤ 5 % main-thread budget is `busyMs / wallMs`;
+- `setTap(ch)` chooses the strip tap: sent to the attached engine and
+  remembered, and `attach` re-sends it to a new engine (an audio restart
+  starts with the tap off), like the want mask;
 - a consumer that throws is removed and logged once.
 
 Consumers draw their canvas or DOM directly, never through Svelte state
 (the MeterBus rule). The mixer meters are one: `MixerView` registers its
 MeterBus tick with want 0 (the meters have their own SAB) and the mixer
-element, instead of running its own rAF.
+element, instead of running its own rAF. A paused loop reads nothing, so the
+mixer's clip / LIMIT lights do not latch an over that happened (and fell
+away) while the mixer was off screen or the tab hidden.

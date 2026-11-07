@@ -164,8 +164,8 @@ clamped against rounding). Non-finite input is returned as is so the final
    status line use) are **not** ballistic: they stay raw per-block peaks.
 4. `MeterBus` (`ui/mixer/meterBus.ts`) reads the SAB once per frame of the
    app's shared visual frame loop (`ui/vis/frameLoop.ts`: a want-0 consumer
-   on the mixer element, paused off screen and in a hidden tab; plan 12) and
-   fans out to every `Meter`/GR readout, which write styles directly (no
+   on the mixer element, at most 60 Hz, paused off screen and in a hidden
+   tab; plan 12) and fans out to every `Meter`/GR readout, which write styles directly (no
    reactive state per frame). The peak-hold line (1 s) is a UI concern
    (`holdStep`). The clip light latches until clicked. On a strip it is red
    when a peak reaches 0 dBFS. On the master (`mixMath.masterLight`) it is an
@@ -173,6 +173,9 @@ clamped against rounding). Non-finite input is returned as is so the final
    master) and turns red only when the output reaches the ceiling (>= ceiling
    - 0.01 dB), which a hard-limited mix does since the limiter output passes
    bit-exact outside clicks (see Click soft clip). It latches its worst state.
+   Lights latch only from what a frame sees: while the loop is paused (mixer
+   off screen, tab hidden) nothing is read, so an over that has fallen away
+   under the ballistics by the time the mixer shows again does not latch.
 
 ## Strip tap (plan 12)
 

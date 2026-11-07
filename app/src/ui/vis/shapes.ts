@@ -192,6 +192,32 @@ export function adsrLabel(p: AdsrParams): string {
   return (c.delay > 0 ? `+${fmtTime(c.delay)} · ` : '') + parts.join(' · ');
 }
 
+/** Characters the compact ADSR label may use: 9 px tabular digits are ≤ 5 px, so it fits the 120 px preview. */
+export const ADSR_LABEL_CHARS = 24;
+
+/** Compact time: "5ms", "250ms", "1.2s", "10s". */
+function compactTime(s: number): string {
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  return s < 9.95 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
+}
+
+/**
+ * The label under the ADSR preview: "5ms·200ms·70%·300ms" ("+250ms·…" with a
+ * delay), clamped to ADSR_LABEL_CHARS with an ellipsis. adsrLabel is the full
+ * text (title, screen readers).
+ */
+export function adsrCompactLabel(p: AdsrParams): string {
+  const c = clampAdsr(p);
+  const parts = [compactTime(c.attack), compactTime(c.decay), `${Math.round(c.sustain * 100)}%`, compactTime(c.release)];
+  const s = (c.delay > 0 ? `+${compactTime(c.delay)}·` : '') + parts.join('·');
+  return s.length <= ADSR_LABEL_CHARS ? s : `${s.slice(0, ADSR_LABEL_CHARS - 1)}…`;
+}
+
+/** The voice LEDs' accessible name. */
+export function voicesAria(playing: number, count: number): string {
+  return `${playing} of ${count} voice${count === 1 ? '' : 's'} playing`;
+}
+
 /** Seconds per LFO cycle: 1 / rate, or the division at `bpm` when synced (lfo.rs: bpm ≥ 1). */
 export function lfoPeriod(p: LfoParams, bpm: number): number {
   if (p.sync >= 0.5) {

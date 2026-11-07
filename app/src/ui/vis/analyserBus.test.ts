@@ -4,9 +4,11 @@ import { createFrameLoop, type FrameEnv } from './frameLoop';
 import { VIS_HDR, VIS_WANT, visBytes, visViews, type VisViews } from '../../audio/visLayout';
 import { VIS_TAP_RING } from '../../audio/protocol';
 import { DB_FLOOR } from './spectrum';
+import { IDLE_AFTER_MS, createIdleDriver } from './idleDriver';
+import { createVisWake } from './visWake';
 
 /** The real frame loop on a fake rAF / clock / document (no IntersectionObserver needed: views have no el). */
-function rig() {
+function rig(wake?: ReturnType<typeof createVisWake>) {
   let t = 0;
   let id = 1;
   const pending = new Map<number, (now: number) => void>();
@@ -32,7 +34,7 @@ function rig() {
       eng: { vis: () => v, sampleRate: 48000, setVisTap: (ch: number) => (taps.push(ch), true) },
     };
   };
-  const bus = createAnalyserBus({ loop });
+  const bus = createAnalyserBus({ loop, wake });
   return {
     loop,
     bus,
@@ -44,6 +46,8 @@ function rig() {
       pending.clear();
       for (const fn of fns) fn(t);
     },
+    /** rAFs waiting: 0 = the frame loop is paused. */
+    pendingRafs: () => pending.size,
   };
 }
 
@@ -216,5 +220,58 @@ describe('analyserBus', () => {
     r.frame();
     expect(r.bus.mini.level[i1k]).toBeLessThan(-3);
   });
-});
 
+  it('the mini spectrum leaves the loop when stopped and silent for 0.5 s; play or a note wakes it', () => {
+    const wake = createVisWake();
+    const r = rig(wake);
+    const { v, eng } = r.mkEngine();
+    r.loop.attach(eng);
+    r.bus.attach(eng);
+    let draws = 0;
+    r.bus.subscribe(view('mini', () => draws++));
+    // The voice LEDs on the same loop (dark): the loop pauses only when both left.
+    const leds = createIdleDriver({ loop: r.loop, want: VIS_WANT.voices, hz: 30, wake, frame: () => false });
+    leds.kick();
+    // Sound while stopped (a live note): it stays.
+    for (let i = 0; i < 60; i++) {
+      pump(v, 'master', 800);
+      r.frame();
+    }
+    expect(r.pendingRafs()).toBe(1);
+    expect(v.hdr[VIS_HDR.want] & VIS_WANT.master).toBe(VIS_WANT.master);
+    // Silence: the bands fall to the floor, then 0.5 s later it leaves and
+    // the whole loop pauses (it was the only consumer).
+    let frames = 0;
+    while (r.pendingRafs() > 0 && frames < 600) {
+      r.frame();
+      frames++;
+    }
+    expect(r.pendingRafs()).toBe(0);
+    expect(leds.running).toBe(false);
+    expect(v.hdr[VIS_HDR.want]).toBe(0);
+    expect([...r.bus.mini.level].every((x) => x === DB_FLOOR)).toBe(true);
+    expect([...r.bus.mini.peak].every((x) => x === DB_FLOOR)).toBe(true);
+    // Not before 0.5 s of floor (the falls take longer than that themselves).
+    expect(frames * (1000 / 60)).toBeGreaterThan(IDLE_AFTER_MS);
+    const n = draws;
+    r.frame();
+    expect(draws).toBe(n);
+    // A note wakes it (and the LEDs).
+    wake.wake();
+    expect(r.pendingRafs()).toBe(1);
+    expect(leds.running).toBe(true);
+    expect(v.hdr[VIS_HDR.want] & VIS_WANT.master).toBe(VIS_WANT.master);
+    for (let i = 0; i < 60; i++) r.frame(); // 1 s of silence: asleep again
+    expect(r.pendingRafs()).toBe(0);
+    // Playing keeps it, even silent; Stop lets it sleep again.
+    wake.setPlaying(true);
+    for (let i = 0; i < 120; i++) r.frame();
+    expect(r.pendingRafs()).toBe(1);
+    wake.setPlaying(false);
+    for (let i = 0; i < 60; i++) r.frame();
+    expect(r.pendingRafs()).toBe(0);
+    // A new view (the mixer analyser opened) wakes it to draw.
+    r.bus.subscribe(view('panel'));
+    expect(r.pendingRafs()).toBe(1);
+  });
+});

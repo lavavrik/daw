@@ -16,6 +16,15 @@
 // exactly those bits, re-registered when they change, and not at all while
 // nothing is on screen, so the loop and the worklet's copies can stop.
 //
+// Idle (Task 5 review; `env.wake`, the app's visWake): when the transport is
+// stopped, nothing analysed has been heard and every shown band (mini, and
+// the panel when on screen: levels and peaks) has been at the floor for
+// IDLE_AFTER_MS, the bus leaves the loop too (the top bar's spectrum is
+// always on screen: without this the loop would never pause). A wake (Play,
+// a note-on, an edit, a new engine), a new view or a new selection brings it
+// back; its first look sees the ring stood still and reads silence until
+// fresh frames arrive. Without `env.wake` it never idles.
+//
 // The tap choice lives here too: select(ch | 'master') / toggle(ch) (the
 // strips' ∿ buttons). The engine taps the selected strip only while a panel
 // is mounted (else −1), sent through frameLoop().setTap, which remembers it
@@ -35,6 +44,8 @@
 import { VIS_GUARD, VIS_HDR, VIS_WANT, type VisViews } from '../../audio/visLayout';
 import { VIS_TAP_RING } from '../../audio/protocol';
 import { frameLoop, type FrameLoop } from './frameLoop';
+import { IDLE_AFTER_MS } from './idleDriver';
+import { visWake, type VisWake } from './visWake';
 import { Ballistics, Bands, DB_FLOOR, SPEC_N, SpectrumAnalyser } from './spectrum';
 import { CorrelationMeter, MAX_STEREO_FRAMES, corrFrames, goniometer, gonioFrames } from './stereo';
 
@@ -93,6 +104,8 @@ export interface AnalyserEnv {
     observe(el: Element): void;
     unobserve(el: Element): void;
   };
+  /** Idle when stopped and silent; woken by it (omitted: never idles). */
+  wake?: Pick<VisWake, 'onWake' | 'playing'>;
 }
 
 export const PANEL_BANDS = 60;
@@ -141,6 +154,11 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
   let registered = -1;
   let lastRun = -Infinity;
   let lastVis: VisViews | null = null;
+  /** Out of the loop while stopped and silent (see the top); `quietSince`: NaN = not quiet yet. */
+  let asleep = false;
+  let quietSince = NaN;
+  /** Something non-silent was analysed this frame. */
+  let heard = false;
 
   let rate = DEFAULT_RATE;
   let analyser = new SpectrumAnalyser(rate);
@@ -208,7 +226,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
   /** (Re-)register on the frame loop with the current want bits. */
   function refresh() {
     syncTap();
-    const on = [...views].some((e) => e.onScreen);
+    const on = !asleep && [...views].some((e) => e.onScreen);
     const w = on ? wantBits() : -1;
     if (w === registered) return;
     unregister?.();
@@ -247,14 +265,46 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
    * running whenever the app is visible.
    */
   function bins(): Float32Array | null {
-    for (let i = 0; i < SPEC_N; i++) if (mono[i] !== 0) return analyser.analyse(mono);
+    for (let i = 0; i < SPEC_N; i++) {
+      if (mono[i] !== 0) {
+        heard = true;
+        return analyser.analyse(mono);
+      }
+    }
     return null;
   }
+
+  const atFloor = (b: Ballistics) => {
+    for (let i = 0; i < b.level.length; i++) if (b.level[i] > DB_FLOOR || b.peak[i] > DB_FLOOR) return false;
+    return true;
+  };
+
+  /** After a frame: leave the loop once stopped, unheard and dark for IDLE_AFTER_MS. */
+  function idleCheck(now: number, needMini: boolean, needPanel: boolean) {
+    if (!env.wake) return;
+    const quiet = !heard && !env.wake.playing() && (!needMini || atFloor(mini)) && (!needPanel || atFloor(panel));
+    if (!quiet) quietSince = NaN;
+    else if (Number.isNaN(quietSince)) quietSince = now;
+    else if (now - quietSince > IDLE_AFTER_MS) {
+      asleep = true;
+      refresh();
+    }
+  }
+
+  /** Back into the loop (a wake, a new view or selection). */
+  function wakeUp() {
+    quietSince = NaN;
+    if (!asleep) return;
+    asleep = false;
+    refresh();
+  }
+  env.wake?.onWake(wakeUp);
 
   function frame(now: number, vis: VisViews) {
     if (now - lastRun < MIN_ANALYSIS_MS) return;
     const dt = Math.min(MAX_DT_S, Number.isFinite(lastRun) ? (now - lastRun) / 1000 : 1 / 30);
     lastRun = now;
+    heard = false;
     if (vis !== lastVis) {
       // Another engine's visSab: nothing in it belongs to the old history.
       lastVis = vis;
@@ -290,6 +340,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
         if (panelMaster) panel.step(b ? panelBands.measure(b) : silentPanel, dt);
       }
       if (needStereo) {
+        if (!heard) for (let i = masterN - corrN; i < masterN; i++) if (bufL[i] !== 0 || bufR[i] !== 0) { heard = true; break; }
         corr.step(bufL, bufR, masterN - corrN, masterN, dt);
         gonN = goniometer(bufL, bufR, gonX, gonY, gonioN, masterN);
       }
@@ -315,12 +366,15 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
     }
 
     for (const e of views) if (e.onScreen) e.v.draw(bus, now);
+    idleCheck(now, needMini, needPanel);
   }
 
   function setSelected(s: AnalyserSource, key: string | null) {
     const changed = s !== selected;
     selected = s;
     selectedKey = s === 'master' ? null : key;
+    asleep = false;
+    quietSince = NaN;
     refresh();
     if (changed) for (const fn of listeners) fn(s);
   }
@@ -339,6 +393,9 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
         }
         set.add(en);
       }
+      // A new view draws at least until it has shown the current state.
+      asleep = false;
+      quietSince = NaN;
       refresh();
       return () => {
         if (!views.delete(en)) return;
@@ -422,6 +479,7 @@ export function analyserBus(): AnalyserBus {
   shared ??= createAnalyserBus({
     loop: frameLoop(),
     IntersectionObserver: IntersectionObserver as unknown as AnalyserEnv['IntersectionObserver'],
+    wake: visWake(),
   });
   return shared;
 }

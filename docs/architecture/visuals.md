@@ -191,6 +191,13 @@ analysis, so there is never a per-view FFT:
   tap ring (bit 2) only while the panel is on screen showing a strip; it
   re-registers on the loop when those bits change and unregisters while
   nothing is on screen;
+- **idle** (Task 5 review): when the transport is stopped, nothing analysed
+  was heard and every shown band (levels and peaks, the mini's and the
+  panel's when on screen) has been at the floor for 0.5 s
+  (`IDLE_AFTER_MS`), it unregisters too, so the always-visible top-bar
+  spectrum does not keep the loop running; a visuals wake (below), a new
+  view or a new selection re-registers it, and the first look reads the
+  stood-still ring as silence;
 - it owns the tap choice: `select(ch | 'master')` / `toggle(ch)`; the
   engine taps the selected strip while a panel is mounted, else −1,
   through `frameLoop().setTap`, which re-sends it on every `attach` (App
@@ -329,13 +336,18 @@ waveform is display only; editing stays in the fields).
 The ADSR and LFO panels show their shape above the knobs
 (`ShapePreview.svelte`, a 120 × 40 px SVG plus a one-line label).
 
-- **Static, not animated:** no frame loop. It redraws when a param changes
+- **Static, not animated:** no frame loop. It redraws (at most once per
+  animation frame: changes mark it dirty, one rAF draws) when a param changes
   (a knob, undo, a patch load), when the tempo changes (a synced LFO), and
   when an automation lane on one of its continuous params moves: like a
   Knob it registers those params with the autoBus (`ui/autoBus.ts`) and
   draws the lane's heard value while the lane applies, so it always shows
   what the knob rings show. The bus calls back only when a value changed;
   the preview writes the SVG `d` attributes and the label directly.
+- **Label:** the ADSR's is compact ("5ms·200ms·70%·300ms", "+250ms·…"),
+  clamped to `ADSR_LABEL_CHARS` = 24 with "…" (and by CSS to 120 px); the
+  full text ("5 ms · 200 ms · 70% · 300 ms") is its title and what screen
+  readers read (the SVG is `aria-hidden`).
 - **ADSR curve** (`shapes.ts`, mirroring `adsr.rs`): Delay flat at 0 →
   Attack linear 0 → 1 → Decay exponential to `sustain` with
   `tau = decay / ln 100` → a plateau → Release exponential to 0 with
@@ -363,7 +375,7 @@ The ADSR and LFO panels show their shape above the knobs
   sample-time origin, the LFO's sampled phases) are in the test's header.
 - Test hooks: `shape-adsr` / `shape-lfo` (the SVG; the ADSR's carries each
   segment's width in px as `data-delay` … `data-release`),
-  `shape-label-adsr` / `shape-label-lfo`.
+  `shape-label-adsr` / `shape-label-lfo` (the visible, compact text).
 
 ## Voice LEDs
 
@@ -376,9 +388,30 @@ without a MIDI In shows none and registers no consumer.
   (the voice's peak across the rack's Outs, with meter ballistics; 0 below
   −60 dB) and the gate (see *Data path*).
 - **Drawing:** a 30 Hz frame-loop consumer on the LED row (paused off
-  screen like any consumer). Brightness = `voiceLedLevel` (−48..0 dB →
+  screen like any consumer), present only while there is something to show
+  (`idleDriver.ts`): when the transport is stopped and every LED has been
+  dark (no level, no gate) for 0.5 s it leaves the loop. Brightness =
+  `voiceLedLevel` (−48..0 dB →
   0..1, clamped; quantised to 1/64 so an invisible change writes nothing),
   written as a CSS variable; an amber ring while the gate is held
   (`data-gate`). Only changed values touch the DOM.
+- Accessible name "3 of 8 voices playing" (lit LEDs), rewritten only when
+  that number changes; `aria-live="off"`.
 - Test hooks: `voice-leds`, `voice-led-<k>` with `data-on` (lit) and
   `data-gate`.
+
+## Idle visuals and waking
+
+With the app open, stopped and silent, the frame loop pauses entirely: the
+visuals that only show sound — the voice LEDs (`idleDriver.ts`) and the
+analyser bus (the top-bar spectrum, the stereo view, the panel) — leave it
+after 0.5 s of stopped silence, like the waveform view leaves when it has
+nothing to draw (`waveDriver.ts`). The scope and the mixer meters stay
+while on screen. `visWake.ts` brings the idle ones back: `setPlaying(true)`
+on Play (App follows `project.playing`), and `wake()` on a played note-on
+(`noteInput.ts`, QWERTY and MIDI, also while stopped), on any edit
+(`project.version`: a patch that drones without a note) and on a new engine.
+A release tail after Stop keeps them awake while it is still visible.
+Pinned by `idleDriver.test.ts` and `analyserBus.test.ts` (`the mini
+spectrum leaves the loop…`: with the bus and the LEDs on one real frame
+loop, no rAF is pending once both are idle).

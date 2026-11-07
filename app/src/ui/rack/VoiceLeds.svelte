@@ -13,12 +13,19 @@
   //   (−48..0 dB → 0..1); a ring = the gate is held.
   // - A 30 Hz frame-loop consumer (ui/vis/frameLoop.ts) that writes the
   //   LEDs' style directly, only when a value changed (the MeterBus rule).
+  //   Only while there is something to show (ui/vis/idleDriver.ts): once
+  //   the transport is stopped and every LED has been dark for 0.5 s it
+  //   leaves the loop; Play, a note-on or an edit (ui/vis/visWake.ts)
+  //   brings it back.
+  // - Accessible name: "3 of 8 voices playing" (lit LEDs), rewritten only
+  //   when that number changes; not a live region.
   import { VIS_WANT, type VisViews } from '../../audio/visLayout';
   import { moduleDef } from '../../audio/catalog';
   import { MAX_POLY } from '../../audio/protocol';
   import type { SynthTrack } from '../../state/project.svelte';
   import { frameLoop } from '../vis/frameLoop';
-  import { voiceLedLevel } from '../vis/shapes';
+  import { createIdleDriver } from '../vis/idleDriver';
+  import { voiceLedLevel, voicesAria } from '../vis/shapes';
 
   let { track }: { track: SynthTrack } = $props();
 
@@ -40,9 +47,15 @@
   /** What each LED shows now (brightness, gate), to write only on change. */
   const shown = new Float32Array(MAX_POLY * 2).fill(-1);
 
-  function frame(_now: number, vis: VisViews) {
+  /** Lit LEDs, as the accessible name says it (-1: not written yet). */
+  let saidLit = -1;
+
+  /** Draws; true while any LED is lit or any gate held. */
+  function frame(_now: number, vis: VisViews): boolean {
     const base = track.slot * MAX_POLY * 2;
     const v = vis.voices;
+    let lit = 0;
+    let gates = 0;
     for (let k = 0; k < count; k++) {
       const el = leds[k];
       if (!el) continue;
@@ -59,18 +72,29 @@
         shown[k * 2 + 1] = g;
         el.dataset.gate = String(g);
       }
+      if (q > 0) lit++;
+      gates += g;
     }
+    if (lit !== saidLit && box) {
+      saidLit = lit;
+      box.setAttribute('aria-label', voicesAria(lit, count));
+    }
+    return lit > 0 || gates > 0;
   }
 
   $effect(() => {
     if (!box || count === 0) return;
     shown.fill(-1);
-    return frameLoop().add({ want: VIS_WANT.voices, el: box, hz: 30, frame });
+    saidLit = -1;
+    box.setAttribute('aria-label', voicesAria(0, count));
+    const d = createIdleDriver({ loop: frameLoop(), want: VIS_WANT.voices, el: box, hz: 30, frame });
+    d.kick(); // draw the current state once, then idle if there is none
+    return () => d.stop();
   });
 </script>
 
 {#if count > 0}
-  <span class="voices" bind:this={box} data-testid="voice-leds" role="img" aria-label={`${count} voice${count === 1 ? '' : 's'} activity`}>
+  <span class="voices" bind:this={box} data-testid="voice-leds" role="img" aria-live="off">
     <span class="lbl">Voices</span>
     {#each Array.from({ length: count }, (_, k) => k) as k (k)}
       <i bind:this={leds[k]} data-testid={`voice-led-${k}`} data-on="0" data-gate="0"></i>

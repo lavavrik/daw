@@ -37,4 +37,16 @@ describe('noteInput', () => {
     expect(() => input.off(60, 0, 'q')).not.toThrow();
     expect(sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
   });
+
+  it('a note-on wakes the visuals, after the engine got it', () => {
+    const order: string[] = [];
+    const sink = { send: (op: number) => (order.push(op === Op.NOTE_ON ? 'on' : 'off'), true) };
+    const input = createNoteInput(sink, null, () => {
+      order.push('wake');
+      throw new Error('a visual must never stop a note');
+    });
+    expect(() => input.on(60, 100, 0, 'q')).not.toThrow();
+    input.off(60, 0, 'q'); // no wake: a note-off brings nothing new to show
+    expect(order).toEqual(['on', 'wake', 'off']);
+  });
 });

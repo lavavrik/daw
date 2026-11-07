@@ -10,6 +10,11 @@
 // sustain pedal is additionally reported here (sustain(): recorder only, no
 // engine command) so recorded notes honour it. A panic (or an unplugged
 // keyboard) calls closeSource(source) so the recorder ends that input's notes.
+//
+// `onNoteOn` (plan 12; App passes visWake().wake): after the engine got a
+// note-on, idle visuals (voice LEDs, analysers: ui/vis/visWake.ts) come back
+// to show it, also while the transport is stopped. Its errors are swallowed
+// like the recorder's.
 import { Op } from '../audio/protocol';
 import type { CommandSink } from '../state/actions';
 
@@ -36,17 +41,18 @@ export interface NoteInput {
   sustain(on: boolean, perfMs: number, source: string): void;
 }
 
-export function createNoteInput(sink: CommandSink, recorder: NoteListener | null): NoteInput {
+export function createNoteInput(sink: CommandSink, recorder: NoteListener | null, onNoteOn?: () => void): NoteInput {
   const tell = (f: () => void) => {
     try {
       f();
     } catch (err) {
-      console.error('recorder failed', err);
+      console.error('note listener failed', err);
     }
   };
   return {
     on(note, vel, perfMs, source) {
       sink.send(Op.NOTE_ON, note, vel);
+      if (onNoteOn) tell(onNoteOn);
       if (recorder) tell(() => recorder.noteOn(note, vel, perfMs, source));
     },
     off(note, perfMs, source) {

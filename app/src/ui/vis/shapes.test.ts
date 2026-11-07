@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  PLATEAU, adsrLabel, adsrLayout, adsrPoints, adsrTimeToX, lfoLabel, lfoPoints, polyAt, voiceLedLevel,
+  ADSR_LABEL_CHARS, PLATEAU, adsrCompactLabel, adsrLabel, voicesAria, adsrLayout, adsrPoints, adsrTimeToX, lfoLabel, lfoPoints, polyAt, voiceLedLevel,
 } from './shapes';
 
 // engine/tests/fixtures/shapes.json: the REAL Adsr / Lfo rendered by
@@ -97,5 +97,28 @@ describe('shape previews', () => {
     expect(lfoLabel({ wave: 0, rate: 0.25, sync: 0, division: 3, depth: 1 }, 120)).toBe('0.25 Hz · 4.00 s');
     expect(adsrLabel({ delay: 0, attack: 0.005, decay: 0.2, sustain: 0.7, release: 0.3 })).toBe('5 ms · 200 ms · 70% · 300 ms');
     expect(adsrLabel({ delay: 0.25, attack: 1.2, decay: 0.2, sustain: 0.55, release: 2.5 })).toBe('+250 ms · 1.20 s · 200 ms · 55% · 2.50 s');
+  });
+
+  it('the ADSR label fits 120 px: compact, clamped, the full text kept', () => {
+    expect(adsrCompactLabel({ delay: 0, attack: 0.005, decay: 0.2, sustain: 0.7, release: 0.3 })).toBe('5ms·200ms·70%·300ms');
+    expect(adsrCompactLabel({ delay: 0.25, attack: 0.8, decay: 1.5, sustain: 0.6, release: 2.5 })).toBe('+250ms·800ms·1.5s·60%·2.5s'.slice(0, 23) + '…');
+    expect(adsrCompactLabel({ delay: 0.5, attack: 1.2, decay: 2, sustain: 0.55, release: 2.5 })).toBe('+500ms·1.2s·2.0s·55%·2.5s'.slice(0, 23) + '…');
+    expect(adsrCompactLabel({ delay: 1, attack: 0.01, decay: 2, sustain: 0.55, release: 2.5 })).toBe('+1.0s·10ms·2.0s·55%·2.5s');
+    expect(adsrCompactLabel({ delay: 0, attack: 10, decay: 10, sustain: 1, release: 10 })).toBe('10s·10s·100%·10s');
+    // The longest: every time at "999ms" and a delay; clamped with an ellipsis.
+    const longest = { delay: 0.999, attack: 0.999, decay: 0.999, sustain: 1, release: 0.999 };
+    const c = adsrCompactLabel(longest);
+    expect(c.length).toBeLessThanOrEqual(ADSR_LABEL_CHARS);
+    expect(c.endsWith('…')).toBe(true);
+    // 9 px tabular digits are ≤ 5 px wide: the budget fits 120 px.
+    expect(ADSR_LABEL_CHARS * 5).toBeLessThanOrEqual(120);
+    // The full text (title / screen readers) keeps everything.
+    expect(adsrLabel(longest)).toBe('+999 ms · 999 ms · 999 ms · 100% · 999 ms');
+  });
+
+  it('the voice LEDs say how many voices play', () => {
+    expect(voicesAria(0, 8)).toBe('0 of 8 voices playing');
+    expect(voicesAria(3, 8)).toBe('3 of 8 voices playing');
+    expect(voicesAria(1, 1)).toBe('1 of 1 voice playing');
   });
 });

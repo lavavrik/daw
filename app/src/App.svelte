@@ -52,6 +52,7 @@
   import { createAutoBus, provideAutoBus } from './ui/autoBus';
   import { frameLoop } from './ui/vis/frameLoop';
   import { analyserBus } from './ui/vis/analyserBus';
+  import { visWake } from './ui/vis/visWake';
   import AutoMenu from './ui/AutoMenu.svelte';
   import { laneView } from './ui/song/laneView.svelte';
 
@@ -295,6 +296,16 @@
     void clock;
     untrack(() => autoBus.reset());
   });
+  // Idle visuals (voice LEDs, analysers: ui/vis/visWake.ts) come back on
+  // Play and on any edit (a patch can drone without a note).
+  $effect(() => {
+    const playing = project.playing;
+    untrack(() => visWake().setPlaying(playing));
+  });
+  $effect(() => {
+    void project.version;
+    untrack(() => visWake().wake());
+  });
   $effect(() => {
     void project.version;
     void project.playing;
@@ -453,6 +464,7 @@
     frameLoop().attach(e);
     // The analysers follow its sample rate (the loop re-sends their strip tap).
     analyserBus().attach(e);
+    visWake().wake(); // a new engine: idle visuals look again
     unwatchStalls = preparedStalls ?? watchStalls(e);
     preparedStalls = null;
     // Telemetry history (heard time) is per engine: a new clock, which the
@@ -500,7 +512,7 @@
     // Before a track's current pattern changes (selectPattern): held recorded
     // notes are written into the old pattern while the engine still edits it.
     project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, liveClock.heardTicks());
-    const input = createNoteInput(live, r);
+    const input = createNoteInput(live, r, visWake().wake);
     noteInput = input;
     wireEngine(e);
     // Undo/redo (history/history.ts): every action is a transact, every

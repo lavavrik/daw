@@ -53,7 +53,8 @@ replaces it).
   MIDI In). Brightness is the voice's level across the rack's Outs (−48..0
   dB → dark..full; the engine reports nothing below −60 dB), a ring means
   its gate is held. Read from visSab (want bit 4) by a 30 Hz frame-loop
-  consumer; see [visuals.md](visuals.md#voice-leds).
+  consumer that leaves the loop after 0.5 s stopped and dark (Play, a
+  note-on or an edit wakes it); see [visuals.md](visuals.md#voice-leds).
 
 ## Envelopes
 

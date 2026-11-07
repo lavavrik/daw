@@ -419,7 +419,11 @@
     | { kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: number; laneHint: boolean; wasMulti: boolean; placed?: boolean }
     | { kind: 'left' | 'right'; orig: Orig; patLen: number; x0: number; moved: boolean; last: string }
     | { kind: 'box'; base: Set<string> }
-    | { kind: 'ruler'; t0: number; x0: number; moved: boolean; last: string; loop: { on: boolean; start: number; end: number } };
+    | {
+        kind: 'ruler'; t0: number; x0: number; moved: boolean; last: string; loop: { on: boolean; start: number; end: number };
+        /** Started while playing: the drag only previews (p.loop) and sends once on release. */
+        quiet: boolean;
+      };
   let drag: Drag | null = null;
   let pending: (() => void) | null = null;
   let raf = 0;
@@ -586,6 +590,7 @@
     drag = null; // first: the lostpointercapture that follows must not cancel
     flush();
     if (d.kind === 'box') box = null;
+    else if (d.kind === 'ruler' && d.moved && d.quiet) setLoop(p, engine, { ...p.loop }); // the one send
     else if (d.kind === 'move' && !d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
     else if (d.kind === 'ruler' && !d.moved) {
       seek(p, engine, seekTick(d.t0, e.altKey));
@@ -606,7 +611,8 @@
       selected = d.base;
       box = null;
     } else if (d.kind === 'ruler') {
-      if (d.moved) setLoop(p, engine, d.loop);
+      // A quiet drag never reached the engine: re-sending the old loop would jump.
+      if (d.moved) setLoop(p, d.quiet ? NO_SEND : engine, d.loop);
     } else if (d.kind === 'move' && d.placed) {
       // Escape on a place-and-drag: the clip never existed.
       deleteClips(p, engine, d.ids);
@@ -624,7 +630,7 @@
     menu = null;
     focusLanes();
     const x = e.clientX - rulerCv.getBoundingClientRect().left;
-    drag = { kind: 'ruler', t0: xToTick(x, view), x0: x, moved: false, last: '', loop: { ...p.loop } };
+    drag = { kind: 'ruler', t0: xToTick(x, view), x0: x, moved: false, last: '', loop: { ...p.loop }, quiet: p.playing };
     rulerCv.setPointerCapture(e.pointerId);
   }
   function rulerMove(e: PointerEvent) {
@@ -638,8 +644,14 @@
     const k = `${r.start},${r.end}`;
     if (k === d.last) return;
     d.last = k;
-    schedule(() => setLoop(p, engine, { on: true, ...r }));
+    schedule(() => setLoop(p, d.quiet ? NO_SEND : engine, { on: true, ...r }));
   }
+  /**
+   * A loop drag while playing updates p.loop (the ruler preview) without
+   * telling the engine until release: the first drag frame could make a
+   * tiny loop behind the playhead, which jumps, and Escape can't undo a jump.
+   */
+  const NO_SEND: CommandSink = { send: () => true };
 
   // ---- double-click / context menu --------------------------------------------------
   function dbl(e: MouseEvent) {

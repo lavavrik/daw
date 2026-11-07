@@ -409,3 +409,35 @@ test('the add-track buttons are disabled at 32 tracks and come back when one is 
   await page.getByTestId('add-synth-track').click();
   await expect(page.getByTestId('add-drum-track')).toBeDisabled();
 });
+
+test('loop drag while playing sends the loop once, on release; Escape sends nothing', async ({ page }) => {
+  await start(page);
+  await page.getByTestId('mode-song').click();
+  await play(page);
+  await page.evaluate(() => {
+    const d = (window as any).__daw;
+    const e = d.engine;
+    const orig = e.send.bind(e);
+    d.loopSends = [];
+    e.send = (op: number, ...a: number[]) => { if (op === d.Op.SET_LOOP) d.loopSends.push(a.slice(0, 2)); return orig(op, ...a); };
+  });
+  const sends = () => page.evaluate(() => (window as any).__daw.loopSends);
+  const a = await at(page, 0, 2 * BAR + 500);
+  const b = await at(page, 0, 4 * BAR + 500);
+  const r = (await page.getByTestId('tl-ruler').boundingBox())!;
+  await drag(page, { x: a.x, y: r.y + 10 }, { x: b.x, y: r.y + 10 }, { up: false });
+  // The loop previews on the ruler but nothing reaches the engine mid-drag.
+  await expect(page.getByTestId('tl-ruler')).toHaveAttribute('data-loop', `${2 * BAR},${5 * BAR},1`);
+  await page.waitForTimeout(100);
+  expect(await sends()).toEqual([]);
+  await page.mouse.up();
+  await expect.poll(sends).toEqual([[2 * BAR, 5 * BAR]]);
+  // Escape mid-drag: the old loop is back, and the engine never heard of the new one.
+  const c = await at(page, 0, 6 * BAR + 500);
+  await drag(page, { x: b.x, y: r.y + 10 }, { x: c.x, y: r.y + 10 }, { up: false });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(page.getByTestId('tl-ruler')).toHaveAttribute('data-loop', `${2 * BAR},${5 * BAR},1`);
+  await page.waitForTimeout(100);
+  expect(await sends()).toEqual([[2 * BAR, 5 * BAR]]);
+});

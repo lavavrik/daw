@@ -355,37 +355,56 @@ mod tests {
         assert!((dot / (el * er).sqrt()).abs() < 0.3, "L/R correlation too high");
     }
 
-    #[test]
-    fn reverb_param_moves_are_smooth() {
-        // Sweep size and predelay while a tail rings: finite, no big steps.
+    /// Largest kink (|Δ²y|) of the reverb's response to a steady 100 Hz tone
+    /// while size, predelay, decay and damping jump (blocks 300 and 800),
+    /// measured from block 250 on. The steady response is a smooth low
+    /// sinusoid-like signal (Δ² ~1e-4), so read-position or gain steps show
+    /// as kinks. `smooth = false` is the control: the new read positions
+    /// and gains are taken at once (the `fresh` jump, state kept).
+    fn sweep_max_kink(smooth: bool) -> f32 {
         let mut rv = Reverb::new(48000.0);
-        let mut noise = Noise::new(3);
-        let mut prev = 0.0f32;
-        let mut max_step = 0.0f32;
-        for blk in 0..1500 {
+        let (mut prev, mut prev_step) = (0.0f32, 0.0f32);
+        let mut max_kink = 0.0f32;
+        let mut t = 0usize;
+        for blk in 0..1200 {
             if blk == 300 {
                 rv.set_size(1.0);
                 rv.set_predelay_ms(200.0);
                 rv.set_decay(20.0);
+                rv.fresh |= !smooth;
             }
             if blk == 800 {
                 rv.set_size(0.0);
                 rv.set_predelay_ms(0.0);
                 rv.set_damping(1.0);
                 rv.set_decay(0.2);
+                rv.fresh |= !smooth;
             }
-            let mut l: [f32; 128] = std::array::from_fn(|_| if blk < 200 { 0.1 * noise.next() } else { 0.0 });
+            let mut l: [f32; 128] =
+                std::array::from_fn(|k| 0.1 * (2.0 * std::f32::consts::PI * 100.0 * (t + k) as f32 / 48000.0).sin());
             let mut r = l;
             rv.process(&mut l, &mut r);
             for v in l {
                 assert!(v.is_finite());
+                let step = v - prev;
                 if blk > 250 {
-                    max_step = max_step.max((v - prev).abs());
+                    max_kink = max_kink.max((step - prev_step).abs());
                 }
-                prev = v;
+                (prev, prev_step) = (v, step);
             }
+            t += 128;
         }
-        assert!(max_step < 0.1, "max step {max_step}");
+        max_kink
+    }
+
+    #[test]
+    fn reverb_param_moves_are_smooth() {
+        // Jump size, predelay, decay and damping under a steady tone: only
+        // small kinks, while the control (no glide) kinks far more.
+        let smooth = sweep_max_kink(true);
+        let jumped = sweep_max_kink(false);
+        assert!(smooth < 0.003, "max kink {smooth}");
+        assert!(jumped > 10.0 * smooth, "control {jumped} vs {smooth}");
     }
 
     #[test]

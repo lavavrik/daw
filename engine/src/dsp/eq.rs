@@ -17,8 +17,8 @@
 //!   log2 Q) with a 5 ms one-pole stepped once per [`SUB_BLOCK`] frames, and
 //!   the coefficients are recomputed only for bands that moved. Settled
 //!   values equal their targets exactly, so a band at 0 dB is recognised as
-//!   flat and skipped (its TDF-II state is provably zero then, so skipping is
-//!   seamless).
+//!   flat and skipped; its tiny leftover state (~1e-5 of the signal, from the
+//!   last 1e-4 dB of the glide) is zeroed then, so skipping is seamless.
 
 use super::biquad::{Biquad, Coefs};
 use super::{clampf, finite, valid_sr, Glide, SMOOTH_SECONDS, SUB_BLOCK};
@@ -139,9 +139,12 @@ impl Eq3 {
             for ch in &mut self.bands[b] {
                 ch.set(c);
                 if flat[b] {
-                    // A 0 dB RBJ shelf/peak is exactly y = x and drives its
-                    // TDF-II state to 0 within two samples; zeroing it here
-                    // makes skipping the band seamless.
+                    // A 0 dB RBJ shelf/peak has b == a, i.e. y = x once its
+                    // state is 0, but leftover state would only decay with
+                    // the filter's own poles. The glide snaps to exactly 0 dB
+                    // from within 1e-4 dB, where the state is ~1e-5 of the
+                    // signal (it scales with b − a), so zeroing it here and
+                    // skipping the band is seamless far below audibility.
                     ch.reset();
                 }
             }
@@ -249,38 +252,58 @@ mod tests {
         assert!(gain(&mut eq, 1000.0).abs() < 0.5);
     }
 
-    #[test]
-    fn eq_sweep_is_smooth_and_settles() {
-        // A full-range mid-gain jump during a low tone: no step larger than
-        // the tone's own slope allows, and the gain lands on the target.
+    /// Largest kink (second difference, |Δ²y|) of an 80 Hz tone (0.1) through
+    /// `eq` while the low shelf jumps −15 -> +15 dB at block 200 (and the mid
+    /// band moves too). A low tone's own Δ² is ~6e-5, so this isolates the
+    /// coefficient changes (a TDF-II jump barely *steps* a low tone, but it
+    /// bends it). `smooth = false` is the control: the new coefficients are
+    /// applied at once (the `fresh` jump), keeping the filter state.
+    fn sweep_max_kink(eq: &mut Eq3, smooth: bool) -> f32 {
         let sr = 48000.0;
-        let mut eq = Eq3::new(sr);
+        eq.set_low(-15.0);
         eq.set_mid(200.0, -15.0, 0.3);
-        let mut prev = 0.0f32;
+        let (mut prev, mut prev_step) = (0.0f32, 0.0f32);
         let mut max_step = 0.0f32;
         let mut t = 0usize;
         for blk in 0..400 {
             if blk == 200 {
-                eq.set_mid(200.0, 15.0, 0.3);
-                eq.set_hp(1000.0);
+                eq.set_low(15.0);
+                eq.set_mid(400.0, 15.0, 4.0);
+                if !smooth {
+                    eq.fresh = true;
+                }
             }
             let mut l = [0.0f32; 128];
             for (k, v) in l.iter_mut().enumerate() {
-                *v = 0.1 * (2.0 * std::f32::consts::PI * 150.0 * (t + k) as f32 / sr).sin();
+                *v = 0.1 * (2.0 * std::f32::consts::PI * 80.0 * (t + k) as f32 / sr).sin();
             }
             let mut r = l;
             eq.process(&mut l, &mut r);
             for v in l {
                 assert!(v.is_finite());
-                if t > 0 {
-                    max_step = max_step.max((v - prev).abs());
+                let step = v - prev;
+                if t > 1 {
+                    max_step = max_step.max((step - prev_step).abs());
                 }
-                prev = v;
+                (prev, prev_step) = (v, step);
                 t += 1;
             }
         }
-        assert!(max_step < 0.05, "max step {max_step}");
+        max_step
+    }
+
+    #[test]
+    fn eq_sweep_is_smooth_and_settles() {
+        // A full-range shelf jump during a low tone: only small kinks, and
+        // the gain lands on the target.
+        let mut eq = Eq3::new(48000.0);
+        let smooth = sweep_max_kink(&mut eq, true);
         assert_eq!(eq.cur.map(|g| g.value), eq.target);
+        // The control (coefficients jumped) kinks far more: the bound below
+        // only holds because of the glide.
+        let jumped = sweep_max_kink(&mut Eq3::new(48000.0), false);
+        assert!(smooth < 0.0015, "max kink {smooth}");
+        assert!(jumped > 2.5 * smooth && jumped > 0.0015, "control {jumped} vs {smooth}");
     }
 
     #[test]

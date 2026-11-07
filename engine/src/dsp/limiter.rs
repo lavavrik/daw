@@ -17,9 +17,11 @@
 //!
 //! Why it never exceeds the ceiling: `g[n−D]` is inside every hold window
 //! `m[n−D ..= n]`, so all `D+1` values the box averages are `≤ g[n−D]`, hence
-//! `s[n] ≤ g[n−D]` and `|x[n−D]|·s[n] ≤ ceiling`. The final clamp only absorbs
-//! float rounding (and a ceiling that is still gliding down); tests check it
-//! almost never engages. The box sum runs in f64 (no drift).
+//! `s[n] ≤ g[n−D]` and `|x[n−D]|·s[n] ≤ ceiling`. The required gain aims at
+//! `min(gliding ceiling, target)`, so a ceiling gliding *down* (which is
+//! lower by the time a sample leaves the delay line) is already accounted for
+//! and the final clamp still only absorbs float rounding; tests check it
+//! never engages. The box sum runs in f64 (no drift).
 //!
 //! The ceiling (linear, 0.001..1) glides per sample (5 ms).
 
@@ -146,9 +148,13 @@ impl Limiter {
             self.ceil_s.step(self.ceiling);
             let c = self.ceil_s.value;
 
-            // 1. Required gain.
+            // 1. Required gain, against the lower of the gliding ceiling and
+            //    its target: this sample leaves the delay line D samples from
+            //    now, when a falling ceiling has glided further down, so
+            //    aiming at the target keeps the final clamp idle.
             let peak = xl.abs().max(xr.abs());
-            let g = if peak > c { c / peak } else { 1.0 };
+            let aim = c.min(self.ceiling);
+            let g = if peak > aim { aim / peak } else { 1.0 };
 
             // 2. Sliding minimum over the last D+1 gains (monotonic deque:
             //    values increase from front to back).
@@ -245,6 +251,51 @@ mod tests {
         assert!(peak <= ceiling, "peak {peak} > ceiling {ceiling}");
         assert!(peak > ceiling * 0.95, "it is a limiter, not a mute: {peak}");
         assert_eq!(lim.clamp_hits, 0, "the gain envelope alone must hold the ceiling");
+    }
+
+    #[test]
+    fn falling_ceiling_never_hard_clips() {
+        // Loud material while the ceiling is dragged 0 -> −6 dB (one 5 ms
+        // glide), then back up and down again: the gain envelope alone holds
+        // the (gliding) ceiling, the clamp never engages, and the output
+        // never steps by more than the material's own slope plus the
+        // envelope's linear ramp allows.
+        let mut lim = Limiter::new(48000.0);
+        lim.set_ceiling(1.0);
+        let mut noise = Noise::new(11);
+        let mut input = Vec::new();
+        for i in 0..48000 {
+            // A loud 110 Hz tone (+6 dB) with a little noise on top.
+            let s = 2.0 * (2.0 * std::f32::consts::PI * 110.0 * i as f32 / 48000.0).sin() + 0.002 * noise.next();
+            input.push((s, s));
+        }
+        let mut out = Vec::new();
+        let mut prev_tail = 0.0f32;
+        let mut max_step = 0.0f32;
+        for (b, chunk) in input.chunks(128).enumerate() {
+            match b {
+                40 => lim.set_ceiling(10f32.powf(-6.0 / 20.0)),
+                120 => lim.set_ceiling(1.0),
+                200 => lim.set_ceiling(10f32.powf(-6.0 / 20.0)),
+                _ => {}
+            }
+            let mut l: Vec<f32> = chunk.iter().map(|p| p.0).collect();
+            let mut r: Vec<f32> = chunk.iter().map(|p| p.1).collect();
+            lim.process(&mut l, &mut r);
+            for &v in &l {
+                if out.len() > 128 {
+                    max_step = max_step.max((v - prev_tail).abs());
+                }
+                prev_tail = v;
+                out.push(v);
+            }
+        }
+        assert_eq!(lim.clamp_hits, 0, "a falling ceiling must not reach the hard clamp");
+        // The tone's own slope at the ceiling is 2π·110/48000 ≈ 0.0144 per
+        // sample; a hard clip would add a corner, a gain jump a step.
+        assert!(max_step < 0.03, "max step {max_step}");
+        let tail = out[out.len() - 4800..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(tail <= 10f32.powf(-6.0 / 20.0) + 1e-6 && tail > 0.45, "tail peak {tail}");
     }
 
     #[test]

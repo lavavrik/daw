@@ -5,18 +5,18 @@
   // instant attack, 60 dB/s fall; see audio/meterBallistics.ts) and a
   // peak-hold line that stays at the highest peak for 1 s (holdStep).
   //
-  // Clip light: lights when a peak reaches 0 dBFS (strips) and stays lit until
-  // clicked, so a single over is never missed. On the master (`master` prop)
-  // the limiter output sits ~0.2 dB under its ceiling, so a plain peak test
-  // would never fire; there it lights when limiter gain reduction exceeds 1 dB
-  // or the output is within 0.5 dB of the ceiling (mixMath.isMasterClip).
+  // Clip light: lights red when a peak reaches 0 dBFS (strips) and stays lit
+  // until clicked, so a single over is never missed. On the master (`master`
+  // prop) limiting is normal, so limiter gain reduction above 1 dB lights an
+  // amber LIMIT light; it turns red only when the output reaches the ceiling
+  // (within 0.01 dB; mixMath.masterLight). It latches its worst state.
   //
   // Updated from the mixer's single rAF loop (MeterBus) by writing styles
   // directly; data-peak-db / data-hold-db expose the values to tests.
   import { MIX_METER_STRIDE } from '../../audio/protocol';
   import type { MeterBus } from './meterBus';
-  import { holdStep, isClip, isMasterClip, linToDb, meterPos } from './mixMath';
-  import type { Hold } from './mixMath';
+  import { holdStep, isClip, linToDb, masterLight, meterPos, worseLight } from './mixMath';
+  import type { Hold, MasterLight } from './mixMath';
 
   let { bus, channel, ceilingDb = 0, name, master = false }: {
     bus: MeterBus;
@@ -26,14 +26,15 @@
     ceilingDb?: number;
     /** For the accessible name ("Drums meter"). */
     name: string;
-    /** The master: clip light follows limiter GR / near-ceiling (see above). */
+    /** The master: amber LIMIT on limiter GR, red at the ceiling (see above). */
     master?: boolean;
   } = $props();
 
   let root = $state<HTMLElement | null>(null);
   const covers: (HTMLElement | null)[] = $state([null, null]);
   const holdEls: (HTMLElement | null)[] = $state([null, null]);
-  let clipped = $state(false);
+  // Latched light state: null (off), 'limit' (amber, master only) or 'clip'.
+  let light = $state<MasterLight>(null);
   const holds: Hold[] = [{ db: -Infinity, t: 0 }, { db: -Infinity, t: 0 }];
   const shownPos = [-1, -1];
   const shownHold = [-1, -1];
@@ -63,7 +64,10 @@
           el.style.visibility = hp > 0 ? 'visible' : 'hidden';
         }
       }
-      if (!clipped && (master ? isMasterClip(lin, ceilingDb, m[base + 2] ?? 0) : isClip(lin, ceilingDb))) clipped = true;
+      if (light !== 'clip') {
+        const now = master ? masterLight(lin, ceilingDb, m[base + 2] ?? 0) : isClip(lin, ceilingDb) ? 'clip' : null;
+        if (now && now !== light) light = worseLight(light, now);
+      }
     }
     if (root) {
       const r = (x: number) => (x > -200 ? x.toFixed(1) : '-inf');
@@ -80,11 +84,19 @@
   <button
     type="button"
     class="clip"
-    class:on={clipped}
+    class:on={light === 'clip'}
+    class:limit={light === 'limit'}
     data-testid="clip"
-    aria-label={clipped ? `${name} clipped — reset` : `${name} clip light (off)`}
-    title={clipped ? `Clipped: a peak reached ${ceilingDb === 0 ? '0 dBFS' : `the ${ceilingDb.toFixed(1)} dB ceiling`}. Click to reset.` : 'Clip light: lights when a peak reaches the ceiling'}
-    onclick={() => (clipped = false)}
+    data-light={light ?? 'off'}
+    aria-label={light === 'clip' ? `${name} clipped — reset` : light === 'limit' ? `${name} limiting — reset` : `${name} clip light (off)`}
+    title={light === 'clip'
+      ? `Clipped: a peak reached ${ceilingDb === 0 ? '0 dBFS' : `the ${ceilingDb.toFixed(1)} dB ceiling`}. Click to reset.`
+      : light === 'limit'
+        ? 'LIMIT: the limiter reduced the gain by more than 1 dB. Click to reset.'
+        : master
+          ? 'Amber LIMIT when the limiter reduces more than 1 dB, red when the output reaches the ceiling'
+          : 'Clip light: lights when a peak reaches the ceiling'}
+    onclick={() => (light = null)}
   ></button>
   <div class="bars">
     {#each [0, 1] as c (c)}
@@ -102,6 +114,7 @@
   .meter { display: flex; flex-direction: column; align-items: stretch; gap: 3px; height: 100%; width: 14px; box-sizing: border-box; }
   .clip { height: 6px; flex: none; padding: 0; border: 0; border-radius: 2px; background: #3a2226; cursor: pointer; }
   .clip.on { background: #ff3b47; box-shadow: 0 0 4px #ff3b47; }
+  .clip.limit { background: #f0a43a; box-shadow: 0 0 4px #f0a43a; }
   .bars { flex: 1; display: flex; gap: 2px; min-height: 0; }
   .bar {
     position: relative; flex: 1; overflow: hidden; border-radius: 1px;

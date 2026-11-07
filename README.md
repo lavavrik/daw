@@ -120,8 +120,9 @@ Design notes: `docs/architecture/mixer.md`.
    Up to 8 distinct drum rows can be sidechain keys at once.
 4. **Master limiter.** The Master strip has a **Ceiling** knob (default
    -0.3 dB) and a **Limiter GR** readout: the output never goes above the
-   ceiling. The master clip light turns on when the limiter works hard (more
-   than 1 dB of reduction); click it to reset. The limiter delays the output by
+   ceiling. The master light turns amber (LIMIT) when the limiter works hard
+   (more than 1 dB of reduction) and red only when the output actually
+   reaches the ceiling; click it to reset. The limiter delays the output by
    1.5 ms; the playhead and recording take that into account.
 5. **Gain-staging tips.** Poly patches (Chord Stab, Pad, Pluck) are about 9 dB
    quieter than the mono ones (Deep Bass, Lead): raise their faders (up to

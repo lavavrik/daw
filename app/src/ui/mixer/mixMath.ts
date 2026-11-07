@@ -121,18 +121,27 @@ export function isClip(lin: number, ceilingDb: number): boolean {
   return linToDb(lin) >= ceilingDb - 0.001;
 }
 
-/** Master clip light: limiter GR above this (dB) counts as "hitting the ceiling". */
-export const MASTER_CLIP_GR_DB = 1;
-/** ...as does an output peak within this many dB of the ceiling. */
-export const MASTER_CLIP_MARGIN_DB = 0.5;
+/** Master light: limiter GR above this (dB) lights the amber LIMIT light. */
+export const MASTER_LIMIT_GR_DB = 1;
+/** ...and an output peak within this many dB of the ceiling the red CLIP light. */
+export const MASTER_CLIP_MARGIN_DB = 0.01;
+
+/** The master's light: off (null), amber 'limit' or red 'clip'. */
+export type MasterLight = 'limit' | 'clip' | null;
 
 /**
- * Master clip test. The limiter's output sits a little *under* its ceiling
- * (lookahead peak detection, ~0.2 dB), so plain isClip never fires there.
- * Instead the master light means "the limiter is working hard": gain reduction
- * above MASTER_CLIP_GR_DB, or an output peak within MASTER_CLIP_MARGIN_DB of
- * the ceiling.
+ * Master light. Limiting is normal on a master, so gain reduction above
+ * MASTER_LIMIT_GR_DB only lights an amber LIMIT ("the limiter is working
+ * hard"). Red CLIP means the output actually reached the ceiling (within
+ * MASTER_CLIP_MARGIN_DB): the limiter output passes bit-exact outside
+ * metronome clicks (engine ClickClip), so a hard-limited mix does get there.
  */
-export function isMasterClip(lin: number, ceilingDb: number, grDb: number): boolean {
-  return grDb > MASTER_CLIP_GR_DB || linToDb(lin) >= ceilingDb - MASTER_CLIP_MARGIN_DB;
+export function masterLight(lin: number, ceilingDb: number, grDb: number): MasterLight {
+  if (linToDb(lin) >= ceilingDb - MASTER_CLIP_MARGIN_DB) return 'clip';
+  return grDb > MASTER_LIMIT_GR_DB ? 'limit' : null;
+}
+
+/** The worse of two lights (clip > limit > off): the light latches its worst state. */
+export function worseLight(a: MasterLight, b: MasterLight): MasterLight {
+  return a === 'clip' || b === 'clip' ? 'clip' : a ?? b;
 }

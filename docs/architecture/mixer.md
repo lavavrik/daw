@@ -148,10 +148,12 @@ clamped against rounding). Non-finite input is returned as is so the final
 4. `MeterBus` (`ui/mixer/meterBus.ts`) reads the SAB in one rAF loop and
    fans out to every `Meter`/GR readout, which write styles directly (no
    reactive state per frame). The peak-hold line (1 s) is a UI concern
-   (`holdStep`). The clip light latches until clicked; on the master it lights
-   when limiter GR > 1 dB or the output is within 0.5 dB of the ceiling,
-   because the limiter output sits ~0.2 dB under the ceiling and never
-   "reaches" it.
+   (`holdStep`). The clip light latches until clicked. On a strip it is red
+   when a peak reaches 0 dBFS. On the master (`mixMath.masterLight`) it is an
+   amber **LIMIT** light when limiter GR > 1 dB (limiting is normal on a
+   master) and turns red only when the output reaches the ceiling (>= ceiling
+   - 0.01 dB), which a hard-limited mix does since the limiter output passes
+   bit-exact outside clicks (see Click soft clip). It latches its worst state.
 
 ## Gain staging
 

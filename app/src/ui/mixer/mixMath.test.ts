@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mixParam } from '../../audio/mixerCatalog';
 import {
-  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, holdStep, isClip, isMasterClip,
+  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, holdStep, isClip, masterLight, worseLight,
   linToDb, meterPos,
 } from './mixMath';
 
@@ -88,13 +88,21 @@ describe('meter mapping', () => {
   });
 });
 
-describe('master clip light', () => {
-  it('lights on limiter GR > 1 dB or an output within 0.5 dB of the ceiling', () => {
+describe('master light', () => {
+  it('amber LIMIT on limiter GR > 1 dB, red CLIP only when the output reaches the ceiling', () => {
     const lin = (db: number) => 10 ** (db / 20);
-    expect(isMasterClip(lin(-0.5), -0.3, 0)).toBe(true); // 0.2 dB under: the limiter's normal peak
-    expect(isMasterClip(lin(-1), -0.3, 0)).toBe(false);
-    expect(isMasterClip(lin(-6), -0.3, 1.5)).toBe(true);
-    expect(isMasterClip(lin(-6), -0.3, 1)).toBe(false);
+    expect(masterLight(lin(-0.3), -0.3, 6)).toBe('clip'); // at the ceiling
+    expect(masterLight(lin(-0.305), -0.3, 0)).toBe('clip'); // within 0.01 dB
+    expect(masterLight(lin(-0.5), -0.3, 3)).toBe('limit'); // working, not at the ceiling
+    expect(masterLight(lin(-0.5), -0.3, 0)).toBeNull(); // near but no GR: off
+    expect(masterLight(lin(-6), -0.3, 1.5)).toBe('limit');
+    expect(masterLight(lin(-6), -0.3, 1)).toBeNull();
+  });
+  it('latches the worst state until reset', () => {
+    expect(worseLight(null, 'limit')).toBe('limit');
+    expect(worseLight('limit', null)).toBe('limit');
+    expect(worseLight('limit', 'clip')).toBe('clip');
+    expect(worseLight('clip', 'limit')).toBe('clip');
   });
 });
 

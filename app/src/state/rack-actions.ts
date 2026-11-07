@@ -1,12 +1,12 @@
 // Synth-track and rack edits. Like actions.ts: every function mutates Project
 // AND sends the matching engine command(s), so UI and engine never diverge.
-import { clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } from '../audio/catalog';
+import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
 import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, newChannel, synthTrack } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
-import { STARTER_PATCHES } from './patches';
+import { STARTER_PATCHES, validatePatch } from './patches';
 import { makeNotePattern } from './pattern-actions';
 import type { Patch } from './patches';
 
@@ -46,40 +46,48 @@ export function addSynthTrack(
   return track;
 }
 
-/** RACK_CLEAR, then ADD_MODULE per module, SET_PARAM per non-default param, CONNECT per cable. */
-export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch: Patch) {
+/**
+ * Validate `patch` (validatePatch: anything unknown, out of range or
+ * dangling is dropped/clamped, and pooled effects beyond the FX pool are
+ * dropped) and load it into the track: RACK_CLEAR, ADD_MODULE per module,
+ * SET_PARAM per non-default param, CONNECT per cable. Returns the
+ * validation warnings ([] for a clean patch). The FX-pool budget is what is
+ * free now plus this rack's own pooled modules: RACK_CLEAR frees them and the
+ * engine hands their slots over to the adds that follow.
+ */
+export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch: unknown): string[] {
   const t = synthTrack(p, trackId);
-  if (!t) return;
+  if (!t) return [];
+  const own = (id: string) => t.modules.filter((m) => moduleDef(m.kind).id === id).length;
+  const { patch: v, warnings } = validatePatch(patch, { fxFree: (id) => fxSlotsFree(p, id) + own(id) });
   sink.send(Op.RACK_CLEAR, t.slot);
   const modules: RackModule[] = [];
   const cables: RackCable[] = [];
   const sets: [number, number, number][] = [];
-  for (const pm of patch.modules) {
+  for (const pm of v.modules) {
     const def = moduleDef(pm.id);
     sink.send(Op.RACK_ADD_MODULE, t.slot, pm.idx, def.kind);
     const params = def.params.map((pd) => pd.default);
-    for (const [name, v] of Object.entries(pm.params ?? {})) {
-      const i = paramIndex(def, name);
-      params[i] = clampParam(def.params[i], v);
-      if (params[i] !== def.params[i].default) sets.push([pm.idx, i, params[i]]);
+    for (const [name, value] of Object.entries(pm.params ?? {})) {
+      const i = def.params.findIndex((pd) => pd.name === name);
+      params[i] = value; // validated: known and in range
+      if (value !== def.params[i].default) sets.push([pm.idx, i, value]);
     }
     modules.push({ idx: pm.idx, kind: def.kind, params });
   }
-  for (const [m, i, v] of sets) sink.send(Op.RACK_SET_PARAM, t.slot, m, i, v);
-  for (const c of patch.cables) {
-    const from = modules.find((m) => m.idx === c.from[0]);
-    const to = modules.find((m) => m.idx === c.to[0]);
-    if (!from || !to) continue;
+  for (const [m, i, value] of sets) sink.send(Op.RACK_SET_PARAM, t.slot, m, i, value);
+  for (const c of v.cables) {
+    const from = modules.find((m) => m.idx === c.from[0])!;
+    const to = modules.find((m) => m.idx === c.to[0])!;
     const fp = portIndex(moduleDef(from.kind), 'out', c.from[1]);
     const tp = portIndex(moduleDef(to.kind), 'in', c.to[1]);
-    const k = cables.findIndex((x) => x.to.m === to.idx && x.to.port === tp);
-    if (k >= 0) cables.splice(k, 1); // one cable per input
     cables.push({ from: { m: from.idx, port: fp }, to: { m: to.idx, port: tp } });
     sink.send(Op.RACK_CONNECT, t.slot, packPort(from.idx, fp), packPort(to.idx, tp));
   }
   t.modules = modules;
   t.cables = cables;
-  t.patchName = patch.name;
+  t.patchName = v.name;
+  return warnings;
 }
 
 /**
@@ -96,16 +104,8 @@ export function fxSlotsFree(p: Project, kind: string | number): number {
   return Math.max(0, slots - used);
 }
 
-/**
- * "All 8 delays in use": why a pooled module kind cannot be added once its
- * FX-pool bank is full ("" for unpooled kinds).
- */
-export function fxPoolFullText(def: { name: string; kind: number }): string {
-  const slots = fxPoolSlots(moduleDef(def.kind));
-  if (slots === null) return '';
-  const name = def.name.toLowerCase();
-  return `All ${slots} ${name}${name.endsWith('s') ? 'es' : 's'} in use`;
-}
+/** "All 8 delays in use" (lives in catalog.ts so patches.ts can use it too). */
+export { fxPoolFullText };
 
 /**
  * The engine refused RACK_ADD_MODULE (slot, idx, kind) with OUT_OF_MEMORY

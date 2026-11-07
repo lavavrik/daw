@@ -56,6 +56,17 @@ export function fxPoolSlots(def: ModuleDef): number | null {
   return CATALOG.fxPool[def.id] ?? null;
 }
 
+/**
+ * "All 8 delays in use": why a pooled module kind cannot be added once its
+ * FX-pool bank is full ("" for unpooled kinds).
+ */
+export function fxPoolFullText(def: { name: string; kind: number }): string {
+  const slots = fxPoolSlots(moduleDef(def.kind));
+  if (slots === null) return '';
+  const name = def.name.toLowerCase();
+  return `All ${slots} ${name}${name.endsWith('s') ? 'es' : 's'} in use`;
+}
+
 /** Look up by string id ("osc") or numeric kind. Throws on unknown. */
 export function moduleDef(idOrKind: string | number): ModuleDef {
   const def = CATALOG.modules.find((m) => (typeof idOrKind === 'number' ? m.kind === idOrKind : m.id === idOrKind));

@@ -10,10 +10,133 @@
 // from engine/tests/fixtures/starter_patches.txt; after editing a patch,
 // regenerate that fixture (see patches.fixture.test.ts) and rerun cargo test.
 
+import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef } from '../audio/catalog';
+import type { ModuleDef } from '../audio/catalog';
+import { MAX_MODULES } from '../audio/protocol';
+
+/**
+ * A rack patch by name: module kinds by catalog id, params by catalog name,
+ * cable ends by port name, so catalog growth never shifts anything. The same
+ * shape is used by the starter patches, saved projects (a synth track's
+ * `patch`) and the patch library.
+ */
 export interface Patch {
   name: string;
   modules: { idx: number; id: string; params?: Record<string, number> }[];
   cables: { from: [number, string]; to: [number, string] }[];
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isEnd = (v: unknown): v is [number, string] =>
+  Array.isArray(v) && v.length === 2 && Number.isInteger(v[0]) && typeof v[1] === 'string';
+
+/**
+ * Check a patch from outside the program (project file, library, …) before
+ * anything reaches the engine. Never throws; whatever is wrong is dropped or
+ * clamped with a warning:
+ *   - modules of unknown kind, or with an idx out of 0..MAX_MODULES-1 or
+ *     already taken (first one wins);
+ *   - pooled effects (Delay, Reverb, Chorus) beyond `fxFree(id)`, the FX-pool
+ *     slots the caller can still spend on that kind (default: the whole
+ *     pool), with the "All 8 delays in use" text;
+ *   - unknown or non-numeric params (the default is used); out-of-range ones
+ *     are clamped (clampParam: integer params round);
+ *   - malformed cables, cables whose module or port does not exist; a second
+ *     cable into the same input replaces the first (one cable per input).
+ * The result is a fixed point: validating it again gives no warnings.
+ */
+export function validatePatch(
+  json: unknown,
+  opts: { fxFree?: (moduleId: string) => number } = {},
+): { patch: Patch; warnings: string[] } {
+  const warnings: string[] = [];
+  const warn = (m: string) => warnings.push(m);
+  if (!isObj(json)) warn('The patch is not an object: loaded an empty rack');
+  const o = isObj(json) ? json : {};
+  const patch: Patch = { name: typeof o.name === 'string' ? o.name : '', modules: [], cables: [] };
+
+  const byIdx = new Map<number, ModuleDef>();
+  const pooled = new Map<string, number>(); // pooled module id -> kept so far
+  for (const raw of Array.isArray(o.modules) ? o.modules : []) {
+    if (!isObj(raw)) {
+      warn('Dropped a malformed module');
+      continue;
+    }
+    let def: ModuleDef | null = null;
+    try {
+      if (typeof raw.id === 'string') def = moduleDef(raw.id);
+    } catch { /* unknown */ }
+    if (!def) {
+      warn(`Dropped module "${String(raw.id)}": unknown kind`);
+      continue;
+    }
+    const idx = raw.idx;
+    if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0 || idx >= MAX_MODULES) {
+      warn(`Dropped ${def.name}: module idx ${String(idx)} is out of range (0..${MAX_MODULES - 1})`);
+      continue;
+    }
+    if (byIdx.has(idx)) {
+      warn(`Dropped ${def.name}: module idx ${idx} is already taken`);
+      continue;
+    }
+    const slots = fxPoolSlots(def);
+    if (slots !== null) {
+      const kept = pooled.get(def.id) ?? 0;
+      if (kept >= (opts.fxFree ? opts.fxFree(def.id) : slots)) {
+        warn(`Dropped ${def.name} (module ${idx}): ${fxPoolFullText(def)}`);
+        continue;
+      }
+      pooled.set(def.id, kept + 1);
+    }
+    const m: Patch['modules'][number] = { idx, id: def.id };
+    if (isObj(raw.params)) {
+      const params: Record<string, number> = {};
+      for (const [name, v] of Object.entries(raw.params)) {
+        const pd = def.params.find((x) => x.name === name);
+        if (!pd) warn(`${def.name} has no param "${name}" (ignored)`);
+        else if (typeof v !== 'number' || !Number.isFinite(v)) warn(`${def.name} ${name}: not a number (default used)`);
+        else {
+          const c = clampParam(pd, v);
+          if (c !== v) warn(`${def.name} ${name} ${v} clamped to ${c}`);
+          params[name] = c;
+        }
+      }
+      m.params = params;
+    }
+    patch.modules.push(m);
+    byIdx.set(idx, def);
+  }
+
+  for (const raw of Array.isArray(o.cables) ? o.cables : []) {
+    if (!isObj(raw) || !isEnd(raw.from) || !isEnd(raw.to)) {
+      warn('Dropped a malformed cable');
+      continue;
+    }
+    const [fm, fp] = raw.from;
+    const [tm, tp] = raw.to;
+    const what = `cable ${fm}.${fp} → ${tm}.${tp}`;
+    const fd = byIdx.get(fm);
+    const td = byIdx.get(tm);
+    if (!fd || !td) {
+      warn(`Dropped ${what}: no module ${!fd ? fm : tm}`);
+      continue;
+    }
+    if (!fd.outputs.some((x) => x.name === fp)) {
+      warn(`Dropped ${what}: ${fd.name} has no output "${fp}"`);
+      continue;
+    }
+    if (!td.inputs.some((x) => x.name === tp)) {
+      warn(`Dropped ${what}: ${td.name} has no input "${tp}"`);
+      continue;
+    }
+    const k = patch.cables.findIndex((c) => c.to[0] === tm && c.to[1] === tp);
+    if (k >= 0) {
+      warn(`The ${what} replaced another cable into the same input`);
+      patch.cables.splice(k, 1);
+    }
+    patch.cables.push({ from: [fm, fp], to: [tm, tp] });
+  }
+  return { patch, warnings };
 }
 
 export const STARTER_PATCHES: Patch[] = [

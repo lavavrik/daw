@@ -3,7 +3,8 @@
 A project is a folder. Code: `app/src/project/` — `schema.ts` (the JSON
 shape + `validate`), `serialize.ts` (pure `serialize`, `projectFingerprint`),
 `load.ts` (`loadProject`: reset + command replay), `fsFolder.ts` (folder
-I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners).
+I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
+`autosave.ts` (OPFS autosave + restore on start).
 
 ```
 My Song/
@@ -14,7 +15,7 @@ My Song/
 
 Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
-tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; Task 4's autosave).
+tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
 ## project.json (schemaVersion 1)
 
@@ -71,7 +72,7 @@ Every edit sends an engine command, so `AudioEngine.onCommand` →
 `markEdited` themselves. O(1) per command. `project/dirtyCheck.ts` then,
 500 ms after edits pause and in an idle callback, compares
 `projectFingerprint` with the saved one and clears `dirty` if the project is
-back to its saved state. **Task 4's autosave subscribes to `p.version`.**
+back to its saved state. **The autosave subscribes to `p.version`** (below).
 Nothing is marked while `p.loading`.
 
 ## Validation (`validate`)
@@ -143,3 +144,67 @@ Save As names the project after the chosen folder. A folder that already
 holds a `project.json` or anything in `samples/` (and is not this project's
 own folder) is written only after an inline "Replace the project in …?"
 (`banners.ask`, never `confirm()`).
+
+## Autosave (`autosave.ts`)
+
+A crash, a reload or a closed tab loses at most the last few seconds.
+
+**When:** App calls `markDirty` on every `Project.version` change (the same
+O(1) edit signal as the unsaved mark; a load never bumps it). A write runs
+**5 s after the last change** (debounced; continuous editing still writes at
+least every 30 s) and at once on `visibilitychange` → hidden (`flush`). One
+write at a time; a change during a write is written after it. Never while
+`p.loading` (retried after). A Save / Save As drops the pending write
+(`cancel`): that state is in the folder.
+
+**Where:** OPFS (`navigator.storage.getDirectory()`), per browser profile:
+
+```
+autosave/autosave.json        the marker: { format: 1, savedAt, project }   ← the only file read
+autosave/samples/<id>-<hash>-<name>   sample pool shared by successive autosaves
+autosave.tmp/autosave.json    the next marker while it is being written
+```
+
+**Atomic swap** (`writeAutosave`), so an interrupted write always leaves the
+previous autosave readable and never a half-written one:
+
+1. every listed sample missing from the pool is written into it. Names carry
+   the content hash, so a file that exists **with the right size** is reused
+   (no bytes read back); an interrupted sample write leaves an empty or
+   short file, which the next write redoes. Files are written in **1 MiB
+   chunks** (`fsFolder.writeFile`), each its own awaited `write()`, so a
+   large sample never holds the UI thread in one long copy;
+2. the marker (`savedAt` + the `serialize`d project.json) goes to
+   `autosave.tmp/`;
+3. it is **moved over `autosave/autosave.json`** — the commit. Where the
+   handle cannot move (or will not replace), the marker is written whole
+   instead: Chrome's writable streams replace a file atomically on close;
+4. pool files the new marker does not list are removed — after the commit,
+   so the committed marker never lists a missing sample.
+
+`readAutosave` reads only `autosave/autosave.json` (an empty, unparsable or
+other-format marker counts as none) and the pool samples it lists;
+`autosave.tmp/` is never read. The `serialize` snapshot is taken
+synchronously at the start of a write, so no edit can interleave with it.
+
+**Restore on start:** after audio starts, App peeks the marker. If it is
+newer than the **last explicit save** (Save / Save As record `Date.now()` in
+`localStorage["daw.lastExplicitSave"]`; none recorded = any autosave
+counts), an inline banner above the editors offers **Restore last session**
+or **Start fresh** (never `confirm()`). Until it is answered the autosave is
+**held**, so new edits cannot overwrite the session on offer (they are
+written once it is answered). A New / Open while it is open answers it
+(that project replaces the session).
+
+- **Restore last session** → `session.restore(json, files)`: the same
+  `loadProject` as Open (validation, `beforeLoad` / `afterLoad`, the
+  warnings banner). The project keeps its name, has **no folder**
+  (`p.folder = null`: a directory handle is not stored in the autosave; the
+  next Save asks for a folder) and stays **"● unsaved"**
+  (`savedFingerprint = NEVER_SAVED`, which no fingerprint matches).
+- **Start fresh** → `discardAutosave`: the marker is removed first, then
+  `autosave/` and `autosave.tmp/`.
+
+A failed write shows one error banner ("Autosave failed — …"; not repeated
+until a write succeeds, which clears it) and is retried on the next change.
+

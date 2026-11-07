@@ -278,8 +278,13 @@ export function createAutosave(o: AutosaveOptions): Autosave {
       const root = await o.root();
       await withAutosaveLock(locks, () => writeAutosave(root, json, files, savedAt));
       lastSaved = savedAt;
+      const wasBackingOff = backoff > 0;
       backoff = 0;
       if (reported !== null) o.onError?.((reported = null));
+      // An edit during this (retry) write found the backoff on and set no
+      // timer of its own (markDirty): schedule it now. (After a normal write
+      // markDirty already did.)
+      if (pending && wasBackingOff && !held && !disabled) schedule(debounce);
     } catch (e) {
       // Retried on its own, backing off (5, 10, 20, 40, 60, 60… s with the
       // default debounce): a full disk must not mean a full rewrite on every

@@ -199,6 +199,34 @@ describe('autosave', () => {
     expect(markerWrites(r)).toHaveLength(1);
   });
 
+  it('an edit during the successful retry write is still written afterwards (P7)', async () => {
+    const r = root();
+    const { p } = await buildFixture();
+    let gate: Promise<void> | null = null;
+    let release!: () => void;
+    const a = createAutosave({
+      getProject: () => p, debounceMs: 100,
+      root: async () => {
+        if (gate) await gate; // the retry write is in flight
+        return asDir(r);
+      },
+    });
+    r.failOn = MARKER;
+    a.markDirty();
+    await vi.advanceTimersByTimeAsync(150); // first write fails: retry in 100 ms (backoff)
+    expect(markerWrites(r)).toHaveLength(0);
+    r.failOn = null;
+    gate = new Promise((res) => (release = res));
+    await vi.advanceTimersByTimeAsync(150); // the retry starts and waits on the gate
+    a.markDirty(); // an edit while backing off: no timer of its own
+    release();
+    gate = null;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(markerWrites(r)).toHaveLength(1); // the retry (without that edit)
+    await vi.advanceTimersByTimeAsync(500);
+    expect(markerWrites(r)).toHaveLength(2); // ...and the edit, after the usual debounce
+  });
+
   it('peek / discard / offersRestore', async () => {
     const r = root();
     expect(await peekAutosave(asDir(r))).toBeNull();

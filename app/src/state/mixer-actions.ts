@@ -31,9 +31,10 @@ function resolve(p: Project, target: MixChannelTarget): Resolved | null {
  * Does channel `index` (of kind `kind`) take `def`? Mirrors the engine's
  * MixParam::accepts (engine/src/mixer/catalog.rs): reverb-group params only
  * on the Reverb return, delay-group params only on the Delay return (both are
- * 'return' channels), everything else by `appliesTo`.
+ * 'return' channels), everything else by `appliesTo`. Also the rule for
+ * mixer params in a project file (project/schema.ts).
  */
-function accepts(def: MixParamDef, kind: MixTarget, index: number): boolean {
+export function accepts(def: MixParamDef, kind: MixTarget, index: number): boolean {
   if (def.group === 'reverb') return index === MIX_REVERB;
   if (def.group === 'delay') return index === MIX_DELAY;
   return def.appliesTo.includes(kind);

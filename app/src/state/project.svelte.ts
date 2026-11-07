@@ -155,12 +155,37 @@ export interface MixerState {
   master: ChannelState;
 }
 
+/** The original bytes of a loaded sample, kept so a save writes them unchanged. */
+export interface SampleFile {
+  /** Original file name with extension ("kick.wav"). */
+  name: string;
+  /** MIME type as the browser reported it ("" if unknown). */
+  type: string;
+  bytes: ArrayBuffer;
+}
+
 export const newChannel = (): ChannelState => ({ params: defaultMixParams(), key: null });
 export const newMixer = (): MixerState => ({
   channels: {}, reverb: newChannel(), delay: newChannel(), master: newChannel(),
 });
 
 export class Project {
+  /** Shown in the top bar; a Save As takes the folder's name. */
+  name = $state('Untitled');
+  /**
+   * projectFingerprint (project/serialize.ts) at the last save, load or New;
+   * null before the session starts. App keeps `dirty` = "differs from it".
+   */
+  savedFingerprint = $state<string | null>(null);
+  /** Unsaved changes ("● unsaved" in the top bar). Written by App only. */
+  dirty = $state(false);
+  /** Where Save writes (null: Save does a Save As). Not reactive. */
+  folder: FileSystemDirectoryHandle | null = null;
+  /**
+   * Engine sample id -> the file it came from (not reactive). Filled on drop
+   * and on load; a save writes the ones the project uses.
+   */
+  readonly sampleFiles = new Map<number, SampleFile>();
   tempo = $state(124);
   metronome = $state(false);
   playing = $state(false);

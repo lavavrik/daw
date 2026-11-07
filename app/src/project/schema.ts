@@ -1,0 +1,485 @@
+// project.json: the saved form of a Project (schemaVersion 1) and its
+// validator. See docs/architecture/projects.md.
+//
+// Design rules:
+//   - Everything the engine needs is by catalog NAME (rack module ids, rack
+//     and mixer params, port names), never by catalog index, so catalog
+//     growth never shifts values.
+//   - Engine slots ARE stored (track `slot`, pattern `engineIdx`, clip and
+//     note `idx`) and references use them (clip `pattern`, `currentPattern`,
+//     sidechain `key.track`), so a restore (load, plan-7 undo) puts every
+//     object back in the same engine slot.
+//   - UUIDs are not stored; a load makes fresh ones.
+//   - `validate` never throws and never lets an out-of-range value through:
+//     unknown fields are ignored, a value of the wrong type falls back to its
+//     default, an out-of-range one is clamped, and an object that cannot be
+//     placed (bad slot, unknown kind, dangling reference) is dropped. Each of
+//     these adds a warning (a missing optional field silently gets its
+//     default). Only a missing/newer schemaVersion is an error.
+import { MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_DELAY, MIX_MASTER, MIX_REVERB, BAR_TICKS } from '../audio/protocol';
+import { clampParam } from '../audio/catalog';
+import { MIX_PARAMS } from '../audio/mixerCatalog';
+import type { MixTarget } from '../audio/mixerCatalog';
+import { accepts } from '../state/mixer-actions';
+import { validatePatch } from '../state/patches';
+import type { Patch } from '../state/patches';
+import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from '../state/project.svelte';
+
+export const SCHEMA_VERSION = 1;
+/** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
+const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
+const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
+
+export interface ProjectJson {
+  schemaVersion: typeof SCHEMA_VERSION;
+  name: string;
+  /** BPM 20..300 (0.1 steps). */
+  tempo: number;
+  metronome: boolean;
+  mode: 'pattern' | 'song';
+  /** Song-mode loop range in ticks (0 <= start < end <= MAX_SONG_TICKS). */
+  loop: { on: boolean; start: number; end: number };
+  /** In track-list order. */
+  tracks: TrackJson[];
+  mixer: MixerJson;
+  /** Every sample the project uses (drum rows and SamplePlayer modules). */
+  samples: SampleJson[];
+  /** Selected track and last-selected synth (the Keys → target), by slot. */
+  selection: { track: number | null; synth: number | null };
+}
+
+interface TrackCommon {
+  /** Engine track slot 0..31, unique. */
+  slot: number;
+  name: string;
+  /** "#rrggbb". */
+  color: string;
+  /** engineIdx of the current pattern. */
+  currentPattern: number;
+  clips: ClipJson[];
+}
+
+export interface DrumTrackJson extends TrackCommon {
+  kind: 'drum';
+  /** Index = engine row (0..MAX_ROWS-1). */
+  rows: RowJson[];
+  patterns: DrumPatternJson[];
+}
+
+export interface RowJson {
+  name: string;
+  /** Session sample id (an entry of `samples`), or null. */
+  sample: number | null;
+  gain: number;
+  pan: number;
+  mute: boolean;
+}
+
+export interface DrumPatternJson {
+  engineIdx: number;
+  name: string;
+  stepCount: 16 | 32 | 64;
+  swing: number;
+  /** Non-zero steps as [row, step 0..63, velocity 1..127]. */
+  hits: [number, number, number][];
+}
+
+export interface SynthTrackJson extends TrackCommon {
+  kind: 'synth';
+  /** The rack, by name (state/patches.ts Patch; validated by validatePatch). */
+  patch: Patch;
+  patterns: NotePatternJson[];
+}
+
+export interface NotePatternJson {
+  engineIdx: number;
+  name: string;
+  bars: number;
+  notes: NoteJson[];
+}
+
+export interface NoteJson {
+  idx: number;
+  pitch: number;
+  vel: number;
+  start: number;
+  len: number;
+}
+
+export interface ClipJson {
+  idx: number;
+  /** engineIdx of a pattern of the same track. */
+  pattern: number;
+  start: number;
+  len: number;
+  offset: number;
+}
+
+export type TrackJson = DrumTrackJson | SynthTrackJson;
+
+/** Mixer params by catalog name (MIX_PARAMS[].name). */
+export type MixParamsJson = Record<string, number>;
+
+export interface MixerJson {
+  tracks: { slot: number; params: MixParamsJson; key: KeyJson | null }[];
+  reverb: MixParamsJson;
+  delay: MixParamsJson;
+  master: MixParamsJson;
+}
+
+/** Sidechain source: a whole track (row null) or one drum row. */
+export interface KeyJson {
+  track: number;
+  row: number | null;
+}
+
+export interface SampleJson {
+  /** Session sample id (reassigned compactly 0..n-1 on load). */
+  id: number;
+  /** Original file name ("kick.wav"). */
+  name: string;
+  type: string;
+  /** Path in the project folder: "samples/<id>-<name>". */
+  file: string;
+}
+
+export type Validated = { project: ProjectJson; warnings: string[] } | { error: string };
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const COLOR = /^#[0-9a-fA-F]{6}$/;
+/** "samples/<one file name>": no sub-folders, no "." / "..". */
+const SAMPLE_PATH = /^samples\/(?!\.\.?$)[^/\\]+$/;
+
+/** Collects warnings; each reader returns a valid value. */
+class Reader {
+  readonly warnings: string[] = [];
+  warn(m: string) {
+    this.warnings.push(m);
+  }
+  /** A number in [lo, hi] (integer: rounded). Missing: `def`, silently. */
+  num(v: unknown, def: number, lo: number, hi: number, what: string, integer = false): number {
+    if (v === undefined) return def;
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      this.warn(`${what}: not a number (using ${def})`);
+      return def;
+    }
+    const c = clampParam({ min: lo, max: hi, default: def, integer }, v);
+    if (c !== v) this.warn(`${what} ${v} clamped to ${c}`);
+    return c;
+  }
+  bool(v: unknown, def: boolean, what: string): boolean {
+    if (v === undefined) return def;
+    if (typeof v !== 'boolean') {
+      this.warn(`${what}: not true/false (using ${def})`);
+      return def;
+    }
+    return v;
+  }
+  str(v: unknown, def: string, what: string): string {
+    if (v === undefined) return def;
+    if (typeof v !== 'string') {
+      this.warn(`${what}: not text (using "${def}")`);
+      return def;
+    }
+    return v;
+  }
+  /** An index 0..n-1 not in `taken`; null (and a warning) if it can't be used. */
+  index(v: unknown, n: number, taken: Set<number>, what: string): number | null {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0 || v >= n) {
+      this.warn(`Dropped ${what}: ${String(v)} is not in 0..${n - 1}`);
+      return null;
+    }
+    if (taken.has(v)) {
+      this.warn(`Dropped ${what}: ${v} is already taken`);
+      return null;
+    }
+    taken.add(v);
+    return v;
+  }
+}
+
+/** Check (and clamp/drop) everything in a parsed project.json. Pure; never throws. */
+export function validate(json: unknown): Validated {
+  if (!isObj(json)) return { error: 'Not a project file (expected a JSON object)' };
+  const ver = json.schemaVersion;
+  if (typeof ver !== 'number' || !Number.isInteger(ver) || ver < 1) {
+    return { error: 'Not a project file (no schemaVersion)' };
+  }
+  if (ver > SCHEMA_VERSION) {
+    return { error: `This project was saved by a newer version of the app (schema ${ver}; this one reads up to ${SCHEMA_VERSION})` };
+  }
+  const r = new Reader();
+
+  const name = r.str(json.name, 'Untitled', 'Project name');
+  const tempo = Math.round(r.num(json.tempo, 124, 20, 300, 'Tempo') * 10) / 10;
+  const metronome = r.bool(json.metronome, false, 'Metronome');
+  let mode: 'pattern' | 'song' = 'pattern';
+  if (json.mode === 'song' || json.mode === 'pattern') mode = json.mode;
+  else if (json.mode !== undefined) r.warn(`Mode "${String(json.mode)}" is unknown (using Pattern)`);
+  const loop = readLoop(r, json.loop);
+
+  const samples: SampleJson[] = [];
+  const sampleIds = new Set<number>();
+  for (const s of arr(json.samples)) {
+    if (!isObj(s)) {
+      r.warn('Dropped a malformed sample entry');
+      continue;
+    }
+    const sname = r.str(s.name, typeof s.file === 'string' ? s.file : 'sample', 'Sample name');
+    if (typeof s.file !== 'string' || !SAMPLE_PATH.test(s.file)) {
+      r.warn(`Dropped sample "${sname}": bad file path "${String(s.file)}"`);
+      continue;
+    }
+    const id = r.index(s.id, MAX_SAMPLES, sampleIds, `sample "${sname}" id`);
+    if (id === null) continue;
+    samples.push({ id, name: sname, type: r.str(s.type, '', `Sample "${sname}" type`), file: s.file });
+  }
+
+  const tracks: TrackJson[] = [];
+  const slots = new Set<number>();
+  for (const t of arr(json.tracks)) {
+    if (!isObj(t)) {
+      r.warn('Dropped a malformed track');
+      continue;
+    }
+    const kind = t.kind;
+    const tname = r.str(t.name, kind === 'synth' ? 'Synth' : 'Drums', 'Track name');
+    if (kind !== 'drum' && kind !== 'synth') {
+      r.warn(`Dropped track "${tname}": unknown kind "${String(kind)}"`);
+      continue;
+    }
+    const slot = r.index(t.slot, MAX_TRACKS, slots, `track "${tname}" slot`);
+    if (slot === null) continue;
+    let color = TRACK_COLORS[slot % TRACK_COLORS.length];
+    if (typeof t.color === 'string' && COLOR.test(t.color)) color = t.color;
+    else if (t.color !== undefined) r.warn(`Track "${tname}": bad colour "${String(t.color)}"`);
+    const at = `Track "${tname}"`;
+    const common = { slot, name: tname, color };
+    if (kind === 'drum') {
+      const rows = readRows(r, t.rows, sampleIds, at);
+      const patterns = readPatterns(r, t.patterns, at, (p, w) => readDrumPattern(r, p, rows.length, w));
+      tracks.push({ kind, ...common, rows, patterns, ...readCurrentAndClips(r, t, patterns, at) });
+    } else {
+      const v = validatePatch(t.patch ?? { name: '', modules: [], cables: [] });
+      for (const w of v.warnings) r.warn(`${at}: ${w}`);
+      for (const m of v.patch.modules) {
+        const s = m.params?.sample;
+        if (m.id === 'sample_player' && s !== undefined && s >= 0 && !sampleIds.has(s)) {
+          r.warn(`${at}: Sample Player ${m.idx} uses sample ${s}, which is not in the project (cleared)`);
+          m.params!.sample = -1;
+        }
+      }
+      const patterns = readPatterns(r, t.patterns, at, (p, w) => readNotePattern(r, p, w));
+      tracks.push({ kind, ...common, patch: v.patch, patterns, ...readCurrentAndClips(r, t, patterns, at) });
+    }
+  }
+
+  const mixer = readMixer(r, json.mixer, tracks);
+  const sel = isObj(json.selection) ? json.selection : {};
+  const slotOf = (v: unknown, synthOnly: boolean) =>
+    tracks.find((t) => t.slot === v && (!synthOnly || t.kind === 'synth'))?.slot ?? null;
+  const selection = { track: slotOf(sel.track, false), synth: slotOf(sel.synth, true) };
+
+  return {
+    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection },
+    warnings: r.warnings,
+  };
+}
+
+function readLoop(r: Reader, v: unknown): ProjectJson['loop'] {
+  const def = { on: false, start: 0, end: DEFAULT_LOOP_END };
+  if (v === undefined) return def;
+  const o = isObj(v) ? v : {};
+  const int = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 0 && x <= MAX_SONG_TICKS;
+  if (!int(o.start) || !int(o.end) || (o.start as number) >= (o.end as number)) {
+    r.warn('Loop range is invalid (reset to bars 1-4, off)');
+    return def;
+  }
+  return { on: r.bool(o.on, false, 'Loop on'), start: o.start as number, end: o.end as number };
+}
+
+function readRows(r: Reader, v: unknown, sampleIds: Set<number>, at: string): RowJson[] {
+  const blank = (i: number): RowJson => ({ name: `Row ${i + 1}`, sample: null, gain: 1, pan: 0, mute: false });
+  if (v === undefined) return [0, 1, 2, 3].map(blank);
+  const raw = arr(v);
+  if (raw.length > MAX_ROWS) r.warn(`${at}: only the first ${MAX_ROWS} rows were kept`);
+  // A malformed row becomes an empty one: rows are positional (hits, keys).
+  return raw.slice(0, MAX_ROWS).map((x, i) => {
+    if (!isObj(x)) {
+      r.warn(`${at} row ${i + 1}: malformed (emptied)`);
+      return blank(i);
+    }
+    const w = `${at} row ${i + 1}`;
+    let sample: number | null = null;
+    if (typeof x.sample === 'number' && sampleIds.has(x.sample)) sample = x.sample;
+    else if (x.sample !== null && x.sample !== undefined) {
+      r.warn(`${w}: sample ${String(x.sample)} is not in the project (cleared)`);
+    }
+    return {
+      name: r.str(x.name, `Row ${i + 1}`, `${w} name`),
+      sample,
+      gain: r.num(x.gain, 1, 0, 2, `${w} gain`),
+      pan: r.num(x.pan, 0, -1, 1, `${w} pan`),
+      mute: r.bool(x.mute, false, `${w} mute`),
+    };
+  });
+}
+
+/** Patterns with unique engineIdx; never empty (a default one is made if needed). */
+function readPatterns<P extends { engineIdx: number }>(
+  r: Reader, v: unknown, at: string, read: (p: Record<string, unknown>, what: string) => Omit<P, 'engineIdx'>,
+): P[] {
+  const out: P[] = [];
+  const taken = new Set<number>();
+  for (const x of arr(v)) {
+    if (!isObj(x)) {
+      r.warn(`${at}: dropped a malformed pattern`);
+      continue;
+    }
+    const pname = typeof x.name === 'string' ? x.name : `Pattern ${out.length + 1}`;
+    const engineIdx = r.index(x.engineIdx, MAX_PATTERNS, taken, `${at} pattern "${pname}" engine slot`);
+    if (engineIdx === null) continue;
+    out.push({ engineIdx, ...read(x, `${at} pattern "${pname}"`) } as P);
+  }
+  if (out.length === 0) {
+    if (v !== undefined) r.warn(`${at}: no usable pattern (added an empty one)`);
+    out.push({ engineIdx: 0, ...read({}, `${at} pattern`) } as P);
+  }
+  return out;
+}
+
+function readDrumPattern(r: Reader, x: Record<string, unknown>, rows: number, w: string): Omit<DrumPatternJson, 'engineIdx'> {
+  let stepCount: 16 | 32 | 64 = 16;
+  if (x.stepCount === 16 || x.stepCount === 32 || x.stepCount === 64) stepCount = x.stepCount;
+  else if (x.stepCount !== undefined) r.warn(`${w}: step count ${String(x.stepCount)} is not 16/32/64 (using 16)`);
+  const hits: [number, number, number][] = [];
+  const seen = new Set<number>();
+  for (const h of arr(x.hits)) {
+    const ok = Array.isArray(h) && h.length === 3 && h.every((n) => typeof n === 'number' && Number.isInteger(n));
+    if (!ok || h[0] < 0 || h[0] >= rows || h[1] < 0 || h[1] >= MAX_STEPS) {
+      r.warn(`${w}: dropped a step hit out of range (${JSON.stringify(h)})`);
+      continue;
+    }
+    if (h[2] <= 0) continue; // velocity 0 = off
+    const vel = r.num(h[2], 100, 1, 127, `${w} row ${h[0] + 1} step ${h[1] + 1} velocity`, true);
+    const key = h[0] * MAX_STEPS + h[1];
+    if (seen.has(key)) {
+      r.warn(`${w}: row ${h[0] + 1} step ${h[1] + 1} appears twice (first kept)`);
+      continue;
+    }
+    seen.add(key);
+    hits.push([h[0], h[1], vel]);
+  }
+  return {
+    name: r.str(x.name, 'Pattern 1', `${w} name`),
+    stepCount,
+    swing: r.num(x.swing, 0, 0, 1, `${w} swing`),
+    hits,
+  };
+}
+
+function readNotePattern(r: Reader, x: Record<string, unknown>, w: string): Omit<NotePatternJson, 'engineIdx'> {
+  const notes: NoteJson[] = [];
+  const taken = new Set<number>();
+  for (const n of arr(x.notes)) {
+    if (!isObj(n)) {
+      r.warn(`${w}: dropped a malformed note`);
+      continue;
+    }
+    const idx = r.index(n.idx, MAX_NOTES, taken, `${w} note slot`);
+    if (idx === null) continue;
+    notes.push({
+      idx,
+      pitch: r.num(n.pitch, 60, 0, 127, `${w} note pitch`, true),
+      vel: r.num(n.vel, 100, 1, 127, `${w} note velocity`, true),
+      start: r.num(n.start, 0, 0, MAX_OFFSET, `${w} note start`, true),
+      len: r.num(n.len, 240, 1, MAX_NOTE_LEN, `${w} note length`, true),
+    });
+  }
+  return {
+    name: r.str(x.name, 'Pattern 1', `${w} name`),
+    bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true),
+    notes,
+  };
+}
+
+function readCurrentAndClips(
+  r: Reader, t: Record<string, unknown>, patterns: { engineIdx: number }[], at: string,
+): { currentPattern: number; clips: ClipJson[] } {
+  const has = (v: unknown) => patterns.some((p) => p.engineIdx === v);
+  let currentPattern = patterns[0].engineIdx;
+  if (has(t.currentPattern)) currentPattern = t.currentPattern as number;
+  else if (t.currentPattern !== undefined) r.warn(`${at}: current pattern ${String(t.currentPattern)} does not exist`);
+  const clips: ClipJson[] = [];
+  const taken = new Set<number>();
+  for (const c of arr(t.clips)) {
+    if (!isObj(c)) {
+      r.warn(`${at}: dropped a malformed clip`);
+      continue;
+    }
+    if (!has(c.pattern)) {
+      r.warn(`${at}: dropped a clip of pattern ${String(c.pattern)}, which does not exist`);
+      continue;
+    }
+    const idx = r.index(c.idx, MAX_CLIPS, taken, `${at} clip slot`);
+    if (idx === null) continue;
+    const start = r.num(c.start, 0, 0, MAX_SONG_TICKS - 1, `${at} clip start`, true);
+    clips.push({
+      idx,
+      pattern: c.pattern as number,
+      start,
+      len: r.num(c.len, BAR_TICKS, 1, MAX_SONG_TICKS - start, `${at} clip length`, true),
+      offset: r.num(c.offset, 0, 0, MAX_OFFSET, `${at} clip offset`, true),
+    });
+  }
+  return { currentPattern, clips };
+}
+
+/** Params of one mixer channel by name: unknown or not-for-this-channel ones are dropped. */
+function readMixParams(r: Reader, v: unknown, kind: MixTarget, index: number, at: string): MixParamsJson {
+  const out: MixParamsJson = {};
+  if (v === undefined) return out;
+  if (!isObj(v)) {
+    r.warn(`${at}: malformed params (defaults used)`);
+    return out;
+  }
+  for (const [name, x] of Object.entries(v)) {
+    const def = MIX_PARAMS.find((d) => d.name === name);
+    if (!def) r.warn(`${at}: unknown param "${name}" (ignored)`);
+    else if (!accepts(def, kind, index)) r.warn(`${at}: ${name} does not apply here (ignored)`);
+    else out[name] = r.num(x, def.default, def.min, def.max, `${at} ${name}`, def.integer);
+  }
+  return out;
+}
+
+function readMixer(r: Reader, v: unknown, tracks: TrackJson[]): MixerJson {
+  const o = isObj(v) ? v : {};
+  const strips: MixerJson['tracks'] = [];
+  const seen = new Set<number>();
+  for (const s of arr(o.tracks)) {
+    const t = isObj(s) ? tracks.find((x) => x.slot === s.slot) : undefined;
+    if (!isObj(s) || !t || seen.has(t.slot)) {
+      r.warn(`Mixer: dropped the strip of track slot ${isObj(s) ? String(s.slot) : '?'} (no such track, or twice)`);
+      continue;
+    }
+    seen.add(t.slot);
+    const at = `Mixer "${t.name}"`;
+    let key: KeyJson | null = null;
+    if (isObj(s.key)) {
+      const k = s.key;
+      const src = tracks.find((x) => x.slot === k.track);
+      const row = k.row;
+      const rowOk = row === null || (src?.kind === 'drum' && typeof row === 'number' && Number.isInteger(row) && row >= 0 && row < src.rows.length);
+      if (src && rowOk) key = { track: src.slot, row: row as number | null };
+      else r.warn(`${at}: sidechain key ${JSON.stringify(s.key)} has no source (dropped)`);
+    } else if (s.key !== null && s.key !== undefined) r.warn(`${at}: malformed sidechain key (dropped)`);
+    strips.push({ slot: t.slot, params: readMixParams(r, s.params, 'track', t.slot, at), key });
+  }
+  return {
+    tracks: strips,
+    reverb: readMixParams(r, o.reverb, 'return', MIX_REVERB, 'Mixer Reverb'),
+    delay: readMixParams(r, o.delay, 'return', MIX_DELAY, 'Mixer Delay'),
+    master: readMixParams(r, o.master, 'master', MIX_MASTER, 'Mixer Master'),
+  };
+}

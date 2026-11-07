@@ -26,18 +26,23 @@ export function fadeOutTail(ch: Float32Array, frames: number): void {
   for (let i = 0; i < n; i++) ch[ch.length - n + i] *= (n - 1 - i) / n;
 }
 
-/** Decode (resampled to the context rate by the browser); at most 2 channels. */
-export async function decodeFile(
-  file: File,
-  ctx: BaseAudioContext,
-): Promise<{ name: string; channels: Float32Array[] }> {
+/** What decoding needs from an AudioContext (tests pass a fake). */
+export type SampleDecoder = Pick<BaseAudioContext, 'decodeAudioData'>;
+
+/**
+ * Decode encoded audio (resampled to the context rate by the browser); at
+ * most 2 channels, each with a 2 ms fade-out tail. `bytes` is detached by
+ * decodeAudioData: pass a copy if you keep the original (sample files).
+ * Throws SampleDecodeError(`name`).
+ */
+export async function decodeBytes(bytes: ArrayBuffer, name: string, ctx: SampleDecoder): Promise<Float32Array[]> {
   let buf: AudioBuffer;
   try {
-    buf = await ctx.decodeAudioData(await file.arrayBuffer());
+    buf = await ctx.decodeAudioData(bytes);
   } catch {
-    throw new SampleDecodeError(file.name);
+    throw new SampleDecodeError(name);
   }
-  if (buf.length === 0 || buf.numberOfChannels === 0) throw new SampleDecodeError(file.name);
+  if (buf.length === 0 || buf.numberOfChannels === 0) throw new SampleDecodeError(name);
   const fade = Math.round(0.002 * buf.sampleRate); // 2 ms
   const channels: Float32Array[] = [];
   for (let c = 0; c < Math.min(2, buf.numberOfChannels); c++) {
@@ -45,7 +50,15 @@ export async function decodeFile(
     fadeOutTail(ch, fade);
     channels.push(ch);
   }
-  return { name: file.name.replace(/\.[^./\\]*$/, '') || file.name, channels };
+  return channels;
+}
+
+/** "kick.wav" -> "kick" (the row name). */
+export const baseName = (fileName: string): string => fileName.replace(/\.[^./\\]*$/, '') || fileName;
+
+/** Decode a dropped file (see decodeBytes). */
+export async function decodeFile(file: File, ctx: SampleDecoder): Promise<{ name: string; channels: Float32Array[] }> {
+  return { name: baseName(file.name), channels: await decodeBytes(await file.arrayBuffer(), file.name, ctx) };
 }
 
 /**

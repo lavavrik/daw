@@ -90,8 +90,7 @@
    * this creates it), so a failed drop leaves state unchanged. Track id is
    * captured at drop time for both the immediate and the deferred attach.
    */
-  async function loadInto(file: File, target: () => string | null) {
-    const tid = track.id;
+  async function loadInto(file: File, target: () => string | null, tid = track.id) {
     const r = await importSample(p, engine, file, () => p.tracks.some((t) => t.id === tid));
     if (!r.ok) {
       if (r.error) onerror(r.error);
@@ -120,18 +119,22 @@
     }
   }
 
-  function dropOnRow(e: DragEvent, rowId: string) {
+  /** The first file fills this row; any more get new rows, like "+ Add row" (one at a time, in order). */
+  async function dropOnRow(e: DragEvent, rowId: string) {
     e.preventDefault();
     dragOver = null;
-    void dropped(e).then((files) => {
-      if (files[0]) void loadInto(files[0], () => rowId);
-    });
+    const tid = track.id; // the track dropped on, even if another is selected meanwhile
+    const [first, ...rest] = await dropped(e);
+    if (!first) return;
+    await loadInto(first, () => rowId, tid);
+    for (const file of rest) await loadInto(file, () => addRow(p, engine, tid)?.id ?? null, tid);
   }
   /** Every dropped file gets its own new row, in drop order (one at a time). */
   async function dropOnAdd(e: DragEvent) {
     e.preventDefault();
     dragOver = null;
-    for (const file of await dropped(e)) await loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
+    const tid = track.id;
+    for (const file of await dropped(e)) await loadInto(file, () => addRow(p, engine, tid)?.id ?? null, tid);
   }
   const allow = (e: DragEvent) => e.preventDefault();
 
@@ -158,7 +161,7 @@
       ondragenter={(e) => { allow(e); dragOver = row.id; }}
       ondragover={allow}
       ondragleave={() => dragOver === row.id && (dragOver = null)}
-      ondrop={(e) => dropOnRow(e, row.id)}
+      ondrop={(e) => void dropOnRow(e, row.id)}
     >
       <span class="name" class:empty={row.sampleId === null} data-testid="row-name" title={row.name}>
         {row.sampleId === null ? 'drop sample' : row.name}

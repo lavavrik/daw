@@ -186,6 +186,22 @@ async function loadKickOnRow0(page: Page) {
   await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
 }
 
+test('dropping several files on a row: the first fills it, the rest get new rows', async ({ page }) => {
+  await startAudio(page);
+  const rowsBefore = await page.getByTestId('row-name').count();
+  await page.evaluate(({ bytes }) => {
+    const el = document.querySelector('[data-testid="row-0"]')!;
+    const dt = new DataTransfer();
+    for (const n of ['kick.wav', 'snare.wav', 'hat.wav']) dt.items.add(new File([new Uint8Array(bytes)], n, { type: 'audio/wav' }));
+    for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, { bytes: [...makeWav()] });
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
+  const names = page.getByTestId('row-name');
+  await expect(names).toHaveCount(rowsBefore + 2);
+  await expect(names.nth(rowsBefore)).toHaveText('snare');
+  await expect(names.nth(rowsBefore + 1)).toHaveText('hat');
+});
+
 test('drop sample, program steps, hear it', async ({ page }) => {
   await startAudio(page);
   await loadKickOnRow0(page);

@@ -113,6 +113,34 @@ export const Op = {
    *  staged source and gain and activates the clip. CLIP_REMOVE / CLIP_CLEAR
    *  remove audio clips too. */
   AUDIO_CLIP_SET: 48,
+  // Automation lanes (engine/src/automation.rs; docs/architecture/automation.md).
+  // 64 lanes x 512 point slots, preallocated; a point is addressed as
+  // lane*MAX_AUTO_POINTS+idx. A lane applies in Song mode only (playing or
+  // stopped); otherwise its target plays its base value (the last MIX_SET /
+  // RACK_SET_PARAM, which on an automated target only stores the base).
+  /** a=lane b=AUTO_KIND (0 none, 1 mix, 2 rack) c=mix channel 0..34 or rack
+   *  slot d=mix param id or packAutoParam(module, param). The target must
+   *  exist and be a non-integer param (else BAD_VALUE; a bad lane, channel or
+   *  slot is BAD_INDEX); a second lane on the same target is BAD_VALUE.
+   *  Captures the target's current value as the base. On a lane with points
+   *  the points stay, re-validated against the new range. */
+  AUTO_LANE_SET: 49,
+  /** a=lane*MAX_AUTO_POINTS+idx b=tick 0..MAX_SONG_TICKS c=value (param
+   *  units, catalog range; the UI clamps first) d=0 linear / 1 hold. A tick
+   *  another point of the lane uses is BAD_VALUE (an instant change is a hold
+   *  point followed by the next point); so is a lane without a target. */
+  AUTO_POINT_SET: 50,
+  /** a=lane*MAX_AUTO_POINTS+idx (an inactive point: no-op). */
+  AUTO_POINT_REMOVE: 51,
+  /** a=lane: no points, no target; the param goes back to its base. */
+  AUTO_LANE_CLEAR: 52,
+  /** a=lane b=0/1 (a disabled lane plays the base). */
+  AUTO_LANE_ENABLE: 53,
+  /** a=lane: suspend it until the playhead passes its next breakpoint, or a
+   *  Play / Stop / seek / loop wrap / mode switch (stopped: until Play or a
+   *  seek). Not an edit (NON_EDIT_OPS): sent right before a manual move's own
+   *  MIX_SET / RACK_SET_PARAM, so that edit is heard at once. */
+  AUTO_OVERRIDE: 54,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -187,10 +215,20 @@ export const BAR_TICKS = 3840;
 /** Ticks per drum step, a 1/16 note (lib.rs STEP_TICKS). */
 export const STEP_TICKS = 240;
 
+/** Automation lanes per project, and point slots per lane (lib.rs). */
+export const MAX_AUTO_LANES = 64;
+export const MAX_AUTO_POINTS = 512;
+/** AUTO_LANE_SET target kinds (b). */
+export const AUTO_KIND = { NONE: 0, MIX: 1, RACK: 2 } as const;
+
 /** Ports per module in a packed port argument (protocol.rs PORT_STRIDE). */
 export const PORT_STRIDE = 16;
 /** Pack `(module, port)` into one rack-command argument: `module * 16 + port`. */
 export const packPort = (module: number, port: number): number => module * PORT_STRIDE + port;
+/** Pack a rack automation target's `(module, param)` for AUTO_LANE_SET d. */
+export const packAutoParam = (module: number, param: number): number => module * PORT_STRIDE + param;
+/** AUTO_POINT_SET / AUTO_POINT_REMOVE address of point `idx` of `lane`. */
+export const autoPoint = (lane: number, idx: number): number => lane * MAX_AUTO_POINTS + idx;
 
 /** Indices into the telemetry Float64Array (lib.rs TELEMETRY_*). */
 export const TELEMETRY = {

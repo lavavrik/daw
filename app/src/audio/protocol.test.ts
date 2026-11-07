@@ -4,7 +4,8 @@ import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
   PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
   MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode,
-  MAX_ARENA_FLOATS, MAX_CLIP_GAIN, CLIP_FADE_SECONDS,
+  MAX_ARENA_FLOATS, MAX_CLIP_GAIN, CLIP_FADE_SECONDS, MAX_AUTO_LANES, MAX_AUTO_POINTS, AUTO_KIND, packAutoParam,
+  autoPoint,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -21,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(54);
+    expect(Object.keys(rust).length).toBe(60);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -30,6 +31,12 @@ describe('protocol parity with engine/src/protocol.rs', () => {
     const m = src.match(/pub const PORT_STRIDE: usize = (\d+);/);
     expect(Number(m?.[1])).toBe(PORT_STRIDE);
     expect(packPort(2, 1)).toBe(33);
+  });
+  it('packs automation targets and points like the engine', () => {
+    expect(packAutoParam(4, 1)).toBe(65);
+    expect(autoPoint(3, 511)).toBe(3 * 512 + 511);
+    expect(AUTO_KIND).toEqual({ NONE: 0, MIX: 1, RACK: 2 });
+    expect(src).toMatch(/OP_AUTO_LANE_SET: u32 = 49; \/\/ a=lane b=kind 0 none\/1 mix\/2 rack/);
   });
 });
 
@@ -44,11 +51,12 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
     MAX_BLOCK, MAX_TRACKS, MAX_ROWS, MAX_STEPS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, TELEMETRY_LEN,
     MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_CLIPS, MAX_SONG_TICKS,
     MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, MAX_ARENA_FLOATS,
+    MAX_AUTO_LANES, MAX_AUTO_POINTS,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
   it('parsed every MAX_*, TELEMETRY_* and MIX_* constant', () => {
-    expect(Object.keys(rust).length).toBe(17 + 10 + 5);
+    expect(Object.keys(rust).length).toBe(19 + 10 + 5);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);

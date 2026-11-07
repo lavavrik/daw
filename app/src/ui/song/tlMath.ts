@@ -33,8 +33,6 @@ export interface TlView {
   ticksPerPx: number;
   /** Tick at x = 0. */
   scrollTick: number;
-  /** Clip row height (px). */
-  laneH: number;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -266,6 +264,22 @@ export function barRange(start: number, len: number): string {
   return a === b ? `bar ${a}` : `bars ${a}–${b}`;
 }
 
+/**
+ * Play follow (the Song-mode rAF loop): when the heard playhead leaves the
+ * view (off either side, or within 12 px of the right edge) on a frame after
+ * it was visible, the view pages to the bar before it (`scrollTick`; null:
+ * no flip). Never while `busy` (a clip drag or an AutoLane gesture is down:
+ * the view must not move under the pointer); it stays armed, so the flip
+ * comes on the first frame after the release. `visible` is the next frame's
+ * `wasVisible`.
+ */
+export function followPage(v: TlView, playTick: number, width: number, wasVisible: boolean, busy: boolean): { scrollTick: number | null; visible: boolean } {
+  const x = tickToX(playTick, v);
+  const visible = x >= 0 && x <= width - 12;
+  const flip = !visible && wasVisible && !busy;
+  return { scrollTick: flip ? snapFloor(playTick, BAR) - BAR : null, visible: visible || busy };
+}
+
 /** Bars per ruler label (1, 2, 4, …) so labels sit at least 28 px apart. */
 export function barLabelStep(ticksPerPx: number): number {
   const pxPerBar = BAR / ticksPerPx;
@@ -388,4 +402,28 @@ export function pointBox(lane: LanePoints, x0: number, y0: number, x1: number, y
     const y = posToY(toPos(lane.def, pt.value), h);
     return x >= xa && x <= xb && y >= ya && y <= yb;
   }).map((pt) => pt.id);
+}
+
+/**
+ * The vertices of a lane's drawn curve (lane-local px), from x = -1 to
+ * W + 1: flat at the first point's value before it and at the last's after
+ * it; a linear segment is a straight line between its points' KNOB
+ * positions, which is exactly what laneValueAt (and the engine) interpolate,
+ * exp params included (only inside an exp param's zero zone, where the value
+ * is exactly 0, the line is up to ZERO_ZONE of the travel off: < 1 px); a
+ * hold point runs flat to the next point's x, then steps.
+ */
+export function lanePolyline(
+  points: readonly { tick: number; value: number; hold: boolean }[], def: CurveDef, v: TlView, W: number, h = AUTO_H,
+): [number, number][] {
+  if (!points.length) return [];
+  const pts = points.map((x) => ({ x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), h), hold: x.hold }));
+  const out: [number, number][] = [[-1, pts[0].y]];
+  pts.forEach((a, i) => {
+    out.push([a.x, a.y]);
+    const b = pts[i + 1];
+    if (b && a.hold) out.push([b.x, a.y]);
+  });
+  out.push([W + 1, pts[pts.length - 1].y]);
+  return out;
 }

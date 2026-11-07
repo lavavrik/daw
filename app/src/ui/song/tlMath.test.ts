@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_H, BAR, BEAT, LANE_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
-  pointBox, pointHit, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
+  followPage, lanePolyline, pointBox, pointHit, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
   snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
+import { moduleDef } from '../../audio/catalog';
+import { laneValueAt } from '../../state/automation';
+import { toPos } from '../rack/knobMath';
 import type { TlView } from './tlMath';
 import { MAX_SONG_TICKS } from '../../audio/protocol';
 
 // 1 bar = 96 px at 40 ticks/px; bar 2 (tick 3840) sits at x = 0.
-const view: TlView = { ticksPerPx: 40, scrollTick: 3840, laneH: 28 };
+const view: TlView = { ticksPerPx: 40, scrollTick: 3840 };
 const tr = (id: string, lanes: string[] = []) => ({ id, automation: lanes.map((l) => ({ id: l })) });
 /** n tracks without open lanes: the plain uniform layout. */
 const uniform = (n: number) => rowLayout(Array.from({ length: n }, (_, i) => tr(`t${i}`)), new Set(), null);
@@ -322,5 +325,50 @@ describe('automation rows (plan 10)', () => {
     const hz = mixParam('eq_mid_freq'); // 200..8000 Hz
     const exp = { def: hz, points: [{ id: 'k', tick: 3840, value: Math.sqrt(200 * 8000) }] };
     expect(pointHit(exp, 0, yMid, view)).toBe('k');
+  });
+});
+
+describe('play follow and the drawn curve (plan 10 review)', () => {
+  it('followPage flips once when the playhead leaves the view, never during a drag', () => {
+    const v = { ticksPerPx: 40, scrollTick: 0 }; // 400 px = 16 000 ticks
+    expect(followPage(v, 5000, 400, true, false)).toEqual({ scrollTick: null, visible: true });
+    // Off the right edge (within 12 px of it counts as off): page to the bar before the playhead.
+    expect(followPage(v, 15700, 400, true, false)).toEqual({ scrollTick: 3 * BAR, visible: false });
+    // Already off last frame (the user scrolled away): no flip.
+    expect(followPage(v, 15700, 400, false, false)).toEqual({ scrollTick: null, visible: false });
+    // A drag in progress (a clip, or an AutoLane gesture): no flip, and it stays armed for after the release.
+    expect(followPage(v, 15700, 400, true, true)).toEqual({ scrollTick: null, visible: true });
+    expect(followPage(v, 15800, 400, true, false).scrollTick).toBe(3 * BAR);
+  });
+
+  it('lanePolyline is the curve laneValueAt plays (zero-zone exp params within a pixel)', () => {
+    const v = { ticksPerPx: 10, scrollTick: 0 };
+    const W = 600;
+    const glide = moduleDef('midi_in').params.find((d) => d.name === 'glide')!; // exp, 0..2 s: a zero zone
+    const cases = [
+      { def: mixParam('fader'), points: [{ tick: 400, value: -40, hold: false }, { tick: 2400, value: 3, hold: true }, { tick: 4000, value: -60, hold: false }] },
+      { def: mixParam('eq_mid_freq'), points: [{ tick: 0, value: 200, hold: false }, { tick: 5000, value: 8000, hold: false }] },
+      { def: glide, points: [{ tick: 500, value: 0, hold: false }, { tick: 5500, value: 2, hold: false }] },
+    ];
+    for (const { def, points } of cases) {
+      const line = lanePolyline(points, def, v, W);
+      expect(line[0][0]).toBeLessThan(0);
+      expect(line.at(-1)![0]).toBeGreaterThan(W);
+      /** The polyline's y at x (the last vertex at x wins: a hold step is vertical). */
+      const yAt = (x: number) => {
+        for (let i = line.length - 1; i > 0; i--) {
+          const [x0, y0] = line[i - 1];
+          const [x1, y1] = line[i];
+          if (x0 <= x && x <= x1) return x1 === x0 ? y1 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+        }
+        return NaN;
+      };
+      for (let x = 0.5; x < W; x += 3) {
+        const at = points.some((pt) => Math.abs(pt.tick / v.ticksPerPx - x) < 1) ? null : x;
+        if (at === null) continue; // right at a hold step
+        const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!));
+        expect(Math.abs(yAt(x) - want)).toBeLessThan(def === glide ? 1 : 1e-6);
+      }
+    }
   });
 });

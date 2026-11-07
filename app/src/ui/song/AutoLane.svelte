@@ -46,11 +46,13 @@
   import type { CommandSink } from '../../state/actions';
   import { isMasterChannel } from '../../state/automation';
   import type { AutoDef, AutoOwner } from '../../state/automation';
+  import { MAX_AUTO_POINTS } from '../../audio/protocol';
+  import { laneView } from './laneView.svelte';
   import { addPoint, deletePoints, drawPoints, movePoints, setPointShape } from '../../state/automation-actions';
   import type { AutomationLane, Project } from '../../state/project.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { formatValue, fromPos, toPos } from '../rack/knobMath';
-  import { AUTO_H, AUTO_PAD, BEAT, pointBox, pointHit, posToY, snap, tickToX, xToTick, yToPos } from './tlMath';
+  import { AUTO_H, AUTO_PAD, BEAT, lanePolyline, pointBox, pointHit, posToY, snap, tickToX, xToTick, yToPos } from './tlMath';
   import type { TlView } from './tlMath';
 
   let {
@@ -139,16 +141,9 @@
       ctx.textBaseline = 'top';
       ctx.fillText(`Click to add a point · ${IS_MAC ? 'Cmd' : 'Ctrl'}-drag to draw`, 6, y < H / 2 ? y + 4 : y - 14);
     } else {
-      // The curve: flat before the first and after the last point.
+      // The curve (tlMath.lanePolyline: what laneValueAt plays, flat before the first and after the last point).
       const path = new Path2D();
-      path.moveTo(-1, pts[0].y);
-      for (let i = 0; i < pts.length; i++) {
-        const a = pts[i];
-        path.lineTo(a.x, a.y);
-        const b = pts[i + 1];
-        if (b && a.hold) path.lineTo(b.x, a.y);
-      }
-      path.lineTo(W + 1, pts[pts.length - 1].y);
+      lanePolyline(lane.points, def, v, W).forEach(([x, y], i) => (i ? path.lineTo(x, y) : path.moveTo(x, y)));
       const fill = new Path2D(path);
       fill.lineTo(W + 1, H);
       fill.lineTo(-1, H);
@@ -276,7 +271,7 @@
         } else {
           const pt = addPoint(p, engine, lane.id, { tick, value: valueAt(y) });
           if (!pt) {
-            onhint(`${label}: 512 points is the most a lane holds`);
+            onhint(`${label}: ${MAX_AUTO_POINTS} points is the most a lane holds`);
             return;
           }
           selected = new Set([pt.id]);
@@ -284,6 +279,7 @@
         }
       }
     }
+    laneView.gesture = true; // no play-follow page flip under the press (Timeline)
     el.setPointerCapture(e.pointerId);
   }
 
@@ -332,11 +328,16 @@
     const d = drag;
     if (!d) return;
     drag = null; // first: the lostpointercapture that follows must not cancel
+    laneView.gesture = false;
     flush();
     if (d.kind === 'box') box = null;
     else if (d.kind === 'draw') {
       stroke = null;
-      if (!drawPoints(p, engine, lane.id, d.samples)) onhint(`${label}: the drawing would pass 512 points`);
+      // Refused: nothing usable drawn, or too many points. Only the second says so (it is
+      // possible only when the lane's points and the stroke's samples together pass the cap).
+      if (!drawPoints(p, engine, lane.id, d.samples) && lane.points.length + d.samples.length > MAX_AUTO_POINTS) {
+        onhint(`${label}: the drawing would pass ${MAX_AUTO_POINTS} points`);
+      }
     } else if (!d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
   }
 
@@ -345,6 +346,7 @@
     const d = drag;
     if (!d) return;
     drag = null;
+    laneView.gesture = false;
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
     pending = null;
@@ -443,7 +445,10 @@
     }
   }
 
-  onDestroy(() => flush());
+  onDestroy(() => {
+    flush();
+    if (drag) laneView.gesture = false; // removed mid-press (an undo, a removed track)
+  });
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -455,6 +460,7 @@
   data-points={lane.points.length}
   data-selected={sel.length}
   style:top="{top}px"
+  style:height="{H}px"
   style:cursor
   tabindex="0"
   role="application"
@@ -499,7 +505,7 @@
 {/if}
 
 <style>
-  .auto { position: absolute; left: 0; right: 0; height: 48px; outline: none; touch-action: none; }
+  .auto { position: absolute; left: 0; right: 0; outline: none; touch-action: none; }
   .auto:focus-visible { box-shadow: inset 0 0 0 1px #f0a23a88; }
   .cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .tip { position: absolute; pointer-events: none; padding: 1px 4px; border-radius: 3px; background: rgba(18, 19, 23, 0.85); color: #e4e5ea; font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }

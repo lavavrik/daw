@@ -7,12 +7,16 @@
 //              yet: it shows anyway once it has one;
 //   suspended  lanes a manual move suspended (drawn grey). Set by the
 //              knob-follow loop (Task 4) when a suspension starts or ends,
-//              never per frame.
+//              never per frame;
+//   gesture    an AutoLane press is down (press .. release / cancel): the
+//              timeline's play-follow must not page the view under it (a
+//              dragged point or a stroke would land a page away).
 // A stale id (a removed track or lane) just matches nothing.
-export const laneView = $state<{ open: Set<string>; master: boolean; suspended: Set<string> }>({
+export const laneView = $state<{ open: Set<string>; master: boolean; suspended: Set<string>; gesture: boolean }>({
   open: new Set(),
   master: false,
   suspended: new Set(),
+  gesture: false,
 });
 
 /** Show (or hide) `owner`'s lanes. */

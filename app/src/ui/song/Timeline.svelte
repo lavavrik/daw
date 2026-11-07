@@ -125,7 +125,7 @@
   import { targetDef } from '../../state/automation';
   import {
     AUTO_H, BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
-    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, fileTicks, hitTest, loopFromDrag, placeLen,
+    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, fileTicks, followPage, hitTest, loopFromDrag, placeLen,
     repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX, xToTick, zoomAt,
   } from './tlMath';
   import type { ClipBox, TlView } from './tlMath';
@@ -168,6 +168,11 @@
   // The layout map (see AUTOMATION at the top): every row's y and height.
   /** The Master row shows once it has a lane, or when asked for (footer, Task 4's "Automate"). */
   const masterShown = $derived(p.mixer.automation.length > 0 || laneView.master);
+  // Once the Master row has a lane (added, loaded, undone back) it was asked
+  // for: removing its last lane later keeps the row (its × hides it).
+  $effect(() => {
+    if (p.mixer.automation.length > 0) untrack(() => (laneView.master = true));
+  });
   const layout = $derived(rowLayout(p.tracks, laneView.open, masterShown ? p.mixer.automation.map((x) => x.lane) : null));
   const lanesH = $derived(rowsHeight(layout));
   /** Content y of each track's clip row, by track index (clip rows are in track order). */
@@ -273,7 +278,7 @@
     const ro = new ResizeObserver(([entry]) => {
       width = Math.floor(entry.contentRect.width);
       untrack(() => {
-        if (!view && width > 0) view = clampView({ ticksPerPx: (OPEN_BARS * BAR) / width, scrollTick: 0, laneH: LANE_H });
+        if (!view && width > 0) view = clampView({ ticksPerPx: (OPEN_BARS * BAR) / width, scrollTick: 0 });
         else if (view) view = clampView(view);
       });
     });
@@ -698,10 +703,10 @@
       playTick = Number.isFinite(t) ? Math.max(0, t) : null;
       const v = view;
       if (playTick !== null && v && width > 0) {
-        const x = tickToX(playTick, v);
-        const visible = x >= 0 && x <= width - 12;
-        if (!visible && wasVisible && !drag) view = clampView({ ...v, scrollTick: snapFloor(playTick, BAR) - BAR });
-        wasVisible = visible || !!drag;
+        // Never under a press: a clip drag here, or an AutoLane gesture (laneView.gesture).
+        const f = followPage(v, playTick, width, wasVisible, !!drag || laneView.gesture);
+        if (f.scrollTick !== null) view = clampView({ ...v, scrollTick: f.scrollTick });
+        wasVisible = f.visible;
       }
       if (root) root.dataset.playhead = playTick === null ? '' : String(Math.round(playTick));
       drawPlayhead(); // the lanes redraw only when something they show changes ($effect above)

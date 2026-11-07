@@ -320,6 +320,16 @@ changes nothing and sends nothing.
   Linear / Hold / Delete. history/gestures.ts makes each gesture one undo
   entry. Keys on a focused lane: Delete, Cmd/Ctrl+A, Escape, ←/→ (1/16,
   Shift a beat); the rest bubble.
+- **Play follow.** While a lane press is down, `laneView.gesture` is set,
+  and the Song-mode follow loop (`tlMath.followPage`) does not page the
+  view (as for a clip drag): a dragged point or a stroke would otherwise
+  land a page away. The flip comes on the first frame after the release.
+- **Curve = sound.** `tlMath.lanePolyline` gives the drawn vertices; a test
+  samples `laneValueAt` against it (exact, and within 1 px in an exp
+  param's zero zone).
+- **Master row.** Once it has a lane (added, loaded or undone back),
+  `laneView.master` is set, so removing its last lane keeps the row (its ×
+  hides it).
 - **Headers** (`TrackHeaders.svelte`, labels in `autoLabels.ts`): the
   target ("Filter · Cutoff", "Fader", "Master · Ceiling"; module titles as
   the rack shows them), the on/off dot, ×, and "+ Lane" on the owner's last

@@ -111,6 +111,7 @@
       {/if}
     {/each}
   </select>
+  {#if full}<span class="cap" data-testid="auto-full" title={FULL}>{MAX_AUTO_LANES} max</span>{/if}
 {/snippet}
 
 <div class="heads">
@@ -264,6 +265,7 @@
   .en:focus-visible, .add:focus-visible { outline: 2px solid #f0a23a; outline-offset: 0; }
   .add { max-width: 84px; height: 18px; font: inherit; font-size: 10px; padding: 0 2px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; }
   .add:disabled { color: #6d707c; cursor: not-allowed; }
+  .cap { font-size: 9px; color: #ff8a92; white-space: nowrap; }
   .pat { font-size: 9px; color: #ffd98a; white-space: nowrap; }
   .empty { color: #7d808c; margin: 0; padding: 6px 8px; }
 </style>

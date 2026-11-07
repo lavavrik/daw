@@ -26,7 +26,7 @@ async function setTempo(page: Page, bpm: number) {
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.tempo)).toBe(bpm);
 }
 
-type View = { ticksPerPx: number; scrollTick: number; laneH: number };
+type View = { ticksPerPx: number; scrollTick: number };
 async function view(page: Page): Promise<View> {
   return JSON.parse((await page.getByTestId('timeline').getAttribute('data-view'))!);
 }
@@ -344,4 +344,92 @@ test('lane keys: select all, nudge, delete; enable and remove from the header', 
   expect((await savedLanes(page, t.slot))[0].enabled).toBe(false);
   await page.getByTestId(`auto-remove-${t.slot}-0`).click();
   expect(await savedLanes(page, t.slot)).toEqual([]);
+});
+
+test('the play-follow page flip waits for a lane gesture to end', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2);
+  const lane = await addLane(page, slot, 'Fader');
+  // Zoom in to about two bars (two seconds), so the playhead runs off the right edge soon.
+  const box = (await page.getByTestId(lane).boundingBox())!;
+  await page.mouse.move(box.x + 10, box.y + 10);
+  await page.keyboard.down('ControlOrMeta');
+  await page.mouse.wheel(0, -1000);
+  await page.keyboard.up('ControlOrMeta');
+  await expect.poll(async () => (await view(page)).ticksPerPx).toBeLessThan(20);
+  await page.getByTestId('tl-hscroll').fill('0'); // back to the song start
+  const v0 = await view(page);
+  expect(v0.scrollTick).toBe(0);
+  const visibleTicks = box.width * v0.ticksPerPx;
+  await page.getByTestId('mode-song').click();
+  await page.evaluate(() => (window as Any).__daw.actions.seek(0));
+  await page.getByTestId('play').click();
+  // A freehand stroke held while the playhead passes the right edge.
+  const a = await lanePt(page, lane, Math.round(visibleTicks * 0.1), 0.2);
+  await page.keyboard.down('ControlOrMeta');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  for (let k = 1; k <= 30; k++) {
+    await page.mouse.move(a.x + k * 4, a.y - (k % 2 ? 10 : 0));
+    await page.waitForTimeout(100);
+  }
+  await expect.poll(() => page.evaluate(() => Number((document.querySelector('[data-testid="timeline"]') as HTMLElement).dataset.playhead))).toBeGreaterThan(visibleTicks);
+  expect((await view(page)).scrollTick).toBe(0); // no page flip mid-gesture
+  await page.mouse.up();
+  await page.keyboard.up('ControlOrMeta');
+  // The stroke's points are where it was drawn, in the first page ...
+  const [l] = await savedLanes(page, slot);
+  expect(l.points.length).toBeGreaterThan(2);
+  for (const pt of l.points) expect(pt[0]).toBeLessThan(visibleTicks);
+  // ... and once the gesture ends the view follows the playhead again.
+  await expect.poll(async () => (await view(page)).scrollTick).toBeGreaterThan(0);
+  await page.getByTestId('play').click();
+});
+
+test('a loaded Master row stays when its last lane goes; the 64-lane cap is shown', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await page.getByTestId('tl-master-toggle').click();
+  await addLane(page, 'master', 'Master · Ceiling');
+  const name = `e2e-auto-master-${test.info().workerIndex}`;
+  await page.evaluate(async (name) => {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(name, { recursive: true }).catch(() => {});
+    const dir = await root.getDirectoryHandle(name, { create: true });
+    await (window as Any).__daw.saveTo(dir);
+  }, name);
+  // A new session opens it: the row is there because of its lane ...
+  await start(page);
+  await page.evaluate(async (name) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
+    await (window as Any).__daw.openFrom(dir);
+  }, name);
+  await expect(page.getByTestId('tl-master-row')).toBeVisible();
+  await page.getByTestId('master-auto').click(); // its lanes: open the row
+  await expect(page.getByTestId('auto-lane-m-0')).toBeVisible();
+  // ... and removing that lane keeps it (its × hides it).
+  await page.getByTestId('auto-remove-m-0').click();
+  await expect(page.getByTestId('tl-master-row')).toBeVisible();
+  await expect(page.getByTestId('auto-head-m-new')).toBeVisible();
+
+  // 64 lanes: "+ Lane" is disabled and says why.
+  const t = (await tracks(page))[0];
+  await addLane(page, t.slot, 'Fader');
+  await expect(page.getByTestId('auto-full')).toHaveCount(0);
+  await page.evaluate(() => {
+    const d = (window as Any).__daw;
+    const ids: string[] = [];
+    for (let i = 0; i < 31; i++) ids.push(d.actions.addDrumTrack().id);
+    return ids;
+  });
+  for (const x of (await tracks(page)).slice(1, 32)) {
+    await page.getByTestId(`track-auto-${x.slot}`).click();
+    await page.getByTestId(`auto-add-${x.slot}`).selectOption({ label: 'Fader' });
+    await page.getByTestId(`auto-add-${x.slot}`).selectOption({ label: 'Pan' });
+  }
+  await page.getByTestId(`auto-add-${t.slot}`).selectOption({ label: 'Pan' });
+  await expect(page.getByTestId(`auto-add-${t.slot}`)).toBeDisabled();
+  await expect(page.getByTestId('auto-full').first()).toHaveText('64 max');
 });

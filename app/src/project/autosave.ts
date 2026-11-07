@@ -33,7 +33,7 @@
 // write is about to list), and only the tab holding OWNER_LOCK (taken for
 // its lifetime) autosaves or offers a restore; the others show a hint.
 import type { Project } from '../state/project.svelte';
-import { WRITE_CHUNK, readListedSamples, replaceWith, writeFile } from './fsFolder';
+import { WRITE_CHUNK, fileSize, readListedSamples, replaceWith, writeFile } from './fsFolder';
 import type { ProjectJson } from './schema';
 import { projectFiles, serialize } from './serialize';
 
@@ -96,15 +96,6 @@ const notFound = (e: unknown) => (e as Error)?.name === 'NotFoundError';
 
 /** The OPFS root (async: the first call may set it up). */
 export const opfsRoot = () => navigator.storage.getDirectory();
-
-/** Size of `dir`/`name`, or -1 if there is no such file. */
-async function fileSize(dir: FileSystemDirectoryHandle, name: string): Promise<number> {
-  try {
-    return (await (await dir.getFileHandle(name)).getFile()).size;
-  } catch {
-    return -1;
-  }
-}
 
 /**
  * Write one autosave (the order at the top). `files`: "samples/<name>" ->

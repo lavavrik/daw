@@ -130,8 +130,9 @@ missing track/module/sample, nothing after the keys but transport.
 
 ## Saving (`writeProject`)
 
-`samples/` first (unchanged files are not rewritten; names carry a content
-hash, so an existing file is never overwritten with other bytes), then
+`samples/` first (names carry a content hash, so an existing file is never
+overwritten with other bytes, and a file of the right size is reused without
+being read back — the same rule as the autosave pool), then
 `project.json.tmp`, then the tmp is moved over `project.json` (or, where the
 handle cannot move, `project.json` is written from it — Chrome's writable
 streams replace a file atomically on close). Only then are the samples

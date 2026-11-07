@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { folderInUse, readProject, writeProject } from './fsFolder';
-import { FakeDir, asDir, bytes } from './fakeDir';
+import { FakeDir, FakeFile, asDir, bytes } from './fakeDir';
 
 const json1 = { schemaVersion: 1, name: 'A', samples: [{ id: 0, file: 'samples/0-kick.wav' }] };
 
@@ -81,5 +81,25 @@ describe('fsFolder', () => {
     (await dir.getDirectoryHandle('samples')).put('huge-unrelated.wav', [1, 2, 3]);
     const back = await readProject(asDir(dir));
     expect([...back.files.keys()]).toEqual(['samples/0-kick.wav']);
+  });
+
+  it('a sample already on disk with the right size is not read back or rewritten (names carry a content hash, M3)', async () => {
+    const dir = new FakeDir();
+    const json = { schemaVersion: 1, name: 'A', samples: [{ id: 0, file: 'samples/0-1a2b3c4d-kick.wav' }] };
+    await writeProject(asDir(dir), json, new Map([['samples/0-1a2b3c4d-kick.wav', bytes(1, 2, 3)]]));
+    const f = (await dir.getDirectoryHandle('samples')).files.get('0-1a2b3c4d-kick.wav') as FakeFile;
+    let reads = 0;
+    const getFile = f.getFile.bind(f);
+    f.getFile = async () => {
+      const file = await getFile();
+      return { ...file, arrayBuffer: async () => (reads++, file.arrayBuffer()) };
+    };
+    dir.log = [];
+    await writeProject(asDir(dir), json, new Map([['samples/0-1a2b3c4d-kick.wav', bytes(1, 2, 3)]]));
+    expect(reads).toBe(0); // only its size was looked at
+    expect(dir.log).toEqual(['write project.json.tmp', 'move project.json.tmp -> project.json']);
+    // A different size (an interrupted earlier write) is rewritten.
+    await writeProject(asDir(dir), json, new Map([['samples/0-1a2b3c4d-kick.wav', bytes(1, 2, 3, 4)]]));
+    expect(dir.log).toContain('write samples/0-1a2b3c4d-kick.wav');
   });
 });

@@ -189,3 +189,60 @@ export function zoomAt(v: TlView, factor: number, x: number, lim: { minTpp: numb
   const at = xToTick(x, v);
   return { ...v, ticksPerPx, scrollTick: Math.max(0, at - x * ticksPerPx) };
 }
+
+// ---- audio lanes (plan 9) ------------------------------------------------------
+
+/** Where a dropped audio file goes. */
+export type DropTarget = { audioLane: number } | { newTrack: true } | { refused: true };
+
+/**
+ * Drop target for content y over the lanes (`rows`: the tracks in lane
+ * order): an Audio lane takes the clip, anything below the last lane makes a
+ * new Audio track (so does an empty timeline), a drum or synth lane only
+ * shows a hint, and so does the ruler (y < 0).
+ */
+export function dropTarget(rows: readonly { kind: string }[], y: number, laneH = LANE_H): DropTarget {
+  if (y < 0) return { refused: true };
+  const lane = Math.floor(y / laneH);
+  if (lane >= rows.length) return { newTrack: true };
+  return rows[lane].kind === 'audio' ? { audioLane: lane } : { refused: true };
+}
+
+/** Song ticks of `seconds` at `tempo` BPM (clips play at native speed: this moves with the tempo). */
+export const fileTicks = (seconds: number, tempo: number) => (seconds * tempo * BEAT) / 60;
+
+/** The parts of an audio clip the lane needs (offset: seconds into the file). */
+export interface AudioClipBox {
+  start: number;
+  len: number;
+  offset: number;
+  loop: boolean;
+}
+
+/**
+ * How far an audio clip's edges can go: a one-shot clip's left edge stops
+ * where its file starts (and at tick 0), its right edge where the file ends
+ * at the current tempo (the same rounding as audio-actions' cap). A loop
+ * clip, or one whose file length is unknown (`seconds` null), only has the
+ * song's bounds.
+ */
+export function audioEdges(c: AudioClipBox, seconds: number | null, tempo: number): { minStart: number; maxEnd: number } {
+  if (c.loop || seconds === null) return { minStart: 0, maxEnd: MAX_SONG_TICKS };
+  const back = fileTicks(c.offset, tempo);
+  const rest = Math.max(1, Math.ceil(fileTicks(seconds - c.offset, tempo) - 1e-9));
+  return { minStart: Math.max(0, Math.ceil(c.start - back - 1e-9)), maxEnd: Math.min(MAX_SONG_TICKS, c.start + rest) };
+}
+
+/**
+ * The lane's marks inside an audio clip: for a loop clip, a notch every file
+ * length where the file starts again (`repeats`); for a one-shot clip, the
+ * tick where its file runs out when that is before the clip end (after a
+ * tempo change: `fileEnd`). Nothing when the file length is unknown.
+ */
+export function audioMarks(c: AudioClipBox, seconds: number | null, tempo: number): { repeats: number[]; fileEnd: number | null } {
+  if (seconds === null || !(seconds > 0)) return { repeats: [], fileEnd: null };
+  const fl = fileTicks(seconds, tempo);
+  if (c.loop) return { repeats: repeatTicks(c.start, c.len, fileTicks(c.offset, tempo), fl), fileEnd: null };
+  const end = c.start + fl - fileTicks(c.offset, tempo);
+  return { repeats: [], fileEnd: end < c.start + c.len - 0.5 ? end : null };
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BAR, BEAT, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, laneToY, loopFromDrag, placeLen, repeatTicks,
   resizeLeft, resizeRight, seekTick, snap, snapCeil, snapFloor, tickToX, xToTick, yToLane, zoomAt,
+  audioEdges, audioMarks, dropTarget, fileTicks,
 } from './tlMath';
 import type { TlView } from './tlMath';
 import { MAX_SONG_TICKS } from '../../audio/protocol';
@@ -177,5 +178,45 @@ describe('labels and view', () => {
     expect(zoomAt(view, 0.0001, 200, lim).ticksPerPx).toBe(2);
     expect(zoomAt(view, 1e6, 200, lim).ticksPerPx).toBe(400);
     expect(zoomAt({ ...view, scrollTick: 0 }, 2, 200, lim).scrollTick).toBe(0); // never below 0
+  });
+});
+
+describe('audio lanes (plan 9)', () => {
+  it('dropTarget resolves audio lane, new track, refused', () => {
+    const rows = [{ kind: 'drum' }, { kind: 'audio' }, { kind: 'synth' }, { kind: 'audio' }];
+    expect(dropTarget(rows, 28 + 3)).toEqual({ audioLane: 1 });
+    expect(dropTarget(rows, 3 * 28 + 27.9)).toEqual({ audioLane: 3 });
+    expect(dropTarget(rows, 2)).toEqual({ refused: true }); // drum lane: only a hint
+    expect(dropTarget(rows, 2 * 28 + 1)).toEqual({ refused: true }); // synth lane
+    expect(dropTarget(rows, 4 * 28)).toEqual({ newTrack: true }); // right below the last lane
+    expect(dropTarget(rows, 4000)).toEqual({ newTrack: true });
+    expect(dropTarget(rows, -5)).toEqual({ refused: true }); // over the ruler
+    expect(dropTarget([], 0)).toEqual({ newTrack: true }); // no tracks: anywhere makes one
+    expect(dropTarget(rows, 28 + 3, 40)).toEqual({ refused: true }); // lane height given: still lane 0
+  });
+
+  it('audio clip edges and file-end mark', () => {
+    expect(fileTicks(2, 120)).toBe(3840); // a 2 s file is one bar at 120 BPM
+    // One-shot, 0.5 s into a 2 s file: it can be trimmed back 0.5 s and grown to the file's end.
+    const shot = { start: 7680, len: 960, offset: 0.5, loop: false };
+    expect(audioEdges(shot, 2, 120)).toEqual({ minStart: 7680 - 960, maxEnd: 7680 + 2880 });
+    // Near the song start it stops at tick 0.
+    expect(audioEdges({ ...shot, start: 100 }, 2, 120).minStart).toBe(0);
+    // A loop clip has no file edges: it wraps.
+    expect(audioEdges({ ...shot, loop: true }, 2, 120)).toEqual({ minStart: 0, maxEnd: MAX_SONG_TICKS });
+    // Unknown length: no file edges either.
+    expect(audioEdges(shot, null, 120)).toEqual({ minStart: 0, maxEnd: MAX_SONG_TICKS });
+
+    // Loop clip: a notch every file length, starting where the file wraps.
+    const loop = { start: 3840, len: 3 * 3840, offset: 0.5, loop: true };
+    expect(audioMarks(loop, 2, 120)).toEqual({ repeats: [3840 + 2880, 3840 + 2880 + 3840, 3840 + 2880 + 7680], fileEnd: null });
+    // One-shot whose clip is longer than its file (the tempo went down): the file ends inside it.
+    const long = { start: 0, len: 3840 * 2, offset: 0, loop: false };
+    expect(audioMarks(long, 2, 120)).toEqual({ repeats: [], fileEnd: 3840 });
+    // The file ends at or after the clip end: no mark.
+    expect(audioMarks({ ...long, len: 3840 }, 2, 120).fileEnd).toBeNull();
+    expect(audioMarks({ ...long, len: 3000 }, 2, 120).fileEnd).toBeNull();
+    // Unknown length: nothing to mark.
+    expect(audioMarks(loop, null, 120)).toEqual({ repeats: [], fileEnd: null });
   });
 });

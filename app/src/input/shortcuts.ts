@@ -14,16 +14,40 @@ const PIANO_VELOCITY = 100;
 /** Recorder source id of the computer keyboard. */
 export const QWERTY_SOURCE = 'qwerty';
 
-/** Bottom-panel tabs, in tab order. */
-export type PanelTab = 'step' | 'pianoroll' | 'instrument' | 'mixer';
-/** Alt+1..4 and the FL-style F6..F9 (matched on e.code: macOS Option+digit types other characters). */
+/** Bottom-panel tabs, in tab order (Alt+N is the Nth tab from the left). */
+export type PanelTab = 'step' | 'pianoroll' | 'instrument' | 'mixer' | 'clip';
+/**
+ * Alt+1..5 and the FL-style F6..F9 (matched on e.code: macOS Option+digit
+ * types other characters). The Clip tab (plan 9, audio tracks) came last, so
+ * it is Alt+5 and the fifth tab; it has no F-key: F10 is the browser's menu
+ * key on Windows/Linux (and FL's own F10 is its settings), so F6..F9 keep
+ * meaning what they mean in FL.
+ */
 const TAB_CODES: Record<string, PanelTab> = {
-  Digit1: 'step', Digit2: 'pianoroll', Digit3: 'instrument', Digit4: 'mixer',
+  Digit1: 'step', Digit2: 'pianoroll', Digit3: 'instrument', Digit4: 'mixer', Digit5: 'clip',
   F6: 'step', F7: 'pianoroll', F8: 'instrument', F9: 'mixer',
 };
 
+/**
+ * Is tab `tab` open for a selected track of `kind` (null: none selected)?
+ * Otherwise the hint the bottom panel flashes (the disabled tab's tooltip
+ * text). Step grid: drum tracks; Piano roll / Instrument: synth tracks;
+ * Clip: audio tracks; Mixer: always.
+ */
+export function tabFor(tab: PanelTab, kind: 'drum' | 'synth' | 'audio' | null): { ok: true } | { hint: string } {
+  const need: Record<PanelTab, ['drum' | 'synth' | 'audio' | null, string]> = {
+    step: ['drum', 'Select a drum track'],
+    pianoroll: ['synth', 'Select a synth track'],
+    instrument: ['synth', 'Select a synth track'],
+    clip: ['audio', 'Select an audio track'],
+    mixer: [null, ''],
+  };
+  const [k, hint] = need[tab];
+  return k === null || k === kind ? { ok: true } : { hint };
+}
+
 export interface ShortcutOptions {
-  /** Alt+1..4 / F6..F9: show a bottom-panel tab (the host handles disabled tabs). */
+  /** Alt+1..5 / F6..F9: show a bottom-panel tab (the host handles disabled tabs: tabFor). */
   onTab?: (tab: PanelTab) => void;
   /** Fires (with the new octave) on Z/X. */
   onOctave?: (o: number) => void;
@@ -124,7 +148,7 @@ export function createShortcutHandlers(
         (redoKey ? opts.onRedo : opts.onUndo)?.();
         return;
       }
-      // Bottom-panel tabs: Alt+digit (no other modifier) or a bare F6..F9. Not
+      // Bottom-panel tabs: Alt+digit 1..5 (no other modifier) or a bare F6..F9. Not
       // while typing, and not from inside an inline confirmation (it stops its
       // own keydowns, but the check keeps it true if focus ever sits elsewhere
       // in the dialog). Documented choice: ignore, don't cancel the confirm.

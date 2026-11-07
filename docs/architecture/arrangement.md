@@ -116,6 +116,46 @@ Plan 9 (spec addendum §3.1); engine side in `engine/src/audio_track.rs`.
   captured, so a replaced, reset or late sample is never read stale (see
   `audio-path.md`, "Sample generations").
 
+### Audio lanes in the UI
+Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
+`ui/song/tlMath.ts` (`dropTarget`, `audioEdges`, `audioMarks`),
+`ui/ClipPanel.svelte`, `audio/peaks.ts`.
+
+- **Drops** are resolved by `dropTarget(rows, y)`: an Audio lane places
+  the files, below the last lane makes a new Audio track, a drum / synth
+  lane (or the ruler) only shows "Drop audio on an audio track or below the
+  tracks". Every file is imported first (`sampleImport.ts`: decode, budget,
+  peaks, upload); the track and all clips are then placed inside one
+  `edit()`, so one undo removes the whole drop. A DEFERRED load (dropped
+  while playing) is placed at once on its sample id (the engine chases it
+  in when it lands) and drawn hatched while `pendingSampleIds()` has it.
+- **Waveforms.** `computePeaks` keeps Int8 min/max per 256 frames per
+  channel plus 4× coarser levels down to one pair; `peaksLevel` picks the
+  coarsest level with at least one pair per pixel. Computed after decode and
+  before the upload transfers the channels (import and project load; the
+  autosave restore loads the same way; the audio restart keeps them), in a
+  Worker past 2^21 frames with the buffers transferred both ways, cached by
+  content hash. The lane maps a pixel to file time (`offset + (tick −
+  start) / ticksPerSecond`, wrapped for a loop clip) and peaks to file
+  fractions, so peaks made at one sample rate draw right at another.
+- **Edges.** A one-shot clip's right edge stops at `audioEdges(...).maxEnd`
+  (its file's end at the current tempo; `setAudioClip` caps the same way);
+  the left edge goes through `trimAudioClipStart` (start and offset move
+  together). Loop clips draw a notch every file length; a one-shot whose
+  file ends before the clip (a tempo change) gets an end-of-file mark and a
+  dimmed silent rest (`audioMarks`).
+- **Lane moves.** A drag of only audio clips follows the pointer onto
+  another Audio lane (`moveClips` with the lane delta to that lane; over a
+  non-audio lane they stay where they are); Escape moves them back.
+- **Split** (`splitClips`): Cmd/Ctrl+E at the heard playhead (playing in
+  Song mode) or the parked song position, and "Split here" at the beat
+  under the right-click. Works on note clips too.
+- **Clip tab** (Alt+5, the fifth tab; no F-key, F10 is the browser's menu
+  key): the clip in `clipFocus` (set by clicking, placing or selecting one
+  audio clip; clicking also selects its track). Gain fader in dB, fades in
+  beats typed exactly, Loop to fill; every change is one `setAudioClip`.
+  `shortcuts.ts tabFor` says which tab fits which track kind.
+
 ## Limits
 | What | Limit |
 |---|---|

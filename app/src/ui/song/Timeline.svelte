@@ -7,7 +7,8 @@
   //   corner "Tracks"      | ruler canvas (sticky top): bar numbers, loop range
   //   track headers (HTML) | lanes: canvas (grid, loop shading, clips, playhead)
   //                        |        + transparent DOM overlays per lane / clip
-  //   footer (sticky bottom): + Drum track, + Synth track, readout
+  //   drop zone below the last lane (`tl-below`): drop audio for a new track
+  //   footer (sticky bottom): + Drum / Synth / Audio track, readout
   // Time scrolls virtually (TlView.scrollTick); the canvases are DPR aware.
   // The DOM overlays (`tl-lane-<slot>`, `clip-<slot>-<idx>`) carry testids,
   // tooltips and labels; every pointer event bubbles to the lanes element and
@@ -17,6 +18,30 @@
   // line marks every point where the pattern starts again. Clips are editable
   // in Pattern mode too; the playhead (heard, latency-compensated) and the
   // parked song position are drawn only in Song mode.
+  //
+  // AUDIO LANES (plan 9; spec addendum §3.1/3.2). An Audio track's clips draw,
+  // in the track colour: the min/max waveform from the sample's peaks
+  // (audio/peaks.ts, the level that matches the zoom; scaled by the clip's
+  // gain and fades; a flat line until peaks exist), the sample name, the
+  // fade ramps, for a loop clip a notch every file length (where the file
+  // starts again), and for a one-shot clip whose file runs out before the clip
+  // ends (a tempo change: clips play at native speed) an end-of-file mark with
+  // the silent rest dimmed. A clip whose sample is still waiting for Stop
+  // (a DEFERRED load, sampleLoads.ts pendingSampleIds) is hatched; one whose
+  // sample is gone is hatched red and named "missing sample".
+  // Drops (Finder files, a library or starter-kit sample; library/drag.ts
+  // droppedFiles) are handled on the whole scroll area and resolved by
+  // tlMath.dropTarget: an Audio lane places the files at the beat under the
+  // pointer (Alt: the exact tick), one after another; below the last lane a
+  // new Audio track is made for them; a drum / synth lane (or the ruler) only
+  // shows the hint. Every file is imported first (sampleImport.ts: decode,
+  // budget check, peaks, upload); then the track and all clips are placed in
+  // ONE edit, so one undo takes the whole drop back.
+  // Audio clips move between Audio lanes (vertical drag; a pointer over a
+  // non-audio lane keeps them where they are), their right edge stops at the
+  // end of a one-shot file, and the left edge trims (trimAudioClipStart: the
+  // audio stays put). Clicking an audio clip selects its track, so the
+  // bottom panel's Clip tab (ClipPanel.svelte, Alt+5) edits it (clipFocus).
   //
   // Mouse:
   // - empty lane: click places the track's current pattern at the bar
@@ -29,8 +54,10 @@
   // - clip edges (6 px): right = length (repeat or cut), left = start, with
   //   the offset following so the music stays put; snapped to the beat;
   // - double-click a clip: select its track and its pattern in the editor;
-  // - right-click a clip: in-app menu (Make unique, Delete); Escape or a
-  //   click outside closes it;
+  // - right-click a clip: in-app menu (Make unique, Split here, Loop to fill
+  //   for an audio clip, Delete); Escape or a click outside closes it.
+  //   "Split here" splits the clip (or the selection holding it) at the beat
+  //   under the right-click (Alt: the exact tick);
   // - ruler: click seeks (nearest beat, Alt = free); drag sets the loop range
   //   in whole bars and turns the loop on. The range stays shaded (dimmer)
   //   while the loop is off or in Pattern mode;
@@ -49,6 +76,8 @@
   //   Delete / Backspace   delete the selected clips
   //   Cmd/Ctrl+D           duplicate them (copies go right after, selected)
   //   Cmd/Ctrl+A           select every clip
+  //   Cmd/Ctrl+E           split the selected clips at the playhead (playing in
+  //                        Song mode) or the parked song position
   //   Escape               cancel a drag / close the menu, else clear the selection
   //   ← / →                nudge the selection one beat (Shift: one bar)
   // Every other key bubbles on: letters keep playing the QWERTY piano, Space
@@ -56,6 +85,14 @@
   import { onDestroy, untrack } from 'svelte';
   import type { CommandSink } from '../../state/actions';
   import { addDrumTrack, selectTrack } from '../../state/actions';
+  import type { ImportEngine } from '../../state/sampleImport';
+  import { importSample } from '../../state/sampleImport';
+  import { deferSampleAssign, pendingSampleIds } from '../../state/sampleLoads';
+  import { banners } from '../../state/banners.svelte';
+  import { edit } from '../../state/edits';
+  import { droppedFiles, isSampleDrag } from '../../library/drag';
+  import { peaksFrames, peaksLevel } from '../../audio/peaks';
+  import { clipFocus, sampleName } from './clipFocus.svelte';
   import { addSynthTrack } from '../../state/rack-actions';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
@@ -63,24 +100,26 @@
   import { MAX_TRACKS, currentPattern, isPatternTrack, patternLength } from '../../state/project.svelte';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
-    deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip,
+    deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
   } from '../../state/song-actions';
-  import { trimAudioClipStart } from '../../state/audio-actions';
+  import { addAudioClip, addAudioTrack, clipGainLinear, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
   import {
-    BAR, BEAT, HEADER_W, LANE_H, MIN_CLIP_W, RULER_H, ZOOM, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest,
-    loopFromDrag, placeLen, repeatTicks, resizeLeft, resizeRight, seekTick, snap, snapFloor, tickToX, xToTick, yToLane,
-    zoomAt,
+    BAR, BEAT, HEADER_W, LANE_H, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks, barLabelStep, barRange, boxSelect,
+    clampGroupDt, dropTarget, fileTicks, hitTest, loopFromDrag, placeLen, repeatTicks, resizeLeft, resizeRight, seekTick,
+    snap, snapFloor, tickToX, xToTick, yToLane, zoomAt,
   } from './tlMath';
   import type { ClipBox, TlView } from './tlMath';
 
-  let { p, engine, clock }: { p: Project; engine: CommandSink; clock: AudioClock | null } = $props();
+  let { p, engine, clock }: { p: Project; engine: CommandSink & ImportEngine; clock: AudioClock | null } = $props();
 
   const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
   const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
   const FULL_TITLE = `${MAX_TRACKS} tracks is the maximum: remove one to add another`;
+  /** What a drop on a drum or synth lane says (addendum §3.1). */
+  const DROP_HINT = 'Drop audio on an audio track or below the tracks';
   /** Pixels a press must travel before it counts as a drag (a click never moves a clip). */
   const DRAG_SLOP = 3;
   const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -98,10 +137,13 @@
   let selected = $state.raw<Set<string>>(new Set());
   /** Box selection rectangle in lanes px. */
   let box = $state.raw<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  let menu = $state.raw<{ x: number; y: number; trackId: string; clipId: string } | null>(null);
+  /** The clip menu; `tick`: where "Split here" splits (the beat under the right-click, Alt: exact). */
+  let menu = $state.raw<{ x: number; y: number; trackId: string; clipId: string; tick: number } | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
   let hint = $state<string | null>(null);
   let cursor = $state('default');
+  /** Where a sample drag over the timeline would land (drawn as a highlight). */
+  let dropHover = $state.raw<{ lane: number } | 'new' | null>(null);
 
   type Found = { t: Track; c: Clip | AudioClip; lane: number };
   const lanesH = $derived(p.tracks.length * LANE_H);
@@ -120,8 +162,9 @@
     return [...all.filter((b) => !selected.has(b.id)), ...all.filter((b) => selected.has(b.id))];
   });
 
-  // Audio clips (plan 9) have no pattern: no repeat marks here, and the
-  // sample name stands in for the pattern name (Task 5 draws their lanes).
+  // Audio clips (plan 9) have no pattern: the sample name stands in for the
+  // pattern name, and their lanes are drawn by drawAudio.
+  const isAudio = (c: Clip | AudioClip): c is AudioClip => 'sampleId' in c;
   const patternClip = (t: Track, c: Clip | AudioClip) => ('patternId' in c && isPatternTrack(t) ? { t, c } : null);
   const patLenOf = (t: Track, c: Clip | AudioClip) => {
     const pc = patternClip(t, c);
@@ -132,7 +175,7 @@
     const pc = patternClip(t, c);
     if (pc) return patternOf(pc.t, pc.c.patternId)?.name ?? '?';
     const id = 'sampleId' in c ? c.sampleId : null;
-    return (id !== null ? p.sampleFiles.get(id)?.name : undefined) ?? 'missing sample';
+    return sampleName(p, id);
   };
   const uses = (t: Track, patternId: string) => t.clips.filter((c) => 'patternId' in c && c.patternId === patternId).length;
 
@@ -140,6 +183,11 @@
     if (hint) return hint;
     if (sel.length === 1) {
       const { t, c } = byId.get(sel[0])!;
+      if (isAudio(c)) {
+        const secs = fileSeconds(p, c.sampleId);
+        const file = secs === null ? '' : ` · ${secs.toFixed(2)} s file`;
+        return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)}${c.loop ? ' · loop' : ''}${file} · Alt+5 edits gain and fades`;
+      }
       const reps = c.len / patLenOf(t, c);
       const times = Number.isInteger(reps) ? `×${reps}` : `×${reps.toFixed(2)}`;
       const pc = patternClip(t, c);
@@ -148,7 +196,22 @@
     }
     if (sel.length > 1) return `${sel.length} clips selected`;
     if (p.mode === 'pattern' && byId.size) return 'Pattern mode: tracks loop their pattern — SONG (Shift+L) plays the timeline';
-    return 'Click a lane to place its pattern · drag the ruler to loop';
+    return 'Click a lane to place its pattern · drop audio files on the timeline · drag the ruler to loop';
+  });
+
+  /**
+   * An audio clip was clicked or placed: the Clip tab edits it (clipFocus),
+   * and its track becomes the selected one so the bottom panel shows that tab.
+   */
+  function focusAudio(t: Track, c: AudioClip) {
+    clipFocus.id = c.id;
+    if (p.selectedTrackId !== t.id) selectTrack(p, engine, t.id);
+  }
+  // A selection of exactly one audio clip (a box select, a nudge, an undo) is the one the Clip tab edits.
+  $effect(() => {
+    if (sel.length !== 1) return;
+    const f = byId.get(sel[0]);
+    if (f && isAudio(f.c)) untrack(() => (clipFocus.id = f.c.id));
   });
 
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
@@ -249,6 +312,18 @@
       ctx.fillRect(lx0, 0, lx1 - lx0, H);
     }
 
+    // Audio lanes redraw when peaks land (peaksVersion) and when a deferred
+    // load settles (the "will load when playback stops" notice clears then).
+    void p.peaksVersion;
+    void banners.notice;
+    const pending = new Set(pendingSampleIds());
+
+    // A sample drag over an audio lane: that lane lights up.
+    if (dropHover && dropHover !== 'new') {
+      ctx.fillStyle = 'rgba(240,162,58,0.16)';
+      ctx.fillRect(0, dropHover.lane * LANE_H, W, LANE_H - 1);
+    }
+
     // clips (unselected first; the selection on top)
     ctx.font = 'bold 10px ui-sans-serif, system-ui, sans-serif';
     ctx.textBaseline = 'top';
@@ -272,33 +347,16 @@
       ctx.fillRect(x0, y, w, h);
       ctx.globalAlpha = 1;
       ctx.fillRect(x0, y, w, 2); // solid top edge in the track colour
-      // repeat markers: a notch + dashed line where the pattern starts again
-      ctx.strokeStyle = t.color;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 2]);
-      ctx.globalAlpha = 0.7;
-      ctx.beginPath();
-      for (const r of repeatTicks(c.start, c.len, c.offset, patLenOf(t, c))) {
-        const rx = Math.round(tickToX(r, v)) + 0.5;
-        if (rx < x0 || rx > x1) continue;
-        ctx.moveTo(rx, y + 2);
-        ctx.lineTo(rx, y + h);
-      }
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-      for (const r of repeatTicks(c.start, c.len, c.offset, patLenOf(t, c))) {
-        const rx = Math.round(tickToX(r, v)) + 0.5;
-        if (rx < x0 || rx > x1) continue;
-        ctx.beginPath();
-        ctx.moveTo(rx - 3, y + 2);
-        ctx.lineTo(rx + 3, y + 2);
-        ctx.lineTo(rx, y + 6);
-        ctx.fill();
-      }
+      if (isAudio(c)) drawAudio(ctx, t.color, c, x0, x1, y, h, v, W, pending);
+      else drawRepeats(ctx, t.color, repeatTicks(c.start, c.len, c.offset, patLenOf(t, c)), x0, x1, y, h, v);
       if (w > 18) { // name in the track colour; pinned to the left edge while scrolled
-        ctx.fillStyle = t.color;
-        ctx.fillText(patNameOf(t, c), Math.max(x0, 0) + 4, y + 5);
+        const name = patNameOf(t, c);
+        if (isAudio(c)) { // over the waveform: on a dark backing
+          ctx.fillStyle = 'rgba(18,19,23,0.75)';
+          ctx.fillRect(Math.max(x0, 0) + 2, y + 3, ctx.measureText(name).width + 4, 12);
+        }
+        ctx.fillStyle = isAudio(c) && c.sampleId === null ? MISSING : t.color;
+        ctx.fillText(name, Math.max(x0, 0) + 4, y + 5);
       }
       ctx.restore();
       ctx.lineWidth = isSel ? 1.5 : 1;
@@ -331,6 +389,167 @@
         ctx.fillRect(x - 0.75, 0, 1.5, H);
       }
     }
+  }
+
+  /** A notch + dashed line at each tick where the clip's material starts again (pattern, or a loop clip's file). */
+  function drawRepeats(ctx: CanvasRenderingContext2D, color: string, ticks: number[], x0: number, x1: number, y: number, h: number, v: TlView) {
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.globalAlpha = 0.7;
+    ctx.beginPath();
+    for (const r of ticks) {
+      const rx = Math.round(tickToX(r, v)) + 0.5;
+      if (rx < x0 || rx > x1) continue;
+      ctx.moveTo(rx, y + 2);
+      ctx.lineTo(rx, y + h);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    for (const r of ticks) {
+      const rx = Math.round(tickToX(r, v)) + 0.5;
+      if (rx < x0 || rx > x1) continue;
+      ctx.beginPath();
+      ctx.moveTo(rx - 3, y + 2);
+      ctx.lineTo(rx + 3, y + 2);
+      ctx.lineTo(rx, y + 6);
+      ctx.fill();
+    }
+  }
+
+  const MISSING = '#ff8a92';
+
+  /** Diagonal stripes over [x0, x1) × [y, y + h) (the caller has clipped to the clip). */
+  function hatch(ctx: CanvasRenderingContext2D, color: string, x0: number, x1: number, y: number, h: number) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath();
+    for (let x = Math.floor(x0 / 8) * 8 - h; x < x1; x += 8) {
+      ctx.moveTo(x, y + h);
+      ctx.lineTo(x + h, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * An audio clip's body (see AUDIO LANES at the top): the waveform, the
+   * fade ramps, the loop notches or the end-of-file mark, and the hatch of a
+   * deferred or missing sample. The caller has clipped to the clip's box and
+   * draws the name and the outline.
+   */
+  function drawAudio(
+    ctx: CanvasRenderingContext2D, color: string, c: AudioClip, x0: number, x1: number, y: number, h: number,
+    v: TlView, W: number, pending: Set<number>,
+  ) {
+    const meta = c.sampleId !== null ? p.sampleMeta.get(c.sampleId) : undefined;
+    const seconds = meta?.seconds ?? null;
+    const tps = fileTicks(1, p.tempo); // ticks per second
+    const end = c.start + c.len;
+    const top = y + 3; // full height: the name is drawn over it on a dark backing
+    const bottom = y + h - 1;
+    const mid = (top + bottom) / 2;
+    const amp = (bottom - top) / 2;
+    const xa = Math.max(Math.floor(x0), 0);
+    const xb = Math.min(Math.ceil(x1), W);
+    const gain = clipGainLinear(c.gain);
+    /** The clip's own envelope (gain × fades) at song tick `t`, for scaling the picture. */
+    const env = (t: number) => {
+      let g = gain;
+      if (c.fadeIn > 0 && t < c.start + c.fadeIn) g *= Math.max(0, (t - c.start) / c.fadeIn);
+      if (c.fadeOut > 0 && t > end - c.fadeOut) g *= Math.max(0, (end - t) / c.fadeOut);
+      return g;
+    };
+
+    ctx.fillStyle = color;
+    if (meta?.peaks && seconds && seconds > 0) {
+      const pk = meta.peaks;
+      const frames = peaksFrames(pk);
+      const fps = frames / seconds; // file frames per second (the rate the peaks were made at)
+      const lv = peaksLevel(pk, (v.ticksPerPx / tps) * fps);
+      const pairs = lv.data[0]?.length / 2 || 0;
+      ctx.globalAlpha = 0.9;
+      for (let px = xa; px < xb && pairs > 0; px++) {
+        const ta = Math.max(c.start, xToTick(px, v));
+        const tb = Math.min(end, xToTick(px + 1, v));
+        if (tb <= ta) continue;
+        let fa = (c.offset + (ta - c.start) / tps) * fps;
+        const span = ((tb - ta) / tps) * fps;
+        if (c.loop) fa %= frames;
+        else if (fa >= frames) break; // the file ran out (end-of-file mark below)
+        const ia = Math.floor(fa / lv.framesPerPeak);
+        const ib = Math.max(ia + 1, Math.ceil((fa + span) / lv.framesPerPeak));
+        let lo = 127;
+        let hi = -127;
+        for (let i = ia; i < ib; i++) {
+          const k = c.loop ? i % pairs : i;
+          if (k >= pairs) break;
+          for (const ch of lv.data) {
+            if (ch[2 * k] < lo) lo = ch[2 * k];
+            if (ch[2 * k + 1] > hi) hi = ch[2 * k + 1];
+          }
+        }
+        if (hi < lo) continue;
+        const g = Math.min(1.5, env((ta + tb) / 2)) / 127;
+        const yTop = Math.max(top - 2, mid - hi * g * amp);
+        const yBot = Math.min(bottom + 1, mid - lo * g * amp);
+        ctx.fillRect(px, yTop, 1, Math.max(1, yBot - yTop));
+      }
+      ctx.globalAlpha = 1;
+    } else if (!pending.has(c.sampleId ?? -1) && c.sampleId !== null) {
+      // No peaks yet: a flat placeholder line.
+      ctx.globalAlpha = 0.5;
+      ctx.fillRect(xa, Math.round(mid), xb - xa, 1);
+      ctx.globalAlpha = 1;
+    }
+
+    // Fade ramps: the faded-out corner dimmed, the ramp drawn as a line.
+    const ramp = (xs: number, ys: number, xe: number, ye: number, corner: [number, number]) => {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.moveTo(xs, ys);
+      ctx.lineTo(xe, ye);
+      ctx.lineTo(corner[0], corner[1]);
+      ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(xs, ys);
+      ctx.lineTo(xe, ye);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+    if (c.fadeIn > 0) {
+      const xf = tickToX(c.start + c.fadeIn, v);
+      ramp(x0, y + h, xf, y + 2, [x0, y + 2]);
+    }
+    if (c.fadeOut > 0) {
+      const xf = tickToX(end - c.fadeOut, v);
+      ramp(xf, y + 2, x1, y + h, [x1, y + 2]);
+    }
+
+    const marks = audioMarks(c, seconds, p.tempo);
+    if (marks.repeats.length) drawRepeats(ctx, color, marks.repeats, x0, x1, y, h, v);
+    if (marks.fileEnd !== null) {
+      // The file runs out before the clip ends (a tempo change): the rest is silent.
+      const xe = Math.round(tickToX(marks.fileEnd, v));
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(xe, y + 2, x1 - xe, h - 2);
+      ctx.fillStyle = '#ffd98a';
+      ctx.fillRect(xe, y + 2, 1.5, h - 2);
+      ctx.beginPath();
+      ctx.moveTo(xe, y + h);
+      ctx.lineTo(xe + 4, y + h);
+      ctx.lineTo(xe, y + h - 4);
+      ctx.fill();
+    }
+
+    if (c.sampleId === null) hatch(ctx, MISSING, x0, x1, y, h);
+    else if (pending.has(c.sampleId)) hatch(ctx, color, x0, x1, y, h);
   }
 
   function drawRuler() {
@@ -427,7 +646,13 @@
   // ---- pointer ---------------------------------------------------------------
   type Orig = { id: string; start: number; len: number; offset: number };
   type Drag =
-    | { kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: number; laneHint: boolean; wasMulti: boolean; placed?: boolean }
+    | {
+        kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: string; laneHint: boolean; wasMulti: boolean; placed?: boolean;
+        /** The anchor's lane at the press (audio clips change lanes: Escape moves them back). */
+        anchorLane: number;
+        /** Every dragged clip is an audio clip, so the group may change lanes. */
+        audio: boolean;
+      }
     | { kind: 'left' | 'right'; orig: Orig; patLen: number; x0: number; moved: boolean; last: string }
     | { kind: 'box'; base: Set<string> }
     | {
@@ -490,9 +715,15 @@
       }
       const wasMulti = selected.has(hit.id) && sel.length > 1;
       if (!selected.has(hit.id)) selected = new Set([hit.id]);
+      const hf = byId.get(hit.id)!;
+      if (isAudio(hf.c)) focusAudio(hf.t, hf.c);
       if (hit.part === 'body') {
         const orig = snapshot(sel);
-        drag = { kind: 'move', ids: orig.map((o) => o.id), orig, anchor: orig.find((o) => o.id === hit.id)!, x0: x, y0: y, moved: false, last: 0, laneHint: false, wasMulti };
+        const audio = orig.every((o) => { const c = byId.get(o.id)?.c; return !!c && isAudio(c); });
+        drag = {
+          kind: 'move', ids: orig.map((o) => o.id), orig, anchor: orig.find((o) => o.id === hit.id)!, x0: x, y0: y, moved: false,
+          last: '', laneHint: false, wasMulti, anchorLane: hf.lane, audio,
+        };
       } else {
         const f = byId.get(hit.id)!;
         selected = new Set([hit.id]);
@@ -528,7 +759,10 @@
       }
       selected = new Set([c.id]);
       const orig = snapshot([c.id]);
-      drag = { kind: 'move', ids: [c.id], orig, anchor: orig[0], x0: x, y0: y, moved: false, last: 0, laneHint: false, wasMulti: false, placed: true };
+      drag = {
+        kind: 'move', ids: [c.id], orig, anchor: orig[0], x0: x, y0: y, moved: false, last: '', laneHint: false, wasMulti: false,
+        placed: true, anchorLane: lane, audio: false,
+      };
     }
     lanesEl.setPointerCapture(e.pointerId);
   }
@@ -548,22 +782,40 @@
     if (drag.kind === 'ruler') return;
     const dx = x - drag.x0;
     if (!drag.moved && Math.abs(dx) < DRAG_SLOP) {
-      if (drag.kind === 'move' && Math.abs(y - drag.y0) >= LANE_H / 2) laneHintOnce(drag);
+      if (drag.kind === 'move' && Math.abs(y - drag.y0) >= LANE_H / 2) {
+        if (!drag.audio) laneHintOnce(drag);
+        else {
+          drag.moved = true; // a vertical drag of audio clips moves them to another lane
+          move(e);
+        }
+      }
       return;
     }
     drag.moved = true;
     const dtRaw = dx * v.ticksPerPx;
     if (drag.kind === 'move') {
       const d = drag;
-      if (yToLane(y, v) !== yToLane(d.y0, v)) laneHintOnce(d);
+      const overLane = yToLane(y, v);
+      if (overLane !== yToLane(d.y0, v) && !d.audio) laneHintOnce(d);
       const a = d.anchor;
       const want = e.altKey ? Math.round(dtRaw) : snap(a.start + dtRaw, BEAT) - a.start;
       const dt = clampGroupDt(d.orig, want);
-      if (dt === d.last) return;
-      d.last = dt;
+      // Audio clips follow the pointer onto another Audio lane; over any other
+      // lane they stay on the one they are on (moveClips' dLane counts places
+      // in the whole track list, so the target must itself be an Audio lane).
+      const lane = d.audio && p.tracks[overLane]?.kind === 'audio' ? overLane : -1;
+      const k = `${dt},${lane}`;
+      if (k === d.last) return;
+      d.last = k;
       schedule(() => {
-        const cur = byId.get(a.id)?.c.start;
-        if (cur !== undefined) moveClips(p, engine, d.ids, a.start + dt - cur);
+        const f = byId.get(a.id);
+        if (!f) return;
+        const dLane = lane < 0 ? 0 : lane - f.lane;
+        if (!moveClips(p, engine, d.ids, a.start + dt - f.c.start, dLane) && dLane !== 0) {
+          // A lane in the group's way is not an Audio lane (or is full): time only.
+          moveClips(p, engine, d.ids, a.start + dt - f.c.start);
+          flashHint('Audio clips move between audio tracks only');
+        }
       });
     } else {
       const d = drag;
@@ -572,10 +824,14 @@
       let r: { start: number; len: number; offset: number };
       if (d.kind === 'right') {
         const end = o.start + o.len;
-        r = { start: o.start, len: resizeRight(o, e.altKey ? end + dtRaw : snap(end + dtRaw, BEAT), minLen), offset: o.offset };
+        let to = e.altKey ? end + dtRaw : snap(end + dtRaw, BEAT);
+        const f = byId.get(o.id);
+        // A one-shot audio clip's right edge stops at the end of its file (at the current tempo).
+        if (f && isAudio(f.c)) to = Math.min(to, audioEdges(f.c, fileSeconds(p, f.c.sampleId), p.tempo).maxEnd);
+        r = { start: o.start, len: resizeRight(o, to, minLen), offset: o.offset };
       } else {
         r = resizeLeft(o, e.altKey ? o.start + dtRaw : snap(o.start + dtRaw, BEAT), d.patLen, minLen);
-        // An audio clip's offset is seconds: the trim moves it with the start (plan 9 Task 5 draws these lanes).
+        // An audio clip's offset is seconds: the trim moves it with the start (resizeClip({start}) would move the clip).
         if (byId.get(o.id)?.t.kind === 'audio') {
           const start = r.start;
           if (`${start}` === d.last) return;
@@ -642,6 +898,10 @@
       selected = new Set();
     } else if (d.moved) {
       const origs = d.kind === 'move' ? d.orig : [d.orig];
+      if (d.kind === 'move') { // audio clips moved to another lane go back first
+        const f = byId.get(d.anchor.id);
+        if (f && f.lane !== d.anchorLane) moveClips(p, engine, d.ids, 0, d.anchorLane - f.lane);
+      }
       for (const o of origs) resizeClip(p, engine, o.id, { start: o.start, len: o.len, offset: o.offset });
     }
   }
@@ -684,7 +944,11 @@
     const f = hit && byId.get(hit.id);
     if (!f) return;
     selectTrack(p, engine, f.t.id);
-    if (!('patternId' in f.c)) return;
+    if (isAudio(f.c)) { // its track's Clip tab, editing this clip
+      clipFocus.id = f.c.id;
+      p.mixerOpen = false;
+      return;
+    }
     selectPattern(p, engine, f.t.id, f.c.patternId);
     flashHint(`Editing ${f.t.name} · ${patNameOf(f.t, f.c)} below`);
   }
@@ -700,7 +964,9 @@
       return;
     }
     if (!selected.has(f.c.id)) selected = new Set([f.c.id]);
-    menu = { x: e.clientX, y: e.clientY, trackId: f.t.id, clipId: f.c.id };
+    if (isAudio(f.c)) focusAudio(f.t, f.c);
+    const t = xToTick(x, view);
+    menu = { x: e.clientX, y: e.clientY, trackId: f.t.id, clipId: f.c.id, tick: e.altKey ? Math.round(t) : snap(t, BEAT) };
   }
   const menuClip = $derived(menu ? byId.get(menu.clipId) ?? null : null);
   /** "Make unique" only means something when another clip shares the pattern. */
@@ -722,6 +988,28 @@
     deleteClips(p, engine, menuDeleteIds);
     selected = new Set();
     closeMenu();
+  }
+  /** "Split here": the menu's clip (or the selection holding it) at the menu's tick. */
+  function menuSplit() {
+    if (menu) split(menuDeleteIds, menu.tick);
+    closeMenu();
+  }
+  /** "Loop to fill" (a toggle): the file repeats until the clip ends; off, it plays once. */
+  function menuLoop() {
+    const c = menuClip?.c;
+    if (c && isAudio(c)) setAudioClip(p, engine, c.id, { loop: !c.loop });
+    closeMenu();
+  }
+
+  /**
+   * Split `ids` at `tick` (song-actions splitClips: note and audio clips);
+   * the right halves become the selection. Says so when no clip spans it.
+   */
+  function split(ids: string[], tick: number) {
+    if (!ids.length) return flashHint('Select the clips to split (Cmd/Ctrl+E splits at the playhead)');
+    const right = splitClips(p, engine, ids, tick);
+    if (!right.length) return flashHint(`No selected clip spans the split point (${barRange(Math.round(tick), 1)})`);
+    selected = new Set(right.map((c) => c.id));
   }
   function menuKey(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -782,6 +1070,100 @@
     };
   });
 
+  // ---- audio drops (see AUDIO LANES at the top) -----------------------------------
+  /** Where a drag at client point `e` would land: its target and the drop tick. */
+  function dropAt(e: DragEvent) {
+    const v = view;
+    if (!v || !lanesEl) return null;
+    const { x, y } = local(e);
+    const raw = Math.max(0, xToTick(Math.max(0, x), v));
+    const tick = Math.min(MAX_SONG_TICKS - 1, e.altKey ? Math.round(raw) : snap(raw, BEAT));
+    return { target: dropTarget(p.tracks, y), tick };
+  }
+
+  function dragOver(e: DragEvent) {
+    if (!isSampleDrag(e) || p.loading) return;
+    e.preventDefault(); // accept it here (the window guard leaves a prevented drop alone)
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    const at = dropAt(e);
+    if (!at) return;
+    const tg = at.target;
+    const next = 'audioLane' in tg ? { lane: tg.audioLane } : 'newTrack' in tg ? 'new' as const : null;
+    if (JSON.stringify(next) !== JSON.stringify(dropHover)) dropHover = next;
+    if ('refused' in tg && hint !== DROP_HINT) flashHint(DROP_HINT);
+  }
+  function dragLeave(e: DragEvent) {
+    // Leaving for a child of the scroll area is not leaving.
+    const to = e.relatedTarget as Node | null;
+    if (!to || !(e.currentTarget as HTMLElement).contains(to)) dropHover = null;
+  }
+
+  function drop(e: DragEvent) {
+    if (!isSampleDrag(e)) return;
+    e.preventDefault(); // handled here, whatever the target: never the window's "drop onto a row" error
+    dropHover = null;
+    if (p.loading) return;
+    const at = dropAt(e);
+    if (!at) return;
+    const { target, tick } = at;
+    if ('refused' in target) return flashHint(DROP_HINT);
+    if ('newTrack' in target && tracksFull) return flashHint(FULL_TITLE);
+    const trackId = 'audioLane' in target ? p.tracks[target.audioLane].id : null;
+    const files = droppedFiles(e); // synchronously: the DataTransfer empties once this returns
+    void placeDropped(files, trackId, tick);
+  }
+
+  /**
+   * Import every dropped file (one at a time, in order; a failed one says why
+   * and is skipped), then place them all in ONE edit: a new Audio track when
+   * `trackId` is null, then the clips one after another from `start`. A
+   * DEFERRED load (dropped while playing) is placed at once and drawn
+   * hatched until its sample lands at Stop.
+   */
+  async function placeDropped(pending: Promise<File[]>, trackId: string | null, start: number) {
+    let files: File[];
+    try {
+      files = await pending;
+    } catch (err) {
+      banners.error = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    const gen = p.generation;
+    const alive = () => p.generation === gen && (trackId === null || p.tracks.some((t) => t.id === trackId));
+    const loaded: { id: number; name: string; deferred: boolean }[] = [];
+    for (const f of files) {
+      const r = await importSample(p, engine, f, alive);
+      if (r.ok) loaded.push(r);
+      else if (r.error) banners.error = r.error;
+    }
+    if (!loaded.length || !alive() || p.loading) return;
+    let track = null as Track | null; // set inside the edit
+    const placed = edit(p, loaded.length > 1 ? 'Drop audio files' : 'Drop audio file', () => {
+      const t = trackId ? p.tracks.find((x) => x.id === trackId) ?? null : addAudioTrack(p, engine);
+      if (!t) return [];
+      track = t;
+      const out: AudioClip[] = [];
+      let at = start;
+      for (const r of loaded) {
+        if (at >= MAX_SONG_TICKS) break;
+        const c = addAudioClip(p, engine, t.id, { sampleId: r.id, start: at });
+        if (!c) break; // 256 clips on this lane
+        out.push(c);
+        at = c.start + c.len;
+      }
+      return out;
+    });
+    for (const r of loaded) if (r.deferred) deferSampleAssign(r.id, r.name, () => p.peaksVersion++); // the clip already plays it
+    if (!track) return flashHint(FULL_TITLE);
+    if (placed.length) {
+      selected = new Set(placed.map((c) => c.id));
+      focusAudio(track, placed[0]);
+      p.mixerOpen = false;
+      if (loaded.length === files.length) banners.error = null; // a stale import error is moot now
+    }
+    if (placed.length < loaded.length) flashHint('Some files did not fit (song end or 256 clips per track)');
+  }
+
   // ---- keyboard (see KEYBOARD FOCUS RULE at the top) ---------------------------
   function nudge(dt: number) {
     const dts = clampGroupDt(snapshot(sel), dt);
@@ -812,6 +1194,12 @@
       const copies = duplicateClips(p, engine, sel);
       if (copies.length) selected = new Set(copies.map((c) => c.id));
       if (copies.length < sel.length) flashHint('Some copies did not fit (song end or 256 clips per track)');
+    } else if (e.code === 'KeyE' && cmd && !e.altKey && !e.shiftKey) {
+      take();
+      releaseHeldKeys();
+      if (e.repeat || drag) return;
+      // At the heard playhead while playing in Song mode, else the parked song position.
+      split(sel, playTick !== null && p.playing && p.mode === 'song' ? Math.round(playTick) : p.songPosition);
     } else if (e.code === 'KeyA' && cmd && !e.altKey) {
       take();
       releaseHeldKeys();
@@ -832,9 +1220,11 @@
         ? t.clips.map((c) => {
           const left = tickToX(c.start, v);
           const name = patNameOf(t, c);
+          void p.peaksVersion;
           return {
             c,
             name,
+            peaks: isAudio(c) && c.sampleId !== null && !!p.sampleMeta.get(c.sampleId)?.peaks,
             left,
             width: Math.max(MIN_CLIP_W, c.len / v.ticksPerPx),
             label: `${t.name} · ${name} · ${barRange(c.start, c.len)}`,
@@ -860,7 +1250,8 @@
   style:--ruler-h="{RULER_H}px"
   style:--lane-h="{LANE_H}px"
 >
-  <div class="scroll">
+  <!-- Sample drops anywhere over the timeline (AUDIO LANES at the top). -->
+  <div class="scroll" role="presentation" ondragenter={dragOver} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}>
     <div class="grid">
       <div class="corner">Tracks</div>
       <div class="ruler-wrap">
@@ -888,7 +1279,7 @@
         style:cursor
         tabindex="0"
         role="application"
-        aria-label="Song arrangement. Click a lane to place its pattern; Delete removes, Cmd+D duplicates, arrows nudge."
+        aria-label="Song arrangement. Click a lane to place its pattern, drop audio files on it; Delete removes, Cmd+D duplicates, Cmd+E splits, arrows nudge."
         onpointerdown={down}
         onpointermove={move}
         onpointerup={up}
@@ -899,32 +1290,59 @@
         oncontextmenu={context}
         onkeydown={key}
       >
-        <canvas bind:this={canvas} class="lanes-cv"></canvas>
+        <canvas bind:this={canvas} class="lanes-cv" data-testid="tl-canvas"></canvas>
         {#each overlays as o, lane (o.t.id)}
           <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{lane * LANE_H}px" title="{o.t.name}: {isPatternTrack(o.t) ? `click to place ${currentPattern(o.t).name}` : 'drop audio files here'}">
             {#each o.clips as k (k.c.id)}
-              <div
-                class="clip"
-                data-testid="clip-{o.t.slot}-{k.c.idx}"
-                data-start={k.c.start}
-                data-len={k.c.len}
-                data-offset={k.c.offset}
-                data-pattern={k.name}
-                data-selected={selected.has(k.c.id)}
-                aria-label={k.label}
-                title="{k.label} — drag to move, edges resize, double-click to edit, right-click for more"
-                style:left="{k.left}px"
-                style:width="{k.width}px"
-              ></div>
+              {#if 'sampleId' in k.c}
+                {@const a = k.c}
+                <!-- Audio clip: data-* mirror the model for tests; data-peaks once its waveform can be drawn. -->
+                <div
+                  class="clip"
+                  data-testid="clip-{o.t.slot}-{a.idx}"
+                  data-kind="audio"
+                  data-start={a.start}
+                  data-len={a.len}
+                  data-offset={a.offset}
+                  data-pattern={k.name}
+                  data-loop={a.loop}
+                  data-gain={a.gain}
+                  data-peaks={k.peaks ? 1 : 0}
+                  data-selected={selected.has(a.id)}
+                  aria-label={k.label}
+                  title="{k.label} — drag to move (also onto another audio track), edges trim, double-click for the Clip tab, right-click for more"
+                  style:left="{k.left}px"
+                  style:width="{k.width}px"
+                ></div>
+              {:else}
+                <div
+                  class="clip"
+                  data-testid="clip-{o.t.slot}-{k.c.idx}"
+                  data-start={k.c.start}
+                  data-len={k.c.len}
+                  data-offset={k.c.offset}
+                  data-pattern={k.name}
+                  data-selected={selected.has(k.c.id)}
+                  aria-label={k.label}
+                  title="{k.label} — drag to move, edges resize, double-click to edit, right-click for more"
+                  style:left="{k.left}px"
+                  style:width="{k.width}px"
+                ></div>
+              {/if}
             {/each}
           </div>
         {/each}
+      </div>
+      <!-- Below the last lane: a drop here makes a new Audio track (tlMath.dropTarget). -->
+      <div class="below" class:over={dropHover === 'new'} data-testid="tl-below">
+        <span>{tracksFull ? FULL_TITLE : 'Drop audio files here for a new audio track'}</span>
       </div>
     </div>
     <div class="foot">
       <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
       <button data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
       <button data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      <button data-testid="add-audio-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add an audio track: drop audio files on its lane'} onclick={() => { if (addAudioTrack(p, engine)) p.mixerOpen = false; }}>+ Audio track</button>
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
         class="hscroll"
@@ -953,13 +1371,27 @@
       oncontextmenu={(e) => e.preventDefault()}
     >
       <div class="menu-ttl">{menuClip.t.name} · {patNameOf(menuClip.t, menuClip.c)}</div>
-      <button
-        role="menuitem"
-        data-testid="tl-menu-unique"
-        disabled={!menuShared}
-        title={menuShared ? 'Give this clip its own copy of the pattern' : 'Only this clip uses this pattern'}
-        onclick={menuUnique}
-      >Make unique</button>
+      {#if !isAudio(menuClip.c)}
+        <button
+          role="menuitem"
+          data-testid="tl-menu-unique"
+          disabled={!menuShared}
+          title={menuShared ? 'Give this clip its own copy of the pattern' : 'Only this clip uses this pattern'}
+          onclick={menuUnique}
+        >Make unique</button>
+      {/if}
+      <button role="menuitem" data-testid="tl-menu-split" title="Split at this beat (Cmd/Ctrl+E splits at the playhead)" onclick={menuSplit}>
+        Split here{menuDeleteIds.length > 1 ? ` (${menuDeleteIds.length} clips)` : ''}
+      </button>
+      {#if isAudio(menuClip.c)}
+        <button
+          role="menuitemcheckbox"
+          aria-checked={menuClip.c.loop}
+          data-testid="tl-menu-loop"
+          title="Loop to fill: the file repeats until the clip ends (off: it plays once and its right edge stops at the file's end)"
+          onclick={menuLoop}
+        ><span class="check">{menuClip.c.loop ? '✓' : ''}</span>Loop to fill</button>
+      {/if}
       <button role="menuitem" data-testid="tl-menu-delete" onclick={menuDelete}>
         Delete{menuDeleteIds.length > 1 ? ` ${menuDeleteIds.length} clips` : ''}
       </button>
@@ -980,6 +1412,9 @@
   .lanes-cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .lane { position: absolute; left: 0; right: 0; height: var(--lane-h); }
   .clip { position: absolute; top: 2px; height: 23px; }
+  .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: #4d505b; font-size: 11px; }
+  .below.over { background: rgba(240, 162, 58, 0.12); border-top-color: #f0a23a; color: #ffd98a; }
+  .menu .check { display: inline-block; width: 14px; }
   .foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 4px 6px; background: #1b1c21; border-top: 1px solid #2a2c33; }
   .foot button { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; white-space: nowrap; }
   .foot button:hover { background: #2e313a; }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { flushSync, onDestroy, onMount, untrack } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
-  import { addClip } from './state/song-actions';
+  import { addClip, seek } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
@@ -278,6 +278,8 @@
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
     // Real song actions for e2e (no-ops before audio starts).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
+    // Song position (as a ruler click does), e.g. a mid-clip seek timed in the audio clips e2e.
+    seek: (ticks: number) => engine && seek(project, engine, ticks),
     // Used by the spec 6 perf e2e (tests/e2e/serial.spec.ts) to build its scenario
     // through the same code paths as the UI.
     addDrumTrack: () => (engine ? addDrumTrack(project, engine) : null),
@@ -664,7 +666,7 @@
     };
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
-      if (!e.defaultPrevented) banners.error = 'Drop onto a step-grid row, "+ Add row" or a Sample Player to load a sample';
+      if (!e.defaultPrevented) banners.error = 'Drop onto a step-grid row, "+ Add row", a Sample Player, or the timeline (an audio track, or below the tracks) to load a sample';
       e.preventDefault();
     };
     window.addEventListener('dragover', over);
@@ -699,7 +701,7 @@
       </div>
     {/if}
     <div class="main">
-      <Browser {engine} />
+      <Browser {engine} p={project} />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
         <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} /></div>

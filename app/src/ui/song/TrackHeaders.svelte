@@ -55,6 +55,9 @@
           <b class="name">{t.name}</b>
           {#if t.kind === 'synth'}
             <span class="kind">Synth · {t.patchName}</span>
+          {:else if t.kind === 'audio'}
+            <!-- "Audio 2" already says it; a renamed track gets the kind line. -->
+            {#if !/^audio/i.test(t.name)}<span class="kind">Audio track</span>{/if}
           {:else if !/^drum/i.test(t.name)}
             <!-- "Drums 2" already says it; a renamed track gets the kind line. -->
             <span class="kind">Drum track</span>

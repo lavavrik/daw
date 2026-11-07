@@ -186,8 +186,12 @@ Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.m
   edge to trim. **Double-click** a clip to edit its pattern below.
   **Right-click** for **Make unique** (its own copy of a shared pattern) and
   Delete. Clips stay on their own track.
+- **Split.** **Cmd/Ctrl+E** splits the selected clips at the playhead (or at
+  the song position while stopped); **Split here** in a clip's right-click
+  menu splits at that beat. The right half plays on from where the left one
+  stopped.
 - **Timeline keys** (lanes focused): **Delete** removes, **Cmd/Ctrl+D**
-  duplicates, **Cmd/Ctrl+A** selects all, **←/→** nudge a beat (**Shift**: a
+  duplicates, **Cmd/Ctrl+E** splits, **Cmd/Ctrl+A** selects all, **←/→** nudge a beat (**Shift**: a
   bar), **Esc** cancels a drag or clears the selection; **Shift**-drag box
   selects. Wheel scrolls tracks, Shift+wheel scrolls time, Cmd/Ctrl+wheel
   zooms; the slider under the lanes scrolls time too.
@@ -199,6 +203,41 @@ Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.m
 - Each track's **×** (on hover) removes it after an inline confirmation.
 
 Limits: 16 patterns and 256 clips per track, 999 bars.
+
+## Audio tracks
+
+Vocals, loops, breaks, whole stems: audio files play on **audio tracks**, in
+SONG mode, at their recorded speed.
+
+- **Drop audio on the timeline.** Drag files from Finder, a library sample
+  or a starter-kit sound onto the timeline. Below the last lane (where it
+  says *Drop audio files here*) makes a new audio track; on an audio track's
+  lane it lands at the beat under the pointer (**Alt**: exactly there).
+  Several files go one after another. A drum or synth lane only says *Drop
+  audio on an audio track or below the tracks*. **+ Audio track** in the
+  footer adds an empty one. One undo takes a whole drop back.
+- **Clips** show the waveform in the track colour, with their sample's name.
+  They move (also onto another audio track), trim from the left (the audio
+  stays where it was), split, duplicate and delete like pattern clips. A
+  clip's right edge stops at the end of its file, unless **Loop to fill** is
+  on (right-click menu or the Clip tab): then the file repeats, with a notch
+  where each repeat starts. A clip whose sample is still loading (dropped
+  while playing) is striped until you stop; "missing sample" means the file
+  was not in the project folder.
+- **Tempo.** Clips are never stretched. After a tempo change a clip keeps
+  its length in bars: the file then ends early (a yellow mark, silence
+  after it) or is cut at the clip end.
+- **Clip tab** (**Alt+5**, or click / double-click a clip): the clip's sample,
+  length and channels; **Gain** (−∞ to +12 dB; double-click resets),
+  **Fade in** / **Fade out** in beats (type the exact value, Enter), and
+  **Loop to fill**. An audio track has no Step grid, Piano roll or Instrument.
+- Audio tracks are silent in PAT mode. Each has its own mixer strip (fader,
+  sends, inserts, sidechain key).
+- **Sample memory** is 1 GB (about 46 minutes of stereo at 48 kHz); the
+  Browser footer shows what is used ("Samples 412 MB / 1 GB"). One file can
+  be up to 256 MB (about 11 minutes of stereo). A file that doesn't fit is
+  refused with a message saying what it needs. Removed samples keep their
+  memory until the project is reopened.
 
 ## Mixer
 
@@ -292,8 +331,9 @@ preview and drag like library samples.
   library header is always there, so nothing moves; **■ Stop** stops. Big files
   stream instead of loading into memory. Up to 2000 entries per folder are
   listed.
-- Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample
-  Player** module. It is copied into the project (Save writes it to
+- Drag a sample onto a drum row, onto **+ Add row**, onto a **Sample
+  Player** module, or onto the timeline (an audio track, or below the
+  tracks for a new one). It is copied into the project (Save writes it to
   `samples/`), so projects stay self-contained.
 - **Patches** lists the patches saved with **Save patch**; load them from a
   synth track's **Patch** dropdown.
@@ -324,7 +364,7 @@ still work there).
 | **Z** / **X** | Octave down / up |
 | **R** | Record arm |
 | **Shift+L** | PAT / SONG |
-| **Alt+1** … **Alt+4**, **F6** … **F9** | Bottom-panel tab: Step grid / Piano roll / Instrument / Mixer. A tab that doesn't fit the selected track shows a hint instead |
+| **Alt+1** … **Alt+5**, **F6** … **F9** | Bottom-panel tab: Step grid / Piano roll / Instrument / Mixer / Clip (the Clip tab has no F-key: F10 is the browser's menu key). A tab that doesn't fit the selected track shows a hint instead |
 | **Cmd/Ctrl+Z** | Undo |
 | **Shift+Cmd/Ctrl+Z**, **Ctrl+Y** | Redo |
 | **Cmd/Ctrl+S** | Save |
@@ -337,6 +377,7 @@ still work there).
 | **Q** | Piano roll: quantize |
 | **Cmd/Ctrl+A** | Piano roll, timeline: select all |
 | **Cmd/Ctrl+D** | Timeline: duplicate the selection |
+| **Cmd/Ctrl+E** | Timeline: split the selected clips at the playhead / song position |
 | **← →** | Piano roll: move by a grid cell. Timeline: nudge a beat (**Shift**: a bar) |
 | **↑ ↓** | Piano roll: transpose a semitone (**Shift**: an octave) |
 | **Alt** (while dragging) | No snap (piano roll, clips); Alt-click a step: ghost note |

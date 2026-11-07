@@ -13,16 +13,21 @@
   //                     samples; Patches (patches/*.json)
   //            Starter kit (always, read-only, foldable): the bundled CC0
   //            samples the default drum track is made of
-  //   footer   change folder
+  //   footer   "Samples 412 MB / 1 GB" (the engine's sample memory in use,
+  //            removed samples included until the project is reopened;
+  //            state/sampleBudget.ts), change folder
   //
   // Samples (folder and kit alike): click previews (library/preview.ts:
   // straight to the speakers, never through the engine; big files stream
-  // instead of decoding); drag onto a step-grid row, "+ Add row" or a
-  // Sample Player copies the file into the project (library/drag.ts).
+  // instead of decoding); drag onto a step-grid row, "+ Add row", a
+  // Sample Player or the timeline (an audio lane, or below the lanes for a
+  // new audio track) copies the file into the project (library/drag.ts).
   // Problems with one file show in this pane's own inline banner; an
   // unreachable folder is the `lost` state, never a stream of errors.
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../audio/engine';
+  import type { Project } from '../state/project.svelte';
+  import { budgetText } from '../state/sampleBudget';
   import { STARTER_SAMPLE_MIME, startLibraryDrag } from '../library/drag';
   import { LibraryLostError, library } from '../library/library.svelte';
   import { bindPreview, clearPreviewCache, previewState, stopPreview, togglePreview } from '../library/sharedPreview.svelte';
@@ -30,7 +35,7 @@
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
 
-  let { engine }: { engine: AudioEngine } = $props();
+  let { engine, p }: { engine: AudioEngine; p: Project } = $props();
 
   const lib = library.state;
   let error = $state<string | null>(null);
@@ -204,15 +209,14 @@
     </section>
   </div>
 
-  {#if lib.status !== 'none'}
-    <div class="foot">
-      {#if lib.status === 'lost'}
-        <button class="link" data-testid="library-choose" onclick={choose}>Choose another folder…</button>
-      {:else}
-        <button class="link" data-testid="library-choose" onclick={choose}>Change folder…</button>
-      {/if}
-    </div>
-  {/if}
+  <div class="foot">
+    <span class="budget" data-testid="sample-budget" title="Sample memory in the audio engine: removed samples are freed when the project is reopened">Samples {budgetText(p)}</span>
+    {#if lib.status === 'lost'}
+      <button class="link" data-testid="library-choose" onclick={choose}>Choose another folder…</button>
+    {:else if lib.status !== 'none'}
+      <button class="link" data-testid="library-choose" onclick={choose}>Change folder…</button>
+    {/if}
+  </div>
 </aside>
 
 <style>
@@ -260,6 +264,7 @@
   .dir { color: #e4e5ea; }
   .more { margin: 0; padding: 1px 4px 1px calc(18px + var(--d, 0) * 12px); font-size: 11px; }
   .foot { display: flex; gap: 10px; padding: 6px 8px 0; border-top: 1px solid #2a2c33; }
+  .budget { flex: 1; min-width: 0; font-size: 11px; color: #7d808c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .link { font: inherit; font-size: 11px; border: 0; background: transparent; color: #8fb8ff; cursor: pointer; padding: 0; }
   .link:hover { text-decoration: underline; }
 </style>

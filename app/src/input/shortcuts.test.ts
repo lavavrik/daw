@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
-import { createShortcutHandlers, releaseHeldKeys, installShortcuts } from './shortcuts';
+import { createShortcutHandlers, releaseHeldKeys, installShortcuts, tabFor } from './shortcuts';
 import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
@@ -207,6 +207,31 @@ describe('shortcut handlers', () => {
     for (const c of ['F6', 'F7', 'F8', 'F9']) h.onKeyDown(key(c, pd));
     expect(tabs).toEqual(['step', 'pianoroll', 'instrument', 'mixer', 'step', 'pianoroll', 'instrument', 'mixer']);
     expect(prevented).toBe(8);
+  });
+  it('Alt+5 opens the Clip tab only for audio tracks', () => {
+    const tabs: string[] = [];
+    const { h } = mk({ onTab: (t) => tabs.push(t) });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    h.onKeyDown(key('Digit5', { altKey: true, ...pd }));
+    expect(tabs).toEqual(['clip']);
+    expect(prevented).toBe(1);
+    // No F-key: F10 is the browser's menu key (Windows/Linux) and the F6..F9 row stays FL's.
+    h.onKeyDown(key('F10', pd));
+    expect(tabs).toEqual(['clip']);
+    // The host asks tabFor whether the tab is open for the selected track's kind.
+    expect(tabFor('clip', 'audio')).toEqual({ ok: true });
+    expect(tabFor('clip', 'drum')).toEqual({ hint: 'Select an audio track' });
+    expect(tabFor('clip', 'synth')).toEqual({ hint: 'Select an audio track' });
+    expect(tabFor('clip', null)).toEqual({ hint: 'Select an audio track' });
+    // Audio tracks have no Step grid, Piano roll or Instrument (their existing tooltips).
+    expect(tabFor('step', 'audio')).toEqual({ hint: 'Select a drum track' });
+    expect(tabFor('pianoroll', 'audio')).toEqual({ hint: 'Select a synth track' });
+    expect(tabFor('instrument', 'audio')).toEqual({ hint: 'Select a synth track' });
+    expect(tabFor('step', 'drum')).toEqual({ ok: true });
+    expect(tabFor('instrument', 'synth')).toEqual({ ok: true });
+    expect(tabFor('mixer', 'audio')).toEqual({ ok: true });
+    expect(tabFor('mixer', null)).toEqual({ ok: true });
   });
   it('tab shortcuts ignore plain digits, other modifiers, repeats and a loading project', () => {
     const tabs: string[] = [];

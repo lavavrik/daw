@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Track headers: the left column of the song timeline, one row per lane
-  // (LANE_H tall, so each header lines up with its lane). One keyboard-
+  // Track headers: the left column of the song timeline, one header per row
+  // of the layout map (tlMath.rowLayout: the same rows, heights and order as
+  // the lanes, so each header lines up with its row). One keyboard-
   // accessible button per track (plan-2 testid `track-<slot>`). Selection is
   // shown by a lighter background + a "▶" marker + bold name (not colour
   // alone); the second line says what the track is. The × only appears on
@@ -10,6 +11,18 @@
   // the strip's M and S (state/mixer-actions toggleMute / toggleSolo), so the
   // two views always agree and each click is one undo entry. Solo = play
   // only the soloed tracks (the returns keep playing).
+  //
+  // AUTOMATION (plan 10). A on a track header shows / hides its automation
+  // lanes (laneView.open: UI state, not saved); it shows how many it has.
+  // Each lane row's header: the enable toggle (a disabled lane plays the
+  // base value), the target ("Filter · Cutoff", "Fader": autoLabels.ts), ×
+  // to remove the lane (one undo entry; no question: undo brings it back),
+  // and on the owner's last lane row the "+ Lane" <select> of the targets
+  // that have no lane yet. An open track without lanes shows one empty lane
+  // row with just the select. In Pattern mode a lane header says it plays in
+  // SONG only. The Master row (pinned under the last track) holds the
+  // master's and both returns' lanes; its own A, and × to hide it while it
+  // has no lane (the timeline footer's "+ Master row" shows it).
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
@@ -18,9 +31,52 @@
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
-  import { LANE_H } from './tlMath';
+  import { MAX_AUTO_LANES } from '../../audio/protocol';
+  import { laneCount, projectLanes } from '../../state/automation';
+  import type { AutoOwner } from '../../state/automation';
+  import { addLane, removeLane, setLaneEnabled } from '../../state/automation-actions';
+  import type { AutoTarget, AutomationLane, MasterChannel } from '../../state/project.svelte';
+  import { laneChoices, targetLabel } from './autoLabels';
+  import { laneView, setOpen } from './laneView.svelte';
+  import { MASTER_GREY, MASTER_ROW } from './tlMath';
+  import type { Row } from './tlMath';
 
-  let { p, engine }: { p: Project; engine: CommandSink } = $props();
+  let { p, engine, rows }: { p: Project; engine: CommandSink; rows: readonly Row[] } = $props();
+
+  const CHANNELS: MasterChannel[] = ['master', 'reverb', 'delay'];
+  const full = $derived(laneCount(p) >= MAX_AUTO_LANES);
+  const FULL = `${MAX_AUTO_LANES} lanes is the maximum: remove one to add another`;
+
+  const trackById = $derived(new Map(p.tracks.map((t) => [t.id, t])));
+  /** Every lane by id: its owner and its index among the owner's lanes (testids). */
+  const laneInfo = $derived.by(() => {
+    const m = new Map<string, { lane: AutomationLane; owner: AutoOwner; k: number }>();
+    for (const t of p.tracks) t.automation.forEach((lane, k) => m.set(lane.id, { lane, owner: t, k }));
+    p.mixer.automation.forEach((x, k) => m.set(x.lane.id, { lane: x.lane, owner: x.channel, k }));
+    return m;
+  });
+  /** The testid key of a row's owner: the track's slot, or "m" for the Master row. */
+  const ownerKey = (trackId: string) => (trackId === MASTER_ROW ? 'm' : String(trackById.get(trackId)?.slot ?? '?'));
+  /** The owner's last row (where its "+ Lane" select sits). */
+  const isLastOfOwner = (i: number) => rows[i + 1]?.trackId !== rows[i].trackId || rows[i + 1]?.kind !== 'lane';
+
+  /** "+ Lane" options for a row's owner, each with the owner it adds to (Master row: one per channel). */
+  function choices(trackId: string): { group: string | null; items: { owner: string; target: AutoTarget; label: string }[] }[] {
+    if (trackId === MASTER_ROW) {
+      const used = (c: MasterChannel) => p.mixer.automation.filter((x) => x.channel === c).map((x) => x.lane.target);
+      return CHANNELS.map((c) => ({ group: c[0].toUpperCase() + c.slice(1), items: laneChoices(c, used(c)).map((x) => ({ owner: c, ...x })) }));
+    }
+    const t = trackById.get(trackId);
+    if (!t) return [];
+    return [{ group: null, items: laneChoices(t, t.automation.map((l) => l.target)).map((x) => ({ owner: t.id, ...x })) }];
+  }
+  function pick(e: Event & { currentTarget: HTMLSelectElement }, trackId: string) {
+    const sel = e.currentTarget;
+    const [g, i] = sel.value.split(':').map(Number);
+    sel.value = '';
+    const item = choices(trackId)[g]?.items[i];
+    if (item) addLane(p, engine, item.owner, item.target);
+  }
 
   /** The open question: which track, and the × that asked. */
   let asking = $state<{ track: Track; anchor: HTMLElement } | null>(null);
@@ -34,42 +90,125 @@
   }
 </script>
 
-<div class="heads" style:--lane-h="{LANE_H}px">
-  {#each p.tracks as t (t.id)}
-    {@const sel = t.id === p.selectedTrackId}
-    {@const muted = flagOn(t, 'mute')}
-    {@const soloed = flagOn(t, 'solo')}
-    <div class="row" class:sel class:muted style:--c={t.color}>
-      <button
-        class="main"
-        data-testid={`track-${t.slot}`}
-        aria-pressed={sel}
-        title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
-        onclick={() => {
-          selectTrack(p, engine, t.id);
-          p.mixerOpen = false; // show this track's editor, not the mixer
-        }}
-      >
-        <span class="mark">{sel ? '▶' : ''}</span>
-        <span class="txt">
-          <b class="name">{t.name}</b>
-          {#if t.kind === 'synth'}
-            <span class="kind">Synth · {t.patchName}</span>
-          {:else if t.kind === 'audio'}
-            <!-- "Audio 2" already says it; a renamed track gets the kind line. -->
-            {#if !/^audio/i.test(t.name)}<span class="kind">Audio track</span>{/if}
-          {:else if !/^drum/i.test(t.name)}
-            <!-- "Drums 2" already says it; a renamed track gets the kind line. -->
-            <span class="kind">Drum track</span>
-          {/if}
+{#snippet addSelect(trackId: string)}
+  {@const groups = choices(trackId)}
+  <select
+    class="add"
+    data-testid="auto-add-{ownerKey(trackId)}"
+    aria-label="Add an automation lane"
+    title={full ? FULL : 'Add an automation lane: choose what it drives'}
+    disabled={full}
+    onchange={(e) => pick(e, trackId)}
+  >
+    <option value="">+ Lane</option>
+    {#each groups as grp, g (g)}
+      {#if grp.group}
+        <optgroup label={grp.group}>
+          {#each grp.items as it, i (i)}<option value="{g}:{i}">{it.label}</option>{/each}
+        </optgroup>
+      {:else}
+        {#each grp.items as it, i (i)}<option value="{g}:{i}">{it.label}</option>{/each}
+      {/if}
+    {/each}
+  </select>
+{/snippet}
+
+<div class="heads">
+  {#each rows as r, i (r.kind + r.trackId + (r.laneId ?? ''))}
+    {#if r.kind === 'clips'}
+      {@const t = trackById.get(r.trackId)!}
+      {@const sel = t.id === p.selectedTrackId}
+      {@const muted = flagOn(t, 'mute')}
+      {@const soloed = flagOn(t, 'solo')}
+      {@const open = laneView.open.has(t.id)}
+      <div class="row" class:sel class:muted style:--c={t.color} style:height="{r.h}px">
+        <button
+          class="main"
+          data-testid={`track-${t.slot}`}
+          aria-pressed={sel}
+          title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
+          onclick={() => {
+            selectTrack(p, engine, t.id);
+            p.mixerOpen = false; // show this track's editor, not the mixer
+          }}
+        >
+          <span class="mark">{sel ? '▶' : ''}</span>
+          <span class="txt">
+            <b class="name">{t.name}</b>
+            {#if t.kind === 'synth'}
+              <span class="kind">Synth · {t.patchName}</span>
+            {:else if t.kind === 'audio'}
+              <!-- "Audio 2" already says it; a renamed track gets the kind line. -->
+              {#if !/^audio/i.test(t.name)}<span class="kind">Audio track</span>{/if}
+            {:else if !/^drum/i.test(t.name)}
+              <!-- "Drums 2" already says it; a renamed track gets the kind line. -->
+              <span class="kind">Drum track</span>
+            {/if}
+          </span>
+        </button>
+        <span class="ms">
+          <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
+          <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (and other soloed ones)`} onclick={() => toggleSolo(p, engine, t.id)}>S</button>
+          <button
+            type="button"
+            class="a"
+            class:lit={open}
+            class:has={t.automation.length > 0}
+            aria-pressed={open}
+            aria-label={`Automation lanes of ${t.name}`}
+            data-testid={`track-auto-${t.slot}`}
+            title={`${open ? 'Hide' : 'Show'} ${t.name}'s automation lanes (${t.automation.length})`}
+            onclick={() => setOpen(t.id, !open)}
+          >A</button>
         </span>
-      </button>
-      <span class="ms">
-        <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
-        <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (and other soloed ones)`} onclick={() => toggleSolo(p, engine, t.id)}>S</button>
-      </span>
-      <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={(e) => remove(t, e.currentTarget)}>×</button>
-    </div>
+        <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={(e) => remove(t, e.currentTarget)}>×</button>
+      </div>
+    {:else if r.kind === 'master'}
+      {@const open = laneView.open.has(MASTER_ROW)}
+      <div class="row master" style:--c={MASTER_GREY} style:height="{r.h}px" data-testid="master-head">
+        <span class="main static">
+          <span class="mark"></span>
+          <span class="txt"><b class="name">Master</b><span class="kind">Master · Reverb · Delay</span></span>
+        </span>
+        <span class="ms">
+          <button
+            type="button" class="a" class:lit={open} class:has={p.mixer.automation.length > 0} aria-pressed={open}
+            aria-label="Automation lanes of the master and the returns" data-testid="master-auto"
+            title={`${open ? 'Hide' : 'Show'} the master's and returns' automation lanes (${p.mixer.automation.length})`}
+            onclick={() => setOpen(MASTER_ROW, !open)}
+          >A</button>
+        </span>
+        {#if !p.mixer.automation.length}
+          <button class="x" aria-label="Hide the Master row" title="Hide the Master row" onclick={() => (laneView.master = false)}>×</button>
+        {/if}
+      </div>
+    {:else}
+      {@const info = r.laneId ? laneInfo.get(r.laneId) : undefined}
+      {@const key = ownerKey(r.trackId)}
+      {@const color = r.trackId === MASTER_ROW ? MASTER_GREY : (trackById.get(r.trackId)?.color ?? MASTER_GREY)}
+      <div class="row lane" style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
+        {#if info}
+          {@const label = targetLabel(info.owner, info.lane.target)}
+          <div class="lrow">
+            <button
+              type="button" class="en" class:on={info.lane.enabled} aria-pressed={info.lane.enabled}
+              aria-label={`${info.lane.enabled ? 'Disable' : 'Enable'} the ${label} lane`}
+              data-testid={`auto-enable-${key}-${info.k}`}
+              title={info.lane.enabled ? 'On: the lane drives its target (click: off, the base value plays)' : 'Off: the base value plays (click: on)'}
+              onclick={() => setLaneEnabled(p, engine, info.lane.id, !info.lane.enabled)}
+            >{info.lane.enabled ? '●' : '○'}</button>
+            <span class="target" title={label}>{label}</span>
+            <button class="x" aria-label={`Remove the ${label} lane`} title="Remove this lane" data-testid={`auto-remove-${key}-${info.k}`} onclick={() => removeLane(p, engine, info.lane.id)}>×</button>
+          </div>
+        {:else}
+          <div class="lrow"><span class="target none">No lanes yet</span></div>
+        {/if}
+        <div class="lrow">
+          {#if isLastOfOwner(i)}{@render addSelect(r.trackId)}{/if}
+          {#if p.mode === 'pattern' && info}<span class="pat" title="Lanes are editable in Pattern mode but play only in Song mode (SONG, Shift+L)">SONG only</span>{/if}
+        </div>
+      </div>
+    {/if}
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet</p>{/if}
 </div>
@@ -92,7 +231,7 @@
 
 <style>
   .heads { display: flex; flex-direction: column; }
-  .row { height: var(--lane-h); box-sizing: border-box; display: flex; align-items: stretch; border-left: 4px solid var(--c); border-bottom: 1px solid #16171b; background: #20222a; }
+  .row { box-sizing: border-box; display: flex; align-items: stretch; border-left: 4px solid var(--c); border-bottom: 1px solid #16171b; background: #20222a; }
   .row:hover, .row:focus-within { background: #272a33; }
   .row.sel { background: #343846; box-shadow: inset 0 0 0 1px #4a4f63; }
   .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 2px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -111,5 +250,20 @@
   .m.lit { background: #e0a030; border-color: #e0a030; color: #111; }
   .s.lit { background: #4fb3e0; border-color: #4fb3e0; color: #111; }
   .row.muted .txt { opacity: 0.5; }
+  .a.lit { background: #8fd18f; border-color: #8fd18f; color: #111; }
+  .a.has:not(.lit) { color: #8fd18f; border-color: #4d6b4d; }
+  .main.static { cursor: default; }
+  .row.master { background: #262830; }
+  .row.lane { flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 6px; background: #1b1c22; }
+  .lrow { display: flex; align-items: center; gap: 4px; min-width: 0; height: 18px; }
+  .target { flex: 1; min-width: 0; font-size: 10px; color: #c9cbd3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .target.none { color: #7d808c; }
+  .row.lane .x { opacity: 0.6; height: 18px; }
+  .en { width: 16px; height: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--c); font-size: 11px; line-height: 16px; cursor: pointer; }
+  .en:not(.on) { color: #6d707c; }
+  .en:focus-visible, .add:focus-visible { outline: 2px solid #f0a23a; outline-offset: 0; }
+  .add { max-width: 84px; height: 18px; font: inherit; font-size: 10px; padding: 0 2px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; }
+  .add:disabled { color: #6d707c; cursor: not-allowed; }
+  .pat { font-size: 9px; color: #ffd98a; white-space: nowrap; }
   .empty { color: #7d808c; margin: 0; padding: 6px 8px; }
 </style>

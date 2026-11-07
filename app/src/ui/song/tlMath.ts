@@ -4,16 +4,22 @@
 // right of the track headers:
 // - x = 0 is the area's left edge, where tick `scrollTick` sits (time is
 //   scrolled virtually, by the view);
-// - y = 0 is the top of lane 0 (below the ruler); lane i covers
-//   [i * laneH, (i + 1) * laneH). Vertical scrolling is native (the pane's
-//   scroll container), so y here is content y, not viewport y.
+// - y = 0 is the top of the first row (below the ruler). Rows are NOT
+//   uniform (plan 10): every y -> row question goes through the layout map
+//   (rowLayout / rowAt): drops, clip hit tests, box selection, cross-lane
+//   moves, drawing and the header column. Vertical scrolling is native (the
+//   pane's scroll container), so y here is content y, not viewport y.
 import { MAX_SONG_TICKS } from '../../audio/protocol';
+import { toPos } from '../rack/knobMath';
+import type { CurveDef } from '../rack/knobMath';
 
 /** Ticks per beat / bar (4/4 at 960 PPQ). */
 export const BEAT = 960;
 export const BAR = 3840;
-/** Lane height (px): the Song pane is only ~0.5fr of the right column. */
+/** Clip row height (px): the Song pane is only ~0.5fr of the right column. */
 export const LANE_H = 28;
+/** Automation lane row height (px). */
+export const AUTO_H = 48;
 /** Width of the track-header column (px). */
 export const HEADER_W = 160;
 export const RULER_H = 20;
@@ -27,7 +33,7 @@ export interface TlView {
   ticksPerPx: number;
   /** Tick at x = 0. */
   scrollTick: number;
-  /** Lane height (px). */
+  /** Clip row height (px). */
   laneH: number;
 }
 
@@ -38,10 +44,89 @@ const mod = (x: number, m: number) => ((x % m) + m) % m;
 
 export const tickToX = (t: number, v: TlView) => (t - v.scrollTick) / v.ticksPerPx;
 export const xToTick = (x: number, v: TlView) => x * v.ticksPerPx + v.scrollTick;
-/** Top edge of lane `lane`. */
-export const laneToY = (lane: number, v: TlView) => lane * v.laneH;
-/** Lane under content y (may be < 0 or past the last lane: the caller checks). */
-export const yToLane = (y: number, v: TlView) => Math.floor(y / v.laneH);
+
+// ---- layout map (plan 10) ---------------------------------------------------
+
+/** The Master row's trackId (its rows and lanes), and its key in rowLayout's `open`. */
+export const MASTER_ROW = 'master';
+/** The Master row's colour: its header and its lanes' curves. */
+export const MASTER_GREY = '#9aa0ad';
+
+/**
+ * One row of the timeline, top to bottom:
+ * - `clips`: a track's clip lane (LANE_H);
+ * - `lane`: an automation lane (AUTO_H) of track `trackId`, or of the Master
+ *   row (trackId MASTER_ROW). Without `laneId` it is an open owner's empty
+ *   lane row: no lane yet, its header offers "+ Lane";
+ * - `master`: the Master row's own header row (LANE_H): no clips.
+ * `track` is the owner's index in the track list (moveClips' lanes, ClipBox
+ * lane), -1 for the Master row.
+ */
+export interface Row {
+  kind: 'clips' | 'lane' | 'master';
+  trackId: string;
+  laneId?: string;
+  y: number;
+  h: number;
+  track: number;
+}
+
+/**
+ * The layout map: each track's clip row, then, while the track is open
+ * (`open` has its id: the header's A toggle), one row per automation lane
+ * (or one empty lane row when it has none). `masterRow` (null: no Master row)
+ * is the Master row's lanes: its header row is pinned under the last track,
+ * and its lanes follow while `open` has MASTER_ROW.
+ */
+export function rowLayout(
+  tracks: readonly { id: string; automation: readonly { id: string }[] }[],
+  open: ReadonlySet<string>,
+  masterRow: readonly { id: string }[] | null,
+): Row[] {
+  const rows: Row[] = [];
+  let y = 0;
+  const push = (r: Omit<Row, 'y'>) => {
+    rows.push(r.laneId === undefined ? { kind: r.kind, trackId: r.trackId, y, h: r.h, track: r.track } : { ...r, y });
+    y += r.h;
+  };
+  const lanes = (trackId: string, list: readonly { id: string }[], track: number) => {
+    if (!open.has(trackId)) return;
+    if (!list.length) push({ kind: 'lane', trackId, h: AUTO_H, track });
+    for (const l of list) push({ kind: 'lane', trackId, laneId: l.id, h: AUTO_H, track });
+  };
+  tracks.forEach((t, i) => {
+    push({ kind: 'clips', trackId: t.id, h: LANE_H, track: i });
+    lanes(t.id, t.automation, i);
+  });
+  if (masterRow) {
+    push({ kind: 'master', trackId: MASTER_ROW, h: LANE_H, track: -1 });
+    lanes(MASTER_ROW, masterRow, -1);
+  }
+  return rows;
+}
+
+/** Total height of the rows (px). */
+export const rowsHeight = (rows: readonly Row[]) => (rows.length ? rows[rows.length - 1].y + rows[rows.length - 1].h : 0);
+
+/** The row under content y, or null (above the first row or below the last). */
+export function rowAt<R extends Row>(rows: readonly R[], y: number): R | null {
+  let lo = 0;
+  let hi = rows.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const r = rows[mid];
+    if (y < r.y) hi = mid - 1;
+    else if (y >= r.y + r.h) lo = mid + 1;
+    else return r;
+  }
+  return null;
+}
+
+/** Track index under content y when it is over a clip row, else -1 (a lane row, the Master row, outside). */
+export function clipLaneAt(rows: readonly Row[], y: number): number {
+  const r = rowAt(rows, y);
+  return r && r.kind === 'clips' ? r.track : -1;
+}
 
 // ---- snapping ---------------------------------------------------------------
 
@@ -88,8 +173,11 @@ export const MIN_CLIP_W = 3;
  * 'left' / 'right' = the resize zones: EDGE_ZONE px, but at most a third of
  * the clip each, so a short clip can still be grabbed to move.
  */
-export function hitTest(clips: readonly ClipBox[], x: number, y: number, v: TlView): { id: string; part: 'body' | 'left' | 'right' } | null {
-  const lane = yToLane(y, v);
+export function hitTest(
+  clips: readonly ClipBox[], x: number, y: number, v: TlView, rows: readonly Row[],
+): { id: string; part: 'body' | 'left' | 'right' } | null {
+  const lane = clipLaneAt(rows, y);
+  if (lane < 0) return null;
   for (let i = clips.length - 1; i >= 0; i--) {
     const c = clips[i];
     if (c.lane !== lane) continue;
@@ -102,13 +190,16 @@ export function hitTest(clips: readonly ClipBox[], x: number, y: number, v: TlVi
   return null;
 }
 
-/** Ids of the clips whose lane and time span overlap the rectangle (any corner order). */
-export function boxSelect(clips: readonly ClipBox[], x0: number, y0: number, x1: number, y1: number, v: TlView): string[] {
+/** Ids of the clips whose clip row and time span overlap the rectangle (any corner order). */
+export function boxSelect(
+  clips: readonly ClipBox[], x0: number, y0: number, x1: number, y1: number, v: TlView, rows: readonly Row[],
+): string[] {
   const tA = xToTick(Math.min(x0, x1), v);
   const tB = xToTick(Math.max(x0, x1), v);
-  const lA = yToLane(Math.min(y0, y1), v);
-  const lB = yToLane(Math.max(y0, y1), v);
-  return clips.filter((c) => c.lane >= lA && c.lane <= lB && c.start < tB && c.start + c.len > tA).map((c) => c.id);
+  const yA = Math.min(y0, y1);
+  const yB = Math.max(y0, y1);
+  const lanes = new Set(rows.filter((r) => r.kind === 'clips' && r.y <= yB && r.y + r.h > yA).map((r) => r.track));
+  return clips.filter((c) => lanes.has(c.lane) && c.start < tB && c.start + c.len > tA).map((c) => c.id);
 }
 
 // ---- clip edits ----------------------------------------------------------------
@@ -196,16 +287,17 @@ export function zoomAt(v: TlView, factor: number, x: number, lim: { minTpp: numb
 export type DropTarget = { audioLane: number } | { newTrack: true } | { refused: true };
 
 /**
- * Drop target for content y over the lanes (`rows`: the tracks in lane
- * order): an Audio lane takes the clip, anything below the last lane makes a
- * new Audio track (so does an empty timeline), a drum or synth lane only
- * shows a hint, and so does the ruler (y < 0).
+ * Drop target for content y over the lanes (`tracks` in lane order, `rows`
+ * their layout map): an Audio track's clip row takes the clip, anything below
+ * the last row makes a new Audio track (so does an empty timeline), a drum or
+ * synth clip row, an automation lane or the Master row only shows a hint,
+ * and so does the ruler (y < 0).
  */
-export function dropTarget(rows: readonly { kind: string }[], y: number, laneH = LANE_H): DropTarget {
+export function dropTarget(tracks: readonly { kind: string }[], rows: readonly Row[], y: number): DropTarget {
   if (y < 0) return { refused: true };
-  const lane = Math.floor(y / laneH);
-  if (lane >= rows.length) return { newTrack: true };
-  return rows[lane].kind === 'audio' ? { audioLane: lane } : { refused: true };
+  if (y >= rowsHeight(rows)) return { newTrack: true };
+  const lane = clipLaneAt(rows, y);
+  return lane >= 0 && tracks[lane]?.kind === 'audio' ? { audioLane: lane } : { refused: true };
 }
 
 /** Song ticks of `seconds` at `tempo` BPM (clips play at native speed: this moves with the tempo). */
@@ -245,4 +337,55 @@ export function audioMarks(c: AudioClipBox, seconds: number | null, tempo: numbe
   if (c.loop) return { repeats: repeatTicks(c.start, c.len, fileTicks(c.offset, tempo), fl), fileEnd: null };
   const end = c.start + fl - fileTicks(c.offset, tempo);
   return { repeats: [], fileEnd: end < c.start + c.len - 0.5 ? end : null };
+}
+
+// ---- automation lane points (plan 10) ------------------------------------------
+
+/** Space kept above and below the curve in an automation lane (px), so the extreme points stay grabbable. */
+export const AUTO_PAD = 6;
+/** A point is grabbed within this many px (its dot is drawn smaller). */
+export const POINT_R = 6;
+
+const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+/** Lane-local y of knob position `pos` (0 = bottom of the travel, 1 = top) in a row `h` tall. */
+export const posToY = (pos: number, h = AUTO_H) => AUTO_PAD + (1 - pos) * (h - 2 * AUTO_PAD);
+/** Knob position at lane-local y (clamped to 0..1). */
+export const yToPos = (y: number, h = AUTO_H) => clamp01(1 - (y - AUTO_PAD) / (h - 2 * AUTO_PAD));
+
+/** What the point hit tests need of a lane: its points and its param's curve. */
+export interface LanePoints {
+  points: readonly { id: string; tick: number; value: number }[];
+  def: CurveDef;
+}
+
+/**
+ * The point under lane-local (x, y) within POINT_R px (the nearest if several
+ * are), or null. Values sit at their knob position, as the lane draws them.
+ */
+export function pointHit(lane: LanePoints, x: number, y: number, v: TlView, h = AUTO_H): string | null {
+  let best: string | null = null;
+  let bestD = POINT_R * POINT_R;
+  for (const pt of lane.points) {
+    const dx = tickToX(pt.tick, v) - x;
+    const dy = posToY(toPos(lane.def, pt.value), h) - y;
+    const d = dx * dx + dy * dy;
+    if (d <= bestD) {
+      bestD = d;
+      best = pt.id;
+    }
+  }
+  return best;
+}
+
+/** Ids of the points inside the lane-local rectangle (any corner order). */
+export function pointBox(lane: LanePoints, x0: number, y0: number, x1: number, y1: number, v: TlView, h = AUTO_H): string[] {
+  const xa = Math.min(x0, x1);
+  const xb = Math.max(x0, x1);
+  const ya = Math.min(y0, y1);
+  const yb = Math.max(y0, y1);
+  return lane.points.filter((pt) => {
+    const x = tickToX(pt.tick, v);
+    const y = posToY(toPos(lane.def, pt.value), h);
+    return x >= xa && x <= xb && y >= ya && y <= yb;
+  }).map((pt) => pt.id);
 }

@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BAR, BEAT, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, laneToY, loopFromDrag, placeLen, repeatTicks,
-  resizeLeft, resizeRight, seekTick, snap, snapCeil, snapFloor, tickToX, xToTick, yToLane, zoomAt,
-  audioEdges, audioMarks, dropTarget, fileTicks,
+  AUTO_H, BAR, BEAT, LANE_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
+  pointBox, pointHit, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
+  snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks,
 } from './tlMath';
+import { mixParam } from '../../audio/mixerCatalog';
 import type { TlView } from './tlMath';
 import { MAX_SONG_TICKS } from '../../audio/protocol';
 
 // 1 bar = 96 px at 40 ticks/px; bar 2 (tick 3840) sits at x = 0.
 const view: TlView = { ticksPerPx: 40, scrollTick: 3840, laneH: 28 };
+const tr = (id: string, lanes: string[] = []) => ({ id, automation: lanes.map((l) => ({ id: l })) });
+/** n tracks without open lanes: the plain uniform layout. */
+const uniform = (n: number) => rowLayout(Array.from({ length: n }, (_, i) => tr(`t${i}`)), new Set(), null);
+const laneToY = (l: number) => l * LANE_H;
 
 describe('geometry', () => {
   it('tick <-> x round-trips (x = 0 is scrollTick)', () => {
@@ -19,14 +24,17 @@ describe('geometry', () => {
     for (const x of [-10, 0, 33.5, 700]) expect(tickToX(xToTick(x, view), view)).toBeCloseTo(x, 9);
   });
 
-  it('lane <-> y: lane i covers [i*laneH, (i+1)*laneH)', () => {
-    expect(laneToY(0, view)).toBe(0);
-    expect(laneToY(3, view)).toBe(84);
+  it('no open lanes: track i clip row covers [i*LANE_H, (i+1)*LANE_H)', () => {
+    const rows = uniform(32);
+    expect(rows[0].y).toBe(0);
+    expect(rows[3].y).toBe(84);
     for (const l of [0, 1, 5, 31]) {
-      expect(yToLane(laneToY(l, view), view)).toBe(l);
-      expect(yToLane(laneToY(l, view) + 27.99, view)).toBe(l);
+      expect(rowAt(rows, l * LANE_H)?.track).toBe(l);
+      expect(rowAt(rows, l * LANE_H + 27.99)?.track).toBe(l);
     }
-    expect(yToLane(-1, view)).toBe(-1);
+    expect(rowAt(rows, -1)).toBeNull();
+    expect(rowAt(rows, 32 * LANE_H)).toBeNull();
+    expect(rowsHeight(rows)).toBe(32 * LANE_H);
   });
 });
 
@@ -60,34 +68,36 @@ describe('snap', () => {
   });
 });
 
+const rows4 = uniform(4);
+
 describe('hitTest', () => {
   // Lane 1, bar 2 (x 0..96), and a short one in lane 0.
   const clips = [
     { id: 'a', lane: 1, start: 3840, len: 3840 },
     { id: 's', lane: 0, start: 7680, len: 240 }, // 6 px wide
   ];
-  const y1 = laneToY(1, view) + 10;
+  const y1 = laneToY(1) + 10;
 
   it('body, left edge and right edge (6 px zones)', () => {
-    expect(hitTest(clips, 3, y1, view)).toEqual({ id: 'a', part: 'left' });
-    expect(hitTest(clips, 5.9, y1, view)).toEqual({ id: 'a', part: 'left' });
-    expect(hitTest(clips, 6.1, y1, view)).toEqual({ id: 'a', part: 'body' });
-    expect(hitTest(clips, 48, y1, view)).toEqual({ id: 'a', part: 'body' });
-    expect(hitTest(clips, 90.1, y1, view)).toEqual({ id: 'a', part: 'right' });
-    expect(hitTest(clips, 95.9, y1, view)).toEqual({ id: 'a', part: 'right' });
+    expect(hitTest(clips, 3, y1, view, rows4)).toEqual({ id: 'a', part: 'left' });
+    expect(hitTest(clips, 5.9, y1, view, rows4)).toEqual({ id: 'a', part: 'left' });
+    expect(hitTest(clips, 6.1, y1, view, rows4)).toEqual({ id: 'a', part: 'body' });
+    expect(hitTest(clips, 48, y1, view, rows4)).toEqual({ id: 'a', part: 'body' });
+    expect(hitTest(clips, 90.1, y1, view, rows4)).toEqual({ id: 'a', part: 'right' });
+    expect(hitTest(clips, 95.9, y1, view, rows4)).toEqual({ id: 'a', part: 'right' });
   });
 
   it('misses: outside in x, other lane', () => {
-    expect(hitTest(clips, 96.1, y1, view)).toBeNull();
-    expect(hitTest(clips, -0.1, y1, view)).toBeNull();
-    expect(hitTest(clips, 48, laneToY(2, view) + 5, view)).toBeNull();
+    expect(hitTest(clips, 96.1, y1, view, rows4)).toBeNull();
+    expect(hitTest(clips, -0.1, y1, view, rows4)).toBeNull();
+    expect(hitTest(clips, 48, laneToY(2) + 5, view, rows4)).toBeNull();
   });
 
   it('a short clip keeps a body (each edge zone is at most a third)', () => {
-    const y0 = laneToY(0, view) + 10;
-    expect(hitTest(clips, 96 + 3, y0, view)?.part).toBe('body');
-    expect(hitTest(clips, 96 + 0.5, y0, view)?.part).toBe('left');
-    expect(hitTest(clips, 96 + 5.5, y0, view)?.part).toBe('right');
+    const y0 = laneToY(0) + 10;
+    expect(hitTest(clips, 96 + 3, y0, view, rows4)?.part).toBe('body');
+    expect(hitTest(clips, 96 + 0.5, y0, view, rows4)?.part).toBe('left');
+    expect(hitTest(clips, 96 + 5.5, y0, view, rows4)?.part).toBe('right');
   });
 
   it('the last (topmost-drawn) clip wins on overlap', () => {
@@ -95,8 +105,8 @@ describe('hitTest', () => {
       { id: 'under', lane: 0, start: 3840, len: 7680 },
       { id: 'over', lane: 0, start: 3840, len: 3840 },
     ];
-    expect(hitTest(two, 30, 10, view)?.id).toBe('over');
-    expect(hitTest(two, 150, 10, view)?.id).toBe('under');
+    expect(hitTest(two, 30, 10, view, rows4)?.id).toBe('over');
+    expect(hitTest(two, 150, 10, view, rows4)?.id).toBe('under');
   });
 });
 
@@ -149,10 +159,10 @@ describe('clip edits', () => {
       { id: 'b', lane: 1, start: 7680, len: 3840 }, // x 96..192, y 28..56
       { id: 'c', lane: 2, start: 3840, len: 960 }, // x 0..24, y 56..84
     ];
-    expect(boxSelect(clips, 50, 10, 100, 30, view).sort()).toEqual(['a', 'b']);
-    expect(boxSelect(clips, 100, 30, 50, 10, view).sort()).toEqual(['a', 'b']); // any direction
-    expect(boxSelect(clips, 30, 0, 90, 100, view)).toEqual(['a']); // c ends at x 24
-    expect(boxSelect(clips, 200, 0, 300, 100, view)).toEqual([]);
+    expect(boxSelect(clips, 50, 10, 100, 30, view, rows4).sort()).toEqual(['a', 'b']);
+    expect(boxSelect(clips, 100, 30, 50, 10, view, rows4).sort()).toEqual(['a', 'b']); // any direction
+    expect(boxSelect(clips, 30, 0, 90, 100, view, rows4)).toEqual(['a']); // c ends at x 24
+    expect(boxSelect(clips, 200, 0, 300, 100, view, rows4)).toEqual([]);
   });
 });
 
@@ -183,16 +193,29 @@ describe('labels and view', () => {
 
 describe('audio lanes (plan 9)', () => {
   it('dropTarget resolves audio lane, new track, refused', () => {
-    const rows = [{ kind: 'drum' }, { kind: 'audio' }, { kind: 'synth' }, { kind: 'audio' }];
-    expect(dropTarget(rows, 28 + 3)).toEqual({ audioLane: 1 });
-    expect(dropTarget(rows, 3 * 28 + 27.9)).toEqual({ audioLane: 3 });
-    expect(dropTarget(rows, 2)).toEqual({ refused: true }); // drum lane: only a hint
-    expect(dropTarget(rows, 2 * 28 + 1)).toEqual({ refused: true }); // synth lane
-    expect(dropTarget(rows, 4 * 28)).toEqual({ newTrack: true }); // right below the last lane
-    expect(dropTarget(rows, 4000)).toEqual({ newTrack: true });
-    expect(dropTarget(rows, -5)).toEqual({ refused: true }); // over the ruler
-    expect(dropTarget([], 0)).toEqual({ newTrack: true }); // no tracks: anywhere makes one
-    expect(dropTarget(rows, 28 + 3, 40)).toEqual({ refused: true }); // lane height given: still lane 0
+    const tracks = [{ kind: 'drum' }, { kind: 'audio' }, { kind: 'synth' }, { kind: 'audio' }];
+    const rows = rows4;
+    expect(dropTarget(tracks, rows, 28 + 3)).toEqual({ audioLane: 1 });
+    expect(dropTarget(tracks, rows, 3 * 28 + 27.9)).toEqual({ audioLane: 3 });
+    expect(dropTarget(tracks, rows, 2)).toEqual({ refused: true }); // drum lane: only a hint
+    expect(dropTarget(tracks, rows, 2 * 28 + 1)).toEqual({ refused: true }); // synth lane
+    expect(dropTarget(tracks, rows, 4 * 28)).toEqual({ newTrack: true }); // right below the last lane
+    expect(dropTarget(tracks, rows, 4000)).toEqual({ newTrack: true });
+    expect(dropTarget(tracks, rows, -5)).toEqual({ refused: true }); // over the ruler
+    expect(dropTarget([], [], 0)).toEqual({ newTrack: true }); // no tracks: anywhere makes one
+  });
+
+  it('dropTarget goes through the layout map: an open automation lane above shifts the audio lane down', () => {
+    const tracks = [{ kind: 'audio' }, { kind: 'audio' }];
+    const rows = rowLayout([tr('a', ['l1']), tr('b')], new Set(['a']), null);
+    expect(dropTarget(tracks, rows, 3)).toEqual({ audioLane: 0 });
+    expect(dropTarget(tracks, rows, LANE_H + 10)).toEqual({ refused: true }); // over a's automation lane
+    expect(dropTarget(tracks, rows, LANE_H + AUTO_H + 3)).toEqual({ audioLane: 1 });
+    expect(dropTarget(tracks, rows, 2 * LANE_H + AUTO_H)).toEqual({ newTrack: true });
+    // The Master row (below the tracks) takes no audio either.
+    const withMaster = rowLayout([tr('a'), tr('b')], new Set([MASTER_ROW]), [{ id: 'm1' }]);
+    expect(dropTarget(tracks, withMaster, 2 * LANE_H + 3)).toEqual({ refused: true });
+    expect(dropTarget(tracks, withMaster, 3 * LANE_H + AUTO_H)).toEqual({ newTrack: true });
   });
 
   it('audio clip edges and file-end mark', () => {
@@ -218,5 +241,86 @@ describe('audio lanes (plan 9)', () => {
     expect(audioMarks({ ...long, len: 3000 }, 2, 120).fileEnd).toBeNull();
     // Unknown length: nothing to mark.
     expect(audioMarks(loop, null, 120)).toEqual({ repeats: [], fileEnd: null });
+  });
+});
+
+describe('automation rows (plan 10)', () => {
+  it('rowLayout stacks lanes under open tracks', () => {
+    const tracks = [tr('a', ['a1', 'a2']), tr('b', ['b1']), tr('c'), tr('d', ['d1'])];
+    // Nothing open: one clip row per track, no Master row.
+    expect(rowLayout(tracks, new Set(), null).map((r) => [r.kind, r.trackId, r.y, r.h])).toEqual([
+      ['clips', 'a', 0, LANE_H], ['clips', 'b', 28, LANE_H], ['clips', 'c', 56, LANE_H], ['clips', 'd', 84, LANE_H],
+    ]);
+    // a and c open (c has no lanes yet: one empty lane row, without laneId, to add one); b closed.
+    const rows = rowLayout(tracks, new Set(['a', 'c']), [{ id: 'm1' }]);
+    expect(rows.map((r) => ({ kind: r.kind, trackId: r.trackId, laneId: r.laneId, y: r.y, h: r.h, track: r.track }))).toEqual([
+      { kind: 'clips', trackId: 'a', laneId: undefined, y: 0, h: 28, track: 0 },
+      { kind: 'lane', trackId: 'a', laneId: 'a1', y: 28, h: 48, track: 0 },
+      { kind: 'lane', trackId: 'a', laneId: 'a2', y: 76, h: 48, track: 0 },
+      { kind: 'clips', trackId: 'b', laneId: undefined, y: 124, h: 28, track: 1 },
+      { kind: 'clips', trackId: 'c', laneId: undefined, y: 152, h: 28, track: 2 },
+      { kind: 'lane', trackId: 'c', laneId: undefined, y: 180, h: 48, track: 2 },
+      { kind: 'clips', trackId: 'd', laneId: undefined, y: 228, h: 28, track: 3 },
+      // The Master row is pinned under the last track; its lanes show only while it is open.
+      { kind: 'master', trackId: MASTER_ROW, laneId: undefined, y: 256, h: 28, track: -1 },
+    ]);
+    expect(AUTO_H).toBe(48);
+    expect(rowsHeight(rows)).toBe(284);
+    const open = rowLayout(tracks, new Set([MASTER_ROW]), [{ id: 'm1' }, { id: 'm2' }]);
+    expect(open.slice(4).map((r) => [r.kind, r.trackId, r.laneId, r.y, r.h])).toEqual([
+      ['master', MASTER_ROW, undefined, 112, 28], ['lane', MASTER_ROW, 'm1', 140, 48], ['lane', MASTER_ROW, 'm2', 188, 48],
+    ]);
+    // rowAt resolves every y to its row, edges included.
+    for (const r of rows) {
+      expect(rowAt(rows, r.y)).toBe(r);
+      expect(rowAt(rows, r.y + r.h - 0.01)).toBe(r);
+    }
+    expect(rowAt(rows, 284)).toBeNull();
+  });
+
+  it('clip hit tests, box select and cross-lane rows go through the layout map', () => {
+    const rows = rowLayout([tr('a', ['a1']), tr('b')], new Set(['a']), null);
+    const clips = [{ id: 'x', lane: 0, start: 3840, len: 3840 }, { id: 'y', lane: 1, start: 3840, len: 3840 }];
+    expect(hitTest(clips, 48, 10, view, rows)?.id).toBe('x');
+    expect(hitTest(clips, 48, LANE_H + 10, view, rows)).toBeNull(); // the automation lane is not a clip row
+    expect(hitTest(clips, 48, LANE_H + AUTO_H + 10, view, rows)?.id).toBe('y');
+    // A box over the automation lane alone selects no clip; one reaching b's row takes y.
+    expect(boxSelect(clips, 10, LANE_H + 5, 60, LANE_H + 40, view, rows)).toEqual([]);
+    expect(boxSelect(clips, 10, LANE_H + 5, 60, LANE_H + AUTO_H + 5, view, rows)).toEqual(['y']);
+    expect(boxSelect(clips, 10, 5, 60, LANE_H + AUTO_H + 5, view, rows).sort()).toEqual(['x', 'y']);
+  });
+
+  it('pointHit and box select', () => {
+    const def = mixParam('fader'); // -60..6 dB, linear
+    const lane = {
+      def,
+      points: [
+        { id: 'p0', tick: 3840, value: -60 }, // x 0, bottom
+        { id: 'p1', tick: 3840 + 960, value: 6 }, // x 24, top
+        { id: 'p2', tick: 3840 + 1920, value: -27 }, // x 48, middle
+      ],
+    };
+    const yMid = posToY(0.5);
+    expect(posToY(1)).toBeLessThan(posToY(0));
+    expect(yToPos(posToY(0.25))).toBeCloseTo(0.25, 9);
+    expect(yToPos(-100)).toBe(1);
+    expect(yToPos(1000)).toBe(0);
+    expect(pointHit(lane, 0, posToY(0), view)).toBe('p0');
+    expect(pointHit(lane, 24 + 3, posToY(1) + 3, view)).toBe('p1'); // within the grab radius
+    expect(pointHit(lane, 48, yMid, view)).toBe('p2');
+    expect(pointHit(lane, 36, yMid, view)).toBeNull(); // between points
+    expect(pointHit(lane, 48, posToY(1), view)).toBeNull(); // right tick, wrong value
+    // Two points within reach: the nearer wins.
+    const close = { def, points: [{ id: 'a', tick: 3840, value: -27 }, { id: 'b', tick: 3840 + 160, value: -27 }] }; // 4 px apart
+    expect(pointHit(close, 1, yMid, view)).toBe('a');
+    expect(pointHit(close, 3, yMid, view)).toBe('b');
+    // Box select: the points inside the rectangle, any corner order.
+    expect(pointBox(lane, -5, 0, 30, AUTO_H, view).sort()).toEqual(['p0', 'p1']);
+    expect(pointBox(lane, 60, AUTO_H, 20, yMid - 2, view)).toEqual(['p2']);
+    expect(pointBox(lane, 20, yMid + 2, 60, AUTO_H, view)).toEqual([]);
+    // Exp params place points by knob position (log), as the lane is drawn.
+    const hz = mixParam('eq_mid_freq'); // 200..8000 Hz
+    const exp = { def: hz, points: [{ id: 'k', tick: 3840, value: Math.sqrt(200 * 8000) }] };
+    expect(pointHit(exp, 0, yMid, view)).toBe('k');
   });
 });

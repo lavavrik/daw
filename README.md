@@ -239,6 +239,46 @@ SONG mode, at their recorded speed.
   refused with a message saying what it needs. Removed samples keep their
   memory until the project is reopened.
 
+## Automation
+
+Draw parameter changes over the song: filter sweeps, volume rides, build-ups
+and drops. Design notes:
+[docs/architecture/automation.md](docs/architecture/automation.md).
+
+- **Lanes.** Click **A** on a track header to show its automation lanes under
+  its clips (click again to hide them; this is not saved). Pick what a lane
+  drives from **+ Lane**: the track's mixer strip (Fader, Pan, sends, EQ,
+  compressor) and, on a synth track, any continuous knob of its rack
+  ("Filter · Cutoff"). Switches and choices (mute, solo, on/off, the delay
+  division, wave, mode) can't be automated. Each lane header has an on/off
+  dot (off: the knob's own value plays) and **×** to remove the lane.
+- **Master row.** **+ Master row** (under the timeline) adds a row below the
+  last track for the master and the two returns (e.g. "Master · Ceiling",
+  "Reverb · Size"). It stays while it has a lane.
+- **Editing.**
+  - Click empty lane space to add a point (snapped to 1/16, **Alt** = free);
+    keep the mouse down to drag it into place.
+  - Drag a point (or the selection) to move it. Points never pass their
+    neighbours and stay in the range.
+  - **Shift**-click toggles a point; **Shift**-drag box-selects.
+  - **Cmd/Ctrl-drag** draws freehand. The stroke is thinned to a few points
+    and replaces the points in the range you drew over.
+  - **Double-click** a point to delete it. **Right-click** it for **Linear**
+    (a straight ramp to the next point) or **Hold** (keep the value, then
+    jump: drops and stutters), or Delete.
+  - A tooltip shows the value under the pointer in the knob's units.
+  - Lane keys (lane focused): **Delete** removes the selected points,
+    **Cmd/Ctrl+A** selects all, **←/→** nudge a 1/16 (**Shift**: a beat),
+    **Esc** cancels a drag or clears the selection.
+  - Each gesture (a click, a drag, a stroke) is one undo step.
+- **Song mode only.** Lanes play in SONG mode (playing, or stopped at the
+  song position). In PAT mode you can still edit them (the header says
+  "SONG only"), but the knobs keep their own values.
+- Removing a rack module or a track removes its lanes too; undo brings them
+  back.
+
+Limits: 64 lanes per project, 512 points per lane.
+
 ## Mixer
 
 The bottom panel's **Mixer** tab shows one strip per track, the **Reverb** and

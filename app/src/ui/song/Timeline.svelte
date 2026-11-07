@@ -43,6 +43,19 @@
   // audio stays put). Clicking an audio clip selects its track, so the
   // bottom panel's Clip tab (ClipPanel.svelte, Alt+5) edits it (clipFocus).
   //
+  // AUTOMATION (plan 10; spec addendum §3.4). Rows are not uniform: the
+  // layout map (tlMath.rowLayout) stacks, under each track's clip row
+  // (LANE_H), its automation lanes (AUTO_H each) while the track is open (its
+  // header's A; laneView.open, UI state), and pins the Master row (the
+  // master's and the returns' lanes) under the last track once it has a lane
+  // or "+ Master row" asked for it. EVERY y question goes through the map:
+  // drawing, the clip hit tests and box selection (clip rows only), the
+  // cross-lane move of audio clips (over a lane row they stay where they
+  // are), drops (dropTarget: a lane row or the Master row only hints), and
+  // the header column (TrackHeaders renders the same rows). A lane row is an
+  // AutoLane (its own canvas, pointer and keys; see there); the main canvas
+  // only paints its background and the grid under it.
+  //
   // Mouse:
   // - empty lane: click places the track's current pattern at the bar
   //   (Alt: at the exact tick), cut short at the next clip, and keeps
@@ -95,7 +108,8 @@
   import { addSynthTrack } from '../../state/rack-actions';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
-  import type { AudioClip, Clip, Project, Track } from '../../state/project.svelte';
+  import type { AudioClip, AutomationLane, Clip, Project, Track } from '../../state/project.svelte';
+  import type { AutoOwner } from '../../state/automation';
   import { MAX_TRACKS, currentPattern, isPatternTrack, patternLength } from '../../state/project.svelte';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
@@ -105,10 +119,14 @@
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
+  import AutoLane from './AutoLane.svelte';
+  import { laneView, setOpen } from './laneView.svelte';
+  import { targetLabel } from './autoLabels';
+  import { targetDef } from '../../state/automation';
   import {
-    BAR, BEAT, HEADER_W, LANE_H, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks, barLabelStep, barRange, boxSelect,
-    clampGroupDt, dropTarget, fileTicks, hitTest, loopFromDrag, placeLen, repeatTicks, resizeLeft, resizeRight, seekTick,
-    snap, snapFloor, tickToX, xToTick, yToLane, zoomAt,
+    AUTO_H, BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
+    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, fileTicks, hitTest, loopFromDrag, placeLen,
+    repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX, xToTick, zoomAt,
   } from './tlMath';
   import type { ClipBox, TlView } from './tlMath';
 
@@ -147,7 +165,28 @@
   let dropHover = $state.raw<{ lane: number } | 'new' | null>(null);
 
   type Found = { t: Track; c: Clip | AudioClip; lane: number };
-  const lanesH = $derived(p.tracks.length * LANE_H);
+  // The layout map (see AUTOMATION at the top): every row's y and height.
+  /** The Master row shows once it has a lane, or when asked for (footer, Task 4's "Automate"). */
+  const masterShown = $derived(p.mixer.automation.length > 0 || laneView.master);
+  const layout = $derived(rowLayout(p.tracks, laneView.open, masterShown ? p.mixer.automation.map((x) => x.lane) : null));
+  const lanesH = $derived(rowsHeight(layout));
+  /** Content y of each track's clip row, by track index (clip rows are in track order). */
+  const clipY = $derived(layout.filter((r) => r.kind === 'clips').map((r) => r.y));
+  /** The automation lane rows, ready for AutoLane (a lane whose target is gone is skipped). */
+  const autoRows = $derived.by(() => {
+    const out = [];
+    const info = new Map<string, { lane: AutomationLane; owner: AutoOwner; k: number; key: string; color: string }>();
+    for (const t of p.tracks) t.automation.forEach((lane, k) => info.set(lane.id, { lane, owner: t, k, key: String(t.slot), color: t.color }));
+    p.mixer.automation.forEach((x, k) => info.set(x.lane.id, { lane: x.lane, owner: x.channel, k, key: 'm', color: MASTER_GREY }));
+    for (const r of layout) {
+      if (r.kind !== 'lane') continue;
+      const f = r.laneId ? info.get(r.laneId) : undefined;
+      const def = f ? targetDef(f.owner, f.lane.target) : null;
+      if (f && def) out.push({ row: r, ...f, def, label: targetLabel(f.owner, f.lane.target) });
+      else if (!r.laneId) out.push({ row: r, empty: true as const });
+    }
+    return out;
+  });
   /** Every clip by id, with its track and lane (position in the track list). */
   const byId = $derived.by(() => {
     const m = new Map<string, Found>();
@@ -254,7 +293,7 @@
 
   const C = {
     bg: '#17181c', laneA: '#1c1d22', laneB: '#1f2026', laneSel: '#262935', beat: '#25272e', bar: '#353842',
-    bar4: '#4a4e5b', ruler: '#202227', rulerText: '#c9cbd3', dimText: '#7d808c', accent: '#f0a23a', playhead: '#ffffff',
+    bar4: '#4a4e5b', auto: '#191a1f', master: '#202128', ruler: '#202227', rulerText: '#c9cbd3', dimText: '#7d808c', accent: '#f0a23a', playhead: '#ffffff',
   };
   /** The loop range counts (bright) only while on and in Song mode; otherwise it is shown dimmed. */
   const loopLive = () => p.loop.on && p.mode === 'song';
@@ -288,12 +327,13 @@
     const t0 = xToTick(0, v);
     const t1 = xToTick(W, v);
 
-    p.tracks.forEach((t, lane) => {
-      ctx.fillStyle = t.id === p.selectedTrackId ? C.laneSel : lane % 2 ? C.laneB : C.laneA;
-      ctx.fillRect(0, lane * LANE_H, W, LANE_H);
+    for (const r of layout) {
+      if (r.kind === 'clips') ctx.fillStyle = r.trackId === p.selectedTrackId ? C.laneSel : r.track % 2 ? C.laneB : C.laneA;
+      else ctx.fillStyle = r.kind === 'master' ? C.master : C.auto; // AutoLane draws the curve on its own canvas
+      ctx.fillRect(0, r.y, W, r.h);
       ctx.fillStyle = '#16171b';
-      ctx.fillRect(0, lane * LANE_H + LANE_H - 1, W, 1);
-    });
+      ctx.fillRect(0, r.y + r.h - 1, W, 1);
+    }
     const vline = (t: number, style: string) => {
       ctx.fillStyle = style;
       ctx.fillRect(Math.round(tickToX(t, v)), 0, 1, H);
@@ -322,7 +362,7 @@
     // A sample drag over an audio lane: that lane lights up.
     if (dropHover && dropHover !== 'new') {
       ctx.fillStyle = 'rgba(240,162,58,0.16)';
-      ctx.fillRect(0, dropHover.lane * LANE_H, W, LANE_H - 1);
+      ctx.fillRect(0, clipY[dropHover.lane] ?? 0, W, LANE_H - 1);
     }
 
     // clips (unselected first; the selection on top)
@@ -334,7 +374,7 @@
       const x1 = Math.max(tickToX(c.start + c.len, v), x0 + MIN_CLIP_W);
       if (x1 < 0 || x0 > W) continue;
       const isSel = selected.has(c.id);
-      const y = b.lane * LANE_H + 2;
+      const y = (clipY[b.lane] ?? 0) + 2;
       const h = LANE_H - 5;
       const w = x1 - x0;
       ctx.save();
@@ -735,10 +775,10 @@
     focusLanes();
     const v = view;
     const { x, y } = local(e);
-    const lane = yToLane(y, v);
+    const lane = clipLaneAt(layout, y); // -1: the Master row (lane rows are AutoLane's own)
     const t = p.tracks[lane];
     if (!t) return;
-    const hit = hitTest(boxes, x, y, v);
+    const hit = hitTest(boxes, x, y, v, layout);
     if (hit) {
       if (e.shiftKey) {
         const s = new Set(sel);
@@ -809,7 +849,7 @@
     if (drag.kind === 'box') {
       box = { ...box!, x1: x, y1: y };
       const s = new Set(drag.base);
-      for (const id of boxSelect(boxes, box.x0, box.y0, x, y, v)) s.add(id);
+      for (const id of boxSelect(boxes, box.x0, box.y0, x, y, v, layout)) s.add(id);
       selected = s;
       return;
     }
@@ -829,8 +869,9 @@
     const dtRaw = dx * v.ticksPerPx;
     if (drag.kind === 'move') {
       const d = drag;
-      const overLane = yToLane(y, v);
-      if (overLane !== yToLane(d.y0, v) && !d.audio) laneHintOnce(d);
+      // Through the layout map: -1 over an automation lane or the Master row.
+      const overLane = clipLaneAt(layout, y);
+      if (overLane >= 0 && overLane !== d.anchorLane && !d.audio) laneHintOnce(d);
       const a = d.anchor;
       const want = e.altKey ? Math.round(dtRaw) : snap(a.start + dtRaw, BEAT) - a.start;
       const dt = clampGroupDt(d.orig, want);
@@ -893,11 +934,11 @@
 
   function hover(x: number, y: number) {
     const v = view!;
-    if (!p.tracks[yToLane(y, v)]) {
+    if (!p.tracks[clipLaneAt(layout, y)]) {
       cursor = 'default';
       return;
     }
-    const hit = hitTest(boxes, x, y, v);
+    const hit = hitTest(boxes, x, y, v, layout);
     cursor = hit ? (hit.part === 'body' ? 'grab' : 'ew-resize') : 'copy';
   }
 
@@ -982,7 +1023,7 @@
   function dbl(e: MouseEvent) {
     if (!view) return;
     const { x, y } = local(e);
-    const hit = hitTest(boxes, x, y, view);
+    const hit = hitTest(boxes, x, y, view, layout);
     const f = hit && byId.get(hit.id);
     if (!f) return;
     selectTrack(p, engine, f.t.id);
@@ -999,7 +1040,7 @@
     e.preventDefault(); // never the browser's menu over the lanes
     if (!view || drag) return;
     const { x, y } = local(e);
-    const hit = hitTest(boxes, x, y, view);
+    const hit = hitTest(boxes, x, y, view, layout);
     const f = hit && byId.get(hit.id);
     if (!f) {
       menu = null;
@@ -1120,7 +1161,7 @@
     const { x, y } = local(e);
     const raw = Math.max(0, xToTick(Math.max(0, x), v));
     const tick = Math.min(MAX_SONG_TICKS - 1, e.altKey ? Math.round(raw) : snap(raw, BEAT));
-    return { target: dropTarget(p.tracks, y), tick };
+    return { target: dropTarget(p.tracks, layout, y), tick };
   }
 
   function dragOver(e: DragEvent) {
@@ -1290,7 +1331,7 @@
           onlostpointercapture={cancel}
         ></canvas>
       </div>
-      <TrackHeaders {p} {engine} />
+      <TrackHeaders {p} {engine} rows={layout} />
       <!-- Focusable so the timeline keys (KEYBOARD FOCUS RULE) reach it. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
@@ -1314,7 +1355,7 @@
         <canvas bind:this={canvas} class="lanes-cv" data-testid="tl-canvas"></canvas>
         <canvas bind:this={ovCanvas} class="lanes-cv ov" data-testid="tl-playhead-canvas" aria-hidden="true"></canvas>
         {#each overlays as o, lane (o.t.id)}
-          <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{lane * LANE_H}px" title="{o.t.name}: {isPatternTrack(o.t) ? `click to place ${currentPattern(o.t).name}` : 'drop audio files here'}">
+          <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{clipY[lane] ?? 0}px" title="{o.t.name}: {isPatternTrack(o.t) ? `click to place ${currentPattern(o.t).name}` : 'drop audio files here'}">
             {#each o.clips as k (k.c.id)}
               {#if 'sampleId' in k.c}
                 {@const a = k.c}
@@ -1355,6 +1396,20 @@
             {/each}
           </div>
         {/each}
+        <!-- Automation lane rows (AutoLane: own canvas, pointer and keys) and the Master row's own row. -->
+        {#each autoRows as a ('empty' in a ? `new-${a.row.trackId}` : a.lane.id)}
+          {#if 'empty' in a}
+            <div class="lane auto-empty" style:top="{a.row.y}px" style:height="{AUTO_H}px">Choose what to automate with + Lane on the left</div>
+          {:else if view}
+            <AutoLane
+              {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y}
+              testid="auto-lane-{a.key}-{a.k}" label={a.label} suspended={laneView.suspended.has(a.lane.id)} onhint={flashHint}
+            />
+          {/if}
+        {/each}
+        {#each layout.filter((r) => r.kind === 'master') as r (r.trackId)}
+          <div class="lane master-row" data-testid="tl-master-row" style:top="{r.y}px">Master row: lanes for the master and the returns (A)</div>
+        {/each}
       </div>
       <!-- Below the last lane: a drop here makes a new Audio track (tlMath.dropTarget). -->
       <div class="below" class:over={dropHover === 'new'} data-testid="tl-below">
@@ -1365,6 +1420,14 @@
       <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
       <button data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
       <button data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      {#if !p.mixer.automation.length}
+        <!-- The Master row (automation of the master and the returns); it stays once it has a lane. -->
+        <button
+          data-testid="tl-master-toggle" aria-pressed={laneView.master}
+          title={laneView.master ? 'Hide the Master row' : 'Show the Master row: automation lanes for the master, reverb and delay'}
+          onclick={() => { laneView.master = !laneView.master; if (laneView.master) setOpen(MASTER_ROW, true); }}
+        >{laneView.master ? '− Master row' : '+ Master row'}</button>
+      {/if}
       <button data-testid="add-audio-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add an audio track: drop audio files on its lane'} onclick={() => { if (addAudioTrack(p, engine)) p.mixerOpen = false; }}>+ Audio track</button>
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
@@ -1436,6 +1499,7 @@
   .lanes-cv.ov { pointer-events: none; z-index: 1; }
   .lane { position: absolute; left: 0; right: 0; height: var(--lane-h); }
   .clip { position: absolute; top: 2px; height: 23px; }
+  .auto-empty, .master-row { display: flex; align-items: center; padding-left: 8px; font-size: 10px; color: #5d606b; pointer-events: none; }
   .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: #4d505b; font-size: 11px; }
   .below.over { background: rgba(240, 162, 58, 0.12); border-top-color: #f0a23a; color: #ffd98a; }
   .menu .check { display: inline-block; width: 14px; }

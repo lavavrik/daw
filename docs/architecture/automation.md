@@ -263,7 +263,7 @@ changes nothing and sends nothing.
 | `removeLane` | `AUTO_LANE_CLEAR` | no such lane |
 | `setLaneEnabled` | `AUTO_LANE_ENABLE` | no such lane, or no change |
 | `addPoint(p, sink, laneId, {tick, value, hold?})` | one `AUTO_POINT_SET` | 512 points, a tick already used, NaN; the tick is rounded and kept in the song, the value clamped |
-| `movePoints(p, sink, laneId, ids, dTick, dValue)` | the difference | nothing moves. `dTick` is clamped so no moved point reaches an unmoved neighbour or leaves the song: the order never changes. **`dValue` is in knob position** (a fraction of the travel, as the lane is drawn), and each value is clamped to the range |
+| `movePoints(p, sink, laneId, ids, dTick, dValue)` | the difference | nothing moves. `dTick` is clamped so no moved point reaches an unmoved neighbour or leaves the song: the order never changes. **`dValue` is in knob position** (a fraction of the travel, as the lane is drawn), and each value is clamped to the range. **`origin`** (optional, a drag): the moved points' positions at the gesture start, by id; the deltas are then cumulative and apply to it, so clamping on the way loses nothing (a group dragged past the top and back keeps its shape; a glide point at 0 leaves the zero zone in small steps) |
 | `deletePoints`, `setPointShape(…, ids, hold)` | the difference | nothing changes |
 | `drawPoints(p, sink, laneId, samples)` | the difference | nothing usable drawn, or more than 512 points would result. The samples are rounded to whole ticks (the last on a tick wins), clamped, and thinned in knob position to `DRAW_TOLERANCE` (0.5 % of the travel); the result replaces every point between the first and last sample's tick. The stroke's ends are always kept |
 | `overrideLane(p, sink, laneId)` | `AUTO_OVERRIDE` only | no such lane. **Not an edit**: no undo entry, no unsaved mark. The manual move's own `setMix` / `setParam` that follows is the edit, and it sets the base |
@@ -295,3 +295,32 @@ changes nothing and sends nothing.
   is gone, so a selection stays on its point when a delete had compacted
   the idx.
 
+## Timeline (plan 10 Task 3)
+
+- **Layout map.** `tlMath.rowLayout(tracks, open, masterRow)` lists the
+  timeline's rows top to bottom: each track's clip row (`LANE_H` 28 px),
+  then its lanes (`AUTO_H` 48 px) while it is open (the header's **A**;
+  `ui/song/laneView.svelte.ts`, UI state, not saved), an open track without
+  lanes showing one empty lane row (no `laneId`) for "+ Lane"; then the
+  pinned Master row (28 px) and its lanes. Every y question goes through it
+  (`rowAt`, `clipLaneAt`): drawing, clip hit tests and box selection,
+  audio clips' cross-lane moves, drops, and the header column, which
+  renders the same rows. There is no uniform lane height any more.
+- **Rows.** `AutoLane.svelte` draws one lane on its own canvas (editing a
+  lane never redraws the clips): the curve in the owner's colour (Master
+  row: `MASTER_GREY`) at knob position (so a linear segment is a straight
+  line, exp params included), hold points square, the selection white, a
+  disabled lane dimmed, a suspended one grey (`laneView.suspended`, set by
+  Task 4), an empty lane's base value dashed. Point hit tests:
+  `tlMath.pointHit` / `pointBox`.
+- **Gestures.** Click adds a point (1/16, Alt free) and keeps dragging it;
+  a point drag calls `movePoints` with the gesture's `origin` and the
+  cumulative deltas, at most once per animation frame; Cmd/Ctrl-drag
+  previews a stroke and calls `drawPoints` once on release; right-click:
+  Linear / Hold / Delete. history/gestures.ts makes each gesture one undo
+  entry. Keys on a focused lane: Delete, Cmd/Ctrl+A, Escape, ←/→ (1/16,
+  Shift a beat); the rest bubble.
+- **Headers** (`TrackHeaders.svelte`, labels in `autoLabels.ts`): the
+  target ("Filter · Cutoff", "Fader", "Master · Ceiling"; module titles as
+  the rack shows them), the on/off dot, ×, and "+ Lane" on the owner's last
+  lane row, listing `automatableParams` without a lane yet.

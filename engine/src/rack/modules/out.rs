@@ -71,10 +71,9 @@ impl Out {
                 let a = if k < nl { l.data[k][i].abs() } else { 0.0 };
                 let b = if k < nr { r.data[k][i].abs() } else { 0.0 };
                 let v = a.max(b) * level;
-                // `a.max(b)` drops a NaN; an infinite sample never counts.
-                if v > *p && v.is_finite() {
-                    *p = v;
-                }
+                // `a.max(b)` drops a NaN; an infinite (or NaN) peak counts
+                // as 0. Branchless: `v < INF` is false for both.
+                *p = p.max(if v < f32::INFINITY { v } else { 0.0 });
             }
         }
     }

@@ -336,7 +336,7 @@ export class AudioEngine {
 
   /**
    * Live views of visSab (visLayout.ts): the master and strip-tap rings,
-   * voice activity and (Task 2) the scopes. The worklet fills only what the
+   * voice activity and the scope rings. The worklet fills only what the
    * want mask asks for; the frame loop (ui/vis/frameLoop.ts) writes it.
    */
   vis(): VisViews {

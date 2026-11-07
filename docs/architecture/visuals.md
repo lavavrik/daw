@@ -22,7 +22,7 @@ activity), `app/src/audio/{visLayout,visCopy,worklet,engine}.ts`,
    want & 1: output     -> master ring ──┤               │ OR of on-screen
    want & 2: tap        -> tap ring ─────┤ visSab        │ consumers' want
    want & 4: voices (ballistics) ────────┤ (~400 KB)     ▼
-   (want & 8: scopes, Task 2)            └─────────► consumers: frame(now, vis)
+   want & 8: scopes -> scope rings ──────└─────────► consumers: frame(now, vis)
    Atomics.store(head) after the data                 draw canvas / DOM directly
 ```
 

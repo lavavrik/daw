@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { moduleDef } from '../audio/catalog';
 import { toPos } from '../ui/rack/knobMath';
-import { automatableParams, laneCount, laneSetCommand, laneValueAt, nextBreakpoint, pointCommands, thin } from './automation';
+import { automatableParams, laneCount, targetDef, laneSetCommand, laneValueAt, nextBreakpoint, pointCommands, thin } from './automation';
 import { laneCommands } from '../project/commands';
 import { trackPatch } from './patches';
 import { AUTO_KIND, MIX_MASTER, packAutoParam } from '../audio/protocol';
@@ -109,6 +109,15 @@ describe('automation (pure)', () => {
     expect(names(automatableParams('reverb'))).not.toContain('delay_feedback');
     expect(names(automatableParams('delay'))).toEqual(expect.arrayContaining(['delay_feedback', 'delay_high_cut', 'pan']));
     expect(names(automatableParams('delay'))).not.toContain('delay_time');
+  });
+
+  it('a Scope\'s params are never automation targets (they only change the view)', () => {
+    const p = new Project();
+    const synth = addSynthTrack(p, nullSink)!;
+    synth.modules.push({ idx: 30, kind: moduleDef('scope').kind, params: moduleDef('scope').params.map((d) => d.default) });
+    expect(automatableParams(synth).some((x) => x.target.kind === 'rack' && x.target.module === 30)).toBe(false);
+    for (const param of ['time', 'gain_a', 'gain_b']) expect(targetDef(synth, { kind: 'rack', module: 30, param })).toBeNull();
+    expect(automatableParams(synth).some((x) => x.target.param === 'cutoff')).toBe(true);
   });
 
   it('one AUTO_LANE_SET builder: the live lane and its saved form encode the same target', () => {

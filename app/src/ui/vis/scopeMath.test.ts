@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DIVISION_TICKS, findScope, readout, scopeWindow, windowFrames, windowLen } from './scopeMath';
+import { DIVISION_TICKS, createSyncHold, findScope, readout, scopeWindow, windowFrames, windowLen } from './scopeMath';
 import { SCOPE_FLAG, SCOPE_HDR, VIS_GUARD } from '../../audio/visLayout';
 import { VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES } from '../../audio/protocol';
 
@@ -111,19 +111,31 @@ describe('scopeMath', () => {
       { head: 5000, epoch: 0 }, // a long history: the guard bounds it
       { head: 5000, epoch: 5100 }, // the header is newer than the head read
     ];
+    // Grid lines: a whole division still readable, and one whose start is
+    // no longer readable (a view that first looks late in a division): that
+    // one is never captured, so never read.
+    const grids = [[1100, 100], [1900, 900]];
     for (const { head, epoch } of cases) {
-      for (const o of [{ sync: false, trig: 0 }, { sync: false, trig: 1 }, { sync: true, trig: 0 }]) {
+      for (const [o, [prev, last]] of [
+        [{ sync: false, trig: 0 }, grids[0]], [{ sync: false, trig: 1 }, grids[0]],
+        [{ sync: true, trig: 0 }, grids[0]], [{ sync: true, trig: 0 }, grids[1]],
+      ] as const) {
         const { ring, hdr } = slot(head, epoch);
         fill(ring, 0, head, saw(1, 0));
         hdr[SCOPE_HDR.flags] = SCOPE_FLAG.sync | SCOPE_FLAG.grid;
-        hdr[SCOPE_HDR.gridPrev] = head - 1900; // inside the guard: must not be used
-        hdr[SCOPE_HDR.gridLast] = head - 900;
+        hdr[SCOPE_HDR.gridPrev] = head - prev;
+        hdr[SCOPE_HDR.gridLast] = head - last;
         const { p, read } = spyRing(ring);
-        const w = scopeWindow(p, hdr, o, 1024);
+        const w = scopeWindow(p, hdr, o, 1024, createSyncHold());
         const lo = Math.max(Math.min(epoch, head), head - (VIS_SCOPE_RING - VIS_GUARD));
         const allowed = new Set<number>();
         for (let j = lo; j < head; j++) allowed.add(j & M);
         for (const r of read) expect(allowed.has(r), `read entry pos ${r} (epoch ${epoch}, ${JSON.stringify(o)})`).toBe(true);
+        if (w.held) {
+          // Copied from the readable range into the hold (the reads above).
+          expect([epoch, prev, w.start, w.len]).toEqual([0, 1100, 0, 1000]);
+          continue;
+        }
         // The window itself stays inside, too.
         expect(w.start).toBeGreaterThanOrEqual(lo);
         expect(w.start + w.len).toBeLessThanOrEqual(head);
@@ -151,14 +163,50 @@ describe('scopeMath', () => {
     hdr[SCOPE_HDR.flags] = SCOPE_FLAG.sync | SCOPE_FLAG.grid;
     hdr[SCOPE_HDR.gridPrev] = 2950;
     hdr[SCOPE_HDR.gridLast] = 3950;
-    expect(scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000)).toEqual({ start: 2950, len: 1000, triggered: true });
+    const hold = createSyncHold();
+    expect(scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000, hold)).toEqual({ start: 0, len: 1000, triggered: true, held: true });
+    for (let i = 0; i < 1000; i++) expect(hold.buf[i * 4 + 1]).toBe(ring[((2950 + i) & M) * 4 + 1]);
     // Trigger Free does not override the grid: Sync is the timebase.
-    expect(scopeWindow(ring, hdr, { sync: true, trig: 1 }, 1000).start).toBe(2950);
+    expect(scopeWindow(ring, hdr, { sync: true, trig: 1 }, 1000, hold).held).toBe(true);
     // Grid not valid (stopped, or just after a seek): Auto.
     hdr[SCOPE_HDR.flags] = SCOPE_FLAG.sync;
-    const auto = scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000);
-    expect(auto.start).not.toBe(2950);
+    const auto = scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000, hold);
+    expect(auto.held).toBeUndefined();
     expect(auto).toEqual(scopeWindow(ring, hdr, { sync: false, trig: 0 }, 1000));
+    // Without a hold there is nothing to show Sync from: the trigger applies.
+    hdr[SCOPE_HDR.flags] = SCOPE_FLAG.sync | SCOPE_FLAG.grid;
+    expect(scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000).held).toBeUndefined();
+  });
+
+  it('sync stays triggered for every head through the next division', () => {
+    // 1/4 at 120 BPM, decim 24: a line every 1000 entries. The head moves
+    // in block-sized steps; the engine marks each line at the entry being
+    // filled. From grid_last to grid_last + span the view must keep showing
+    // the last whole division, although its start leaves the readable range
+    // (RING - GUARD = 1792 entries) ~800 entries in.
+    const { ring, hdr } = slot(0, 0);
+    hdr[SCOPE_HDR.decim] = 24;
+    const f = saw(24, 0);
+    const hold = createSyncHold();
+    let head = 0;
+    let checked = 0;
+    while (head < 6000) {
+      const next = head + 5 + (head % 3); // ~5 entries per 128-frame block
+      fill(ring, head, next, f);
+      head = next;
+      hdr[SCOPE_HDR.head] = head;
+      const lines = Math.floor((head - 1) / 1000); // lines at 0, 1000, ... already reached
+      hdr[SCOPE_HDR.flags] = SCOPE_FLAG.sync | (lines >= 1 ? SCOPE_FLAG.grid : 0);
+      hdr[SCOPE_HDR.gridPrev] = (lines - 1) * 1000;
+      hdr[SCOPE_HDR.gridLast] = lines * 1000;
+      const w = scopeWindow(ring, hdr, { sync: true, trig: 0 }, 1000, hold);
+      if (lines < 1) continue;
+      expect(w, `head ${head}`).toEqual({ start: 0, len: 1000, triggered: true, held: true });
+      const from = (lines - 1) * 1000;
+      for (const i of [0, 1, 499, 999]) expect(hold.buf[i * 4], `head ${head} entry ${i}`).toBe(f(from + i)[0]);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(800);
   });
 
   it('findScope matches track and module', () => {

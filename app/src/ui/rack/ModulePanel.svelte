@@ -14,7 +14,8 @@
   // Rack passes `scope` = the track's engine slot (with the module idx it
   // finds its scope-bank slot) and the sample rate.
   //
-  // Knobs follow their automation lanes (`owner` = the track: Knob.svelte
+  // Knobs follow their automation lanes (not a Scope's: its params only
+  // change the view) (`owner` = the track: Knob.svelte
   // registers module idx + param name with the app's autoBus) and offer
   // "Automate" on right-click when the param is continuous.
   import type { ModuleDef } from '../../audio/catalog';
@@ -129,7 +130,7 @@
       {/each}
       {#each knobs as { pd, i } (pd.name)}
         <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-          auto={owner ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null} />
+          auto={owner && !scope ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null} />
       {/each}
     </div>
   {/if}

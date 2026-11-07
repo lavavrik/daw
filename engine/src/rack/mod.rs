@@ -214,6 +214,9 @@ pub struct Rack {
     handed: [u32; FX_KINDS],
     /// The track slot this rack belongs to (stamped on its Scopes' slots).
     track: u8,
+    /// Scopes (bit = module idx) whose handed-over slot gets its new owner
+    /// stamp once their add has applied (see `restamp_scopes`).
+    restamp: u32,
     /// Voice activity since the last `take_voices` (see the module docs):
     /// the max Out peak per voice, the MIDI In gates, and whether a
     /// sub-block rendered at all.
@@ -267,6 +270,7 @@ impl Rack {
             released: [0; FX_KINDS],
             handed: [0; FX_KINDS],
             track: 0,
+            restamp: 0,
             vis_level: [0.0; MAX_POLY],
             vis_gate: [0.0; MAX_POLY],
             vis_rendered: false,
@@ -294,6 +298,7 @@ impl Rack {
         self.blk_pos = RACK_BLOCK;
         self.released = [0; FX_KINDS];
         self.handed = [0; FX_KINDS];
+        self.restamp = 0;
         self.vis_level = [0.0; MAX_POLY];
         self.vis_gate = [0.0; MAX_POLY];
         self.vis_rendered = false;
@@ -470,8 +475,10 @@ impl Rack {
             },
             None => (NO_SLOT, false),
         };
-        if kind.fx_kind() == Some(FxKind::Scope) {
-            // The claim (or the handover) names the new owner for the UI.
+        if kind.fx_kind() == Some(FxKind::Scope) && !handed {
+            // The claim names the new owner for the UI. A handed-over slot
+            // is still the old Scope's (it writes the ring until its queued
+            // removal applies): it is restamped when this add applies.
             fx.stamp_scope(fx_slot, self.track as usize, idx);
         }
         self.pending[idx] = Some(kind);
@@ -524,8 +531,24 @@ impl Rack {
         Some(s as u8)
     }
 
-    /// Hand the FX-pool slots of modules that are gone back to `fx`.
+    /// Stamp the new owner on the slots of handed-over Scopes whose add has
+    /// applied (`restamp`), so the view switches only when the old Scope has
+    /// stopped writing.
+    fn restamp_scopes(&mut self, fx: &mut FxPool) {
+        let mut m = std::mem::take(&mut self.restamp);
+        while m != 0 {
+            let i = m.trailing_zeros() as usize;
+            m &= m - 1;
+            if let Some((FxKind::Scope, s)) = self.fx_slot(i) {
+                fx.stamp_scope(s, self.track as usize, i);
+            }
+        }
+    }
+
+    /// Hand the FX-pool slots of modules that are gone back to `fx` (and
+    /// stamp handed-over Scopes that now run).
     pub fn reclaim(&mut self, fx: &mut FxPool) {
+        self.restamp_scopes(fx);
         for k in FxKind::ALL {
             let mut m = std::mem::take(&mut self.released[k as usize]);
             while m != 0 {
@@ -715,6 +738,9 @@ impl Rack {
                     let mut m = Module::with_fx_slot(kind, self.sr, fx_slot);
                     if handed {
                         m.reset(); // re-zero the slot it took over
+                        if kind == ModuleKind::Scope && i < 32 {
+                            self.restamp |= 1 << i; // its owner stamp, now
+                        }
                     }
                     slot.module = Some(m);
                     slot.params = [0.0; MAX_PARAMS];
@@ -958,6 +984,7 @@ impl Rack {
         }
         if self.queued > 0 && self.gain <= 0.0 {
             self.apply_queue();
+            self.restamp_scopes(fx);
         }
     }
 }

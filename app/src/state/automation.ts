@@ -149,15 +149,22 @@ export function targetDef(owner: AutoOwner, target: AutoTarget): AutoDef | null 
   }
   if (isMasterChannel(owner) || owner.kind !== 'synth') return null;
   const m = owner.modules.find((x) => x.idx === target.module);
-  const def = m ? moduleDef(m.kind).params.find((d) => d.name === target.param) : undefined;
+  const def = m && rackAutomatable(m.kind) ? moduleDef(m.kind).params.find((d) => d.name === target.param) : undefined;
   return def && !def.integer ? def : null;
+}
+
+/** Can a module of `kind` have lanes at all? Not a Scope: its params only
+ * change what it draws (plan 12; the engine's Shape::rack refuses them). */
+function rackAutomatable(kind: number): boolean {
+  return moduleDef(kind).id !== 'scope';
 }
 
 /**
  * Every target `owner` can automate, for the lane picker: the mixer params
  * its channel takes, in catalog order, then (synth tracks) each module's in
  * rack order, by catalog name. Non-integer params only: never mute, solo,
- * the on/off switches, the delay division, ping-pong, wave, mode, voices.
+ * the on/off switches, the delay division, ping-pong, wave, mode, voices;
+ * and none of a Scope's.
  */
 export function automatableParams(owner: AutoOwner): { target: AutoTarget; def: AutoDef }[] {
   const out: { target: AutoTarget; def: AutoDef }[] = [];
@@ -165,6 +172,7 @@ export function automatableParams(owner: AutoOwner): { target: AutoTarget; def: 
   for (const def of MIX_PARAMS) if (!def.integer && accepts(def, ch.kind, ch.index)) out.push({ target: { kind: 'mix', param: def.name }, def });
   if (!isMasterChannel(owner) && owner.kind === 'synth') {
     for (const m of [...owner.modules].sort((a, b) => a.idx - b.idx)) {
+      if (!rackAutomatable(m.kind)) continue;
       for (const def of moduleDef(m.kind).params) if (!def.integer) out.push({ target: { kind: 'rack', module: m.idx, param: def.name }, def });
     }
   }

@@ -710,8 +710,11 @@ fn scope_bank_stamps_owners() {
     ok(c.disconnect((1, 0))); // queued behind its fade
     ok(c.remove_module(2)); // queued behind it
     ok(c.add_module(12, ModuleKind::Scope, &mut fx)); // the bank is full: takes slot 0 over
-    assert_eq!(owner(&fx, 0), (1, 12), "restamped at the handover");
+    // The old Scope still writes the ring until its removal applies: the
+    // slot keeps its owner until then, and is restamped when the add applies.
+    assert_eq!(owner(&fx, 0), (1, 2), "the old owner until the queue applies");
     render(&mut c, &mut fx, 4800);
+    assert_eq!(owner(&fx, 0), (1, 12), "restamped when the handed-over add applied");
     assert_eq!(c.fx_slot(12), Some((FxKind::Scope, 0)));
     assert_eq!(owner(&fx, 0), (1, 12), "the old owner's release was absorbed");
     assert_eq!(fx.in_use(FxKind::Scope), 8);

@@ -24,8 +24,9 @@
 //! which the worklet mirrors into `visSab` (`engine_scopes`,
 //! `engine_scope_hdr`). The headers live beside the bank, not in it, so a
 //! slot's `head` keeps counting across owners (zeroing a reused ring never
-//! moves it backwards). [`stamp_scope`](FxPool::stamp_scope) (on the claim
-//! and on a handover) writes the owner (track slot, module idx) and moves
+//! moves it backwards). [`stamp_scope`](FxPool::stamp_scope) (on the claim,
+//! and for a handover when the new Scope's add applies, i.e. once the old
+//! one has stopped writing) writes the owner (track slot, module idx) and moves
 //! `epoch` to the head; a release writes −1 as the owner. A scope ring is
 //! exactly one [`CLEAR_CHUNK`], so a reused one is zeroed in one call.
 //!
@@ -257,8 +258,7 @@ impl FxPool {
     }
 
     /// Scope slot `slot` now belongs to module `module` of track slot
-    /// `track` (on its claim, and again when a handover gives it a new
-    /// owner): the owner fields are written and `epoch` moves to the head,
+    /// `track` (on its claim, and again when a handed-over add applies): the owner fields are written and `epoch` moves to the head,
     /// so readers never show the previous owner's entries. Ignored for a
     /// slot out of range.
     pub fn stamp_scope(&mut self, slot: u8, track: usize, module: usize) {

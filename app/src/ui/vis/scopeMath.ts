@@ -13,7 +13,14 @@
 // Window choice (`scopeWindow`):
 //   - Sync with the grid valid: the last whole division, [grid_prev,
 //     grid_last) (Sync is the timebase, so the trigger choice does not
-//     override it); a grid not valid (stopped, after a seek) falls back to:
+//     override it). A division is up to VIS_SCOPE_WINDOW entries, so late
+//     in the next one its start has left the readable range (RING - GUARD
+//     = 1792 < 2 divisions): the view keeps a **hold** (`createSyncHold`),
+//     a preallocated copy of the last whole division taken the moment
+//     grid_last changes (it is then at most a block old, so readable), and
+//     draws Sync from it (`held`) until the next line: no fallback, no
+//     flicker. A grid not valid (stopped, after a seek), a division not
+//     captured, or no hold falls back to:
 //   - Trigger Free: the latest `len` entries;
 //   - Trigger Auto: the latest rising zero crossing of A's mid
 //     ((min + max) / 2) that still has `len` entries after it. A Schmitt
@@ -42,6 +49,64 @@ export interface ScopeWin {
   len: number;
   /** Locked to a crossing or the sync grid (false: free-running). */
   triggered: boolean;
+  /** Sync: the entries are the hold's `buf` (from 0), not the ring. */
+  held?: true;
+}
+
+/** Entries a hold keeps: one division (≤ VIS_SCOPE_WINDOW, + rounding). */
+const HOLD_CAP = VIS_SCOPE_WINDOW + 2;
+
+/**
+ * The last whole sync division, copied out of the ring (see the file
+ * comment). Preallocated: make one per view, reset `has` when the view's
+ * slot changes.
+ */
+export interface SyncHold {
+  /** HOLD_CAP entries × 4 f32, entry i at i × 4 (the ring's layout). */
+  buf: Float32Array;
+  /** Entries held. */
+  len: number;
+  /** The grid_last it was taken at. */
+  last: number;
+  /** Holds a division. */
+  has: boolean;
+}
+
+export function createSyncHold(): SyncHold {
+  return { buf: new Float32Array(HOLD_CAP * 4), len: 0, last: 0, has: false };
+}
+
+/**
+ * Keep `hold` on the slot's last whole division: copy [grid_prev,
+ * grid_last) when grid_last moved (or nothing is held) and the division is
+ * readable; drop it when the grid is not valid. Returns whether it holds
+ * one. Reads only readable entries.
+ */
+export function holdDivision(ring: Float32Array, hdr: Int32Array, hold: SyncHold): boolean {
+  if (!(hdr[SCOPE_HDR.flags] & SCOPE_FLAG.grid)) return (hold.has = false);
+  const last = hdr[SCOPE_HDR.gridLast];
+  if (hold.has && last === hold.last) return true;
+  const { head, n } = readable(hdr);
+  const lo = (head - n) | 0;
+  let prev = hdr[SCOPE_HDR.gridPrev];
+  let span = (last - prev) | 0;
+  if (span <= 0 || ((prev - lo) | 0) < 0 || ((head - last) | 0) < 0) return (hold.has = false);
+  if (span > HOLD_CAP) {
+    prev = (last - HOLD_CAP) | 0;
+    span = HOLD_CAP;
+  }
+  const buf = hold.buf;
+  for (let i = 0; i < span; i++) {
+    const at = ((prev + i) & MASK) << 2;
+    const o = i << 2;
+    buf[o] = ring[at];
+    buf[o + 1] = ring[at + 1];
+    buf[o + 2] = ring[at + 2];
+    buf[o + 3] = ring[at + 3];
+  }
+  hold.len = span;
+  hold.last = last;
+  return (hold.has = true);
 }
 
 /**
@@ -74,18 +139,15 @@ const midA = (ring: Float32Array, j: number) => {
 
 /**
  * Which `len` entries to draw (see the file comment). `ring`: the slot's
- * VIS_SCOPE_RING × 4 floats; `hdr`: its VIS_SCOPE_HDR fields. The window
- * never reaches outside the readable range (`len` shrinks to what there is).
+ * VIS_SCOPE_RING × 4 floats; `hdr`: its VIS_SCOPE_HDR fields; `hold`: the
+ * view's sync hold (Sync needs one). A `held` window is read from
+ * `hold.buf`; any other never reaches outside the readable range (`len`
+ * shrinks to what there is).
  */
-export function scopeWindow(ring: Float32Array, hdr: Int32Array, o: ScopeOpts, len: number): ScopeWin {
+export function scopeWindow(ring: Float32Array, hdr: Int32Array, o: ScopeOpts, len: number, hold?: SyncHold): ScopeWin {
+  if (o.sync && hold && holdDivision(ring, hdr, hold)) return { start: 0, len: hold.len, triggered: true, held: true };
   const { head, n } = readable(hdr);
   const lo = (head - n) | 0;
-  if (o.sync && hdr[SCOPE_HDR.flags] & SCOPE_FLAG.grid) {
-    const prev = hdr[SCOPE_HDR.gridPrev];
-    const last = hdr[SCOPE_HDR.gridLast];
-    const span = (last - prev) | 0;
-    if (span > 0 && ((prev - lo) | 0) >= 0 && ((head - last) | 0) >= 0) return { start: prev, len: span, triggered: true };
-  }
   len = Math.max(0, Math.min(Math.floor(len), n));
   const free: ScopeWin = { start: (head - len) | 0, len, triggered: false };
   if (o.trig === 1 || len === 0) return free;

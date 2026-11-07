@@ -328,7 +328,9 @@ two-input oscilloscope drawn live in its own panel (`ScopeView.svelte`).
   locks to the latest rising zero crossing of A (a Schmitt trigger with 2 %
   hysteresis; none: free-running, tagged *no trig*); Free shows the latest
   entries; Sync while playing shows exactly the last whole division,
-  between the engine's grid marks. XY plots A against B. A click freezes
+  between the engine's grid marks (copied out of the ring when its line
+  passes and held until the next one: late in a division its start is no
+  longer readable). Scope params are not automatable (view only). XY plots A against B. A click freezes
   the view (UI only, not saved).
 - **The sink rule.** No outputs, so nothing can be cabled *from* a Scope
   and it can never change the sound. Its edits skip the declick (see
@@ -349,7 +351,8 @@ two-input oscilloscope drawn live in its own panel (`ScopeView.svelte`).
   released, handed over and zeroed exactly like the effects' (a scope ring
   is one `CLEAR_CHUNK`: one sub-block). The claim stamps the owner (the
   rack's track slot, the module idx) on the slot's header, a handover
-  restamps it, a release writes −1; the view finds its slot by that owner.
+  restamps it when the new Scope's add applies (until then the old one
+  still writes the ring), a release writes −1; the view finds its slot by that owner.
   The ninth Scope is refused (`ERR_OUT_OF_MEMORY`) and greyed in the add
   menu with "All 8 scopes in use". The header's `head` lives beside the
   bank, so it keeps counting across owners. The worklet mirrors owned slots

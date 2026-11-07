@@ -23,7 +23,7 @@
   import { SCOPE_FLAG, SCOPE_HDR, VIS_HDR, VIS_WANT, type VisViews } from '../../audio/visLayout';
   import { VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES } from '../../audio/protocol';
   import { frameLoop } from '../vis/frameLoop';
-  import { findScope, readout, scopeWindow, windowFrames, windowLen } from '../vis/scopeMath';
+  import { createSyncHold, findScope, readout, scopeWindow, windowFrames, windowLen } from '../vis/scopeMath';
 
   let { track, idx, params, sampleRate = 48000, tempo = 120 }: {
     /** The synth track's engine slot. */
@@ -128,13 +128,13 @@
       }
       c.stroke();
     } else {
-      // The band: maxes left to right, then mins back.
-      const dx = W / len;
+      // The band: maxes left to right, then mins back, both at entry i's x.
+      const dx = W / Math.max(1, len - 1);
       for (let i = 0; i < len; i++) {
         const v = ring[(((start + i) & MASK) << 2) + off + 1];
         if (v * gain > 1) over = true;
         if (i === 0) c.moveTo(0, y(v));
-        c.lineTo((i + 1) * dx, y(v));
+        else c.lineTo(i * dx, y(v));
       }
       for (let i = len - 1; i >= 0; i--) {
         const v = ring[(((start + i) & MASK) << 2) + off];
@@ -173,10 +173,19 @@
     c.globalAlpha = alpha;
   }
 
+  // Sync draws the last whole division from this copy (scopeMath.ts: its
+  // start leaves the readable range late in the next division).
+  const hold = createSyncHold();
+  let holdSlot = -1;
+
   function frame(now: number, v: VisViews) {
     if (frozen) return;
     bind(v);
     const s = findScope(hdrs, track, idx);
+    if (s !== holdSlot) {
+      hold.has = false;
+      holdSlot = s;
+    }
     const hdr = s >= 0 ? slotHdr[s] : null;
     const head = hdr ? Atomics.load(hdr, SCOPE_HDR.head) : 0;
     if (s !== last[1] || head !== last[0]) lastMove = now;
@@ -214,10 +223,11 @@
         const w = scopeWindow(ring, hdr, { sync: false, trig: 1 }, len);
         xy(c, ring, w.start, w.len, params[3] ?? 1, params[4] ?? 1, alpha);
       } else {
-        const w = scopeWindow(ring, hdr, { sync, trig }, len);
+        const w = scopeWindow(ring, hdr, { sync, trig }, len, hold);
+        const src = w.held ? hold.buf : ring;
         if (w.len > 0) {
-          trace(c, ring, w.start, w.len, 0, params[3] ?? 1, A, decim === 1);
-          if (hdr[SCOPE_HDR.flags] & SCOPE_FLAG.b) trace(c, ring, w.start, w.len, 2, params[4] ?? 1, B, decim === 1);
+          trace(c, src, w.start, w.len, 0, params[3] ?? 1, A, decim === 1);
+          if (hdr[SCOPE_HDR.flags] & SCOPE_FLAG.b) trace(c, src, w.start, w.len, 2, params[4] ?? 1, B, decim === 1);
         }
         if (!tag && trig === 0 && !w.triggered && w.len > 0) tag = 'no trig';
       }

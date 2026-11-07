@@ -138,10 +138,12 @@ impl Shape {
         (p.accepts(ch) && !p.integer).then_some(Shape { min: p.min, max: p.max, exp: p.curve == mixcat::Curve::Exp })
     }
 
-    /// Param `param` of a `kind` module, if it is automatable.
+    /// Param `param` of a `kind` module, if it is automatable: not an
+    /// integer (choice) param, and not a Scope's (plan 12: they only change
+    /// what it draws).
     pub fn rack(kind: ModuleKind, param: usize) -> Option<Shape> {
         let p = spec(kind).params.get(param)?;
-        (!p.integer).then_some(Shape { min: p.min, max: p.max, exp: p.curve == RackCurve::Exp })
+        (!p.integer && kind != ModuleKind::Scope).then_some(Shape { min: p.min, max: p.max, exp: p.curve == RackCurve::Exp })
     }
 
     /// Is `v` in the range?
@@ -1017,6 +1019,15 @@ mod tests {
         }
         o.push_str("\n  ]\n}\n");
         o
+    }
+
+    #[test]
+    fn scope_params_are_not_automatable() {
+        // A Scope's params only change what it draws (plan 12): no lanes.
+        for p in 0..spec(ModuleKind::Scope).params.len() {
+            assert!(Shape::rack(ModuleKind::Scope, p).is_none(), "scope param {p}");
+        }
+        assert!(Shape::rack(ModuleKind::Osc, 3).is_some(), "osc fine still is");
     }
 
     /// `reference` shares `Shape` with the code under test, so pin the curve

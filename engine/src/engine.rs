@@ -23,6 +23,31 @@
 //! calls `AudioTracks::jump`, and the next piece chases. Every `ADD_*_TRACK`
 //! and `REMOVE_TRACK` clears the slot's audio clips with a 2 ms fade.
 //!
+//! # Automation
+//! `AUTO_LANE_SET` / `AUTO_POINT_SET` / `AUTO_POINT_REMOVE` /
+//! `AUTO_LANE_CLEAR` / `AUTO_LANE_ENABLE` / `AUTO_OVERRIDE` edit the 64
+//! preallocated lanes (`automation.rs`). A lane's target must exist and be
+//! automatable: a non-integer mixer param its channel accepts (a track
+//! channel needs a track in its slot), or a non-integer param of a module
+//! of a synth slot's patch (queued edits included). Anything else is
+//! `ERR_BAD_VALUE`, and so is a second lane on the same target.
+//! * Each block, `process` splits the block into its loop-wrap pieces once
+//!   and both renders them and evaluates the lanes over them
+//!   (`Automation::frame`); the mixer and the racks apply the frame.
+//! * `MIX_SET` / `RACK_SET_PARAM` on an automated target store the lane's
+//!   base (the mixer keeps it as its stored value; the rack param is left
+//!   to the lane while the lane drives it), heard only while the lane does
+//!   not apply. After every command, a lane that drove its target but no
+//!   longer applies (Pattern mode, disabled, suspended, cleared, no points,
+//!   re-targeted) gets its base re-applied with the normal smoothing.
+//! * Play, Stop, a seek, a mode switch and a loop set behind the playhead
+//!   are jumps (`Automation::jump`): overrides end and the lanes step to the
+//!   new position. A loop wrap does the same inside `frame`.
+//! * Lifecycle: `REMOVE_TRACK` and every `ADD_*_TRACK` clear the slot's
+//!   lanes (strip and rack), `RACK_REMOVE_MODULE` (even when queued behind
+//!   a fade) the module's, `RACK_CLEAR` the rack's, `RESET_ALL` all of them.
+//!   Nothing is re-applied: the target is gone or reset.
+//!
 //! # Live input
 //! `NOTE_ON`/`NOTE_OFF`/`PITCH_BEND`/`MOD_WHEEL`/`SUSTAIN` go to the input
 //! track's rack (`SET_INPUT_TRACK`). With no input track, or one that is not a
@@ -118,6 +143,7 @@
 use crate::arena::SampleArena;
 use crate::arrangement::{Arrangement, Clip, Timeline};
 use crate::audio_track::AudioTracks;
+use crate::automation::{Automation, Shape, Target};
 use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool, SampleView};
@@ -125,7 +151,7 @@ use crate::metronome::Metronome;
 use crate::mixer::{ClickClip, Key, Mixer, StereoBufs};
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
-use crate::transport::{events_in_window, tick_to_offset, Mode, Transport};
+use crate::transport::{events_in_window, tick_to_offset, Mode, Piece, Transport};
 use crate::{
     BAR_TICKS, MAX_BLOCK, MAX_KEYS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, MIX_MASTER, MIX_METER_STRIDE, PPQ,
     TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN, TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING,
@@ -230,6 +256,10 @@ pub struct Engine {
     /// The last output sample (L, R), and the fade over an engine reset.
     last_out: (f32, f32),
     reset_fade: ResetFade,
+    /// Automation lanes and the current block's values.
+    automation: Automation,
+    /// The current block's loop-wrap pieces (`MAX_BLOCK + 2`, preallocated).
+    pieces: Vec<Piece>,
 }
 
 impl Engine {
@@ -279,6 +309,8 @@ impl Engine {
                 left: 0,
                 len: ((RESET_FADE_SECONDS * sample_rate).round() as u32).max(1),
             },
+            automation: Automation::new(),
+            pieces: vec![Piece::default(); MAX_BLOCK + 2],
         }
     }
 
@@ -291,6 +323,7 @@ impl Engine {
         // reset is part of that sample).
         let (l, r) = self.last_out;
         self.reset_fade = ResetFade { l, r, left: self.reset_fade.len, ..self.reset_fade };
+        self.automation.reset_all(); // no target re-applied: everything resets
         self.drums.reset_all();
         self.synths.reset_all(); // racks hard-cleared, then the FX pool freed
         self.audio.reset_all();
@@ -341,6 +374,7 @@ impl Engine {
             Ok(cmd) => self.handle(cmd),
             Err(e) => e,
         };
+        self.settle_auto();
         if code != protocol::OK {
             self.telemetry[TELEMETRY_LAST_ERROR] = code as f64;
         }
@@ -485,6 +519,61 @@ impl Engine {
         self.audio.jump();
     }
 
+    /// Every lane that drove its target but no longer applies gets its base
+    /// re-applied (see "Automation" in the module docs).
+    fn settle_auto(&mut self) {
+        let song = self.transport.mode == Mode::Song;
+        while let Some((target, base)) = self.automation.stopped(song) {
+            self.reapply_base(target, base);
+        }
+    }
+
+    /// A lane stopped driving `target`: its base plays again, with the
+    /// normal smoothing.
+    fn reapply_base(&mut self, target: Target, base: f32) {
+        match target {
+            Target::Mix { ch, id } => self.mixer.release_auto(ch as usize, id as u32),
+            Target::Rack { slot, module, param } => {
+                if let Ok(rack) = self.rack(slot as usize) {
+                    let _ = rack.set_param(module as usize, param as usize, base);
+                }
+            }
+            Target::None => {}
+        }
+    }
+
+    /// A lane target's knob space and current (base) value, if it exists
+    /// and is automatable; else `ERR_BAD_VALUE`.
+    fn auto_target(&mut self, target: Target) -> Result<(Shape, f32), i32> {
+        let bad = protocol::ERR_BAD_VALUE;
+        match target {
+            Target::None => Ok((Shape { min: 0.0, max: 0.0, exp: false }, 0.0)),
+            Target::Mix { ch, id } => {
+                let (ch, id) = (ch as usize, id as u32);
+                if ch < MAX_TRACKS && self.kind(ch) == SlotKind::Empty {
+                    return Err(bad);
+                }
+                let shape = Shape::mix(ch, id).ok_or(bad)?;
+                Ok((shape, self.mixer.param(ch, id)))
+            }
+            Target::Rack { slot, module, param } => {
+                let (module, param) = (module as usize, param as usize);
+                if self.kind(slot as usize) != SlotKind::Synth {
+                    return Err(bad);
+                }
+                let rack = self.synths.rack_mut(slot as usize).ok_or(bad)?;
+                let shape = Shape::rack(rack.pending_kind(module).ok_or(bad)?, param).ok_or(bad)?;
+                Ok((shape, rack.pending_param(module, param).ok_or(bad)?))
+            }
+        }
+    }
+
+    /// Clear the automation lanes of track slot `slot` (its track was
+    /// removed or replaced).
+    fn clear_slot_lanes(&mut self, slot: usize) {
+        self.automation.clear_where(|t| t.on_slot(slot));
+    }
+
     /// Record `slot`'s kind (`get_mut`-guarded: never panics).
     fn set_kind(&mut self, slot: usize, kind: SlotKind) {
         if let Some(k) = self.kinds.get_mut(slot) {
@@ -544,6 +633,7 @@ impl Engine {
             // position, which becomes the song start.
             Command::Play { count_in } => {
                 if !self.transport.playing {
+                    self.automation.jump();
                     match self.transport.mode {
                         Mode::Pattern => self.transport.ticks = -count_in,
                         Mode::Song => {
@@ -567,6 +657,7 @@ impl Engine {
                 self.drums.fade_all(); // no hard cuts: 2 ms fade-out
                 self.synths.release_sequenced(); // releases, never AllOff
                 self.audio.jump(); // audio clips: hold-and-fade over 2 ms
+                self.automation.jump(); // lanes step to the stop position
                 self.sync_transport_telemetry();
             }
             // Applies from the next block; the playhead position is unchanged.
@@ -582,6 +673,7 @@ impl Engine {
                 self.drums.add_track(slot);
                 self.set_kind(slot, SlotKind::Drum);
                 self.clear_clips(slot);
+                self.clear_slot_lanes(slot);
                 self.mixer.slot_added(slot, was_empty);
             }
             // Empty patch (a drum track there fades out first; a synth patch
@@ -594,6 +686,7 @@ impl Engine {
                 self.synths.add_track(slot);
                 self.set_kind(slot, SlotKind::Synth);
                 self.clear_clips(slot);
+                self.clear_slot_lanes(slot);
                 self.mixer.slot_added(slot, was_empty);
             }
             // An Audio track: no patterns, rows or rack. The old track (any
@@ -604,6 +697,7 @@ impl Engine {
                 self.clear_slot(slot);
                 self.set_kind(slot, SlotKind::Audio);
                 self.clear_clips(slot);
+                self.clear_slot_lanes(slot);
                 self.mixer.slot_added(slot, was_empty);
             }
             // Audio clips (Audio slots only): SOURCE and GAIN stage, SET
@@ -626,6 +720,7 @@ impl Engine {
                 self.clear_slot(slot);
                 self.drums.remove_track(slot);
                 self.clear_clips(slot);
+                self.clear_slot_lanes(slot);
                 self.mixer.slot_removed(slot);
             }
             // Row/step edits on an inactive slot succeed and just store state.
@@ -674,13 +769,33 @@ impl Engine {
                 self.rack(slot)?; // synth slot check
                 rack_code(self.synths.add_module(slot, module, kind).ok_or(protocol::ERR_BAD_INDEX)?)?
             }
-            Command::RackRemoveModule { slot, module } => rack_code(self.rack(slot)?.remove_module(module))?,
+            // The module's lanes go at once, even when the removal is queued
+            // behind the rack's fade (nothing drives a freed module slot).
+            Command::RackRemoveModule { slot, module } => {
+                rack_code(self.rack(slot)?.remove_module(module))?;
+                self.automation.clear_where(
+                    |t| matches!(t, Target::Rack { slot: s, module: m, .. } if s as usize == slot && m as usize == module),
+                );
+            }
             Command::RackConnect { slot, from, to } => rack_code(self.rack(slot)?.connect(from, to))?,
             Command::RackDisconnect { slot, to } => rack_code(self.rack(slot)?.disconnect(to))?,
+            // On an automated param: the lane's base. While the lane drives
+            // the param, the rack keeps the lane's value.
             Command::RackSetParam { slot, module, param, value } => {
+                let target = Target::Rack { slot: slot as u8, module: module as u8, param: param as u8 };
+                if let Some(lane) = self.automation.find(target) {
+                    rack_code(self.rack(slot)?.check_param(module, param, value))?;
+                    self.automation.set_base(lane, value);
+                    if self.automation.lane(lane).is_some_and(|l| l.applied()) {
+                        return Ok(());
+                    }
+                }
                 rack_code(self.rack(slot)?.set_param(module, param, value))?
             }
-            Command::RackClear { slot } => self.rack(slot)?.clear(),
+            Command::RackClear { slot } => {
+                self.rack(slot)?.clear();
+                self.automation.clear_where(|t| matches!(t, Target::Rack { slot: s, .. } if s as usize == slot));
+            }
             // Note pattern edits act on the current pattern (synth slots only;
             // `Synths` returns false for an inactive track, which a synth slot
             // never is).
@@ -780,6 +895,7 @@ impl Engine {
                 if mode != self.transport.mode {
                     self.synths.release_sequenced();
                     self.audio.jump(); // audio tracks: fade out (Pattern), chase (Song)
+                    self.automation.jump(); // lanes: base (Pattern), chase (Song)
                     self.transport.mode = mode;
                     match mode {
                         Mode::Song => {
@@ -808,10 +924,17 @@ impl Engine {
                     self.transport.ticks = self.transport.loop_start;
                     self.synths.release_song();
                     self.latch_all_clips();
+                    self.automation.jump();
                     self.sync_transport_telemetry();
                 }
             }
-            Command::MixSet { channel, param, value } => self.mixer.set(channel, param, value),
+            // On an automated param this stores the base (see "Automation").
+            Command::MixSet { channel, param, value } => {
+                if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: param as u8 }) {
+                    self.automation.set_base(lane, value);
+                }
+                self.mixer.set(channel, param, value)
+            }
             // The source must exist: a track key needs a track there, a row
             // key a drum track (`ERR_BAD_INDEX` otherwise).
             Command::MixSetKey { channel, key } => {
@@ -823,12 +946,20 @@ impl Engine {
                 found(ok)?;
                 self.mixer.set_key(channel, key)?;
             }
-            Command::MixReset { channel } => self.mixer.reset_channel(channel),
+            Command::MixReset { channel } => {
+                for p in crate::mixer::catalog::PARAMS.iter().filter(|p| p.accepts(channel)) {
+                    if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: p.id as u8 }) {
+                        self.automation.set_base(lane, p.default);
+                    }
+                }
+                self.mixer.reset_channel(channel)
+            }
             Command::ResetAll => self.reset_all()?,
             Command::Seek { ticks } => {
                 if self.transport.mode == Mode::Song {
                     self.transport.ticks = ticks as f64;
                     self.transport.song_start = ticks as f64;
+                    self.automation.jump(); // playing or stopped: lanes chase
                     if self.transport.playing {
                         // Also cuts every audio voice (`latch_all_clips`).
                         self.synths.release_song();
@@ -836,6 +967,32 @@ impl Engine {
                     }
                     self.sync_transport_telemetry();
                 }
+            }
+            // Automation lanes (see "Automation" in the module docs).
+            Command::AutoLaneSet { lane, target } => {
+                let (shape, base) = self.auto_target(target)?;
+                self.automation.check_target(lane, target, shape)?;
+                if self.automation.lane(lane).map(|l| l.target()) != Some(target) {
+                    if let Some((old, b)) = self.automation.release(lane) {
+                        self.reapply_base(old, b);
+                    }
+                    self.automation.set_target(lane, target, shape, base);
+                }
+            }
+            Command::AutoPointSet { lane, idx, tick, value, hold } => {
+                self.automation.set_point(lane, idx, tick, value, hold)?
+            }
+            Command::AutoPointRemove { lane, idx } => self.automation.remove_point(lane, idx),
+            Command::AutoLaneClear { lane } => {
+                if let Some((old, b)) = self.automation.release(lane) {
+                    self.reapply_base(old, b);
+                }
+                self.automation.clear(lane);
+            }
+            Command::AutoLaneEnable { lane, on } => self.automation.set_enabled(lane, on),
+            Command::AutoOverride { lane } => {
+                let playing = self.transport.playing && self.transport.mode == Mode::Song;
+                self.automation.suspend(lane, self.transport.ticks, playing);
             }
         }
         Ok(())
@@ -860,25 +1017,26 @@ impl Engine {
         self.keys.clear(n);
         self.click.clear(n);
         self.rendered = 0;
-        // Render in pieces split at a Song-mode loop wrap (usually one piece).
+        // Split the block at Song-mode loop wraps (usually one piece). The
+        // same pieces are rendered and carry the automation lanes, so a wrap
+        // re-seeks both. A wrap piece may be empty (see `Transport::split`);
+        // the cap only guards against a degenerate loop, never hit in
+        // practice.
         let spt = self.transport.samples_per_tick(self.sample_rate);
-        // A wrap piece may be empty (see `Transport::split`); the cap only
-        // guards against a degenerate loop, never hit in practice.
         let (mut tick, mut frames) = self.transport.anchored(spt);
         let (mut from, mut t) = (0, self.transport.ticks);
+        let mut count = 0;
         for _ in 0..n + 2 {
             let (len, end, wraps) = self.transport.split(t, n - from, spt);
             let to = (from + len).min(n);
             // Without a wrap, the window ends at the anchored (drift-free) tick.
             let end = if wraps { end } else { tick + (frames + len as f64) / spt };
-            if to > from {
-                self.render_piece(t, end, spt, from, to);
+            if let Some(p) = self.pieces.get_mut(count) {
+                *p = Piece { from, to, t0: t, t1: end, spt, wraps };
+                count += 1;
             }
             from = to;
             if wraps {
-                // Song time jumps back: release clip notes, re-latch swings.
-                self.synths.release_song();
-                self.latch_all_clips();
                 (tick, frames) = (self.transport.loop_start, 0.0);
                 t = tick;
             } else {
@@ -887,6 +1045,20 @@ impl Engine {
             }
             if from >= n {
                 break;
+            }
+        }
+        let (playing, song) = (self.transport.playing, self.transport.mode == Mode::Song);
+        let end = if playing { t } else { self.transport.ticks };
+        self.automation.frame(self.pieces.get(..count).unwrap_or(&[]), end, song, playing, n);
+        for i in 0..count {
+            let Some(&p) = self.pieces.get(i) else { break };
+            if p.to > p.from {
+                self.render_piece(p.t0, p.t1, spt, p.from, p.to);
+            }
+            if p.wraps {
+                // Song time jumps back: release clip notes, re-latch swings.
+                self.synths.release_song();
+                self.latch_all_clips();
             }
         }
         if self.transport.playing {
@@ -901,7 +1073,8 @@ impl Engine {
             }
         }
         let (out_l, out_r) = (&mut left[..n], &mut right[..n]);
-        self.mixer.process(n, &self.tracks, &self.keys, active, self.transport.bpm, out_l, out_r);
+        let auto = self.automation.frame_ref();
+        self.mixer.process(n, &self.tracks, &self.keys, active, self.transport.bpm, out_l, out_r, auto);
         // Click: delayed by the limiter latency (stereo rings of latency + 1:
         // the slot after the write position holds the oldest sample), at the
         // legacy master gain, after the limiter, then the soft clip.
@@ -996,7 +1169,8 @@ impl Engine {
             ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
         };
         let smp = SampleView::new(&self.samples, &self.arena);
-        self.rendered |= self.synths.render_add(&ctx, smp, window, timeline, &mut self.tracks, (from, to));
+        let auto = self.automation.frame_ref();
+        self.rendered |= self.synths.render_add(&ctx, smp, window, timeline, &mut self.tracks, (from, to), auto);
         // Audio tracks: clips at native speed, chased after any jump
         // (Song mode only; tails render in either mode).
         self.rendered |= self.audio.render_add(window, timeline, smp, &mut self.tracks, (from, to));
@@ -1101,6 +1275,9 @@ mod reset_tests;
 
 #[cfg(test)]
 mod audio_tests;
+
+#[cfg(test)]
+mod auto_tests;
 
 #[cfg(test)]
 mod tests {

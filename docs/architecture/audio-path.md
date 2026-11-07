@@ -330,6 +330,11 @@ Consequences worth knowing:
 - **Mixer params** are a catalog (`engine/mixer_catalog.json`, golden-tested
   like the rack catalog): `MIX_SET` (41) validates against it, `MIX_SET_KEY`
   (42) sets a sidechain key, `MIX_RESET` (43) restores a channel's defaults.
+- **Automation (plan 10).** The block is split into its loop-wrap pieces
+  once. The automation lanes are evaluated over those pieces (one value per
+  32-frame sub-block), then the pieces render. The racks apply rack lanes at
+  their sub-block boundaries. While a mixer lane applies, the mixer runs in
+  32-frame chunks. See `docs/architecture/automation.md`.
 
 ## Adding an opcode
 

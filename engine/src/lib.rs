@@ -3,6 +3,7 @@
 pub mod arena;
 pub mod arrangement;
 pub mod audio_track;
+pub mod automation;
 pub mod drums;
 pub mod dsp;
 pub mod engine;
@@ -63,6 +64,13 @@ pub const MAX_CLIPS: usize = 256;
 /// Song length limit in ticks (999 bars): clips end at or before it, and the
 /// loop range and seek positions lie within `0..=MAX_SONG_TICKS`.
 pub const MAX_SONG_TICKS: usize = 999 * 3840;
+
+/// Automation lanes per project (tracks, returns and master together), all
+/// preallocated in `Engine::new` (`automation.rs`).
+pub const MAX_AUTO_LANES: usize = 64;
+/// Breakpoint slots per automation lane; a point is addressed as
+/// `lane * MAX_AUTO_POINTS + idx`.
+pub const MAX_AUTO_POINTS: usize = 512;
 
 /// Distinct drum rows that can be sidechain keys at once (each renders into
 /// its own preallocated key buffer; whole-track keys need no slot).

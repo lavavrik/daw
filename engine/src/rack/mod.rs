@@ -79,6 +79,17 @@
 //! silent and never replays the old ring. Each handover adds one owner and
 //! absorbs exactly one release, whichever of the two owners goes first.
 //!
+//! # Automation
+//! An automation lane on a rack param (`automation.rs`) drives it through
+//! [`Rack::automate`] at sub-block boundaries ([`Rack::render_add_auto`]):
+//! the value is written straight into the running module's param, the
+//! module's normal path (a `smooth` param glides over its 5 ms one-pole,
+//! the others apply at the sub-block), and it never queues behind a
+//! structural fade, so only non-integer params are automatable. A module
+//! whose add or removal is still queued is not driven. The hand-set value
+//! (the base) is kept by the lane; the engine re-applies it with
+//! [`Rack::set_param`] when the lane stops applying.
+//!
 //! **Engine reset.** [`Rack::reset_hard`] drops everything at once (no
 //! fade) and forgets pending releases and handovers, so the engine can then
 //! free the whole pool (`FxPool::release_all`) without a stale release ever
@@ -98,6 +109,7 @@ use fx_pool::{FxKind, FxPool, NO_SLOT};
 use modules::{Ctx, Module, NoteEvent};
 use port::PortBuf;
 
+use crate::automation::{AutoFrame, Target};
 use crate::samples::SampleView;
 
 /// Capacity of the declick edit queue.
@@ -286,6 +298,65 @@ impl Rack {
     /// The FX-pool slot held by the running module at `idx`, if it holds one.
     pub fn fx_slot(&self, idx: usize) -> Option<(FxKind, u8)> {
         self.slots.get(idx)?.module.as_ref()?.fx_slot()
+    }
+
+    /// Kind of module `idx` once every queued edit has applied.
+    pub fn pending_kind(&self, idx: usize) -> Option<ModuleKind> {
+        self.pending.get(idx).copied().flatten()
+    }
+
+    /// Param `param` of module `idx` once every queued edit has applied
+    /// (the running value, then the queue in order: an add resets it to its
+    /// default, a param edit sets it). `None` if there will be no module.
+    pub fn pending_param(&self, idx: usize, param: usize) -> Option<f32> {
+        let kind = self.pending_kind(idx)?;
+        let default = spec(kind).params.get(param)?.default;
+        let slot = self.slots.get(idx)?;
+        let mut v = match slot.module.as_ref() {
+            Some(m) if m.kind() == kind => slot.params.get(param).copied().unwrap_or(default),
+            _ => default,
+        };
+        for e in &self.queue[..self.queued.min(EDIT_QUEUE_LEN)] {
+            match *e {
+                Edit::Add(i, k, ..) if i as usize == idx => {
+                    v = spec(k).params.get(param).map_or(default, |p| p.default);
+                }
+                Edit::SetParam(i, p, x) if i as usize == idx && p as usize == param => v = x,
+                _ => {}
+            }
+        }
+        Some(v)
+    }
+
+    /// The checks of [`set_param`](Rack::set_param) without the edit:
+    /// `OK`, `ERR_BAD_INDEX` or `ERR_BAD_VALUE`.
+    pub fn check_param(&self, idx: usize, param: usize, value: f32) -> i32 {
+        let Some(Some(kind)) = self.pending.get(idx).copied() else { return ERR_BAD_INDEX };
+        let Some(p) = spec(kind).params.get(param) else { return ERR_BAD_INDEX };
+        if !(value >= p.min && value <= p.max) || (p.integer && value.fract() != 0.0) {
+            return ERR_BAD_VALUE;
+        }
+        OK
+    }
+
+    /// Automation: drive non-integer param `param` of module `idx` to
+    /// `value` (clamped to its range) through the module's normal path,
+    /// without queueing. Ignored for a missing module, one whose add or
+    /// removal is still queued, an integer param or a non-finite value.
+    pub fn automate(&mut self, idx: usize, param: usize, value: f32) {
+        let pending = self.pending_kind(idx);
+        let Some(slot) = self.slots.get_mut(idx) else { return };
+        let Some(kind) = slot.module.as_ref().map(Module::kind) else { return };
+        if pending != Some(kind) || !value.is_finite() {
+            return;
+        }
+        let Some(p) = spec(kind).params.get(param) else { return };
+        if p.integer {
+            return;
+        }
+        if let Some(x) = slot.params.get_mut(param) {
+            *x = value.clamp(p.min, p.max);
+        }
     }
 
     /// Current target value of param `param` of running module `idx`.
@@ -681,10 +752,36 @@ impl Rack {
     /// effects borrow their memory from `fx`; slots of modules removed
     /// meanwhile are handed back to it at the end. Sample Players read `smp`.
     pub fn render_add(&mut self, ctx: &Ctx, fx: &mut FxPool, smp: SampleView, left: &mut [f32], right: &mut [f32]) {
+        self.render_add_auto(ctx, fx, smp, left, right, None);
+    }
+
+    /// [`render_add`](Rack::render_add), applying automation at each
+    /// sub-block start: `auto` is the block's frame, this rack's synth slot
+    /// and the block frame of `left[0]`. Each rack entry for the slot that
+    /// applies at the sub-block (`frame / RACK_BLOCK`) sets its value there.
+    pub fn render_add_auto(
+        &mut self,
+        ctx: &Ctx,
+        fx: &mut FxPool,
+        smp: SampleView,
+        left: &mut [f32],
+        right: &mut [f32],
+        auto: Option<(&AutoFrame, usize, usize)>,
+    ) {
         let n = left.len().min(right.len());
         let mut done = 0;
         while done < n {
             if self.blk_pos >= RACK_BLOCK {
+                if let Some((frame, slot, at)) = auto {
+                    let k = (at + done) / RACK_BLOCK;
+                    for e in frame.entries() {
+                        if let (Target::Rack { slot: s, module, param }, true) = (e.target, e.applies(k)) {
+                            if s as usize == slot {
+                                self.automate(module as usize, param as usize, e.value(k));
+                            }
+                        }
+                    }
+                }
                 let mut sub = *ctx;
                 if ctx.playing {
                     sub.ticks = ctx.ticks + done as f64 * ctx.ticks_per_frame;

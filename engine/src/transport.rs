@@ -30,6 +30,20 @@ use crate::PPQ;
 /// Float-noise tolerance (frames) of the loop-wrap split.
 const SNAP_FRAMES: f64 = 1e-6;
 
+/// One piece of a block (`Transport::split`): frames `from..to` render the
+/// song-time window `[t0, t1)` at `spt` samples per tick; `wraps`: the loop
+/// wraps at its end (the next piece starts at `loop_start`). The engine
+/// renders the pieces and evaluates automation over the same list.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Piece {
+    pub from: usize,
+    pub to: usize,
+    pub t0: f64,
+    pub t1: f64,
+    pub spt: f64,
+    pub wraps: bool,
+}
+
 /// What the transport plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {

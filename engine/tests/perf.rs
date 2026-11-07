@@ -34,12 +34,20 @@
 //! arena grows past its reserve) through one long clip with gain and fades;
 //! every loop pass chases all four. Same 40% budget.
 //!
+//! The plan-10 variant ([`spec6_auto`]) runs that same mix (Song mode, 4
+//! Audio tracks) with all 64 automation lanes defined, 512 breakpoints
+//! each, of which 32 apply (16 mixer: faders and sends of the 8 note
+//! tracks, so the mixer runs in sub-block chunks; 16 rack: filter cutoff
+//! and resonance, osc fine tune and detune on the 4 synth tracks) and 32
+//! are disabled. Same 40% budget.
+//!
 //! The rack-effects case ([`fx_chain_track_renders_under_budget`], plan 6)
 //! is one synth track running MIDI In → Osc → Filter → Chorus → Delay →
 //! Reverb → Out with 8 voices held: the per-voice part (Osc, Filter) runs 8
 //! channels, the effects run once on the summed stereo signal.
 
 use daw_engine::arrangement::Timeline;
+use daw_engine::automation::AutoFrame;
 use daw_engine::protocol::*;
 use daw_engine::mixer::catalog::{
     P_COMP_ON, P_COMP_RATIO, P_COMP_THRESHOLD, P_EQ_HIGH, P_EQ_HP, P_EQ_LOW, P_EQ_MID_GAIN, P_EQ_ON, P_FADER, P_SEND_A, P_SEND_B,
@@ -135,16 +143,17 @@ fn four_synth_tracks_render_under_budget() {
     let tpf = bpm as f64 * 960.0 / 60.0 / SR as f64;
     let mut ctx = Ctx { sr: SR, bpm, playing: true, ticks: 0.0, ticks_per_frame: tpf };
     let mut bufs = StereoBufs::new(daw_engine::MAX_TRACKS);
+    let auto = AutoFrame::new();
     let blocks = SECONDS * SR as usize / BLOCK;
 
     // Warm up (caches, branch predictors), then measure.
     for _ in 0..100 {
-        render(&mut s, &mut ctx, tpf, &mut bufs);
+        render(&mut s, &mut ctx, tpf, &mut bufs, &auto);
     }
     let mut peak = 0.0f32;
     let t0 = Instant::now();
     for _ in 0..blocks {
-        render(&mut s, &mut ctx, tpf, &mut bufs);
+        render(&mut s, &mut ctx, tpf, &mut bufs, &auto);
         peak = peak.max(bufs.pair(0, BLOCK).map_or(0.0, |(l, _)| l[0].abs()));
     }
     let elapsed = t0.elapsed().as_secs_f64();
@@ -160,10 +169,10 @@ fn four_synth_tracks_render_under_budget() {
 
 /// One playing block: patterns get the transport window, then the playhead
 /// advances by exactly the window.
-fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, bufs: &mut StereoBufs) {
+fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, bufs: &mut StereoBufs, auto: &AutoFrame) {
     let t1 = ctx.ticks + BLOCK as f64 * tpf;
     bufs.clear(BLOCK);
-    s.render_add(ctx, SampleView::NONE, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK));
+    s.render_add(ctx, SampleView::NONE, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK), auto);
     ctx.ticks = t1;
 }
 
@@ -388,6 +397,78 @@ fn spec6_mix_with_audio_tracks_renders_under_budget() {
     assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
 }
 
+/// [`spec6_with`] (Song mode, Audio tracks) plus every automation lane: 64
+/// lanes of 512 breakpoints over the 4-bar loop, 32 applying (16 mixer, 16
+/// rack) and 32 disabled.
+fn spec6_auto() -> Engine {
+    use daw_engine::mixer::catalog::{param, P_PAN, P_SEND_B};
+    use daw_engine::rack::catalog::spec;
+    let mut e = spec6_with(true, true);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let pts = daw_engine::MAX_AUTO_POINTS;
+    // (kind, c, d, lo, hi, enabled)
+    let mut lanes: Vec<(f64, f64, f64, f32, f32, bool)> = Vec::new();
+    for ch in 0..TRACKS + DRUMS {
+        lanes.push((1.0, ch as f64, P_FADER as f64, -12.0, 0.0, true));
+        lanes.push((1.0, ch as f64, P_SEND_A as f64, -30.0, -6.0, true));
+    }
+    for ch in TRACKS + DRUMS..TRACKS + DRUMS + AUDIO {
+        for id in [P_FADER, P_PAN, P_SEND_A, P_SEND_B] {
+            let p = param(id).unwrap();
+            lanes.push((1.0, ch as f64, id as f64, p.min, p.max, false));
+        }
+    }
+    // Rack: filter (module 4) cutoff and resonance, osc A (1) fine, osc B (2)
+    // detune apply; ADSR 5 decay, ADSR 6 release, LFO 8 rate, LFO 11 depth
+    // are disabled.
+    for slot in 0..TRACKS {
+        for (m, p, lo, hi, on) in [
+            (4usize, 1usize, 200.0f32, 8000.0f32, true),
+            (4, 2, 0.0, 0.6, true),
+            (1, 3, -20.0, 20.0, true),
+            (2, 7, 5.0, 40.0, true),
+            (5, 1, 0.05, 1.0, false),
+            (6, 3, 0.05, 1.0, false),
+            (8, 1, 0.1, 10.0, false),
+            (11, 4, 0.0, 1.0, false),
+        ] {
+            assert!(!spec(MODULES[m]).params[p].integer);
+            lanes.push((2.0, slot as f64, (m * 16 + p) as f64, lo, hi, on));
+        }
+    }
+    assert_eq!(lanes.len(), daw_engine::MAX_AUTO_LANES);
+    assert_eq!(lanes.iter().filter(|l| l.5).count(), 32);
+    for (lane, &(kind, c, d, lo, hi, on)) in lanes.iter().enumerate() {
+        ok(e.command(OP_AUTO_LANE_SET, lane as f64, kind, c, d));
+        for i in 0..pts {
+            // Ramps between the ends every breakpoint, 30 ticks apart (the
+            // 4-bar loop holds them all), a hold every fourth one.
+            let v = if i % 2 == 0 { lo } else { hi };
+            let a = (lane * pts + i) as f64;
+            ok(e.command(OP_AUTO_POINT_SET, a, (i * 30) as f64, v as f64, (i % 4 == 3) as u8 as f64));
+        }
+        if !on {
+            ok(e.command(OP_AUTO_LANE_ENABLE, lane as f64, 0., 0., 0.));
+        }
+    }
+    e
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn spec6_mix_with_audio_and_automation_renders_under_budget() {
+    let mut e = spec6_auto();
+    let (ratio, peak, wrapped, gr) = run(&mut e);
+    println!(
+        "perf (spec 6, song + {AUDIO} audio tracks + 64 automation lanes, 32 applying): {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(wrapped, "the loop must wrap during the run");
+    assert!(peak > 0.0 && peak.is_finite(), "must sound (peak {peak})");
+    assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
 #[test]
 #[ignore = "perf: run in release with --ignored --nocapture"]
 fn fx_chain_track_renders_under_budget() {
@@ -423,14 +504,15 @@ fn fx_chain_track_renders_under_budget() {
     let tpf = bpm as f64 * 960.0 / 60.0 / SR as f64;
     let mut ctx = Ctx { sr: SR, bpm, playing: true, ticks: 0.0, ticks_per_frame: tpf };
     let mut bufs = StereoBufs::new(daw_engine::MAX_TRACKS);
+    let auto = AutoFrame::new();
     let blocks = SECONDS * SR as usize / BLOCK;
     for _ in 0..100 {
-        render(&mut s, &mut ctx, tpf, &mut bufs);
+        render(&mut s, &mut ctx, tpf, &mut bufs, &auto);
     }
     let mut peak = 0.0f32;
     let t0 = Instant::now();
     for _ in 0..blocks {
-        render(&mut s, &mut ctx, tpf, &mut bufs);
+        render(&mut s, &mut ctx, tpf, &mut bufs, &auto);
         peak = peak.max(bufs.pair(0, BLOCK).map_or(0.0, |(l, _)| l[0].abs()));
     }
     let elapsed = t0.elapsed().as_secs_f64();

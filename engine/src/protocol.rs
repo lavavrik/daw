@@ -8,12 +8,13 @@
 //! own line in the form `pub const NAME: u32|i32 = N;`.
 
 use crate::arrangement::Clip;
+use crate::automation::Target;
 use crate::mixer::catalog;
 use crate::mixer::Key;
 use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
-    BAR_TICKS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
+    BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
     MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS,
 };
 
@@ -84,6 +85,14 @@ pub const OP_ADD_AUDIO_TRACK: u32 = 45; // a=slot
 pub const OP_AUDIO_CLIP_SOURCE: u32 = 46; // a=slot*MAX_CLIPS+idx b=sample id or -1 c=offset seconds (>= 0) d=loop 0/1
 pub const OP_AUDIO_CLIP_GAIN: u32 = 47; // a=slot*MAX_CLIPS+idx b=gain 0..MAX_CLIP_GAIN (linear) c=fade-in ticks d=fade-out ticks
 pub const OP_AUDIO_CLIP_SET: u32 = 48; // a=slot*MAX_CLIPS+idx b=start ticks c=length ticks (fadeIn+fadeOut <= len)
+// Automation lanes (automation.rs). A point is addressed as
+// `lane * MAX_AUTO_POINTS + idx`; a rack target packs `module * 16 + param`.
+pub const OP_AUTO_LANE_SET: u32 = 49; // a=lane b=kind 0 none/1 mix/2 rack c=mix channel or rack slot d=mix param id or module*16+param
+pub const OP_AUTO_POINT_SET: u32 = 50; // a=lane*512+idx b=tick 0..MAX_SONG_TICKS c=value (param units) d=0 linear/1 hold
+pub const OP_AUTO_POINT_REMOVE: u32 = 51; // a=lane*512+idx
+pub const OP_AUTO_LANE_CLEAR: u32 = 52; // a=lane: no points, no target; the param goes back to its base
+pub const OP_AUTO_LANE_ENABLE: u32 = 53; // a=lane b=0/1
+pub const OP_AUTO_OVERRIDE: u32 = 54; // a=lane: suspend until the next breakpoint (not an edit)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -170,6 +179,19 @@ pub enum Command {
     AudioClipGain { slot: usize, idx: usize, gain: f32, fade_in: u32, fade_out: u32 },
     /// Commit the staged source and gain at `start` / `len` (ticks).
     AudioClipSet { slot: usize, idx: usize, start: u32, len: u32 },
+    /// Point lane `lane` at `target`. Decode checks what it can statically
+    /// (ranges, a mixer param that is non-integer and accepted by the
+    /// channel, a packed rack param index); the engine checks that the
+    /// target exists and is automatable.
+    AutoLaneSet { lane: usize, target: Target },
+    /// Store point `idx` of `lane` (the engine checks `value` against the
+    /// target's range and the tick against the lane's other points).
+    AutoPointSet { lane: usize, idx: usize, tick: u32, value: f32, hold: bool },
+    AutoPointRemove { lane: usize, idx: usize },
+    AutoLaneClear { lane: usize },
+    AutoLaneEnable { lane: usize, on: bool },
+    /// Suspend `lane` until its next breakpoint (a manual move).
+    AutoOverride { lane: usize },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -356,6 +378,42 @@ fn mix_set(a: f64, b: f64, c: f64) -> Result<Command, i32> {
     Ok(Command::MixSet { channel, param: id, value: c as f32 })
 }
 
+/// Packed point address `lane * MAX_AUTO_POINTS + idx` -> `(lane, idx)`;
+/// anything non-integral or out of range is `ERR_BAD_INDEX`.
+fn auto_addr(v: f64) -> Result<(usize, usize), i32> {
+    let i = index(v, MAX_AUTO_LANES * MAX_AUTO_POINTS)?;
+    Ok((i / MAX_AUTO_POINTS, i % MAX_AUTO_POINTS))
+}
+
+/// `OP_AUTO_LANE_SET` target: kind `b` (0 none, 1 mix, 2 rack; else
+/// `ERR_BAD_VALUE`). A mix channel or rack slot out of range is
+/// `ERR_BAD_INDEX`; a param that cannot be automated there (unknown,
+/// integer, not accepted by the channel; a malformed `module * 16 + param`)
+/// is `ERR_BAD_VALUE`.
+fn auto_target(b: f64, c: f64, d: f64) -> Result<Target, i32> {
+    match int_in(b, 0, 2)? {
+        0 => Ok(Target::None),
+        1 => {
+            let ch = index(c, MIX_CHANNELS)?;
+            let id = int_in(d, 0, catalog::MIX_PARAMS as u32 - 1)?;
+            let p = catalog::param(id).ok_or(ERR_BAD_VALUE)?;
+            if !p.accepts(ch) || p.integer {
+                return Err(ERR_BAD_VALUE);
+            }
+            Ok(Target::Mix { ch: ch as u8, id: id as u8 })
+        }
+        _ => {
+            let slot = index(c, MAX_TRACKS)?;
+            let packed = int_in(d, 0, (MAX_MODULES * PORT_STRIDE - 1) as u32)? as usize;
+            let (module, param) = (packed / PORT_STRIDE, packed % PORT_STRIDE);
+            if param >= MAX_PARAMS {
+                return Err(ERR_BAD_VALUE);
+            }
+            Ok(Target::Rack { slot: slot as u8, module: module as u8, param: param as u8 })
+        }
+    }
+}
+
 /// Decode and range-check one record. Never panics.
 pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
     Ok(match op {
@@ -500,6 +558,24 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
             let (start, len) = span(b, c)?;
             Command::AudioClipSet { slot, idx, start, len }
         }
+        OP_AUTO_LANE_SET => Command::AutoLaneSet { lane: index(a, MAX_AUTO_LANES)?, target: auto_target(b, c, d)? },
+        OP_AUTO_POINT_SET => {
+            let (lane, idx) = auto_addr(a)?;
+            Command::AutoPointSet {
+                lane,
+                idx,
+                tick: int_in(b, 0, MAX_SONG_TICKS as u32)?,
+                value: finite(c)?,
+                hold: flag(d)?,
+            }
+        }
+        OP_AUTO_POINT_REMOVE => {
+            let (lane, idx) = auto_addr(a)?;
+            Command::AutoPointRemove { lane, idx }
+        }
+        OP_AUTO_LANE_CLEAR => Command::AutoLaneClear { lane: index(a, MAX_AUTO_LANES)? },
+        OP_AUTO_LANE_ENABLE => Command::AutoLaneEnable { lane: index(a, MAX_AUTO_LANES)?, on: flag(b)? },
+        OP_AUTO_OVERRIDE => Command::AutoOverride { lane: index(a, MAX_AUTO_LANES)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -563,7 +639,7 @@ mod tests {
     #[test]
     fn decode_never_panics_on_garbage() {
         let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -3e9];
-        for op in 0..52u32 {
+        for op in 0..60u32 {
             for &v in &vals {
                 let _ = decode(op, v, v, v, v);
             }
@@ -798,6 +874,70 @@ mod tests {
         }
         assert_eq!(decode(OP_MIX_RESET, 34., 0., 0., 0.), Ok(Command::MixReset { channel: 34 }));
         assert_eq!(decode(OP_MIX_RESET, 35., 0., 0., 0.), Err(ERR_BAD_INDEX));
+    }
+    #[test]
+    fn decode_auto_commands() {
+        use crate::automation::Target;
+        use crate::mixer::catalog::*;
+        use crate::{MAX_AUTO_LANES, MAX_AUTO_POINTS};
+        let lanes = MAX_AUTO_LANES as f64;
+        let pts = MAX_AUTO_POINTS as f64;
+        assert_eq!(
+            decode(OP_AUTO_LANE_SET, 63., 1., 34., P_FADER as f64),
+            Ok(Command::AutoLaneSet { lane: 63, target: Target::Mix { ch: 34, id: P_FADER as u8 } })
+        );
+        assert_eq!(
+            decode(OP_AUTO_LANE_SET, 0., 2., 31., 31. * 16. + 11.),
+            Ok(Command::AutoLaneSet { lane: 0, target: Target::Rack { slot: 31, module: 31, param: 11 } })
+        );
+        assert_eq!(decode(OP_AUTO_LANE_SET, 5., 0., 0., 0.), Ok(Command::AutoLaneSet { lane: 5, target: Target::None }));
+        // Lane and channel / slot indices are ERR_BAD_INDEX.
+        for (a, b, c) in [(lanes, 1., 0.), (-1., 1., 0.), (0.5, 1., 0.), (f64::NAN, 1., 0.), (0., 1., 35.), (0., 2., 32.), (0., 2., -1.)] {
+            assert_eq!(decode(OP_AUTO_LANE_SET, a, b, c, 0.), Err(ERR_BAD_INDEX), "{a} {b} {c}");
+        }
+        // Kinds and non-automatable targets are ERR_BAD_VALUE.
+        for (b, c, d) in [
+            (3., 0., 0.),
+            (-1., 0., 0.),
+            (1.5, 0., 0.),
+            (1., 0., 30.),                         // no such param
+            (1., 0., P_MUTE as f64),               // integer
+            (1., 33., P_DELAY_TIME as f64),        // a choice
+            (1., 34., P_PAN as f64),               // not on the master
+            (1., 32., P_DELAY_FEEDBACK as f64),    // the Delay return's
+            (1., 0., 0.5),
+            (2., 0., 32. * 16.),                   // module 32
+            (2., 0., 12.),                         // param 12 >= MAX_PARAMS
+            (2., 0., 0.5),
+            (2., 0., f64::INFINITY),
+        ] {
+            assert_eq!(decode(OP_AUTO_LANE_SET, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
+        }
+        let a = 3. * pts + 511.;
+        assert_eq!(
+            decode(OP_AUTO_POINT_SET, a, 7680., -6.5, 1.),
+            Ok(Command::AutoPointSet { lane: 3, idx: 511, tick: 7680, value: -6.5, hold: true })
+        );
+        assert_eq!(
+            decode(OP_AUTO_POINT_SET, 0., MAX_SONG_TICKS as f64, 0., 0.),
+            Ok(Command::AutoPointSet { lane: 0, idx: 0, tick: MAX_SONG_TICKS as u32, value: 0.0, hold: false })
+        );
+        for bad in [-1., lanes * pts, 0.5, f64::NAN] {
+            assert_eq!(decode(OP_AUTO_POINT_SET, bad, 0., 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+            assert_eq!(decode(OP_AUTO_POINT_REMOVE, bad, 0., 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+        }
+        for (b, c, d) in [(-1., 0., 0.), (0.5, 0., 0.), (MAX_SONG_TICKS as f64 + 1., 0., 0.), (0., f64::NAN, 0.), (0., f64::INFINITY, 0.), (0., 0., 2.), (0., 0., 0.5)] {
+            assert_eq!(decode(OP_AUTO_POINT_SET, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
+        }
+        assert_eq!(decode(OP_AUTO_POINT_REMOVE, pts + 1., 0., 0., 0.), Ok(Command::AutoPointRemove { lane: 1, idx: 1 }));
+        assert_eq!(decode(OP_AUTO_LANE_CLEAR, 63., 0., 0., 0.), Ok(Command::AutoLaneClear { lane: 63 }));
+        assert_eq!(decode(OP_AUTO_LANE_CLEAR, lanes, 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_AUTO_LANE_ENABLE, 2., 0., 0., 0.), Ok(Command::AutoLaneEnable { lane: 2, on: false }));
+        assert_eq!(decode(OP_AUTO_LANE_ENABLE, 2., 1., 0., 0.), Ok(Command::AutoLaneEnable { lane: 2, on: true }));
+        assert_eq!(decode(OP_AUTO_LANE_ENABLE, 2., 0.5, 0., 0.), Err(ERR_BAD_VALUE));
+        assert_eq!(decode(OP_AUTO_LANE_ENABLE, lanes, 1., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_AUTO_OVERRIDE, 7., 0., 0., 0.), Ok(Command::AutoOverride { lane: 7 }));
+        assert_eq!(decode(OP_AUTO_OVERRIDE, -1., 0., 0., 0.), Err(ERR_BAD_INDEX));
     }
     #[test]
     fn decode_value_ranges() {

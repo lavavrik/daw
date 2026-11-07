@@ -63,6 +63,28 @@
 //! ringing, gate ramps), then idles at zero cost. Returns and master always
 //! run (their tails never stop abruptly).
 //!
+//! # Automation
+//! A lane on a mixer param (`automation.rs`) drives it through
+//! [`Mixer::automate`], never through `set`: the strip keeps the hand-set
+//! value (the *base*: what `set` stores, what [`Mixer::param`] reports and
+//! what is saved) and holds the automated one in an overlay (`auto_mask`,
+//! `auto_vals`) that every gain and DSP update reads first. A `MIX_SET` on
+//! an automated param therefore only stores the base, and
+//! [`Mixer::release_auto`] re-applies it with the normal smoothing when the
+//! lane stops applying.
+//!
+//! With no mixer lane applying, `process` runs the whole block as one chunk,
+//! exactly as before automation existed (the golden export hashes pin this).
+//! Otherwise it runs the strips, returns and master in `RACK_BLOCK` (32-frame)
+//! chunks, and before each chunk applies every mixer entry of the block's
+//! [`AutoFrame`]: on a *line* the gain ramps (fader, pan, sends) move
+//! linearly to the next sub-block value over the chunk ([`Ramp::line`]);
+//! on a *step* they glide over the usual 5 ms; other params set their DSP
+//! target once per chunk and the DSP glides it. A strip that has just got
+//! its track (`fresh`), and the returns and master before their first block
+//! after a reset, take a step at once, so a replayed project starts at its
+//! automated values.
+//!
 //! Everything is allocated in [`Mixer::new`]; `process` and the setters
 //! never allocate, block or panic.
 
@@ -70,6 +92,7 @@ pub mod catalog;
 #[cfg(test)]
 mod tests;
 
+use crate::automation::{AutoFrame, Target};
 use crate::dsp::{db_to_lin, Compressor, Delay, Eq3, Limiter, Reverb};
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE};
 use crate::{MAX_BLOCK, MAX_KEYS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY, MIX_MASTER, MIX_METER_STRIDE, MIX_REVERB};
@@ -157,6 +180,12 @@ impl StereoBufs {
         let (l, r) = self.data.get(base..base + 2 * MAX_BLOCK)?.split_at(MAX_BLOCK);
         Some((&l[..n], &r[..n]))
     }
+
+    /// Frames `from..to` of pair `i` (`None` if out of range).
+    pub fn span(&self, i: usize, from: usize, to: usize) -> Option<(&[f32], &[f32])> {
+        let (l, r) = self.pair(i, to)?;
+        Some((l.get(from..)?, r.get(from..)?))
+    }
 }
 
 /// A linear ramp: `set` starts a move to a new target over the ramp length;
@@ -190,6 +219,17 @@ impl Ramp {
             self.value = if self.left == 0 { self.target } else { self.value + self.step };
         }
         self.value
+    }
+
+    /// Move linearly to `target`, landing in `frames` samples, or at the end
+    /// of a glide still running if that is later (automation: a line
+    /// segment per sub-block; a step's 5 ms glide is never cut short, it
+    /// just aims at the moving target).
+    fn line(&mut self, target: f32, frames: u32) {
+        let left = self.left.max(frames).max(1);
+        self.target = target;
+        self.left = left;
+        self.step = (target - self.value) / left as f32;
     }
 
     /// Jump to `target` at once (no ramp).
@@ -292,6 +332,10 @@ pub(crate) struct Strip {
     /// project replay (load, export) mixes from its first sample with the
     /// project's settings, whatever the engine's call size.
     fresh: bool,
+    /// Bit `id`: param `id` is driven by an automation lane; its effective
+    /// value is `auto_vals[id]` (the base stays in `values`).
+    auto_mask: u32,
+    auto_vals: [f32; MIX_PARAMS],
 }
 
 impl Strip {
@@ -311,6 +355,8 @@ impl Strip {
             tail: 0,
             hold: 0,
             fresh: false,
+            auto_mask: 0,
+            auto_vals: [0.0; MIX_PARAMS],
         };
         for p in &PARAMS {
             s.values[p.id as usize] = p.default;
@@ -326,9 +372,25 @@ impl Strip {
         self.v(id) != 0.0
     }
 
+    /// Is param `id` driven by an automation lane?
+    fn masked(&self, id: u32) -> bool {
+        id < 32 && self.auto_mask >> id & 1 != 0
+    }
+
+    /// Effective value of param `id`: the automated one while a lane drives
+    /// it, else the stored (base) value.
+    fn ev(&self, id: u32) -> f32 {
+        if self.masked(id) {
+            self.auto_vals.get(id as usize).copied().unwrap_or(0.0)
+        } else {
+            self.v(id)
+        }
+    }
+
     /// Store `value` for param `id` and push it into the DSP and (unless
     /// held) the ramp targets. Strip-local params only; the returns'
-    /// reverb/delay params are applied by the mixer.
+    /// reverb/delay params are applied by the mixer. An automated param
+    /// only stores its base (the DSP and ramps keep the automated value).
     fn apply(&mut self, id: u32, value: f32) {
         if let Some(slot) = self.values.get_mut(id as usize) {
             *slot = value;
@@ -336,21 +398,58 @@ impl Strip {
         if self.hold == 0 {
             self.retarget();
         }
+        if !self.masked(id) {
+            self.push(id);
+        }
+    }
+
+    /// Push param `id`'s effective value into the strip's DSP (EQ and
+    /// compressor; gains and inserts go through `retarget`, mute / solo
+    /// through the per-block gate, the sends' pre flags are read where used).
+    fn push(&mut self, id: u32) {
         match id {
-            P_EQ_HP => self.eq.set_hp(value),
-            P_EQ_LOW => self.eq.set_low(value),
+            P_EQ_HP => self.eq.set_hp(self.ev(P_EQ_HP)),
+            P_EQ_LOW => self.eq.set_low(self.ev(P_EQ_LOW)),
             P_EQ_MID_FREQ | P_EQ_MID_GAIN | P_EQ_MID_Q => {
-                self.eq.set_mid(self.v(P_EQ_MID_FREQ), self.v(P_EQ_MID_GAIN), self.v(P_EQ_MID_Q))
+                self.eq.set_mid(self.ev(P_EQ_MID_FREQ), self.ev(P_EQ_MID_GAIN), self.ev(P_EQ_MID_Q))
             }
-            P_EQ_HIGH => self.eq.set_high(value),
-            P_COMP_THRESHOLD => self.comp.set_threshold_db(value),
-            P_COMP_RATIO => self.comp.set_ratio(value),
-            P_COMP_ATTACK => self.comp.set_attack_ms(value),
-            P_COMP_RELEASE => self.comp.set_release_ms(value),
-            P_COMP_MAKEUP => self.comp.set_makeup_db(value),
-            // Gains and inserts: `retarget`. Mute / solo: the gate target is
-            // derived per block (solo is global); the sends' pre flags are
-            // read where used.
+            P_EQ_HIGH => self.eq.set_high(self.ev(P_EQ_HIGH)),
+            P_COMP_THRESHOLD => self.comp.set_threshold_db(self.ev(P_COMP_THRESHOLD)),
+            P_COMP_RATIO => self.comp.set_ratio(self.ev(P_COMP_RATIO)),
+            P_COMP_ATTACK => self.comp.set_attack_ms(self.ev(P_COMP_ATTACK)),
+            P_COMP_RELEASE => self.comp.set_release_ms(self.ev(P_COMP_RELEASE)),
+            P_COMP_MAKEUP => self.comp.set_makeup_db(self.ev(P_COMP_MAKEUP)),
+            _ => {}
+        }
+    }
+
+    /// Automation: move the gain ramps a fader, pan or send drives to their
+    /// effective targets: at once (`snap`), linearly over `ramp` frames, or
+    /// (`ramp == 0`) with the usual 5 ms glide.
+    fn drive(&mut self, id: u32, ramp: u32, snap: bool) {
+        let go = |r: &mut Ramp, target: f32| {
+            if snap {
+                r.snap(target)
+            } else if ramp > 0 {
+                r.line(target, ramp)
+            } else {
+                r.set(target)
+            }
+        };
+        match id {
+            P_FADER | P_PAN => {
+                let (l, r) = pan_gains(self.ev(P_FADER), self.ev(P_PAN));
+                go(&mut self.gl, l);
+                go(&mut self.gr, r);
+            }
+            P_SEND_A => {
+                let g = send_gain(self.ev(P_SEND_A));
+                go(&mut self.send_a, g);
+            }
+            P_SEND_B => {
+                let g = send_gain(self.ev(P_SEND_B));
+                go(&mut self.send_b, g);
+            }
             _ => {}
         }
     }
@@ -358,20 +457,20 @@ impl Strip {
     /// Point the gain ramps and the insert crossfades at the current values
     /// (`Ramp::set` ignores an unchanged target).
     fn retarget(&mut self) {
-        let (l, r) = pan_gains(self.v(P_FADER), self.v(P_PAN));
+        let (l, r) = pan_gains(self.ev(P_FADER), self.ev(P_PAN));
         if self.fresh {
             self.gl.snap(l);
             self.gr.snap(r);
-            self.send_a.snap(send_gain(self.v(P_SEND_A)));
-            self.send_b.snap(send_gain(self.v(P_SEND_B)));
+            self.send_a.snap(send_gain(self.ev(P_SEND_A)));
+            self.send_b.snap(send_gain(self.ev(P_SEND_B)));
             self.eq_ins.snap(self.flag(P_EQ_ON), &mut self.eq, Eq3::reset);
             self.comp_ins.snap(self.flag(P_COMP_ON), &mut self.comp, Compressor::reset);
             return;
         }
         self.gl.set(l);
         self.gr.set(r);
-        self.send_a.set(send_gain(self.v(P_SEND_A)));
-        self.send_b.set(send_gain(self.v(P_SEND_B)));
+        self.send_a.set(send_gain(self.ev(P_SEND_A)));
+        self.send_b.set(send_gain(self.ev(P_SEND_B)));
         self.eq_ins.set(self.flag(P_EQ_ON));
         self.comp_ins.set(self.flag(P_COMP_ON));
     }
@@ -452,6 +551,9 @@ pub struct Mixer {
     meters: Vec<f32>,
     gate_len: usize,
     tail_len: usize,
+    /// No block has run since `new` / `reset_all`: an automation step on a
+    /// return or the master lands at once (track strips use `fresh`).
+    auto_fresh: bool,
 }
 
 impl Mixer {
@@ -479,6 +581,7 @@ impl Mixer {
             meters: vec![0.0; MIX_CHANNELS * MIX_METER_STRIDE],
             gate_len: gate_len as usize,
             tail_len: (TAIL_SECONDS * sr) as usize,
+            auto_fresh: true,
         };
         m.apply_defaults();
         m
@@ -516,6 +619,7 @@ impl Mixer {
         self.delay.reset();
         self.limiter.reset();
         self.meters.fill(0.0);
+        self.auto_fresh = true;
     }
 
     /// Latency of the master (the limiter lookahead), in samples.
@@ -530,9 +634,9 @@ impl Mixer {
         }
     }
 
-    /// The master limiter's ceiling target (linear).
+    /// The master limiter's ceiling target (linear; automated or not).
     pub fn ceiling(&self) -> f32 {
-        self.strips.get(MIX_MASTER).map_or(1.0, |s| db_to_lin(s.v(P_LIMITER_CEILING)))
+        self.strips.get(MIX_MASTER).map_or(1.0, |s| db_to_lin(s.ev(P_LIMITER_CEILING)))
     }
 
     /// The legacy master gain's current (ramped) value.
@@ -549,6 +653,13 @@ impl Mixer {
         }
         let Some(s) = self.strips.get_mut(ch) else { return };
         s.apply(id, value);
+        if !s.masked(id) {
+            self.push_global(id, value);
+        }
+    }
+
+    /// Push a return / master param into its DSP (reverb, delay, limiter).
+    fn push_global(&mut self, id: u32, value: f32) {
         match id {
             P_REV_SIZE => self.reverb.set_size(value),
             P_REV_DECAY => self.reverb.set_decay(value),
@@ -566,9 +677,66 @@ impl Mixer {
         }
     }
 
-    /// Param `id` of channel `ch` (its catalog default if it does not apply).
+    /// Param `id` of channel `ch` (its catalog default if it does not
+    /// apply): the stored value, i.e. the base of an automated param.
     pub fn param(&self, ch: usize, id: u32) -> f32 {
         self.strips.get(ch).map_or(0.0, |s| s.v(id))
+    }
+
+    /// Param `id` of channel `ch` as heard: the automated value while a lane
+    /// drives it, else [`param`](Mixer::param).
+    pub fn effective(&self, ch: usize, id: u32) -> f32 {
+        self.strips.get(ch).map_or(0.0, |s| s.ev(id))
+    }
+
+    /// Current gains of channel `ch`: `[left, right, send A, send B]`
+    /// (tests).
+    #[doc(hidden)]
+    pub fn ramps(&self, ch: usize) -> [f32; 4] {
+        self.strips.get(ch).map_or([0.0; 4], |s| [s.gl.value, s.gr.value, s.send_a.value, s.send_b.value])
+    }
+
+    /// Automation: drive continuous param `id` of channel `ch` to `value`.
+    /// `ramp > 0`: the gains move linearly to it over `ramp` frames (a line
+    /// segment); `ramp == 0`: a step with the usual smoothing (at once on a
+    /// fresh strip). Other params set their DSP target. The stored base is
+    /// never touched. Anything invalid is ignored.
+    pub fn automate(&mut self, ch: usize, id: u32, value: f32, ramp: u32) {
+        let Some(p) = param(id) else { return };
+        if !p.accepts(ch) || p.integer || !value.is_finite() || id >= 32 {
+            return;
+        }
+        let v = value.clamp(p.min, p.max);
+        let fresh_bus = self.auto_fresh && ch >= MAX_TRACKS;
+        let Some(s) = self.strips.get_mut(ch) else { return };
+        s.auto_mask |= 1 << id;
+        if let Some(x) = s.auto_vals.get_mut(id as usize) {
+            *x = v;
+        }
+        match id {
+            P_FADER | P_PAN | P_SEND_A | P_SEND_B => {
+                if s.hold == 0 {
+                    let snap = ramp == 0 && (s.fresh || fresh_bus);
+                    s.drive(id, ramp, snap);
+                }
+            }
+            _ => {
+                s.push(id);
+                self.push_global(id, v);
+            }
+        }
+    }
+
+    /// Automation of param `id` of channel `ch` stopped: its base (the
+    /// stored value) plays again, with the normal smoothing.
+    pub fn release_auto(&mut self, ch: usize, id: u32) {
+        let Some(s) = self.strips.get_mut(ch) else { return };
+        if !s.masked(id) {
+            return;
+        }
+        s.auto_mask &= !(1 << id);
+        let base = s.v(id);
+        self.set(ch, id, base);
     }
 
     /// Every param channel `ch` accepts back to its default (through the
@@ -641,6 +809,7 @@ impl Mixer {
         // one sub-block longer so its tail is covered too.
         if let Some(s) = self.strips.get_mut(slot).filter(|_| slot < MAX_TRACKS) {
             s.hold = fade + RACK_BLOCK;
+            s.auto_mask = 0; // its lanes were cleared with the slot
         }
         self.reset_channel(slot);
     }
@@ -668,6 +837,7 @@ impl Mixer {
         if let Some(s) = self.strips.get_mut(slot) {
             s.fresh = true;
             s.gate.snap(1.0);
+            s.auto_mask = 0;
         }
         self.reset_channel(slot);
     }
@@ -710,9 +880,10 @@ impl Mixer {
 
     /// Mix one block of `n` frames. `tracks` holds every slot's raw buffer,
     /// `keys` the key-slot buffers, and bit `s` of `active` is set for each
-    /// slot that holds a track or rendered audio this block. Writes the
-    /// limited master to `out_l` / `out_r` (`n` frames, delayed by
-    /// [`latency`](Mixer::latency)).
+    /// slot that holds a track or rendered audio this block. `auto` holds
+    /// the block's automation values (see "Automation" in the module docs).
+    /// Writes the limited master to `out_l` / `out_r` (`n` frames, delayed
+    /// by [`latency`](Mixer::latency)).
     #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
@@ -723,28 +894,73 @@ impl Mixer {
         bpm: f32,
         out_l: &mut [f32],
         out_r: &mut [f32],
+        auto: &AutoFrame,
     ) {
         let n = n.min(MAX_BLOCK).min(out_l.len()).min(out_r.len());
-        let Mixer { strips, reverb, delay, limiter, master_gain, row_keys, buses, meters, tail_len, .. } = self;
-        let tail_len = *tail_len;
-        buses.master.clear(n);
-        buses.send_a.clear(n);
-        buses.send_b.clear(n);
-        meters.fill(0.0);
-        let solo = strips.iter().take(MAX_TRACKS).any(|s| s.flag(P_SOLO));
+        self.buses.master.clear(n);
+        self.buses.send_a.clear(n);
+        self.buses.send_b.clear(n);
+        self.meters.fill(0.0);
+        let solo = self.strips.iter().take(MAX_TRACKS).any(|s| s.flag(P_SOLO));
+        // Which track strips run this block: those whose slot holds a track
+        // or rendered audio, and those still in their tail.
+        let tail_len = self.tail_len;
+        let mut runs = 0u32;
+        for (ch, st) in self.strips.iter_mut().enumerate().take(MAX_TRACKS) {
+            if active & (1u32 << ch) != 0 {
+                st.tail = tail_len;
+                runs |= 1 << ch;
+            } else if st.tail > 0 {
+                st.tail = st.tail.saturating_sub(n);
+                runs |= 1 << ch;
+            }
+        }
+        self.delay.set_tempo(bpm);
+        let blk = Block { tracks, keys, runs, solo };
+        if !auto.has_mix() {
+            // The whole block at once: exactly the mix without automation.
+            self.chunk(&blk, 0, n, out_l, out_r);
+        } else {
+            let mut from = 0;
+            for k in 0..auto.subs() {
+                let to = ((k + 1) * RACK_BLOCK).min(n);
+                if to <= from {
+                    break;
+                }
+                let len = (to - from) as u32;
+                for e in auto.entries() {
+                    if let (Target::Mix { ch, id }, true) = (e.target, e.applies(k)) {
+                        if e.line(k) {
+                            self.automate(ch as usize, id as u32, e.value(k + 1), len);
+                        } else {
+                            self.automate(ch as usize, id as u32, e.value(k), 0);
+                        }
+                    }
+                }
+                self.chunk(&blk, from, to, out_l, out_r);
+                from = to;
+            }
+            if from < n {
+                self.chunk(&blk, from, n, out_l, out_r);
+            }
+        }
+        self.auto_fresh = false;
+    }
+
+    /// Mix frames `from..to` of the block: strips, returns, master, limiter.
+    fn chunk(&mut self, blk: &Block, from: usize, to: usize, out_l: &mut [f32], out_r: &mut [f32]) {
+        let Block { tracks, keys, runs, solo } = *blk;
+        let len = to - from;
+        let Mixer { strips, reverb, delay, limiter, master_gain, row_keys, buses, meters, .. } = self;
 
         // Track strips: raw buffer -> work copy -> EQ -> comp -> fader/pan/gate.
         for (ch, st) in strips.iter_mut().enumerate().take(MAX_TRACKS) {
-            if active & (1u32 << ch) != 0 {
-                st.tail = tail_len;
-            } else if st.tail == 0 {
-                st.count_hold(n);
+            if runs & (1u32 << ch) == 0 {
+                st.count_hold(len);
                 continue;
-            } else {
-                st.tail = st.tail.saturating_sub(n);
             }
-            let Some(src) = tracks.pair(ch, n) else { continue };
-            if !buses.load(src, n) {
+            let Some(src) = tracks.span(ch, from, to) else { continue };
+            if !buses.load(src, from, to) {
                 continue;
             }
             let muted = st.flag(P_MUTE) || (solo && !st.flag(P_SOLO));
@@ -753,29 +969,28 @@ impl Mixer {
             } else if st.hold == 0 {
                 st.gate.set(if muted { 0.0 } else { 1.0 });
             }
-            buses.eq(st, n);
+            buses.eq(st, from, to);
             let key = match st.key {
                 Key::None => None,
-                Key::Track(s) => Some(tracks.pair(s, n)),
+                Key::Track(s) => Some(tracks.span(s, from, to)),
                 Key::Row(s, r) => {
                     let k = row_keys.get(s).and_then(|rk| rk.get(r)).copied().unwrap_or(NO_KEY);
-                    Some(if k == NO_KEY { None } else { keys.pair(k as usize, n) })
+                    Some(if k == NO_KEY { None } else { keys.span(k as usize, from, to) })
                 }
             };
-            buses.comp(st, key, n);
-            let (pl, pr) = buses.mix_out(st, n, true);
+            buses.comp(st, key, from, to);
+            let (pl, pr) = buses.mix_out(st, from, to, true);
             let gr = if st.comp_ins.idle { 0.0 } else { st.comp.gain_reduction_db() };
             write_meter(meters, ch, pl, pr, gr);
-            st.count_hold(n);
+            st.count_hold(len);
             st.fresh = false;
         }
 
         // Returns: send bus -> effect (100% wet) -> EQ -> fader/pan/mute.
-        delay.set_tempo(bpm);
         for ch in [MIX_REVERB, MIX_DELAY] {
             let Some(st) = strips.get_mut(ch) else { continue };
             let bus = if ch == MIX_REVERB { &buses.send_a } else { &buses.send_b };
-            let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, 0, n), bus.pair(0, n)) else {
+            let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, from, to), bus.span(0, from, to)) else {
                 continue;
             };
             wl.copy_from_slice(bl);
@@ -786,24 +1001,24 @@ impl Mixer {
                 delay.process(wl, wr);
             }
             st.gate.set(if st.flag(P_MUTE) { 0.0 } else { 1.0 });
-            buses.eq(st, n);
-            let (pl, pr) = buses.mix_out(st, n, false);
+            buses.eq(st, from, to);
+            let (pl, pr) = buses.mix_out(st, from, to, false);
             write_meter(meters, ch, pl, pr, 0.0);
         }
 
         // Master: bus x legacy gain -> EQ -> fader -> limiter -> out.
         let Some(st) = strips.get_mut(MIX_MASTER) else { return };
-        if let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, 0, n), buses.master.pair(0, n)) {
-            for i in 0..n {
+        if let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, from, to), buses.master.span(0, from, to)) {
+            for i in 0..len {
                 let g = master_gain.next();
                 wl[i] = bl[i] * g;
                 wr[i] = br[i] * g;
             }
         }
-        buses.eq(st, n);
-        let (ol, or) = (&mut out_l[..n], &mut out_r[..n]);
-        if let Some((wl, wr)) = buses.work.pair(0, n) {
-            for i in 0..n {
+        buses.eq(st, from, to);
+        let (Some(ol), Some(or)) = (out_l.get_mut(from..to), out_r.get_mut(from..to)) else { return };
+        if let Some((wl, wr)) = buses.work.span(0, from, to) {
+            for i in 0..len {
                 // The master has no pan: gl and gr carry the same fader gain.
                 let g = st.gl.next();
                 st.gr.next();
@@ -814,6 +1029,15 @@ impl Mixer {
         limiter.process(ol, or);
         write_meter(meters, MIX_MASTER, 0.0, 0.0, limiter.gain_reduction_db());
     }
+}
+
+/// What every chunk of one block shares (see `Mixer::process`).
+struct Block<'a> {
+    tracks: &'a StereoBufs,
+    keys: &'a StereoBufs,
+    /// Bit = a track strip that runs this block.
+    runs: u32,
+    solo: bool,
 }
 
 /// Where [`soft_clip`] leaves linear (as a fraction of the ceiling).
@@ -894,26 +1118,29 @@ impl ClickClip {
     }
 }
 
+/// A chunk's peaks into the block's meters (`process` zeroes them first;
+/// peaks are >= 0, so a whole-block chunk writes them unchanged), and its
+/// gain reduction (the block's last chunk wins).
 fn write_meter(meters: &mut [f32], ch: usize, pl: f32, pr: f32, gr: f32) {
     if let Some(m) = meters.get_mut(ch * MIX_METER_STRIDE..(ch + 1) * MIX_METER_STRIDE) {
-        m[0] = pl;
-        m[1] = pr;
+        m[0] = m[0].max(pl);
+        m[1] = m[1].max(pr);
         m[2] = gr;
     }
 }
 
 impl Buses {
-    /// Copy `src` (`n` frames) into the work buffer.
-    fn load(&mut self, src: (&[f32], &[f32]), n: usize) -> bool {
-        let Some((wl, wr)) = self.work.pair_mut(0, 0, n) else { return false };
+    /// Copy `src` (frames `from..to`) into the work buffer.
+    fn load(&mut self, src: (&[f32], &[f32]), from: usize, to: usize) -> bool {
+        let Some((wl, wr)) = self.work.pair_mut(0, from, to) else { return false };
         wl.copy_from_slice(src.0);
         wr.copy_from_slice(src.1);
         true
     }
 
     /// The strip's EQ insert on the work buffer.
-    fn eq(&mut self, st: &mut Strip, n: usize) {
-        let (Some(work), Some(dry)) = (self.work.pair_mut(0, 0, n), self.dry.pair_mut(0, 0, n)) else { return };
+    fn eq(&mut self, st: &mut Strip, from: usize, to: usize) {
+        let (Some(work), Some(dry)) = (self.work.pair_mut(0, from, to), self.dry.pair_mut(0, from, to)) else { return };
         run_insert(&mut st.eq_ins, &mut st.eq, work, dry, |eq, l, r| eq.process(l, r), Eq3::reset);
     }
 
@@ -922,8 +1149,8 @@ impl Buses {
     /// buffer is always there in practice (a missing one keys from silence,
     /// never from the strip itself).
     #[allow(clippy::option_option)]
-    fn comp(&mut self, st: &mut Strip, key: Option<Option<(&[f32], &[f32])>>, n: usize) {
-        let (Some(work), Some(dry)) = (self.work.pair_mut(0, 0, n), self.dry.pair_mut(0, 0, n)) else { return };
+    fn comp(&mut self, st: &mut Strip, key: Option<Option<(&[f32], &[f32])>>, from: usize, to: usize) {
+        let (Some(work), Some(dry)) = (self.work.pair_mut(0, from, to), self.dry.pair_mut(0, from, to)) else { return };
         run_insert(
             &mut st.comp_ins,
             &mut st.comp,
@@ -940,15 +1167,19 @@ impl Buses {
 
     /// Fader·pan and gate on the work buffer into the master bus, plus (for
     /// tracks) the sends. Returns the post-fader peaks.
-    fn mix_out(&mut self, st: &mut Strip, n: usize, sends: bool) -> (f32, f32) {
+    fn mix_out(&mut self, st: &mut Strip, from: usize, to: usize, sends: bool) -> (f32, f32) {
         let pre_a = st.flag(P_SEND_A_PRE);
         let pre_b = st.flag(P_SEND_B_PRE);
         let Buses { master, send_a, send_b, work, .. } = self;
-        let (Some((wl, wr)), Some((ml, mr)), Some((al, ar)), Some((bl, br))) =
-            (work.pair(0, n), master.pair_mut(0, 0, n), send_a.pair_mut(0, 0, n), send_b.pair_mut(0, 0, n))
-        else {
+        let (Some((wl, wr)), Some((ml, mr)), Some((al, ar)), Some((bl, br))) = (
+            work.span(0, from, to),
+            master.pair_mut(0, from, to),
+            send_a.pair_mut(0, from, to),
+            send_b.pair_mut(0, from, to),
+        ) else {
             return (0.0, 0.0);
         };
+        let n = to - from;
         let use_a = sends && !st.send_a.rests_at(0.0);
         let use_b = sends && !st.send_b.rests_at(0.0);
         let (mut pl, mut pr) = (0.0f32, 0.0f32);

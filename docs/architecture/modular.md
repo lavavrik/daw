@@ -62,6 +62,30 @@ glide, LFO rate) apply at once: they change a rate, not a level, so phase and
 envelopes stay continuous, and fading them would dip the output on every step
 of a knob drag.
 
+## Automation (`Rack::automate`)
+
+An automation lane on a rack param (`docs/architecture/automation.md`) is
+applied by `Synths::render_add`. It passes the block's `AutoFrame` to
+`Rack::render_add_auto`, and at each sub-block boundary every entry for this
+slot calls `Rack::automate(module, param, value)`:
+
+- **The normal path, never queued.** The value goes straight into the
+  running module's param: a `smooth` param glides over its 5 ms one-pole,
+  the others apply at the sub-block. It never queues behind a structural
+  fade. That is why only non-integer params are automatable: a stepped one
+  would need the fade.
+- **Modules not driven.** A module whose add or removal is still queued is
+  not driven, and neither is an integer param.
+- **The base.** The lane keeps the hand-set value (the *base*). While the
+  lane drives the param, `RACK_SET_PARAM` only stores the base, validated
+  by `Rack::check_param`. When the lane stops applying (Pattern mode,
+  disabled, overridden, cleared), the engine re-applies the base with
+  `set_param`. `AUTO_LANE_SET` captures the base with
+  `Rack::pending_param`: the value once queued edits apply.
+- **Lifecycle.** `RACK_REMOVE_MODULE` clears the module's lanes at once,
+  even when the removal is queued behind the fade. `RACK_CLEAR` (a patch
+  load) and removing or replacing the track clear the rack's lanes.
+
 ## Levels
 
 Out sums every poly channel unnormalised (8 voices at full level would be

@@ -71,6 +71,7 @@
 //! also resets its pattern (empty, `DEFAULT_BARS` long).
 
 use crate::arrangement::{Clip, Timeline};
+use crate::automation::AutoFrame;
 use crate::mixer::StereoBufs;
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::rack::catalog::ModuleKind;
@@ -455,6 +456,7 @@ impl Synths {
         timeline: Timeline,
         tracks: &mut StereoBufs,
         (from, to): (usize, usize),
+        auto: &AutoFrame,
     ) -> u32 {
         let n = to.saturating_sub(from);
         let events = &mut *self.events;
@@ -466,6 +468,10 @@ impl Synths {
             }
             let Some((left, right)) = tracks.pair_mut(slot, from, to) else { continue };
             rendered |= 1 << slot;
+            // Automation lanes on this rack: applied at its sub-block starts
+            // (`seg` turns a segment start into that frame of the block).
+            let lanes = (active && auto.has_rack(slot)).then_some(auto);
+            let seg = |pos: usize| lanes.map(|a| (a, slot, from + pos));
             events.clear();
             if let (true, Some((t0, t1, spt))) = (active, window) {
                 match timeline {
@@ -484,13 +490,13 @@ impl Synths {
             for &(offset, ev) in events.as_slice() {
                 let at = offset.min(n).max(pos); // pos <= n always
                 if at > pos {
-                    render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..at], &mut right[pos..at]);
+                    render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..at], &mut right[pos..at], seg(pos));
                     pos = at;
                 }
                 t.rack.note(ev);
             }
             if pos < n {
-                render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
+                render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..n], &mut right[pos..n], seg(pos));
             }
         }
         rendered
@@ -530,8 +536,10 @@ fn song_events(t: &mut SynthTrack, clips: &[Clip], (t0, t1, spt): (f64, f64, f64
     }
 }
 
-/// Render frames `from..` of the block (`left`/`right` are that sub-slice),
-/// with the `Ctx` playhead moved to the segment start while playing.
+/// Render frames `from..` of the piece (`left`/`right` are that sub-slice),
+/// with the `Ctx` playhead moved to the segment start while playing; `auto`:
+/// the automation frame, slot and block frame of the segment start.
+#[allow(clippy::too_many_arguments)]
 fn render_segment(
     rack: &mut Rack,
     fx: &mut FxPool,
@@ -540,12 +548,13 @@ fn render_segment(
     from: usize,
     left: &mut [f32],
     right: &mut [f32],
+    auto: Option<(&AutoFrame, usize, usize)>,
 ) {
     let mut seg = *ctx;
     if ctx.playing {
         seg.ticks = ctx.ticks + from as f64 * ctx.ticks_per_frame;
     }
-    rack.render_add(&seg, fx, smp, left, right);
+    rack.render_add_auto(&seg, fx, smp, left, right, auto);
 }
 
 /// Send `Off` for every pitch in `mask` (bit = pitch).

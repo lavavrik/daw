@@ -7,7 +7,8 @@ parameter table), `app/src/state/mixer-actions.ts`, `app/src/ui/mixer/`.
 
 ## Signal flow
 
-Everything below runs **once per whole block**, after every track has rendered
+Everything below runs **once per whole block** (in 32-frame chunks while a
+mixer automation lane applies, see Automation), after every track has rendered
 into its slot buffer (Song mode renders a block in pieces, the loop wrap can
 make a 0-frame piece; the mixer never sees pieces). Jumps (wrap, seek, Stop)
 release notes only, so effect tails, compressor and limiter state survive them.
@@ -199,6 +200,37 @@ ramping, and applies from the track's first sample whatever the call size
 and ended on a call boundary, so a project's mutes and faders were ignored
 for the engine's first call (see `export.md`).
 
+## Automation
+
+Automation lanes (`docs/architecture/automation.md`) drive continuous mixer
+params through `Mixer::automate`, never through `set`:
+
+- **Base and overlay.** The strip keeps the hand-set value (the *base*: what
+  `MIX_SET` stores, `Mixer::param` reports and the project saves). The
+  automated value sits in an overlay (`auto_mask` / `auto_vals`), which
+  every gain and DSP update reads first (`Mixer::effective`). So a `MIX_SET`
+  on an automated param only stores the base. `Mixer::release_auto`
+  re-applies the base, with the normal smoothing, when the lane stops
+  applying.
+- **Sub-block chunks.** With no mixer lane applying, `process` runs the
+  whole block as one chunk, bit for bit as before (the golden export hashes
+  pin this). While one applies, it runs strips, returns, master and limiter
+  in `RACK_BLOCK` (32-frame) chunks. Before each chunk it applies the block's
+  `AutoFrame` entries:
+  - on a *line*, the fader, pan and send ramps move linearly to the next
+    sub-block value over the chunk (`Ramp::line`; a 5 ms step glide still
+    running is never cut short);
+  - on a *step*, they glide over the usual 5 ms;
+  - EQ, compressor, reverb, delay and limiter params set their DSP target
+    once per chunk and glide inside the DSP.
+
+  Meter peaks are the maximum over the chunks.
+- **Fresh strips.** A fresh strip (see Slot reuse), and the returns and
+  master before their first block after a reset, take a step at once. So a
+  replayed project starts at its automated values.
+- **Lifecycle.** Removing or replacing a track clears its strip's overlay
+  with its lanes.
+
 ## Gain staging
 
 Faders are -inf..+6 dB; the master limiter catches what is left. Poly starter
@@ -233,6 +265,7 @@ Measured on the dev Mac (Apple M5 Pro; native in release, browser on the dev ser
 | Spec 6, Pattern mode | 8.1–8.2% | 16.8–18.8% (max 20.6%) |
 | Spec 6, Song mode | 8.4–8.5% | 14.6% (no Audio tracks, one-off probe) |
 | Spec 6, Song mode + 4 Audio tracks | 8.5–8.6% | 10.1–15.0% (max 16.7%) |
+| Same + 64 automation lanes (32 applying, plan 10) | 8.2% (8.1% without the lanes, same run) | — (plan 10, Task 5) |
 
 Audio clips cost almost nothing: a voice reads frames from the arena and
 scales them by its envelope, with no interpolation or time-stretch. The

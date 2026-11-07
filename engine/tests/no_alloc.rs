@@ -713,3 +713,165 @@ fn audio_tracks_and_clip_edits_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.05, "audio clips should be audible, peak {peak}");
 }
+
+/// Every automation op at the caps (64 lanes x 512 points), with playback,
+/// overrides, point edits under the playhead, loop wraps (a 1-tick loop
+/// too), seeks, mode switches, re-targeting and every target removal, next
+/// to Audio, drum and synth tracks.
+#[test]
+fn automation_does_not_allocate() {
+    use daw_engine::mixer::catalog::{param, P_EQ_MID_FREQ, P_FADER, P_LIMITER_CEILING, P_PAN, P_REV_DECAY, P_SEND_A, P_SEND_B};
+    use daw_engine::rack::catalog::{spec, ModuleKind as K};
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let (lanes, pts) = (daw_engine::MAX_AUTO_LANES, daw_engine::MAX_AUTO_POINTS);
+    let max_clips = daw_engine::MAX_CLIPS as f64;
+    // Outside the counted region: a stereo sample for the Audio and drum tracks.
+    let p = e.sample_alloc(0, 96000, 2).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 192000) }
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, x)| *x = ((i as f32) * 0.01).sin() * 0.5);
+    ok(e.sample_ready(0));
+
+    arm();
+
+    // Synth tracks 0 and 1: Noise -> Filter -> VCA (<- ADSR) -> Out, plus an
+    // Osc and an LFO, so 16 non-integer params each are automatable.
+    const RACK: [K; 7] = [K::Noise, K::Filter, K::Osc, K::Adsr, K::Lfo, K::Vca, K::Out];
+    for slot in 0..2 {
+        let s = slot as f64;
+        ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+        for (m, &kind) in RACK.iter().enumerate() {
+            ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, kind as u32 as f64, 0.));
+        }
+        for (from, to) in [(pk(0, 0), pk(1, 0)), (pk(1, 0), pk(5, 0)), (pk(5, 0), pk(6, 0)), (pk(2, 0), pk(6, 1))] {
+            ok(e.command(OP_RACK_CONNECT, s, from, to, 0.));
+        }
+    }
+    // Audio tracks 2 and 3, drum tracks 4 and 5.
+    for slot in 2..4 {
+        let a = slot as f64 * max_clips;
+        ok(e.command(OP_ADD_AUDIO_TRACK, slot as f64, 0., 0., 0.));
+        ok(e.command(OP_AUDIO_CLIP_SOURCE, a, 0., 0.1, 1.));
+        ok(e.command(OP_AUDIO_CLIP_GAIN, a, 0.8, 240., 240.));
+        ok(e.command(OP_AUDIO_CLIP_SET, a, 0., 3840. * 8., 0.));
+    }
+    for slot in 4..6 {
+        let s = slot as f64;
+        ok(e.command(OP_ADD_DRUM_TRACK, s, 0., 0., 0.));
+        ok(e.command(OP_SET_ROW_SAMPLE, s, 0., 0., 0.));
+        for step in (0..16).step_by(4) {
+            ok(e.command(OP_SET_STEP, s, 0., step as f64, 100.));
+        }
+    }
+
+    // 64 targets (kind, c, d, min, max) in a fixed array: 32 mixer params
+    // (6 channels x 5, the Reverb decay, the master ceiling), then 16 rack
+    // params on each synth track.
+    let mut targets = [(0.0f64, 0.0f64, 0.0f64, 0.0f32, 0.0f32); 64];
+    let mut n = 0;
+    for ch in 0..6usize {
+        for id in [P_FADER, P_PAN, P_SEND_A, P_SEND_B, P_EQ_MID_FREQ] {
+            let p = param(id).unwrap();
+            targets[n] = (1.0, ch as f64, id as f64, p.min, p.max);
+            n += 1;
+        }
+    }
+    for (ch, id) in [(daw_engine::MIX_REVERB, P_REV_DECAY), (daw_engine::MIX_MASTER, P_LIMITER_CEILING)] {
+        let p = param(id).unwrap();
+        targets[n] = (1.0, ch as f64, id as f64, p.min, p.max);
+        n += 1;
+    }
+    for slot in 0..2 {
+        let mut per = 0;
+        for (m, &kind) in RACK.iter().enumerate() {
+            for (pi, p) in spec(kind).params.iter().enumerate() {
+                if !p.integer && per < 16 {
+                    targets[n] = (2.0, slot as f64, (m * 16 + pi) as f64, p.min, p.max);
+                    n += 1;
+                    per += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(n, lanes);
+    let fill = |e: &mut Engine, lane: usize| {
+        let (kind, c, d, min, max) = targets[lane];
+        ok(e.command(OP_AUTO_LANE_SET, lane as f64, kind, c, d));
+        for i in 0..pts {
+            let v = min + (max - min) * (i % 7) as f32 / 6.0;
+            let a = (lane * pts + i) as f64;
+            ok(e.command(OP_AUTO_POINT_SET, a, (i * 16) as f64, v as f64, (i % 3 == 0) as u8 as f64));
+        }
+    };
+    for lane in 0..lanes {
+        fill(&mut e, lane);
+    }
+    ok(e.command(OP_SET_INPUT_TRACK, 0., 0., 0., 0.));
+    ok(e.command(OP_SET_LOOP, 0., 7680., 0., 0.));
+    ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
+    for _ in 0..20 {
+        e.process(&mut l, &mut r); // stopped: lanes follow the parked position
+    }
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    let mut peak = 0.0f64;
+    for b in 0..1700u32 {
+        match b {
+            100 => ok(e.command(OP_SEEK, 3000., 0., 0., 0.)),
+            200 => {
+                for lane in 0..8 {
+                    ok(e.command(OP_AUTO_OVERRIDE, lane as f64, 0., 0., 0.));
+                }
+                ok(e.command(OP_MIX_SET, 0., P_FADER as f64, -3., 0.));
+                ok(e.command(OP_RACK_SET_PARAM, 0., 1., 1., 500.));
+            }
+            300 => {
+                ok(e.command(OP_AUTO_POINT_SET, (pts + 5) as f64, 80., 0.5, 0.)); // lane 1 (pan), point 5
+                ok(e.command(OP_AUTO_POINT_REMOVE, (2 * pts + 100) as f64, 0., 0., 0.));
+                ok(e.command(OP_AUTO_POINT_SET, (2 * pts + 100) as f64, 1601., -20., 1.));
+            }
+            400 => {
+                for lane in 10..20 {
+                    ok(e.command(OP_AUTO_LANE_ENABLE, lane as f64, 0., 0., 0.));
+                }
+            }
+            450 => {
+                for lane in 10..20 {
+                    ok(e.command(OP_AUTO_LANE_ENABLE, lane as f64, 1., 0., 0.));
+                }
+            }
+            500 => ok(e.command(OP_SET_MODE, 0., 0., 0., 0.)),
+            550 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)),
+            600 => ok(e.command(OP_AUTO_LANE_CLEAR, 3., 0., 0., 0.)),
+            610 => fill(&mut e, 3),
+            700 => ok(e.command(OP_AUTO_LANE_SET, 4., 0., 0., 0.)), // no target
+            710 => ok(e.command(OP_AUTO_LANE_SET, 4., 1., 0., P_EQ_MID_FREQ as f64)), // back
+            800 => ok(e.command(OP_SET_LOOP, 4000., 4001., 0., 0.)), // wraps every ~20 frames
+            900 => ok(e.command(OP_SET_LOOP, 0., 7680., 0., 0.)),
+            1000 => ok(e.command(OP_RACK_REMOVE_MODULE, 0., 1., 0., 0.)), // queued behind the fade
+            1100 => ok(e.command(OP_RACK_CLEAR, 1., 0., 0., 0.)),
+            1200 => ok(e.command(OP_REMOVE_TRACK, 2., 0., 0., 0.)),
+            1300 => ok(e.command(OP_ADD_AUDIO_TRACK, 0., 0., 0., 0.)),
+            1400 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            1410 => ok(e.command(OP_SEEK, 5000., 0., 0., 0.)),
+            1420 => ok(e.command(OP_AUTO_OVERRIDE, 30., 0., 0., 0.)),
+            1430 => ok(e.command(OP_PLAY, 0., 0., 0., 0.)),
+            1600 => {
+                ok(e.command(OP_STOP, 0., 0., 0., 0.));
+                ok(e.command(OP_RESET_ALL, 0., 0., 0., 0.));
+            }
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        if b < 500 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "automation allocated");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(peak > 0.01, "the tracks should be audible, peak {peak}");
+}

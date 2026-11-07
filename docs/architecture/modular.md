@@ -107,6 +107,45 @@ Saturator (14) and Attenuator (15). They wrap the mixer's DSP
   - A reused slot is zeroed before its new module gets it, 64 KiB per
     sub-block (a reused delay is mute for about 11 ms), so it never replays
     the previous owner's echo.
+  - **Handover on replace.** Because a slot is held through its module's
+    removal fade, "remove (or clear) then add" in one batch on a sounding
+    rack (a patch load) would find a full bank although the UI counts the
+    slot free. So when the bank is full, `add_module` takes over the slot of
+    a *queued* Remove/Clear in the same rack: the queue applies in order, so
+    the old module is gone before the new one runs. The new module is reset
+    when it applies, which restarts the slot's zeroing (`FxPool::reassign`),
+    so it starts silent. A `handed` mask absorbs the old owner's release.
+    Across tracks there is no handover (another track's fade is independent):
+    if the engine still refuses an add, the worklet reports it and the UI
+    rolls the add back with the same "All 8 delays in use" message.
+  - `Module::reset` on a pooled effect also restarts its slot's zeroing (the
+    ring is the pool's; the module only marks it).
+  - The engine reset (`OP_RESET_ALL`) hard-clears every rack first
+    (`Rack::reset_hard`: no fade, queued edits and pending releases
+    forgotten) and only then frees the whole pool, so no stale release can
+    free a slot a new module has claimed.
+
+## Sample Player (16)
+
+A *Source* that plays a sample of the project's sample pool (the samples
+the drum rows use), one voice per channel. Inputs `pitch` and `gate`, output
+`out` (one mono channel per voice; stereo samples play as `(L + R) / 2`).
+Params: `sample` (pool id 0..255, −1 = none), `gain` (0..2, smoothed),
+`start` (0..1 of the sample, read at trigger), `pitchTrack` (Off/On) and
+`root` (MIDI note, default 60).
+
+- A rising gate starts the voice at `start · frames`; it plays to the end of
+  the sample (one-shot: follow it with an ADSR + VCA for gated notes). A gate
+  with no playable sample starts nothing.
+- With `pitchTrack` on the rate is `2^(pitch − (root − 60)/12)`, per sample
+  (bends follow), with linear interpolation; off, the rate is 1.
+- Declicked like the drum voices: a retrigger fades the sounding voice out
+  over 2 ms under the new one. A voice captures the sample's *generation*
+  (`engine/src/samples.rs`) at trigger; when the sample is replaced,
+  un-readied or cleared by an engine reset, the voice never reads the slot
+  again: it holds its last value and fades it to 0 over 2 ms.
+- Modules get the pool read-only as a `SampleView`, passed next to the FX
+  pool down `Synths::render_add` → `Rack::render_add` → `Module::process`.
 
 ## Adding a module
 

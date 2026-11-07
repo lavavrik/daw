@@ -171,6 +171,18 @@ clamped against rounding). Non-finite input is returned as is so the final
    - 0.01 dB), which a hard-limited mix does since the limiter output passes
    bit-exact outside clicks (see Click soft clip). It latches its worst state.
 
+## Engine reset
+
+`OP_RESET_ALL` calls `Mixer::reset_all`: every strip is rebuilt in place
+(params, keys, EQ/compressor state, insert crossfades, tails, holds), the
+defaults are applied *at once* (no 5 ms glides), then the reverb and delay
+returns are reset (their tails zeroed, jumping to the default settings), the
+limiter is cleared (delay line, windows, envelope, positions) and the legacy
+master gain is back at `MASTER_GAIN` (0.8) without a ramp. The result renders
+bit for bit like a new mixer (`reset_all_clears_mixer_tails_and_master`). The
+engine fades its last output sample over 5 ms across the reset, so cutting
+the tails never clicks.
+
 ## Gain staging
 
 Faders are -inf..+6 dB; the master limiter catches what is left. Poly starter

@@ -98,6 +98,39 @@ original `id` (replies are matched by id), even for malformed requests
 codes are turned into plain words for the user by `loadErrorText()` in
 `samples.ts`.
 
+### Sample generations and the engine reset
+
+Each `SamplePool::set` stamps the slot with a new pool-wide generation, and
+`clear()` (engine reset) moves it on as well. Voices (drum rows, the rack's
+Sample Player) capture the generation at trigger and keep reading only while
+`playable(id)` reports the same one; otherwise they hold their last output
+and fade it out over 2 ms. This is what makes an arena reset safe: the next
+upload may land on the very same arena slice, but never in the same
+generation.
+
+`OP_RESET_ALL` (44, stopped only, else `BAD_VALUE`) is what a project load
+sends first (`STOP` + `RESET_ALL` in one batch is fine). In the command phase
+it removes every track without a fade, frees every FX-pool slot, resets the
+mixer, transport and metronome, empties the sample pool and rewinds the
+arena to its first chunk (`SampleArena::reset`: grown chunks are freed, the
+first is **not** re-zeroed, which would be a 128 MB memset on the audio
+thread; every allocation is fully written before its sample is marked
+ready). Commands after it in the same batch land on the blank engine. The
+audible result is a 5 ms linear fade of the last output sample (L/R), added
+to the blank engine's silent output, so a ringing reverb tail ends without a
+step. It allocates nothing (`no_alloc.rs` `reset_all_does_not_allocate`).
+
+On the host side a successful `RESET_ALL` also drops the worklet's deferred
+uploads (step 3 above): they belong to the session that just ended, so each
+is answered with `sample-loaded` / `HostErr.RESET`, which the UI settles
+silently.
+
+Command results otherwise never come back to the UI (the ring is one-way).
+The one exception is a `RACK_ADD_MODULE` refused with `OUT_OF_MEMORY` (FX pool
+full): the worklet posts `{type:'rack-add-refused', slot, idx, kind}` (a rare
+error path, so the allocation is acceptable) and the UI rolls back its
+optimistic add (`rollbackRefusedAdd`).
+
 ## When the engine fails
 
 A caught exception from any engine call (most likely a WASM trap, after which

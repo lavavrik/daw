@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { banners } from '../state/banners.svelte';
 import { Project } from '../state/project.svelte';
 import { createProjectSession } from './session';
-import { markEdited } from '../state/edits';
+import { commandEdits, markEdited } from '../state/edits';
 import { projectFiles, projectFingerprint, serialize } from './serialize';
 import { FakeDir, asDir } from './fakeDir';
 import { buildFixture, fakeDecoder, fakeEngine } from './testFixture';
@@ -200,5 +200,22 @@ describe('project session', () => {
     expect(cleared).toBeGreaterThan(0);
     expect(p.dirty).toBe(false);
     expect(p.savedFingerprint).toBe(projectFingerprint(p));
+  });
+  it('New is not an edit: its default track bumps no version, so the untouched session is never autosaved (final I1)', async () => {
+    const { p } = await buildFixture();
+    markEdited(p); // the old session had edits
+    const e = engine();
+    const send = e.send.bind(e);
+    e.send = (op: number, a?: number, b?: number, c?: number, d?: number) => {
+      commandEdits(p, op); // App: e.onCommand
+      return send(op, a, b, c, d);
+    };
+    const s = createProjectSession(p, e);
+    const v0 = p.version;
+    await s.newProject();
+    expect(p.tracks).toHaveLength(1);
+    expect(p.version).toBe(v0);
+    expect(p.dirty).toBe(false);
+    expect(p.baselining).toBe(false);
   });
 });

@@ -157,3 +157,36 @@ test('the Browser always shows the starter kit, beside a library folder', async 
     });
   }, name);
 });
+
+test('Project ▸ New deletes the old autosave and never autosaves the untouched kit session (final I1)', async ({ page }) => {
+  test.setTimeout(45_000);
+  type A = { autosave: { lastSaved: number | null; flush(): Promise<void> } };
+  const hasAutosave = () =>
+    page.evaluate(async () => (await navigator.storage.getDirectory()).getDirectoryHandle('autosave').then(() => true, () => false));
+  await startAudio(page);
+  await expectKit(page);
+  await page.getByTestId('step-0-4').click(); // an edit: the old session autosaves
+  await expect
+    .poll(() => page.evaluate(async () => {
+      const a = (window as unknown as { __daw: A }).__daw.autosave;
+      await a.flush();
+      return a.lastSaved;
+    }), { timeout: 15_000 })
+    .not.toBeNull();
+  expect(await hasAutosave()).toBe(true);
+  await page.getByTestId('project-menu').click();
+  await page.getByTestId('project-new').click();
+  await page.getByTestId('project-discard').click();
+  await expectKit(page);
+  await expect.poll(hasAutosave).toBe(false); // the discarded session's autosave is deleted
+  await page.waitForTimeout(6000); // past the 5 s autosave debounce: nothing is written
+  expect(await hasAutosave()).toBe(false);
+  await startAudio(page); // reload
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('restore')).toBeHidden();
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for (const n of ['autosave', 'autosave.tmp']) await root.removeEntry(n, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  });
+});

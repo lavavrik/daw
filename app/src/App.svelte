@@ -133,6 +133,8 @@
   /** An autosave newer than the last explicit save, offered in an inline banner (never confirm()). */
   let restoreOffer = $state<AutosaveInfo | null>(null);
   let restoring = false;
+  /** This tab holds the autosave owner lock (only then may it delete the autosave). */
+  let ownsAutosave = false;
 
   async function checkAutosave() {
     if (!(await claimAutosaveOwner(locks))) {
@@ -142,6 +144,7 @@
       flashHint('Autosave is off — this project is open in another tab', 10_000);
       return;
     }
+    ownsAutosave = true;
     try {
       const info = await locked(peekAutosave);
       if (offersRestore(info, lastExplicitSave())) {
@@ -186,14 +189,33 @@
     }
   }
 
-  async function startFresh() {
-    restoreOffer = null;
+  /** Delete the autosave (it belongs to a session the user discarded). */
+  async function deleteAutosave() {
     try {
       await locked(discardAutosave);
     } catch (e) {
       console.warn('Could not remove the autosave', e);
     }
+  }
+
+  async function startFresh() {
+    restoreOffer = null;
+    await deleteAutosave();
     autosave.hold(false);
+  }
+
+  /**
+   * Project ▸ New built its fresh session (the default kit's drum track, not
+   * an edit: no version bump). Like "Start fresh": the discarded session's
+   * pending autosave is dropped and its autosave deleted (not overwritten by
+   * the untouched New session, which would then be offered back as "Restore
+   * last session" on the next start); the first real edit autosaves as
+   * usual. Only the owner tab touches the autosave. Then the kit loads.
+   */
+  function onFresh(trackId: string) {
+    autosave.cancel();
+    if (ownsAutosave) void deleteAutosave();
+    void loadDefaultKit(project, live, trackId);
   }
 
   /** "Mar 3, 14:05" (or just "14:05" today). */
@@ -431,10 +453,11 @@
       // closes held notes at the heard tick; release held piano keys.
       beforeLoad: () => {
         // A New / Open while the restore offer is open answers it (the user
-        // confirmed "Discard the unrestored session", project/discard.ts):
-        // that project replaces the session, and later edits autosave over it.
+        // confirmed "Discard the unrestored session … Its autosave will be
+        // deleted", project/discard.ts): that project replaces the session.
         if (restoreOffer && !restoring) {
           restoreOffer = null;
+          void deleteAutosave();
           autosave.hold(false);
         }
         if (project.playing) {
@@ -453,8 +476,8 @@
       // Project ▸ Save / Save As: an older autosave is now stale, and a
       // pending one is dropped unless edits landed during the write.
       onSaved: ({ version, t }) => autosave.savedExplicitly(t, project.version === version),
-      // Project ▸ New: fill its default drum track from the kit.
-      onFresh: (trackId) => void loadDefaultKit(project, live, trackId),
+      // Project ▸ New: drop the old session's autosave, fill the kit.
+      onFresh,
     });
     session = s;
     void checkAutosave(); // after audio started: a restore needs the engine

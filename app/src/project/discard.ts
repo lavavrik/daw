@@ -8,13 +8,14 @@
 //   - unsaved edits (Project.dirty);
 //   - the previous session, while the "Restore last session" offer is still
 //     open: the fresh session is not dirty, but New / Open answers the offer
-//     and the next edit autosaves over the session that was never restored.
+//     and deletes that autosave (App beforeLoad; New also drops the autosave
+//     of the session it replaces, App onFresh).
 
 /** The warning line for New / Open, or null when nothing is lost (go ahead at once). */
 export function discardWarning(p: { dirty: boolean; name: string }, restoreOffer: { name: string } | null): string | null {
   const edits = `Unsaved changes in "${p.name}" will be lost`;
   if (restoreOffer) {
-    const offer = `Discard the unrestored session "${restoreOffer.name}"? Its autosave will be overwritten.`;
+    const offer = `Discard the unrestored session "${restoreOffer.name}"? Its autosave will be deleted.`;
     return p.dirty ? `${offer} ${edits} too.` : offer;
   }
   return p.dirty ? `${edits}.` : null;

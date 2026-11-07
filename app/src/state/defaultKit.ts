@@ -65,9 +65,21 @@ export function defaultKitRows(max = MAX_ROWS): KitRow[] {
   return DEFAULT_KIT.slice(0, Math.max(0, max));
 }
 
-/** Step 1: the fresh session's drum track, with the kit's (empty) rows. Null if no track slot is free. */
+/**
+ * Step 1: the fresh session's drum track, with the kit's (empty) rows. Null
+ * if no track slot is free. Built with Project.baselining on: it is the
+ * starting point, not an edit, so no dirty mark and no version bump even when
+ * the engine's commands mark edits (Project ▸ New runs with onCommand wired;
+ * a bump there would autosave the untouched New session and offer it back as
+ * "Restore last session" on the next start).
+ */
 export function addDefaultDrumTrack(p: Project, sink: CommandSink): DrumTrack | null {
-  return addDrumTrack(p, sink, undefined, defaultKitRows().map((k) => k.name));
+  p.baselining = true;
+  try {
+    return addDrumTrack(p, sink, undefined, defaultKitRows().map((k) => k.name));
+  } finally {
+    p.baselining = false;
+  }
 }
 
 export interface KitDeps {

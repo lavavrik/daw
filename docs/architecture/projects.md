@@ -91,7 +91,11 @@ A fresh session — first start, New, and Start fresh (which keeps the first
 start's session) — gets one drum track whose eight rows (Kick, Clap, Closed
 hat, Open hat, Snare, Rim, Shaker, Perc; the first `MAX_ROWS`) are created
 synchronously with the session, empty, before `markSaved` /
-`history.clear()`. Their samples are then fetched from the bundled starter
+`history.clear()`, with `p.baselining` on (New runs with the engine's
+`onCommand` wired: without it the track would bump `p.version` and the
+untouched New session would autosave and be offered back on the next
+start). New also drops the replaced session's pending autosave and deletes
+its autosave (App `onFresh`, owner tab only), like Start fresh. Their samples are then fetched from the bundled starter
 kit and imported in row order through `importSample` (original bytes in
 `p.sampleFiles`, so Save, export and an audio restart have them), not
 awaited: the UI is usable at once and rows fill as samples land; a failure
@@ -197,8 +201,9 @@ read. New, Open… and ⌘O / Ctrl+O all go through the Project menu
 (`TopBar.request`), which asks inline "Discard and start new / open…"
 whenever `discardWarning` (`project/discard.ts`) says something would be
 lost: unsaved changes, or an open "Restore last session" offer ("Discard
-the unrestored session …?" — the fresh session is not dirty, but answering
-the offer this way lets the next edit autosave over it). ⌘N is the
+the unrestored session …? Its autosave will be deleted." — the fresh session
+is not dirty, but answering the offer this way deletes that autosave, App
+`beforeLoad`). ⌘N is the
 browser's own and is not taken over.
 
 **Closing the tab.** While a project with a folder has unsaved changes
@@ -288,7 +293,7 @@ or **Start fresh** (never `confirm()`). Until it is answered the autosave is
 **held**, so new edits cannot overwrite the session on offer (they are
 written once it is answered). A New / Open while it is open asks "Discard
 the unrestored session …?" first; confirmed, it answers the offer (that
-project replaces the session).
+project replaces the session, and the autosave on offer is deleted).
 
 - **Restore last session** → `session.restore(read)` (`read` = the
   autosave read under the autosave lock, run inside the session guard): the same

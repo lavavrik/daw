@@ -1,7 +1,7 @@
 // Mixer edits. Like actions.ts: mutate Project.mixer AND send the matching
 // engine command. Channel index on the wire: the track's slot, or
 // MIX_REVERB / MIX_DELAY / MIX_MASTER for the shared channels.
-import { MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
+import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
 import { MIX_PARAMS, clampMix, mixParam } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
@@ -54,33 +54,54 @@ export function toggleMute(p: Project, sink: CommandSink, target: MixChannelTarg
 }
 
 /**
+ * Whether `trackId`'s compressor may use `key`. Only drum rows are limited:
+ * the engine has MAX_KEYS key slots, one per distinct (drum track, row) keyed
+ * by any strip, and rejects (BAD_VALUE) a key that would need one more. Same
+ * rule as the engine's Mixer::set_key: count the distinct rows keyed by the
+ * *other* channels; the key is allowed if that count is below MAX_KEYS or the
+ * row is already among them (shared). The channel's own current row does not
+ * count, since re-keying frees it.
+ */
+export function rowKeyAllowed(p: Project, trackId: string, key: SidechainKey | null): boolean {
+  if (!key || key.row === null) return true;
+  const rows = new Set<string>();
+  for (const [id, ch] of Object.entries(p.mixer.channels)) {
+    if (id !== trackId && ch.key && ch.key.row !== null) rows.add(`${ch.key.trackId}:${ch.key.row}`);
+  }
+  return rows.size < MAX_KEYS || rows.has(`${key.trackId}:${key.row}`);
+}
+
+/**
  * Set a track's compressor key: another track, a drum row, or null (own
  * signal). A key at the channel's own whole track means none, so it is stored
  * and sent as none. Invalid keys (unknown track, row out of range, row of a
- * synth track) are ignored.
+ * synth track) and a row that would be a (MAX_KEYS+1)th distinct row key
+ * (rowKeyAllowed) are refused: nothing changes, nothing is sent, false.
  */
-export function setSidechain(p: Project, sink: CommandSink, trackId: string, key: SidechainKey | null) {
+export function setSidechain(p: Project, sink: CommandSink, trackId: string, key: SidechainKey | null): boolean {
   const t = p.tracks.find((x) => x.id === trackId);
   const ch = p.mixer.channels[trackId];
-  if (!t || !ch) return;
+  if (!t || !ch) return false;
   let stored: SidechainKey | null = null;
   let code = -1;
   if (key) {
     const src = p.tracks.find((x) => x.id === key.trackId);
-    if (!src) return;
+    if (!src) return false;
     if (key.row === null) {
       if (src.id !== trackId) {
         stored = { trackId: src.id, row: null };
         code = keyCode({ slot: src.slot });
       }
     } else {
-      if (src.kind !== 'drum' || !Number.isInteger(key.row) || key.row < 0 || key.row >= src.rows.length) return;
+      if (src.kind !== 'drum' || !Number.isInteger(key.row) || key.row < 0 || key.row >= src.rows.length) return false;
+      if (!rowKeyAllowed(p, trackId, key)) return false;
       stored = { trackId: src.id, row: key.row };
       code = keyCode({ slot: src.slot, row: key.row });
     }
   }
   ch.key = stored;
   sink.send(Op.MIX_SET_KEY, t.slot, code);
+  return true;
 }
 
 /** "Drums · kick", "Synth", or "none". */

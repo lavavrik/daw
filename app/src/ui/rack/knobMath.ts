@@ -5,8 +5,24 @@
 // gesture works in position space, so an Exp param (cutoff, envelope times)
 // moves logarithmically: each pixel of drag multiplies the value by the same
 // factor instead of adding Hz.
-import { clampParam } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
+
+/**
+ * What a knob needs to know about a param: rack params (catalog ParamDef) and
+ * mixer params (mixerCatalog MixParamDef) both fit. `minLabel` is what the
+ * minimum reads as ("Off", "-inf"), or absent/"" when it is just a number.
+ */
+export type KnobDef = Pick<ParamDef, 'label' | 'min' | 'max' | 'default' | 'integer' | 'curve' | 'unit' | 'choices'> & {
+  name?: string;
+  minLabel?: string;
+};
+
+/** Clamp to [min,max]; integer params also round. NaN falls back to the default. */
+function clampParam(d: KnobDef, v: number): number {
+  if (Number.isNaN(v)) return d.default;
+  const c = Math.min(d.max, Math.max(d.min, v));
+  return d.integer ? Math.round(c) : c;
+}
 
 /** Vertical drag distance that covers the whole range (Shift = 10x finer). */
 export const DRAG_PX = 150;
@@ -26,10 +42,10 @@ export const ZERO_ZONE = 0.02;
 export const EXP_FLOOR_RATIO = 1000;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
-const zeroBased = (d: ParamDef) => d.curve === 'exp' && d.min <= 0;
+const zeroBased = (d: KnobDef) => d.curve === 'exp' && d.min <= 0;
 
 /** Value -> position 0..1 (clamped). */
-export function toPos(d: ParamDef, v: number): number {
+export function toPos(d: KnobDef, v: number): number {
   if (Number.isNaN(v)) v = d.default;
   if (d.max <= d.min) return 0;
   if (d.curve !== 'exp') return clamp01((v - d.min) / (d.max - d.min));
@@ -44,7 +60,7 @@ export function toPos(d: ParamDef, v: number): number {
 }
 
 /** Position 0..1 -> value, clamped to the range (integer params rounded). */
-export function fromPos(d: ParamDef, pos: number): number {
+export function fromPos(d: KnobDef, pos: number): number {
   const p = clamp01(pos);
   let v: number;
   if (d.curve !== 'exp') v = d.min + p * (d.max - d.min);
@@ -62,7 +78,7 @@ export function dragPos(pos: number, dy: number, fine: boolean): number {
 }
 
 /** One keyboard step up (dir 1) or down (dir -1); `fine` = 0.1% of travel. */
-export function keyStep(d: ParamDef, v: number, dir: 1 | -1, fine = false): number {
+export function keyStep(d: KnobDef, v: number, dir: 1 | -1, fine = false): number {
   if (d.integer) return clampParam(d, Math.round(v) + dir);
   // From "off", a step up must leave the zero zone (1% would land inside it
   // and stay 0): go straight to the floor, the smallest non-zero value.
@@ -85,15 +101,28 @@ function signed(x: number): string {
   return x > 0 ? `+${s}` : `−${s.slice(1)}`;
 }
 
+/** The catalog's minLabel as shown ("-inf" -> "−∞" with real minus and infinity signs). */
+export function minLabelText(label: string): string {
+  return label === '-inf' ? '−∞' : label;
+}
+
 /**
  * Readout text. Hz -> "300 Hz" / "1.2 kHz"; s -> "250 ms" / "1.5 s" ("off" at
  * 0 for zero-based times like glide); oct/st/ct -> signed when the range is
  * bipolar (an offset), plain when unipolar (an amount, e.g. bend range);
  * unitless 0..1 -> percent; choices -> the choice label.
+ * Mixer additions: a param at its minimum shows its minLabel ("Off", "−∞");
+ * dB -> one decimal ("−18.0 dB", "+3.0 dB" when bipolar); ":1" -> "4:1";
+ * the "pan" param -> "L50" / "C" / "R100" (percent of the way to the side).
  */
-export function formatValue(d: ParamDef, v: number): string {
+export function formatValue(d: KnobDef, v: number): string {
   if (d.choices.length) return d.choices[Math.round(v)] ?? String(v);
+  if (d.minLabel && v <= d.min) return minLabelText(d.minLabel);
   const bipolar = d.min < 0;
+  if (d.name === 'pan' && d.unit === '') {
+    const pct = Math.round(Math.abs(v) * 100);
+    return pct === 0 ? 'C' : `${v < 0 ? 'L' : 'R'}${pct}`;
+  }
   // Round first so 999.7 Hz reads "1 kHz", not "1000 Hz".
   const r3 = Math.abs(Number(v.toPrecision(3)));
   switch (d.unit) {
@@ -106,6 +135,13 @@ export function formatValue(d: ParamDef, v: number): string {
     case 'st':
     case 'ct':
       return `${bipolar ? signed(v) : sig3(v)} ${d.unit}`;
+    case 'dB': {
+      const t = Math.abs(v).toFixed(1);
+      if (t === '0.0') return '0.0 dB';
+      return `${v < 0 ? '−' : bipolar ? '+' : ''}${t} dB`;
+    }
+    case ':1':
+      return `${sig3(v)}:1`;
     case '':
       if (!d.integer && d.min >= 0 && d.max <= 1) return `${Math.round(v * 100)}%`;
       return d.integer ? String(Math.round(v)) : sig3(v);

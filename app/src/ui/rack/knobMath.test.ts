@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
+import { mixParam } from '../../audio/mixerCatalog';
 import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, toPos, ZERO_ZONE } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
@@ -143,5 +144,45 @@ describe('formatValue rounding edges', () => {
     expect(formatValue(cutoff, 999.7)).toBe('1 kHz');
     expect(formatValue(attack, 0.9996)).toBe('1 s');
     expect(formatValue(glide, 0.0002)).toBe('0.2 ms');
+  });
+});
+
+// Mixer params (mixerCatalog) go through the same knob maths: dB readouts with
+// one decimal and a real minus, the catalog's minLabel at the minimum, pan as
+// L/C/R, ratio as "4:1".
+describe('formatValue: mixer params', () => {
+  it('dB: one decimal, signed when the range is bipolar', () => {
+    expect(formatValue(mixParam('eq_low'), 3)).toBe('+3.0 dB');
+    expect(formatValue(mixParam('eq_low'), -4.25)).toBe('−4.3 dB');
+    expect(formatValue(mixParam('eq_low'), 0)).toBe('0.0 dB');
+    expect(formatValue(mixParam('comp_threshold'), -18)).toBe('−18.0 dB');
+    expect(formatValue(mixParam('comp_makeup'), 6)).toBe('6.0 dB');
+    expect(formatValue(mixParam('limiter_ceiling'), -0.3)).toBe('−0.3 dB');
+  });
+  it('the minimum shows the minLabel ("Off", "−∞")', () => {
+    expect(formatValue(mixParam('send_a'), -60)).toBe('Off');
+    expect(formatValue(mixParam('send_a'), -12)).toBe('−12.0 dB');
+    expect(formatValue(mixParam('eq_hp'), 20)).toBe('Off');
+    expect(formatValue(mixParam('eq_hp'), 80)).toBe('80 Hz');
+    expect(formatValue(mixParam('fader'), -60)).toBe('−∞');
+  });
+  it('pan reads L / C / R in percent', () => {
+    expect(formatValue(mixParam('pan'), 0)).toBe('C');
+    expect(formatValue(mixParam('pan'), -0.5)).toBe('L50');
+    expect(formatValue(mixParam('pan'), 1)).toBe('R100');
+    expect(formatValue(mixParam('pan'), 0.004)).toBe('C');
+  });
+  it('ratio, ms, s and percent', () => {
+    expect(formatValue(mixParam('comp_ratio'), 4)).toBe('4:1');
+    expect(formatValue(mixParam('comp_ratio'), 2.5)).toBe('2.5:1');
+    expect(formatValue(mixParam('comp_attack'), 5)).toBe('5 ms');
+    expect(formatValue(mixParam('rev_decay'), 2.2)).toBe('2.2 s');
+    expect(formatValue(mixParam('rev_size'), 0.6)).toBe('60%');
+    expect(formatValue(mixParam('delay_time'), 6)).toBe('3/16');
+  });
+  it('mixer exp params map like rack ones', () => {
+    const r = mixParam('comp_ratio');
+    expect(toPos(r, 1)).toBe(0);
+    expect(fromPos(r, 1)).toBeCloseTo(20);
   });
 });

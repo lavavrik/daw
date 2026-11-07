@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
+import { MAX_KEYS, MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, removeTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
-import { keyLabel, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
+import { keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
 
 function fake() {
   const sent: number[][] = [];
@@ -131,5 +131,45 @@ describe('mixer state', () => {
     expect(keyLabel(p, { trackId: s.id, row: null })).toBe('Synth');
     expect(keyLabel(p, null)).toBe('none');
     expect(keyLabel(p, { trackId: 'gone', row: null })).toBe('none');
+  });
+
+  it(`at most MAX_KEYS (${MAX_KEYS}) distinct drum rows are keys: a 9th is refused, sharing or replacing is fine`, () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const d1 = addDrumTrack(p, sink)!;
+    const d2 = addDrumTrack(p, sink)!;
+    const d3 = addDrumTrack(p, sink)!; // 3 x 4 default rows = 12 rows
+    const rows = [d1, d2, d3].flatMap((d) => [0, 1, 2, 3].map((row) => ({ trackId: d.id, row })));
+    const synths = Array.from({ length: MAX_KEYS + 2 }, () => addSynthTrack(p, sink)!);
+    for (let i = 0; i < MAX_KEYS; i++) {
+      expect(rowKeyAllowed(p, synths[i].id, rows[i])).toBe(true);
+      expect(setSidechain(p, sink, synths[i].id, rows[i])).toBe(true);
+    }
+    sent.length = 0;
+    const ninth = synths[MAX_KEYS];
+    expect(rowKeyAllowed(p, ninth.id, rows[MAX_KEYS])).toBe(false);
+    expect(setSidechain(p, sink, ninth.id, rows[MAX_KEYS])).toBe(false);
+    expect(sent).toEqual([]); // no engine command, state unchanged
+    expect(p.mixer.channels[ninth.id].key).toBeNull();
+    // A row already in use can be shared; whole tracks and none are always allowed.
+    expect(setSidechain(p, sink, ninth.id, rows[0])).toBe(true);
+    expect(rowKeyAllowed(p, ninth.id, { trackId: d1.id, row: null })).toBe(true);
+    expect(setSidechain(p, sink, synths[MAX_KEYS + 1].id, { trackId: d2.id, row: null })).toBe(true);
+    // A channel that alone holds a row may swap it for a new one (its old row is freed).
+    expect(rowKeyAllowed(p, synths[MAX_KEYS - 1].id, rows[MAX_KEYS + 1])).toBe(true);
+    expect(setSidechain(p, sink, synths[MAX_KEYS - 1].id, rows[MAX_KEYS + 1])).toBe(true);
+    // ...but a channel sharing its row with another frees nothing.
+    expect(rowKeyAllowed(p, synths[0].id, rows[MAX_KEYS + 2])).toBe(false);
+  });
+
+  it('setSidechain reports success', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const d = addDrumTrack(p, sink)!;
+    const s = addSynthTrack(p, sink)!;
+    expect(setSidechain(p, sink, s.id, { trackId: d.id, row: 0 })).toBe(true);
+    expect(setSidechain(p, sink, s.id, null)).toBe(true);
+    expect(setSidechain(p, sink, s.id, { trackId: d.id, row: 99 })).toBe(false);
+    expect(setSidechain(p, sink, 'gone', null)).toBe(false);
   });
 });

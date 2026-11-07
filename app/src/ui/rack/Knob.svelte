@@ -19,11 +19,12 @@
   // (the latest value wins) plus the final value on pointerup, so dragging
   // never floods the engine's command ring. The engine smooths the rest.
   import { onDestroy } from 'svelte';
-  import type { ParamDef } from '../../audio/catalog';
   import { dragPos, formatValue, fromPos, keyStep, toPos } from './knobMath';
+  import type { KnobDef } from './knobMath';
 
   let { def, value, onchange, moduleName = '', color = '#f0a23a', testid }: {
-    def: ParamDef;
+    /** A rack ParamDef or a mixer MixParamDef. */
+    def: KnobDef;
     value: number;
     onchange: (v: number) => void;
     /** For the accessible name: "<module name> <label>". */

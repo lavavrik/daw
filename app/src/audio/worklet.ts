@@ -13,6 +13,7 @@
 //     Every 'sample' request still gets exactly one reply, with its original id.
 
 import { CommandRing } from './ring';
+import { applyMeters, meterFall } from './meterBallistics';
 import { Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
@@ -95,6 +96,9 @@ class DawEngineProcessor extends AudioWorkletProcessor {
   /** UI-visible meters (shared) and the engine's own meters (wasm memory). */
   private meters: Float32Array;
   private engMeters = new Float32Array(0);
+  /** Sample rate and the meters' per-block fall factor for 128-frame blocks. */
+  private readonly sr: number;
+  private readonly meterFall128: number;
 
   // CPU / overrun accounting (milliseconds).
   private readonly budgetMs: number;
@@ -120,6 +124,8 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.tele = new Float64Array(o.telemetrySab, 0, TELEMETRY_LEN);
     this.meters = new Float32Array(o.metersSab, 0, METER_LEN);
     const sr = o.sampleRate || sampleRate;
+    this.sr = sr;
+    this.meterFall128 = meterFall(sr, 128);
     this.budgetMs = (128 / sr) * 1000;
     this.port.onmessage = (ev) => this.onMessage(ev.data);
     try {
@@ -206,10 +212,9 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       // start of the next block plus the engine's own latency (the limiter
       // lookahead delays everything by `latency` frames).
       tele[TELEMETRY.frame] = currentFrame + n + this.latency;
-      // Meters: plain copy, no allocation (views are rebuilt only on memory growth).
-      const em = this.engMeters;
-      const m = this.meters;
-      for (let k = 0; k < METER_LEN; k++) m[k] = em[k];
+      // Meters: peak ballistics (meterBallistics.ts), no allocation (views are
+      // rebuilt only on memory growth).
+      applyMeters(this.meters, this.engMeters, n === 128 ? this.meterFall128 : meterFall(this.sr, n));
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

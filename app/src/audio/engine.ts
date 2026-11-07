@@ -212,7 +212,9 @@ export class AudioEngine {
 
   /**
    * Live view of the mixer meters, updated every block: per channel
-   * (MIX_METER_STRIDE floats) peak L, peak R (linear), gain reduction (dB).
+   * (MIX_METER_STRIDE floats) peak L, peak R (linear, with peak-meter
+   * ballistics: instant attack, METER_FALL_DB_PER_S fall — see
+   * meterBallistics.ts), gain reduction (dB, ≥ 0).
    */
   meters(): Float32Array {
     return this.meterView;

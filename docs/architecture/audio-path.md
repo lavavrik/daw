@@ -224,7 +224,11 @@ leaves the user exactly where they were:
    and that clip or row then plays nothing ("sample not loaded"). `rest`
    stops as soon as the session is replaced (`p.generation`: the ids are
    someone else's then) or another restart starts. Until it lands, an undo
-   that brings such a sample back plays nothing for it.
+   that brings such a sample back plays nothing for it; when it lands, the
+   commands binding it to what uses it now (`bindingCommands`: the
+   `projectCommands` that differ with and without that id) are sent again,
+   as no edit (`p.baselining`). Late warnings are dropped if the session
+   was replaced or another restart finished meanwhile.
 6. Failure (the hint refused, a start or replay timeout, a replay error): the
    new engine is closed (a start that answers after the timeout is closed when
    it does), the old one was never unwired, and an inline banner says

@@ -148,13 +148,16 @@
    * before any New can run; a tab that is not the owner says so at once.
    */
   let ownerClaim: OwnerClaim | null = null;
+  /** Shown for as long as this tab is not the owner (on the start overlay too). */
+  const AUTOSAVE_OFF = 'Autosave is off — this project is open in another tab';
+  let autosaveOff = $state(false);
   onMount(() => {
     ownerClaim = createOwnerClaim(locks, {
       // Another tab autosaves (and would offer / discard that session): this
       // one must not overwrite it, nor offer the other tab's live work.
       onNotOwner: () => {
         autosave.disable();
-        flashHint('Autosave is off — this project is open in another tab', 10_000);
+        autosaveOff = true;
       },
     });
   });
@@ -580,9 +583,11 @@
       if (!res.warnings.length) flashHint(`Audio restarted (${hintLabel(res.hint)})`);
       // The unused samples upload after the switch (undo may need them): their
       // warnings join the same banner, unless the session was replaced meanwhile.
+      // ...nor by a later restart (its own banner wins).
       const gen = project.generation;
+      const restarts = project.audioRestarts;
       void res.later.then((w) => {
-        if (w.length && project.generation === gen) {
+        if (w.length && project.generation === gen && project.audioRestarts === restarts) {
           banners.load = warningsText('Audio restarted — skipped or changed', [...res.warnings, ...w]);
         }
       });
@@ -682,6 +687,9 @@
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
       />
     {/if}
+    {#if autosaveOff}
+      <div class="autosave-off" data-testid="autosave-off" role="status">{AUTOSAVE_OFF}</div>
+    {/if}
     {#if restoreOffer}
       {@const offer = restoreOffer}
       <div class="restore" data-testid="restore" role="region" aria-label="Restore last session">
@@ -700,7 +708,7 @@
   {/if}
 </div>
 {#if !engine}
-  <StartOverlay {onstarted} />
+  <StartOverlay {onstarted} note={autosaveOff ? AUTOSAVE_OFF : null} />
 {/if}
 {#if project.loading}
   <!-- A New / Open is replacing the session: no clicks, drags or drops reach
@@ -721,6 +729,7 @@
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
   .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
   .restore span { flex: 1; }
+  .autosave-off { margin: 3px 3px 0; padding: 3px 8px; border-radius: 3px; background: #23242a; color: #9a9da8; border: 1px solid #33353d; }
   .restore button { font: inherit; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
   .restore .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
   .loading { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #16171b99; color: #e4e5ea; font-size: 14px; cursor: progress; }

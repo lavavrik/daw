@@ -33,12 +33,13 @@
 //   8. success: deps.unwire() (old), deps.wire(new, upload codes) -- in the
 //      same task as the last replayed command -- then the old engine closes
 //      and p.audioRestarts is bumped; then the unused samples are uploaded
-//      (replayInto's `rest`, outside any timeout: `later` in the result);
+//      (replayInto's `rest`, outside any timeout: `later` in the result),
+//      each one's bindings re-sent if an undo brought it back meanwhile;
 //      failure (start refused / timed out, replay threw / timed out): the
 //      new engine (if any; a start that answers late too) is closed, the old
 //      one was never unwired, and the result says "Couldn't apply …; kept
 //      previous settings".
-import { replayInto, sampleBytes, usedSampleIds } from '../project/load';
+import { bindingCommands, replayInto, sampleBytes, usedSampleIds } from '../project/load';
 import type { LoadEngine, SampleDecoder } from '../project/load';
 import { markBusy, markIdle } from '../state/idle';
 import type { Project } from '../state/project.svelte';
@@ -204,7 +205,7 @@ export async function restartAudio<E extends RestartEngine>(
   markBusy(p, { restarting: true });
   let e: E | null = null;
   let abandoned = false;
-  let rest: (() => Promise<string[]>) | null = null;
+  let rest: ((onLanded?: (id: number) => void) => Promise<string[]>) | null = null;
   let result: RestartResult;
   try {
     deps.stop();
@@ -233,6 +234,20 @@ export async function restartAudio<E extends RestartEngine>(
     markIdle(p);
   }
   // After the switch and once idle, outside the timeouts (rest never rejects).
-  if (rest) result.later = rest();
+  // A late sample something already points at (an undo brought it back
+  // before it was in the arena, so the engine refused that binding): bind
+  // it again now. Catching the engine up is no edit (p.baselining).
+  const fresh = e;
+  if (rest && fresh) {
+    result.later = rest((id) => {
+      if (!usedSampleIds(p).has(id)) return;
+      p.baselining = true;
+      try {
+        for (const c of bindingCommands(p, id)) fresh.send(c[0], c[1], c[2], c[3], c[4]);
+      } finally {
+        p.baselining = false;
+      }
+    });
+  }
   return result;
 }

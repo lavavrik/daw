@@ -389,8 +389,13 @@ test('a second tab neither autosaves nor offers the first tab\'s session', async
     }), { timeout: 15_000 })
     .not.toBeNull();
   const second = await context.newPage();
-  await startAudio(second);
-  await expect(second.getByTestId('flash-hint')).toContainText('Autosave is off — this project is open in another tab');
+  // Said at mount, before audio starts, and kept while this tab is not the owner.
+  await second.goto('/');
+  await expect(second.getByTestId('autosave-off')).toContainText('Autosave is off — this project is open in another tab');
+  await second.waitForTimeout(300);
+  await second.getByRole('button', { name: 'Click to start audio' }).click();
+  await expect(second.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await expect(second.getByTestId('autosave-off')).toContainText('Autosave is off — this project is open in another tab');
   await second.waitForTimeout(300);
   await expect(second.getByTestId('restore')).toBeHidden();
   await second.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Pad'));

@@ -5,7 +5,9 @@
   import { AudioEngine } from '../audio/engine';
   import { loadLatencyHint } from '../audio/restart';
 
-  let { onstarted }: { onstarted: (engine: AudioEngine) => void } = $props();
+  // `note`: a standing message for this tab (App: "Autosave is off — …" when
+  // another tab owns the autosave), shown before audio starts too.
+  let { onstarted, note = null }: { onstarted: (engine: AudioEngine) => void; note?: string | null } = $props();
 
   let busy = $state(false);
   let started = $state(false);
@@ -32,6 +34,7 @@
     <span class="label">Click to start audio</span>
     {#if busy}<span class="hint">Starting…</span>{/if}
     {#if error}<span class="error">Could not start audio: {error}</span>{/if}
+    {#if note}<span class="note" data-testid="autosave-off">{note}</span>{/if}
   </button>
 {/if}
 
@@ -57,6 +60,10 @@
   }
   .hint {
     opacity: 0.6;
+  }
+  .note {
+    opacity: 0.6;
+    font-size: 0.9rem;
   }
   .error {
     color: #ff7a7a;

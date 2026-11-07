@@ -324,6 +324,54 @@ describe('restartAudio', () => {
       expect(checkLog(started[0].log).errors).toEqual([]);
     });
 
+    it('an undo that brings back a not-yet-uploaded sample: its binding is re-sent once when the upload lands', async () => {
+      const l = await live();
+      const row = l.drums.rows[3].id;
+      // Row 3 held the unused sample 3 once: an undo can bring it back.
+      setRowSample(l.p, l.old, l.drums.id, row, 3, 'unused');
+      setRowSample(l.p, l.old, l.drums.id, row, null, 'Row');
+      vi.useFakeTimers();
+      const { d, started } = deps(l, { timeoutMs: undefined });
+      const slow = {
+        decodeAudioData: async (buf: ArrayBuffer) => {
+          if (new Uint8Array(buf)[0] === 13) await new Promise((r) => setTimeout(r, 20_000));
+          return fakeDecoder.decodeAudioData(buf);
+        },
+      };
+      const start = d.start;
+      d.start = async (h) => {
+        const e = await start(h);
+        e.context = slow as typeof fakeDecoder;
+        return e;
+      };
+      let res: Awaited<ReturnType<typeof restartAudio>> | undefined;
+      void restartAudio(l.p, 'playback', d).then((r) => (res = r));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(res?.error).toBeNull();
+      const e = started[0];
+      const slot = l.drums.slot;
+      const binds = () => e.log.filter((x) => 'op' in x && x.op === Op.SET_ROW_SAMPLE && x.args[0] === slot && x.args[1] === 3 && x.args[2] === 3);
+      l.h.undo(); // row 3 -> sample 3, which the new engine does not have yet
+      expect(l.p.tracks[0].kind === 'drum' && l.p.tracks[0].rows[3].sampleId).toBe(3);
+      expect(binds()).toHaveLength(1);
+      const [version, dirty] = [l.p.version, l.p.dirty];
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await res!.later).toEqual([]);
+      expect(binds()).toHaveLength(2); // re-sent exactly once, after the upload
+      const upload = e.log.findIndex((x) => 'sample' in x && x.sample === 3);
+      expect(e.log.lastIndexOf(binds()[1])).toBeGreaterThan(upload);
+      expect([l.p.version, l.p.dirty]).toEqual([version, dirty]); // catching the engine up is no edit
+    });
+
+    it('an unused sample nothing points at when it lands: nothing is re-sent', async () => {
+      const l = await live();
+      const { d, started } = deps(l);
+      const r = await restartAudio(l.p, 'interactive', d);
+      const before = started[0].log.filter((x) => 'op' in x).length;
+      await r!.later;
+      expect(started[0].log.filter((x) => 'op' in x).length).toBe(before);
+    });
+
     it('an unused sample the new engine refuses for memory is dropped silently; another refusal is a warning', async () => {
       const l = await live();
       const { d } = deps(l, {

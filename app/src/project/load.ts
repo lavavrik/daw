@@ -175,7 +175,35 @@ export interface Replayed {
    * its ids are someone else's now), another restart starts or succeeds, or
    * the sample left p.sampleFiles.
    */
-  rest(): Promise<string[]>;
+  rest(onLanded?: (id: number) => void): Promise<string[]>;
+}
+
+/**
+ * The commands that bind sample `id` to what uses it in `p` now (a drum
+ * row's SET_ROW_SAMPLE, a SamplePlayer's sample param, ...): those of
+ * projectCommands(serialize(p)) that differ between the engine having `id`
+ * and not having it. The restart re-sends them when a late (`rest`) upload
+ * lands, for an undo that brought the sample back before it was in the
+ * arena (the engine refused that binding then). Empty if nothing uses `id`.
+ * A binding that only stages a change must also be committed by one of
+ * these commands (true of every sample use today).
+ */
+export function bindingCommands(p: Project, id: number): [number, number, number, number, number][] {
+  const json = serialize(p);
+  const all = new Map([...p.sampleFiles.keys()].map((k) => [k, k]));
+  const without = new Map(all);
+  all.set(id, id);
+  without.delete(id);
+  const key = (c: readonly (number | undefined)[]) => c.join(',');
+  const unbound = new Map<string, number>();
+  for (const c of projectCommands(json, without).commands) unbound.set(key(c), (unbound.get(key(c)) ?? 0) + 1);
+  const out: [number, number, number, number, number][] = [];
+  for (const c of projectCommands(json, all).commands) {
+    const n = unbound.get(key(c)) ?? 0;
+    if (n > 0) unbound.set(key(c), n - 1);
+    else out.push([c[0], c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0]);
+  }
+  return out;
 }
 
 /**
@@ -222,7 +250,7 @@ export async function replayInto(
   for (const c of pc.commands) engine.send(c[0], c[1], c[2], c[3], c[4]);
 
   const unused = files.filter(([id]) => !used.has(id));
-  const rest = async (): Promise<string[]> => {
+  const rest = async (onLanded?: (id: number) => void): Promise<string[]> => {
     const out: string[] = [];
     const gen = p.generation;
     const restarts = p.audioRestarts;
@@ -245,9 +273,9 @@ export async function replayInto(
         if (current(id, f)) out.push(`Sample "${f.name}" could not be reloaded — ${e instanceof Error ? e.message : String(e)}`);
         continue;
       }
-      if (c !== Err.OK && c !== Err.DEFERRED && c !== Err.OUT_OF_MEMORY && current(id, f)) {
-        out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
-      }
+      if (!current(id, f)) continue;
+      if (c === Err.OK || c === Err.DEFERRED) onLanded?.(id);
+      else if (c !== Err.OUT_OF_MEMORY) out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
     }
     return out;
   };

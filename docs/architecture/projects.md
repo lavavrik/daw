@@ -290,8 +290,10 @@ synchronously at the start of a write, so no edit can interleave with it.
   Web Locks need no audio — and kept for the tab's lifetime) autosaves,
   offers a restore or deletes the autosave. Its outcome is therefore
   settled before any New can run, so a New clicked right after start still
-  deletes the discarded session's autosave. Any other tab shows the hint
-  "Autosave is off — this project is open in another tab" (at mount) and
+  deletes the discarded session's autosave. Any other tab shows the line
+  "Autosave is off — this project is open in another tab" from mount on
+  (on the start overlay, then above the editors, for as long as it is not
+  the owner) and
   never writes, so it cannot offer (or "Start fresh" away) the first tab's
   live session. Without Web Locks a tab assumes it is alone.
 

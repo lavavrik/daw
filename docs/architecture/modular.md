@@ -73,6 +73,41 @@ replays each starter patch's exact UI command list from
 `engine/tests/fixtures/starter_patches.txt` (generated and parity-checked by
 `app/src/state/patches.fixture.test.ts`) and asserts this.
 
+## Effect modules and the FX pool
+
+Plan 6 added Delay (9), Reverb (10), Chorus (11), EQ (12), Compressor (13),
+Saturator (14) and Attenuator (15). They wrap the mixer's DSP
+(`engine/src/dsp/`), with the mixer's defaults where they overlap.
+
+- **Stereo effects** (Delay, Reverb, Chorus, EQ, Compressor; the pink
+  *Effect* group): inputs `l` and `r` (`r` falls back to `l` when
+  unconnected), outputs `l` and `r` of **one channel each**. A poly input is
+  summed first, so one reverb serves a whole 16-voice patch. The
+  Compressor's `sc` input is the key (summed to mono); unconnected, it keys
+  on itself.
+- **Delay** syncs to the transport tempo and uses the mixer delay's
+  division table (`DELAY_DIVISIONS` in `mixer/catalog.rs`, default 3/16).
+  Synced times over 2 s are clamped; the knob shows "(max 2 s)" then, as on
+  the mixer delay.
+- **Saturator** (*Shaping*) and **Attenuator** (*Utility*: `in × amount +
+  offset`) are per channel (poly).
+- **FX pool** (`engine/src/rack/fx_pool.rs`). The module enum is inline and
+  fixed-size, so Delay (2 s stereo ring), Reverb (FDN lines + predelay) and
+  Chorus (50 ms ring) never own memory. They hold a `u8` slot of an
+  engine-owned pool, allocated once for the context sample rate and
+  **shared by all tracks**: 8 delay, 8 reverb and 16 chorus slots (10.5 MiB
+  at 48 kHz). The dsp structs come as a `*Core` that takes the ring in
+  `process(buf, l, r)`; the mixer's own Delay/Reverb wrap the same core with
+  a `Vec`, bit-identically (`mixer_delay_reverb_unchanged`).
+  - Adding one when its bank is full returns `ERR_OUT_OF_MEMORY` and adds
+    nothing. The UI never sends it: the add menu greys the module with
+    "All 8 delays in use" (counted over the project's tracks).
+  - A slot returns to the pool only when its module is gone: when the removal
+    or clear *applies*, after the 2 ms declick fade.
+  - A reused slot is zeroed before its new module gets it, 64 KiB per
+    sub-block (a reused delay is mute for about 11 ms), so it never replays
+    the previous owner's echo.
+
 ## Adding a module
 
 Modules are enum-dispatched (no trait objects, no allocation):
@@ -80,8 +115,11 @@ Modules are enum-dispatched (no trait objects, no allocation):
 1. Add `engine/src/rack/modules/<name>.rs` with the DSP struct (`new(sr)`,
    `process(...)`; follow the contract at the top of `rack/modules/mod.rs`).
    Declare it with `pub mod <name>;` in `rack/modules/mod.rs`.
-2. Add the variant to `enum Module` and wire it into `Module::new`,
-   `Module::kind` and `Module::process` (same file).
+2. Add the variant to `enum Module` and wire it into
+   `Module::with_fx_slot`, `Module::kind`, `Module::process` and
+   `Module::reset` (same file). A module that needs a big buffer borrows it
+   from the FX pool instead (see above): give it a `FxKind` bank and
+   `ModuleKind::fx_kind`.
 3. Add the variant to `enum ModuleKind` in `rack/catalog.rs` with a **fixed
    id** (append only: ids are wire format and saved-project format), to
    `ModuleKind::ALL`, and add its `ModuleSpec` (ports, params with
@@ -110,3 +148,8 @@ voices, about 9% with each track also playing a 16-note pattern (plan 3). The e2
 (8 voices, 2 saw oscs with unison 2, LP24 + LFO, VCA) in Chromium and
 requires CPU telemetry below 60%, audible output (peak L/R > 0), and no new
 dropouts or errors; a single run measured about 7%.
+
+Rack effects (plan 6, `fx_chain_track_renders_under_budget`): one track
+running MIDI In → Osc → Filter (8 voices) → Chorus → Delay → Reverb → Out
+measured 0.65% of real time natively. The effects run once, on the summed
+stereo signal.

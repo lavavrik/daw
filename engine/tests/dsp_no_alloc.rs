@@ -2,7 +2,7 @@
 //! every setter and `reset()` run on the audio thread. Same counting-allocator
 //! pattern as `no_alloc.rs`, armed per-thread.
 
-use daw_engine::dsp::{Biquad, Compressor, Delay, Eq3, Limiter, Reverb};
+use daw_engine::dsp::{Biquad, ChorusCore, Compressor, Delay, Eq3, Limiter, Reverb};
 use daw_engine::dsp::biquad::Coefs;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -46,6 +46,8 @@ fn dsp_processing_and_setters_do_not_allocate() {
     let mut del = Delay::new(sr);
     let mut lim = Limiter::new(sr);
     let mut bq = Biquad::new(Coefs::low_pass(sr, 1000.0, 0.7));
+    let mut cho = ChorusCore::new(sr);
+    let mut cho_buf = vec![0.0f32; ChorusCore::buffer_len(sr)];
     let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
     let (mut kl, mut kr) = ([0.0f32; 128], [0.0f32; 128]);
     let mut seed = 1u32;
@@ -87,10 +89,14 @@ fn dsp_processing_and_setters_do_not_allocate() {
             lim.set_ceiling(0.5 + 0.5 * t);
             lim.set_release_ms(10.0 + 490.0 * t);
             bq.set(Coefs::peaking(sr, 200.0 + 5000.0 * t, 6.0, 1.0));
+            cho.set_rate(0.05 + 4.95 * t);
+            cho.set_depth(t);
+            cho.set_mix(1.0 - t);
         }
         fill(&mut l, &mut r, 1.5);
         fill(&mut kl, &mut kr, 0.8);
         eq.process(&mut l, &mut r);
+        cho.process(&mut cho_buf, &mut l, &mut r);
         comp.process(&mut l, &mut r, &kl, &kr);
         comp.process_self(&mut l, &mut r);
         let (mut sl, mut sr_) = (l, r);
@@ -113,6 +119,7 @@ fn dsp_processing_and_setters_do_not_allocate() {
             del.reset();
             lim.reset();
             bq.reset();
+            cho.reset();
         }
     }
 

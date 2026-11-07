@@ -54,14 +54,30 @@
 //!   running graph plus queued edits), so e.g. a connect to a module whose add
 //!   is still queued is accepted. Accessors (`kind`, `cable`, `param`,
 //!   `order`) report the *running* graph.
+//!
+//! # FX pool
+//! Delay, Reverb and Chorus need a slot of the engine-wide [`FxPool`]
+//! (`fx_pool.rs`, shared by every track's rack). `add_module` claims it at
+//! validation time, so a queued add holds its slot and a full bank is
+//! reported at once as `ERR_OUT_OF_MEMORY` (nothing is added). A slot is
+//! given back only when its module is really gone: when a `Remove`/`Clear`
+//! *applies* (after the declick fade, so the effect is never cut while
+//! audible), or when a clear drops a still-queued add. Applying an edit
+//! only records the slot in `released`; [`Rack::reclaim`] hands those back
+//! to the pool, which `render_add` and `add_module` do on every call (and
+//! the synth tracks after edits that may apply at once).
 
 pub mod catalog;
+pub mod fx_pool;
+#[cfg(test)]
+mod fx_tests;
 pub mod modules;
 pub mod port;
 
-use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, OK};
+use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, ERR_OUT_OF_MEMORY, OK};
 use crate::{MAX_MODULES, MAX_PARAMS, MAX_PORTS, RACK_BLOCK};
 use catalog::{spec, ModuleKind};
+use fx_pool::{FxKind, FxPool, NO_SLOT};
 use modules::{Ctx, Module, NoteEvent};
 use port::PortBuf;
 
@@ -77,7 +93,8 @@ const SILENCE: f32 = 1e-6;
 /// A validated edit, as stored in the declick queue (indices fit in u8).
 #[derive(Clone, Copy, Debug)]
 enum Edit {
-    Add(u8, ModuleKind),
+    /// Module index, kind, FX-pool slot (`NO_SLOT` for inline kinds).
+    Add(u8, ModuleKind, u8),
     Remove(u8),
     Connect { from: (u8, u8), to: (u8, u8) },
     Disconnect((u8, u8)),
@@ -138,6 +155,9 @@ pub struct Rack {
     blk_l: [f32; RACK_BLOCK],
     blk_r: [f32; RACK_BLOCK],
     blk_pos: usize,
+    /// FX-pool slots of removed modules not yet handed back (bit = slot, one
+    /// mask per `FxKind`); see [`Rack::reclaim`].
+    released: [u32; 3],
 }
 
 /// Is module `m` reachable from itself through modules in `within`?
@@ -182,6 +202,7 @@ impl Rack {
             blk_l: [0.0; RACK_BLOCK],
             blk_r: [0.0; RACK_BLOCK],
             blk_pos: RACK_BLOCK,
+            released: [0; 3],
         }
     }
 
@@ -223,9 +244,15 @@ impl Rack {
     // ---- edits -------------------------------------------------------------
 
     /// Remove every module and cable (declicked while sounding). Edits still
-    /// queued are dropped: the clear supersedes them.
+    /// queued are dropped: the clear supersedes them (a dropped add gives its
+    /// FX-pool slot back at the next [`reclaim`](Rack::reclaim)).
     pub fn clear(&mut self) {
         self.pending = [None; MAX_MODULES];
+        for k in 0..self.queued.min(EDIT_QUEUE_LEN) {
+            if let Edit::Add(_, kind, slot) = self.queue[k] {
+                self.release(kind.fx_kind(), slot);
+            }
+        }
         if self.queued > 0 || self.is_sounding() {
             self.queue[0] = Edit::Clear;
             self.queued = 1;
@@ -235,15 +262,54 @@ impl Rack {
     }
 
     /// Add a module of `kind` at slot `idx` with default params and no cables.
-    /// `ERR_BAD_INDEX` if `idx >= MAX_MODULES`; `ERR_BAD_VALUE` if occupied.
-    pub fn add_module(&mut self, idx: usize, kind: ModuleKind) -> i32 {
-        let Some(slot) = self.pending.get_mut(idx) else { return ERR_BAD_INDEX };
-        if slot.is_some() {
-            return ERR_BAD_VALUE;
+    /// `ERR_BAD_INDEX` if `idx >= MAX_MODULES`; `ERR_BAD_VALUE` if occupied;
+    /// `ERR_OUT_OF_MEMORY` if `kind` needs an FX-pool slot and `fx` has none
+    /// free (then nothing is added).
+    pub fn add_module(&mut self, idx: usize, kind: ModuleKind, fx: &mut FxPool) -> i32 {
+        self.reclaim(fx);
+        match self.pending.get(idx) {
+            None => return ERR_BAD_INDEX,
+            Some(Some(_)) => return ERR_BAD_VALUE,
+            Some(None) => {}
         }
-        *slot = Some(kind);
-        self.submit(Edit::Add(idx as u8, kind), EditClass::Add);
+        let fx_slot = match kind.fx_kind() {
+            Some(k) => match fx.claim(k) {
+                Some(s) => s,
+                None => return ERR_OUT_OF_MEMORY,
+            },
+            None => NO_SLOT,
+        };
+        self.pending[idx] = Some(kind);
+        self.submit(Edit::Add(idx as u8, kind, fx_slot), EditClass::Add);
         OK
+    }
+
+    /// Hand the FX-pool slots of modules that are gone back to `fx`.
+    pub fn reclaim(&mut self, fx: &mut FxPool) {
+        for k in FxKind::ALL {
+            let mut m = std::mem::take(&mut self.released[k as usize]);
+            while m != 0 {
+                let s = m.trailing_zeros();
+                m &= m - 1;
+                fx.release(k, s as u8);
+            }
+        }
+    }
+
+    /// Record `slot` of `kind` (if any) for the next `reclaim`.
+    fn release(&mut self, kind: Option<FxKind>, slot: u8) {
+        if let Some(k) = kind {
+            if (slot as u32) < 32 {
+                self.released[k as usize] |= 1 << slot;
+            }
+        }
+    }
+
+    /// Record the FX slot of the running module at `i` (if any).
+    fn release_module(&mut self, i: usize) {
+        if let Some((k, s)) = self.slots.get(i).and_then(|sl| sl.module.as_ref()).and_then(Module::fx_slot) {
+            self.release(Some(k), s);
+        }
     }
 
     /// Remove module `idx` and every cable into or out of it.
@@ -368,10 +434,13 @@ impl Rack {
     /// (everything is `get`-guarded), though validation makes that moot.
     fn apply(&mut self, e: Edit) {
         match e {
-            Edit::Add(i, kind) => {
+            Edit::Add(i, kind, fx_slot) => {
                 let i = i as usize;
+                // Validation keeps an occupied index from being added to; if
+                // it ever were, the old module's slot must not leak.
+                self.release_module(i);
                 if let Some(slot) = self.slots.get_mut(i) {
-                    slot.module = Some(Module::new(kind, self.sr));
+                    slot.module = Some(Module::with_fx_slot(kind, self.sr, fx_slot));
                     slot.params = [0.0; MAX_PARAMS];
                     for (dst, p) in slot.params.iter_mut().zip(spec(kind).params) {
                         *dst = p.default;
@@ -381,6 +450,7 @@ impl Rack {
                 self.silence_outputs(i);
             }
             Edit::Remove(i) => {
+                self.release_module(i as usize);
                 if let Some(slot) = self.slots.get_mut(i as usize) {
                     *slot = Slot::EMPTY;
                 }
@@ -409,6 +479,9 @@ impl Rack {
                 }
             }
             Edit::Clear => {
+                for i in 0..self.slots.len() {
+                    self.release_module(i);
+                }
                 for slot in self.slots.iter_mut() {
                     *slot = Slot::EMPTY;
                 }
@@ -489,8 +562,10 @@ impl Rack {
     /// Render `min(left.len(), right.len())` frames and **add** them into
     /// `left`/`right`. Internally renders whole `RACK_BLOCK` sub-blocks (any
     /// leftover frames are handed out on the next call), each with
-    /// `ctx.ticks` advanced to that sub-block's start while playing.
-    pub fn render_add(&mut self, ctx: &Ctx, left: &mut [f32], right: &mut [f32]) {
+    /// `ctx.ticks` advanced to that sub-block's start while playing. Pooled
+    /// effects borrow their memory from `fx`; slots of modules removed
+    /// meanwhile are handed back to it at the end.
+    pub fn render_add(&mut self, ctx: &Ctx, fx: &mut FxPool, left: &mut [f32], right: &mut [f32]) {
         let n = left.len().min(right.len());
         let mut done = 0;
         while done < n {
@@ -499,7 +574,7 @@ impl Rack {
                 if ctx.playing {
                     sub.ticks = ctx.ticks + done as f64 * ctx.ticks_per_frame;
                 }
-                self.render_sub(&sub);
+                self.render_sub(&sub, fx);
                 self.blk_pos = 0;
             }
             let take = (RACK_BLOCK - self.blk_pos).min(n - done);
@@ -513,12 +588,13 @@ impl Rack {
             self.blk_pos += take;
             done += take;
         }
+        self.reclaim(fx);
     }
 
     /// Run every module once (in order), mix the Out modules into
     /// `blk_l`/`blk_r`, apply the declick gain, and apply queued edits once
     /// the fade-out has reached 0.
-    fn render_sub(&mut self, ctx: &Ctx) {
+    fn render_sub(&mut self, ctx: &Ctx, fx: &mut FxPool) {
         for k in 0..self.order_len {
             let m = self.order[k] as usize;
             let Some(slot) = self.slots.get_mut(m) else { continue };
@@ -534,7 +610,7 @@ impl Rack {
             }
             let base = m * MAX_PORTS;
             if let Some(outs) = self.outs.get_mut(base..base + n_out) {
-                module.process(ctx, &slot.params, &self.ins[..n_in], outs);
+                module.process(ctx, &slot.params, &self.ins[..n_in], outs, fx);
             }
         }
 
@@ -575,6 +651,7 @@ mod tests {
     use super::port::PortBuf;
     use super::*;
     use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, OK};
+    use fx_pool::FxPool;
     use crate::{MAX_MODULES, MAX_PARAMS, MAX_POLY, RACK_BLOCK};
 
     const SR: f32 = 48000.0;
@@ -596,7 +673,7 @@ mod tests {
         for _ in 0..frames.div_ceil(128) {
             l.fill(0.0);
             rr.fill(0.0);
-            r.render_add(&ctx(), &mut l, &mut rr);
+            r.render_add(&ctx(), &mut FxPool::empty(), &mut l, &mut rr);
             out.extend_from_slice(&l);
         }
         out
@@ -604,9 +681,9 @@ mod tests {
 
     /// LFO `lfo` -> VCA `vca`.in -> Out `out`.l
     fn chain(r: &mut Rack, lfo: usize, vca: usize, out: usize) {
-        assert_eq!(r.add_module(lfo, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(vca, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(out, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(lfo, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(vca, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(out, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((lfo, 0), (vca, 0)), OK);
         assert_eq!(r.connect((vca, 0), (out, 0)), OK);
     }
@@ -640,9 +717,9 @@ mod tests {
     #[test]
     fn topo_order_respects_cables() {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Out), OK);
-        assert_eq!(r.add_module(5, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(9, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Out, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(5, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(9, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((9, 0), (5, 0)), OK);
         assert_eq!(r.connect((5, 0), (0, 0)), OK);
         assert_eq!(r.order(), &[9, 5, 0]);
@@ -651,10 +728,10 @@ mod tests {
     #[test]
     fn feedback_loop_uses_previous_subblock() {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(2, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(3, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((0, 0), (1, 0)), OK);
         assert_eq!(r.connect((1, 0), (2, 0)), OK);
         assert_eq!(r.connect((2, 0), (1, 1)), OK); // the loop
@@ -675,9 +752,9 @@ mod tests {
     #[test]
     fn connect_replaces_existing_cable() {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(2, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Vca, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((0, 0), (2, 0)), OK);
         assert_eq!(r.cable((2, 0)), Some((0, 0)));
         assert_eq!(r.connect((1, 0), (2, 0)), OK);
@@ -690,14 +767,14 @@ mod tests {
     fn remove_module_drops_its_cables() {
         let mut r = Rack::new(SR);
         chain(&mut r, 0, 1, 2);
-        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((3, 0), (1, 1)), OK);
         assert_eq!(r.remove_module(1), OK);
         assert_eq!(r.kind(1), None);
         assert_eq!(r.cable((2, 0)), None, "cable from the removed module");
         assert_eq!(r.order(), &[0, 2, 3]);
         // Re-adding at the same index starts with no cables.
-        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca, &mut FxPool::empty()), OK);
         assert_eq!(r.cable((1, 0)), None);
         assert_eq!(r.cable((1, 1)), None);
     }
@@ -709,9 +786,9 @@ mod tests {
         // engine reports as ERR_BAD_INDEX.
         assert_eq!(ModuleKind::from_id(99), None);
         assert_eq!(ModuleKind::from_id(u32::MAX), None);
-        assert_eq!(r.add_module(MAX_MODULES, ModuleKind::Vca), ERR_BAD_INDEX);
-        assert_eq!(r.add_module(0, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(0, ModuleKind::Lfo), ERR_BAD_VALUE, "occupied");
+        assert_eq!(r.add_module(MAX_MODULES, ModuleKind::Vca, &mut FxPool::empty()), ERR_BAD_INDEX);
+        assert_eq!(r.add_module(0, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut FxPool::empty()), ERR_BAD_VALUE, "occupied");
         assert_eq!(r.kind(0), Some(ModuleKind::Vca));
         assert_eq!(r.remove_module(5), ERR_BAD_INDEX, "empty slot");
         assert_eq!(r.remove_module(usize::MAX), ERR_BAD_INDEX);
@@ -731,7 +808,7 @@ mod tests {
         assert_eq!(r.set_param(0, MAX_PARAMS + 3, 0.5), ERR_BAD_INDEX);
         assert_eq!(r.set_param(9, 0, 0.5), ERR_BAD_INDEX, "empty slot");
         assert_eq!(r.set_param(0, VCA_LEVEL, 0.5), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         assert_eq!(r.set_param(1, LFO_WAVE, 1.5), ERR_BAD_VALUE, "fractional choice");
         assert_eq!(r.set_param(1, LFO_WAVE, 4.0), ERR_BAD_VALUE, "past last choice");
         assert_eq!(r.set_param(1, LFO_WAVE, 3.0), OK);
@@ -770,7 +847,7 @@ mod tests {
         }
         let mut outs = [PortBuf::new()];
         let params = [1.0f32; MAX_PARAMS];
-        vca.process(&ctx(), &params, &ins, &mut outs);
+        vca.process(&ctx(), &params, &ins, &mut outs, &mut FxPool::empty());
         assert_eq!(outs[0].channels, 4);
         for ch in 0..4 {
             for i in 0..RACK_BLOCK {
@@ -825,13 +902,13 @@ mod tests {
     fn queued_edits_validate_against_pending_state() {
         let mut r = sounding_square();
         // A cable-less add applies at once, even while sounding.
-        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         assert_eq!(r.kind(3), Some(ModuleKind::Lfo));
         assert_eq!(r.connect((3, 0), (1, 1)), OK); // queued (sounding)
         assert_eq!(r.cable((1, 1)), None);
         // With the queue non-empty, adds queue too (ordering).
-        assert_eq!(r.add_module(5, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(5, ModuleKind::Lfo), ERR_BAD_VALUE, "occupied once queued");
+        assert_eq!(r.add_module(5, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(5, ModuleKind::Lfo, &mut FxPool::empty()), ERR_BAD_VALUE, "occupied once queued");
         assert_eq!(r.kind(5), None, "not applied before the fade-out");
         // Module 5 is not in the running graph yet, but validates.
         assert_eq!(r.connect((5, 0), (1, 1)), OK);
@@ -846,8 +923,8 @@ mod tests {
     #[test]
     fn add_while_sounding_does_not_dip() {
         let mut r = sounding_square();
-        assert_eq!(r.add_module(7, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(8, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(7, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(8, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.kind(8), Some(ModuleKind::Out));
         let out = render(&mut r, 480);
         assert!(out.iter().all(|&x| (x - 0.8).abs() < 1e-3), "output dipped");
@@ -856,9 +933,9 @@ mod tests {
     #[test]
     fn edit_on_silent_rack_fades_in() {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Lfo), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(2, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.set_param(0, LFO_WAVE, SQUARE), OK);
         assert_eq!(r.set_param(0, LFO_RATE, 1.0), OK);
         assert_eq!(r.connect((0, 0), (1, 0)), OK);
@@ -879,10 +956,10 @@ mod tests {
     fn cycle_breaking_keeps_downstream_last() {
         // Out@0 is fed by the loop 1 <-> 2 but is not on it.
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Out), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(2, ModuleKind::Vca), OK);
-        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Out, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Vca, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         assert_eq!(r.connect((3, 0), (1, 0)), OK);
         assert_eq!(r.connect((1, 0), (2, 0)), OK);
         assert_eq!(r.connect((2, 0), (1, 1)), OK);
@@ -893,7 +970,7 @@ mod tests {
     #[test]
     fn queue_overflow_applies_in_order() {
         let mut r = sounding_square();
-        assert_eq!(r.add_module(3, ModuleKind::Lfo), OK);
+        assert_eq!(r.add_module(3, ModuleKind::Lfo, &mut FxPool::empty()), OK);
         // 101 edits: overflows the 64-entry queue; ends connected.
         for i in 0..100 {
             let code = if i % 2 == 0 { r.connect((3, 0), (1, 1)) } else { r.disconnect((1, 1)) };
@@ -942,8 +1019,8 @@ mod tests {
     /// past the fade-in so it is sounding.
     fn sounding_osc(wave: f32, frames: usize) -> (Rack, f32) {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Osc), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Osc, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.set_param(0, OSC_WAVE, wave), OK);
         assert_eq!(r.connect((0, 0), (1, 0)), OK);
         let out = render(&mut r, frames);
@@ -1007,8 +1084,8 @@ mod tests {
     /// Square osc at C1: long flat stretches at +-0.8.
     fn sounding_square_osc() -> (Rack, f32) {
         let mut r = Rack::new(SR);
-        assert_eq!(r.add_module(0, ModuleKind::Osc), OK);
-        assert_eq!(r.add_module(1, ModuleKind::Out), OK);
+        assert_eq!(r.add_module(0, ModuleKind::Osc, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Out, &mut FxPool::empty()), OK);
         assert_eq!(r.set_param(0, OSC_WAVE, OSC_SQUARE), OK);
         assert_eq!(r.set_param(0, OSC_OCTAVE, -3.0), OK);
         assert_eq!(r.connect((0, 0), (1, 0)), OK);
@@ -1035,7 +1112,7 @@ mod tests {
         let mut out = vec![warm[warm.len() - 1]];
         for n in [1usize, 31, 100, 7, 128, 33, 200] {
             let (mut l, mut rr) = (vec![0.0f32; n], vec![0.0f32; n]);
-            r.render_add(&ctx(), &mut l, &mut rr);
+            r.render_add(&ctx(), &mut FxPool::empty(), &mut l, &mut rr);
             assert_eq!(l, rr, "l feeds both sides when r is unconnected");
             out.extend_from_slice(&l);
         }

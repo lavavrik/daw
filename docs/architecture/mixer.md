@@ -205,18 +205,23 @@ via `reset()`. They can **not** simply be wrapped as rack modules, though:
   `add_module` would allocate on the audio thread, and storing them inline
   would make every `Module` slot that big.
 
-So rack effect modules need an **engine-owned FX memory pool** (`FxPool`,
-plan 6): typed slots shared by all tracks — **8 delay, 8 reverb and 16 chorus
-slots** — allocated once in `Engine::new` for the context sample rate (~9 MiB
-at 48 kHz, ~18 MiB at 96 kHz), and **borrowed-buffer constructors**
-(`Delay::with_buffer(sr, &mut [f32])`-style, or the module holding a `u8`
-slot index and receiving the slice at `process` time). Adding an FX module
-claims a free slot (refused with `ERR_OUT_OF_MEMORY` when that kind is used
-up; the add menu greys it out, like the key cap) and removing it returns the
-slot after its tail fades; the slot is zeroed before reuse. The pool is
-shared rather than per-track because most patches use none, and the mixer
-returns already give every track a delay and a reverb.
-The mixer's own Reverb/Delay returns keep their dedicated buffers.
+So rack effect modules use an **engine-owned FX memory pool** (`FxPool`,
+`engine/src/rack/fx_pool.rs`, plan 6): typed slots shared by all tracks —
+**8 delay, 8 reverb and 16 chorus slots** — allocated once (in
+`Synths::new`, called by `Engine::new`) for the context sample rate
+(10.5 MiB at 48 kHz, 21 MiB at 96 kHz). The dsp is split into a
+`DelayCore` / `ReverbCore` / `ChorusCore` holding all state except the ring,
+with `process(buf, l, r)`; the rack module holds a `u8` slot index and
+borrows the slot at `process` time. Adding an FX module claims a free slot
+(refused with `ERR_OUT_OF_MEMORY` when that kind is used up; the add menu
+greys it out with "All 8 delays in use") and removing it returns the slot
+once the removal applies, after the declick fade; the slot is zeroed in
+64 KiB steps before its next owner uses it. The pool is shared rather than
+per-track because most patches use none, and the mixer returns already give
+every track a delay and a reverb (see `docs/architecture/modular.md`).
+The mixer's own Reverb/Delay returns keep their dedicated buffers: `Delay` /
+`Reverb` wrap the same cores with an owned `Vec`, bit-identically (pinned by
+`mixer_delay_reverb_unchanged`).
 
 The strip's EQ/Comp inserts can become the default rack-per-track chain.
 Parameter tables stay in the golden JSON style (`mixer_catalog.json`), which

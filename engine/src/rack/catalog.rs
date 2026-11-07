@@ -10,11 +10,15 @@
 //! Param and port *indices* are positions in these tables, so the order of
 //! entries is part of the engine <-> UI protocol: append, never reorder.
 
+use super::fx_pool::{FxKind, CHORUS_SLOTS, DELAY_SLOTS, REVERB_SLOTS};
+use crate::mixer::catalog::{DELAY_DEFAULT_DIVISION, DELAY_DIVISIONS};
 use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 
 /// Module kinds. The discriminants are **fixed wire ids** (commands and saved
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
-/// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8.
+/// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
+/// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15
+/// (SamplePlayer=16 is reserved for plan 6 task 2).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -27,6 +31,13 @@ pub enum ModuleKind {
     Lfo = 6,
     Mixer = 7,
     Out = 8,
+    Delay = 9,
+    Reverb = 10,
+    Chorus = 11,
+    Eq = 12,
+    Compressor = 13,
+    Saturator = 14,
+    Attenuator = 15,
 }
 
 impl ModuleKind {
@@ -41,11 +52,29 @@ impl ModuleKind {
         ModuleKind::Lfo,
         ModuleKind::Mixer,
         ModuleKind::Out,
+        ModuleKind::Delay,
+        ModuleKind::Reverb,
+        ModuleKind::Chorus,
+        ModuleKind::Eq,
+        ModuleKind::Compressor,
+        ModuleKind::Saturator,
+        ModuleKind::Attenuator,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
     pub fn from_id(id: u32) -> Option<ModuleKind> {
         ModuleKind::ALL.iter().copied().find(|&k| k as u32 == id)
+    }
+
+    /// The FX-pool bank a module of this kind needs a slot in (Delay, Reverb,
+    /// Chorus), or `None` for inline modules (see `rack/fx_pool.rs`).
+    pub fn fx_kind(self) -> Option<FxKind> {
+        match self {
+            ModuleKind::Delay => Some(FxKind::Delay),
+            ModuleKind::Reverb => Some(FxKind::Reverb),
+            ModuleKind::Chorus => Some(FxKind::Chorus),
+            _ => None,
+        }
     }
 }
 
@@ -132,6 +161,21 @@ const fn lin(name: &'static str, label: &'static str, min: f32, max: f32, defaul
 /// A continuous exponential-knob param (times); `min > 0` unless noted.
 const fn exp(name: &'static str, label: &'static str, min: f32, max: f32, default: f32, unit: &'static str) -> ParamSpec {
     ParamSpec { name, label, min, max, default, integer: false, curve: Curve::Exp, unit, choices: &[], smooth: false }
+}
+
+/// A continuous param with a unit and curve (`smooth`: the module glides it).
+#[allow(clippy::too_many_arguments)]
+const fn cont(
+    name: &'static str,
+    label: &'static str,
+    min: f32,
+    max: f32,
+    default: f32,
+    curve: Curve,
+    unit: &'static str,
+    smooth: bool,
+) -> ParamSpec {
+    ParamSpec { name, label, min, max, default, integer: false, curve, unit, choices: &[], smooth }
 }
 
 /// An integer param `min..=max`.
@@ -359,6 +403,128 @@ static OUT: ModuleSpec = ModuleSpec {
     params: &[lin("level", "Level", 0.0, 1.0, 0.8, true)],
 };
 
+// ---- effects (plan 6) -------------------------------------------------------
+//
+// The stereo effects (Delay, Reverb, Chorus, Eq, Compressor) take `l` and `r`
+// (`r` falls back to `l` when unconnected) and output `l` and `r` of exactly
+// **1 channel** each: poly inputs are summed first, so one reverb serves a
+// whole 16-voice patch. Their DSP is the mixer's (`engine/src/dsp/`), with
+// the mixer's defaults where they overlap. Saturator and Attenuator are
+// per-channel (poly). Delay, Reverb and Chorus borrow memory from the shared
+// FX pool (`fx_pool.rs`); adding one when its bank is full returns
+// `ERR_OUT_OF_MEMORY`.
+
+const STEREO_IN: &[PortSpec] = &[port("l", Signal::Audio), port("r", Signal::Audio)];
+const STEREO_OUT: &[PortSpec] = &[port("l", Signal::Audio), port("r", Signal::Audio)];
+
+static DELAY: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Delay,
+    id: "delay",
+    name: "Delay",
+    category: "effect",
+    inputs: STEREO_IN,
+    outputs: STEREO_OUT,
+    params: &[
+        // The mixer delay's table (one table for both); synced to the
+        // transport tempo, clamped to 2 s ("(max 2 s)" in the UI).
+        choice("division", "Division", DELAY_DIVISIONS, DELAY_DEFAULT_DIVISION as f32),
+        lin("feedback", "Feedback", 0.0, 0.95, 0.35, true),
+        lin("mix", "Mix", 0.0, 1.0, 0.3, true),
+        choice("pingpong", "Ping-pong", &["Off", "On"], 1.0),
+        cont("hicut", "High cut", 1000.0, 20000.0, 6000.0, Curve::Exp, "Hz", true),
+    ],
+};
+
+static REVERB: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Reverb,
+    id: "reverb",
+    name: "Reverb",
+    category: "effect",
+    inputs: STEREO_IN,
+    outputs: STEREO_OUT,
+    params: &[
+        lin("size", "Size", 0.0, 1.0, 0.6, true),
+        cont("decay", "Decay", 0.2, 20.0, 2.2, Curve::Exp, "s", true),
+        lin("damping", "Damping", 0.0, 1.0, 0.5, true),
+        cont("predelay", "Predelay", 0.0, 200.0, 20.0, Curve::Lin, "ms", true),
+        lin("mix", "Mix", 0.0, 1.0, 0.3, true),
+    ],
+};
+
+static CHORUS: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Chorus,
+    id: "chorus",
+    name: "Chorus",
+    category: "effect",
+    inputs: STEREO_IN,
+    outputs: STEREO_OUT,
+    params: &[
+        cont("rate", "Rate", 0.05, 5.0, 0.6, Curve::Exp, "Hz", false),
+        lin("depth", "Depth", 0.0, 1.0, 0.4, true),
+        lin("mix", "Mix", 0.0, 1.0, 0.5, true),
+    ],
+};
+
+static EQ: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Eq,
+    id: "eq",
+    name: "EQ",
+    category: "effect",
+    inputs: STEREO_IN,
+    outputs: STEREO_OUT,
+    params: &[
+        // 20 Hz (the minimum) is "off" (see dsp/eq.rs).
+        cont("hp", "High-pass", 20.0, 1000.0, 20.0, Curve::Exp, "Hz", true),
+        cont("low", "Low", -15.0, 15.0, 0.0, Curve::Lin, "dB", true),
+        cont("midf", "Mid freq", 200.0, 8000.0, 1000.0, Curve::Exp, "Hz", true),
+        cont("mid", "Mid", -15.0, 15.0, 0.0, Curve::Lin, "dB", true),
+        cont("midq", "Mid Q", 0.3, 4.0, 0.7, Curve::Lin, "", true),
+        cont("high", "High", -15.0, 15.0, 0.0, Curve::Lin, "dB", true),
+    ],
+};
+
+static COMPRESSOR: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Compressor,
+    id: "compressor",
+    name: "Compressor",
+    category: "effect",
+    // `sc` is the key (summed to mono); unconnected, it keys on l/r itself.
+    inputs: &[port("l", Signal::Audio), port("r", Signal::Audio), port("sc", Signal::Audio)],
+    outputs: STEREO_OUT,
+    params: &[
+        cont("threshold", "Threshold", -60.0, 0.0, -18.0, Curve::Lin, "dB", true),
+        cont("ratio", "Ratio", 1.0, 20.0, 4.0, Curve::Lin, "", true),
+        cont("attack", "Attack", 0.1, 100.0, 5.0, Curve::Exp, "ms", false),
+        cont("release", "Release", 10.0, 1000.0, 120.0, Curve::Exp, "ms", false),
+        cont("makeup", "Makeup", 0.0, 24.0, 0.0, Curve::Lin, "dB", true),
+    ],
+};
+
+static SATURATOR: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Saturator,
+    id: "saturator",
+    name: "Saturator",
+    category: "shaping",
+    inputs: &[port("in", Signal::Audio)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        lin("drive", "Drive", 0.0, 1.0, 0.3, true),
+        lin("mix", "Mix", 0.0, 1.0, 1.0, true),
+        lin("tone", "Tone", 0.0, 1.0, 0.5, true),
+    ],
+};
+
+static ATTENUATOR: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Attenuator,
+    id: "attenuator",
+    name: "Attenuator",
+    category: "utility",
+    // out = in × amount + offset (in unconnected: the offset alone).
+    inputs: &[port("in", Signal::Cv)],
+    outputs: &[port("out", Signal::Cv)],
+    params: &[lin("amount", "Amount", -1.0, 1.0, 1.0, true), lin("offset", "Offset", -1.0, 1.0, 0.0, true)],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -371,6 +537,13 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::Lfo => &LFO,
         ModuleKind::Mixer => &MIXER,
         ModuleKind::Out => &OUT,
+        ModuleKind::Delay => &DELAY,
+        ModuleKind::Reverb => &REVERB,
+        ModuleKind::Chorus => &CHORUS,
+        ModuleKind::Eq => &EQ,
+        ModuleKind::Compressor => &COMPRESSOR,
+        ModuleKind::Saturator => &SATURATOR,
+        ModuleKind::Attenuator => &ATTENUATOR,
     }
 }
 
@@ -426,12 +599,13 @@ fn param(p: &ParamSpec) -> String {
 }
 
 /// The whole catalog as JSON (the contents of `engine/catalog.json`):
-/// `{"version":1,"rackBlock":32,"maxModules":32,"maxPoly":16,"modules":[...]}`
+/// `{"version":1,"rackBlock":32,"maxModules":32,"maxPoly":16,
+/// "fxPool":{"delay":8,"reverb":8,"chorus":16},"modules":[...]}`
 /// with modules ordered by kind id, one module (and one param) per line so the
 /// golden file diffs readably. Test/tool-only: it allocates.
 pub fn catalog_json() -> String {
     let mut o = format!(
-        "{{\n  \"version\": 1,\n  \"rackBlock\": {RACK_BLOCK},\n  \"maxModules\": {MAX_MODULES},\n  \"maxPoly\": {MAX_POLY},\n  \"modules\": ["
+        "{{\n  \"version\": 1,\n  \"rackBlock\": {RACK_BLOCK},\n  \"maxModules\": {MAX_MODULES},\n  \"maxPoly\": {MAX_POLY},\n  \"fxPool\": {{\"delay\": {DELAY_SLOTS}, \"reverb\": {REVERB_SLOTS}, \"chorus\": {CHORUS_SLOTS}}},\n  \"modules\": ["
     );
     for (i, &k) in ModuleKind::ALL.iter().enumerate() {
         let s = spec(k);

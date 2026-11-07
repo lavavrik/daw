@@ -3,6 +3,7 @@
   "rackBlock": 32,
   "maxModules": 32,
   "maxPoly": 16,
+  "fxPool": {"delay": 8, "reverb": 8, "chorus": 16},
   "modules": [
     {"kind":0,"id":"midi_in","name":"MIDI In","category":"source",
       "inputs":[],
@@ -81,6 +82,70 @@
       "outputs":[],
       "params":[
         {"name":"level","label":"Level","min":0,"max":1,"default":0.8,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":9,"id":"delay","name":"Delay","category":"effect",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "outputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "params":[
+        {"name":"division","label":"Division","min":0,"max":11,"default":6,"integer":true,"curve":"lin","unit":"","choices":["1/32","1/16T","1/16","1/16.","1/8T","1/8","3/16","1/4T","1/4","1/4.","1/2","1 bar"],"smooth":false},
+        {"name":"feedback","label":"Feedback","min":0,"max":0.95,"default":0.35,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"mix","label":"Mix","min":0,"max":1,"default":0.3,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"pingpong","label":"Ping-pong","min":0,"max":1,"default":1,"integer":true,"curve":"lin","unit":"","choices":["Off","On"],"smooth":false},
+        {"name":"hicut","label":"High cut","min":1000,"max":20000,"default":6000,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":true}
+      ]},
+    {"kind":10,"id":"reverb","name":"Reverb","category":"effect",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "outputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "params":[
+        {"name":"size","label":"Size","min":0,"max":1,"default":0.6,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"decay","label":"Decay","min":0.2,"max":20,"default":2.2,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":true},
+        {"name":"damping","label":"Damping","min":0,"max":1,"default":0.5,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"predelay","label":"Predelay","min":0,"max":200,"default":20,"integer":false,"curve":"lin","unit":"ms","choices":[],"smooth":true},
+        {"name":"mix","label":"Mix","min":0,"max":1,"default":0.3,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":11,"id":"chorus","name":"Chorus","category":"effect",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "outputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "params":[
+        {"name":"rate","label":"Rate","min":0.05,"max":5,"default":0.6,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":false},
+        {"name":"depth","label":"Depth","min":0,"max":1,"default":0.4,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"mix","label":"Mix","min":0,"max":1,"default":0.5,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":12,"id":"eq","name":"EQ","category":"effect",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "outputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "params":[
+        {"name":"hp","label":"High-pass","min":20,"max":1000,"default":20,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":true},
+        {"name":"low","label":"Low","min":-15,"max":15,"default":0,"integer":false,"curve":"lin","unit":"dB","choices":[],"smooth":true},
+        {"name":"midf","label":"Mid freq","min":200,"max":8000,"default":1000,"integer":false,"curve":"exp","unit":"Hz","choices":[],"smooth":true},
+        {"name":"mid","label":"Mid","min":-15,"max":15,"default":0,"integer":false,"curve":"lin","unit":"dB","choices":[],"smooth":true},
+        {"name":"midq","label":"Mid Q","min":0.3,"max":4,"default":0.7,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"high","label":"High","min":-15,"max":15,"default":0,"integer":false,"curve":"lin","unit":"dB","choices":[],"smooth":true}
+      ]},
+    {"kind":13,"id":"compressor","name":"Compressor","category":"effect",
+      "inputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"},{"name":"sc","signal":"audio"}],
+      "outputs":[{"name":"l","signal":"audio"},{"name":"r","signal":"audio"}],
+      "params":[
+        {"name":"threshold","label":"Threshold","min":-60,"max":0,"default":-18,"integer":false,"curve":"lin","unit":"dB","choices":[],"smooth":true},
+        {"name":"ratio","label":"Ratio","min":1,"max":20,"default":4,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"attack","label":"Attack","min":0.1,"max":100,"default":5,"integer":false,"curve":"exp","unit":"ms","choices":[],"smooth":false},
+        {"name":"release","label":"Release","min":10,"max":1000,"default":120,"integer":false,"curve":"exp","unit":"ms","choices":[],"smooth":false},
+        {"name":"makeup","label":"Makeup","min":0,"max":24,"default":0,"integer":false,"curve":"lin","unit":"dB","choices":[],"smooth":true}
+      ]},
+    {"kind":14,"id":"saturator","name":"Saturator","category":"shaping",
+      "inputs":[{"name":"in","signal":"audio"}],
+      "outputs":[{"name":"out","signal":"audio"}],
+      "params":[
+        {"name":"drive","label":"Drive","min":0,"max":1,"default":0.3,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"mix","label":"Mix","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"tone","label":"Tone","min":0,"max":1,"default":0.5,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+      ]},
+    {"kind":15,"id":"attenuator","name":"Attenuator","category":"utility",
+      "inputs":[{"name":"in","signal":"cv"}],
+      "outputs":[{"name":"out","signal":"cv"}],
+      "params":[
+        {"name":"amount","label":"Amount","min":-1,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"offset","label":"Offset","min":-1,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
       ]}
   ]
 }

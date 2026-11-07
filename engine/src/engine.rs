@@ -515,7 +515,11 @@ impl Engine {
                 self.drum_slot(slot)?;
                 self.drums.set_swing(slot, swing, self.transport.playing)
             }
-            Command::RackAddModule { slot, module, kind } => rack_code(self.rack(slot)?.add_module(module, kind))?,
+            // Pooled effects (Delay/Reverb/Chorus) may return ERR_OUT_OF_MEMORY.
+            Command::RackAddModule { slot, module, kind } => {
+                self.rack(slot)?; // synth slot check
+                rack_code(self.synths.add_module(slot, module, kind).ok_or(protocol::ERR_BAD_INDEX)?)?
+            }
             Command::RackRemoveModule { slot, module } => rack_code(self.rack(slot)?.remove_module(module))?,
             Command::RackConnect { slot, from, to } => rack_code(self.rack(slot)?.connect(from, to))?,
             Command::RackDisconnect { slot, to } => rack_code(self.rack(slot)?.disconnect(to))?,
@@ -1684,7 +1688,7 @@ mod tests {
         assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), ERR_BAD_INDEX);
         assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), ERR_BAD_INDEX);
         // Bad kind ids / module indices / slots.
-        for kind in [99.0, 9.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
+        for kind in [99.0, 16.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
             assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, kind, 0.0), ERR_BAD_INDEX, "kind {kind}");
         }
         assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 32.0, K_OSC, 0.0), ERR_BAD_INDEX);

@@ -28,6 +28,11 @@
 //! ```text
 //! cargo test --release -p daw-engine --test perf -- --ignored --nocapture
 //! ```
+//!
+//! The rack-effects case ([`fx_chain_track_renders_under_budget`], plan 6)
+//! is one synth track running MIDI In → Osc → Filter → Chorus → Delay →
+//! Reverb → Out with 8 voices held: the per-voice part (Osc, Filter) runs 8
+//! channels, the effects run once on the summed stereo signal.
 
 use daw_engine::arrangement::Timeline;
 use daw_engine::protocol::*;
@@ -91,11 +96,11 @@ const PARAMS: [(usize, usize, f32); 8] =
 /// Build the 13-module patch on track `slot` and hold 8 notes.
 fn build(s: &mut Synths, slot: usize) {
     s.add_track(slot);
-    let r = s.rack_mut(slot).expect("active synth track");
     let ok = |code: i32| assert_eq!(code, OK);
     for (m, &kind) in MODULES.iter().enumerate() {
-        ok(r.add_module(m, kind));
+        ok(s.add_module(slot, m, kind).expect("active synth track"));
     }
+    let r = s.rack_mut(slot).expect("active synth track");
     for (from, to) in CABLES {
         ok(r.connect(from, to));
     }
@@ -321,4 +326,61 @@ fn spec6_mix_song_mode_renders_under_budget() {
     assert!(peak > 0.0 && peak.is_finite(), "song must sound (peak {peak})");
     assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
     assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn fx_chain_track_renders_under_budget() {
+    let mut s = Synths::new(SR);
+    s.add_track(0);
+    let ok = |code: i32| assert_eq!(code, OK);
+    // MIDI In, Osc, Filter, Chorus, Delay, Reverb, Out.
+    let kinds = [K::MidiIn, K::Osc, K::Filter, K::Chorus, K::Delay, K::Reverb, K::Out];
+    for (m, &kind) in kinds.iter().enumerate() {
+        ok(s.add_module(0, m, kind).expect("active synth track"));
+    }
+    let r = s.rack_mut(0).expect("active synth track");
+    // pitch -> osc -> filter -> chorus l -> delay l/r -> reverb l/r -> out l/r.
+    for (from, to) in [
+        ((0, 0), (1, 0)),
+        ((1, 0), (2, 0)),
+        ((2, 0), (3, 0)),
+        ((3, 0), (4, 0)),
+        ((3, 1), (4, 1)),
+        ((4, 0), (5, 0)),
+        ((4, 1), (5, 1)),
+        ((5, 0), (6, 0)),
+        ((5, 1), (6, 1)),
+    ] {
+        ok(r.connect(from, to));
+    }
+    ok(r.set_param(5, 4, 0.4)); // reverb mix
+    ok(r.set_param(6, 0, 0.1)); // out level: 8 summed voices
+    for (i, n) in [48u8, 52, 55, 59, 62, 65, 69, 72].into_iter().enumerate() {
+        r.note(NoteEvent::On { note: n, vel: 90 + i as u8 });
+    }
+    let bpm = 124.0f32;
+    let tpf = bpm as f64 * 960.0 / 60.0 / SR as f64;
+    let mut ctx = Ctx { sr: SR, bpm, playing: true, ticks: 0.0, ticks_per_frame: tpf };
+    let mut bufs = StereoBufs::new(daw_engine::MAX_TRACKS);
+    let blocks = SECONDS * SR as usize / BLOCK;
+    for _ in 0..100 {
+        render(&mut s, &mut ctx, tpf, &mut bufs);
+    }
+    let mut peak = 0.0f32;
+    let t0 = Instant::now();
+    for _ in 0..blocks {
+        render(&mut s, &mut ctx, tpf, &mut bufs);
+        peak = peak.max(bufs.pair(0, BLOCK).map_or(0.0, |(l, _)| l[0].abs()));
+    }
+    let elapsed = t0.elapsed().as_secs_f64();
+    let audio = (blocks * BLOCK) as f64 / SR as f64;
+    let ratio = elapsed / audio;
+    println!(
+        "perf (rack fx): 1 track, MIDI In -> Osc -> Filter (8 voices) -> Chorus -> Delay -> Reverb -> Out: {elapsed:.3} s for {audio:.1} s of audio = {:.2}% of real time",
+        ratio * 100.0
+    );
+    assert!(peak > 0.0 && peak.is_finite(), "patch must sound (peak {peak})");
+    // One track's share of the 25% four-track budget.
+    assert!(ratio < 0.0625, "over budget: {:.2}% of real time", ratio * 100.0);
 }

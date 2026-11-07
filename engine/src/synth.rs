@@ -3,10 +3,12 @@
 //!
 //! # Memory
 //! [`Synths::new`] preallocates all `MAX_TRACKS` tracks (racks and all
-//! `MAX_PATTERNS` patterns each, ~12.3 KB per pattern, ~6.3 MB in all) and the
-//! shared event buffer up front (in `Engine::new`), so adding a synth track,
-//! editing its patch or patterns, switching or copying patterns, playing notes
-//! and rendering never allocate.
+//! `MAX_PATTERNS` patterns each, ~12.3 KB per pattern, ~6.3 MB in all), the
+//! shared event buffer and the rack effects' [`FxPool`] (8 delay, 8 reverb,
+//! 16 chorus slots shared by every track, ~10.5 MiB at 48 kHz; see
+//! `rack/fx_pool.rs`) up front (in `Engine::new`, for the context sample
+//! rate), so adding a synth track, editing its patch or patterns, switching or
+//! copying patterns, playing notes and rendering never allocate.
 //!
 //! # Patterns
 //! Each track has a *current* pattern: the one that plays (Pattern mode) and
@@ -71,6 +73,8 @@
 use crate::arrangement::{Clip, Timeline};
 use crate::mixer::StereoBufs;
 use crate::rack::modules::{Ctx, NoteEvent};
+use crate::rack::catalog::ModuleKind;
+use crate::rack::fx_pool::FxPool;
 use crate::rack::Rack;
 use crate::sequencer::{EventBuf, NotePattern, SeqNote, Voicing};
 use crate::transport::tick_to_offset;
@@ -160,6 +164,9 @@ pub struct Synths {
     active: [bool; MAX_TRACKS],
     /// Per-block event scratch, shared by the tracks (they render in turn).
     events: Box<EventBuf>,
+    /// Memory for the racks' Delay/Reverb/Chorus modules, shared by all
+    /// tracks.
+    fx: FxPool,
 }
 
 impl Synths {
@@ -170,7 +177,29 @@ impl Synths {
         for _ in 0..MAX_TRACKS {
             tracks.push(SynthTrack::new(sample_rate));
         }
-        Synths { tracks, active: [false; MAX_TRACKS], events: Box::new(EventBuf::new()) }
+        Synths { tracks, active: [false; MAX_TRACKS], events: Box::new(EventBuf::new()), fx: FxPool::new(sample_rate) }
+    }
+
+    /// The shared FX pool (slot usage, for tests and telemetry).
+    pub fn fx_pool(&self) -> &FxPool {
+        &self.fx
+    }
+
+    /// Add a module to the patch of active synth track `slot` (see
+    /// [`Rack::add_module`]: `ERR_OUT_OF_MEMORY` when a pooled effect's bank
+    /// is full). Slots freed by edits on any track that applied at once
+    /// (silent racks) are reclaimed first, so removing a Delay on one track
+    /// and adding one on another in the same batch works. `None` if `slot`
+    /// is not an active synth track.
+    pub fn add_module(&mut self, slot: usize, idx: usize, kind: ModuleKind) -> Option<i32> {
+        if !self.is_active(slot) {
+            return None;
+        }
+        for t in self.tracks.iter_mut() {
+            t.rack.reclaim(&mut self.fx);
+        }
+        let t = self.tracks.get_mut(slot)?;
+        Some(t.rack.add_module(idx, kind, &mut self.fx))
     }
 
     /// Is `slot` an active synth track?
@@ -184,6 +213,7 @@ impl Synths {
     pub fn add_track(&mut self, slot: usize) {
         if let (Some(t), Some(a)) = (self.tracks.get_mut(slot), self.active.get_mut(slot)) {
             t.rack.clear();
+            t.rack.reclaim(&mut self.fx); // a silent rack's clear applied at once
             t.reset_patterns(); // the cleared rack drops its notes anyway
             *a = true;
         }
@@ -195,6 +225,7 @@ impl Synths {
         if let (Some(t), Some(a)) = (self.tracks.get_mut(slot), self.active.get_mut(slot)) {
             if *a {
                 t.rack.clear();
+                t.rack.reclaim(&mut self.fx);
                 t.reset_patterns();
                 *a = false;
             }
@@ -403,6 +434,7 @@ impl Synths {
     ) -> u32 {
         let n = to.saturating_sub(from);
         let events = &mut *self.events;
+        let fx = &mut self.fx;
         let mut rendered = 0u32;
         for (slot, (t, &active)) in self.tracks.iter_mut().zip(self.active.iter()).enumerate() {
             if !(active || t.rack.is_sounding()) {
@@ -428,13 +460,13 @@ impl Synths {
             for &(offset, ev) in events.as_slice() {
                 let at = offset.min(n).max(pos); // pos <= n always
                 if at > pos {
-                    render_segment(&mut t.rack, ctx, pos, &mut left[pos..at], &mut right[pos..at]);
+                    render_segment(&mut t.rack, fx, ctx, pos, &mut left[pos..at], &mut right[pos..at]);
                     pos = at;
                 }
                 t.rack.note(ev);
             }
             if pos < n {
-                render_segment(&mut t.rack, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
+                render_segment(&mut t.rack, fx, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
             }
         }
         rendered
@@ -476,12 +508,12 @@ fn song_events(t: &mut SynthTrack, clips: &[Clip], (t0, t1, spt): (f64, f64, f64
 
 /// Render frames `from..` of the block (`left`/`right` are that sub-slice),
 /// with the `Ctx` playhead moved to the segment start while playing.
-fn render_segment(rack: &mut Rack, ctx: &Ctx, from: usize, left: &mut [f32], right: &mut [f32]) {
+fn render_segment(rack: &mut Rack, fx: &mut FxPool, ctx: &Ctx, from: usize, left: &mut [f32], right: &mut [f32]) {
     let mut seg = *ctx;
     if ctx.playing {
         seg.ticks = ctx.ticks + from as f64 * ctx.ticks_per_frame;
     }
-    rack.render_add(&seg, left, right);
+    rack.render_add(&seg, fx, left, right);
 }
 
 /// Send `Off` for every pitch in `mask` (bit = pitch).

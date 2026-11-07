@@ -47,21 +47,18 @@
     GRID_TICKS, MAX_NOTE_LEN, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
-  import type { Recorder, RecStatus } from '../../state/recorder';
   import {
-    BAR, BEAT, KEYS_W, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
+    BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
     snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
   } from './prMath';
   import type { View } from './prMath';
 
-  let { p, engine, clock, track, noteInput, recorder, rec }: {
+  let { p, engine, clock, track, noteInput }: {
     p: Project;
     engine: CommandSink;
     clock: AudioClock | null;
     track: SynthTrack;
     noteInput: NoteInput | null;
-    recorder: Recorder | null;
-    rec: RecStatus;
   } = $props();
 
   const RULER_H = 20;
@@ -100,7 +97,6 @@
   const drawOrder = $derived([...notes.filter((n) => !selected.has(n.id)), ...selNotes]);
   const noteH = $derived(Math.max(0, size.h - RULER_H - VEL_H - SEP));
   const velTop = $derived(size.h - VEL_H);
-  const canUndoTake = $derived(rec.takeNotes > 0 && recorder?.lastTakeTrackId === track.id);
   const lengths = $derived(LENGTHS.includes(track.pattern.bars) ? LENGTHS : [...LENGTHS, track.pattern.bars].sort((a, b) => a - b));
 
   const readoutText = $derived.by(() => {
@@ -268,7 +264,7 @@
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(x0 + w - 3, y + 3, 1.5, v.rowH - 6);
       }
-      if (w > 30 && v.rowH >= 9) {
+      if (w > 22 && v.rowH >= MIN_ROW_H) { // room for "D#3" at 9 px
         ctx.fillStyle = 'rgba(0,0,0,0.8)';
         ctx.fillText(noteName(n.pitch), Math.max(x0, KEYS_W) + 3, y + v.rowH / 2 + 0.5);
       }
@@ -441,8 +437,14 @@
   // ---- pointer ---------------------------------------------------------------
   type Orig = { id: string; pitch: number; start: number; len: number; vel: number };
   type Drag =
-    | { kind: 'move' | 'resize'; anchor: Orig; orig: Orig[]; x0: number; y0: number; moved: boolean }
-    | { kind: 'vel'; orig: Orig[] }
+    | {
+        kind: 'move' | 'resize'; anchor: Orig; orig: Orig[]; x0: number; y0: number; moved: boolean;
+        /** Last scheduled deltas ("dt,dp" or the length delta): unchanged -> nothing is re-sent. */
+        last: string;
+        /** A time change was applied: from then on `start` is always sent (to come back to dt 0). */
+        timeMoved: boolean;
+      }
+    | { kind: 'vel'; orig: Orig[]; last: number }
     | { kind: 'box'; base: Set<string> }
     | { kind: 'key' };
   let drag: Drag | null = null;
@@ -510,8 +512,8 @@
     } else if (reg === 'vel') {
       const ids = stemsAt(x);
       if (!ids.size) return;
-      drag = { kind: 'vel', orig: snapshot(ids) };
       velShown = velFromY(y);
+      drag = { kind: 'vel', orig: snapshot(ids), last: velShown };
       schedule([...ids].map((id) => ({ id, vel: velShown! })));
     } else {
       const hit = hitTest(drawOrder, x, ny, v);
@@ -525,7 +527,7 @@
         }
         if (!selected.has(hit.id)) selected = new Set([hit.id]);
         const orig = snapshot(selected);
-        drag = { kind: hit.part === 'end' ? 'resize' : 'move', anchor: orig.find((o) => o.id === hit.id)!, orig, x0: x, y0: ny, moved: false };
+        drag = { kind: hit.part === 'end' ? 'resize' : 'move', anchor: orig.find((o) => o.id === hit.id)!, orig, x0: x, y0: ny, moved: false, last: '0,0', timeMoved: false };
       } else if (e.shiftKey) {
         drag = { kind: 'box', base: new Set(selected) };
         box = { x0: x, y0: y, x1: x, y1: y };
@@ -547,7 +549,7 @@
         }
         selected = new Set([n.id]);
         const orig = snapshot(selected);
-        drag = { kind: 'move', anchor: orig[0], orig, x0: x, y0: ny, moved: false };
+        drag = { kind: 'move', anchor: orig[0], orig, x0: x, y0: ny, moved: false, last: '0,0', timeMoved: false };
       }
     }
     canvas.setPointerCapture(e.pointerId);
@@ -563,6 +565,8 @@
       if (pt !== auditionPitch) audition(pt, e.timeStamp);
     } else if (drag.kind === 'vel') {
       velShown = velFromY(y);
+      if (velShown === drag.last) return;
+      drag.last = velShown;
       schedule(drag.orig.map((o) => ({ id: o.id, vel: velShown! })));
     } else if (drag.kind === 'box') {
       box = { ...box!, x1: x, y1: y };
@@ -587,11 +591,22 @@
         const dt = e.altKey ? Math.round(dtRaw) : snap(a.start + dtRaw, grid) - a.start;
         const dp = yToPitch(ny, v) - yToPitch(drag.y0, v);
         const c = clampMove(drag.orig, dt, dp, total);
-        schedule(drag.orig.map((o) => ({ id: o.id, start: o.start + c.dt, pitch: o.pitch + c.dp })));
+        const k = `${c.dt},${c.dp}`;
+        if (k === drag.last) return;
+        drag.last = k;
+        // Pitch-only so far: leave `start` out (a past-the-end note keeps its place).
+        if (c.dt) drag.timeMoved = true;
+        const withStart = drag.timeMoved;
+        schedule(drag.orig.map((o) => ({
+          id: o.id, pitch: o.pitch + c.dp, ...(withStart ? { start: o.start + c.dt } : {}),
+        })));
       } else {
         const end = a.start + a.len;
         const newEnd = e.altKey ? end + dtRaw : snap(end + dtRaw, grid);
         const delta = Math.round(newEnd - end);
+        const k = `${delta}`;
+        if (k === drag.last) return;
+        drag.last = k;
         schedule(drag.orig.map((o) => ({
           id: o.id,
           len: Math.min(MAX_NOTE_LEN, Math.max(e.altKey ? 1 : Math.min(grid, o.len), o.len + delta)),
@@ -678,7 +693,11 @@
   function nudge(dt: number, dp: number) {
     const orig = snapshot(selected);
     const c = clampMove(orig, dt, dp, total);
-    if (c.dt || c.dp) updateNotes(p, engine, track.id, orig.map((o) => ({ id: o.id, start: o.start + c.dt, pitch: o.pitch + c.dp })));
+    if (!c.dt && !c.dp) return;
+    // Only the field that moves: a pitch nudge never touches `start`.
+    updateNotes(p, engine, track.id, orig.map((o) => ({
+      id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp ? { pitch: o.pitch + c.dp } : {}),
+    })));
   }
   function key(e: KeyboardEvent) {
     const cmd = e.metaKey || e.ctrlKey;
@@ -729,6 +748,7 @@
       clearPattern(p, engine, track.id);
       selected = new Set();
     }
+    refocus(); // confirm() took focus away
   }
 
   onDestroy(() => {
@@ -754,7 +774,6 @@
       Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
     </button>
     <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}>Clear</button>
-    <button data-testid="pr-undo-take" title="Remove the notes the last recording pass added" disabled={!canUndoTake} onclick={() => { recorder?.undoLastTake(); refocus(); }}>Undo take</button>
     <output class="readout" data-testid="pr-readout" class:hint={!!hint}>{readoutText}</output>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->

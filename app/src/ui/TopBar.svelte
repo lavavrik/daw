@@ -8,6 +8,10 @@
   // Play/Stop and arm go through the App (onTogglePlay / onToggleArm) so the
   // count-in and the recorder's stop tick are handled in one place. Count-in
   // and Rec offset persist in localStorage (state/recorder.ts).
+  //
+  // Layout: one row that never wraps at 1280 px. Every control is nowrap;
+  // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
+  // the full text in their tooltips.
   import { onMount, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
@@ -93,7 +97,7 @@
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);
     dropouts = engine.dropouts();
     latencyMs = engine.latencyMs();
-    latency = `${engine.sampleRate / 1000} kHz · ${latencyMs.toFixed(1)} ms`;
+    latency = `Output latency ${latencyMs.toFixed(1)} ms at ${engine.sampleRate / 1000} kHz`;
   }
 
   onMount(() => {
@@ -195,16 +199,18 @@
       Audio engine stopped — <button onclick={() => location.reload()}>reload</button>
     </span>
   {/if}
-  <span class="pill">CPU {cpu}%</span>
-  <span class="pill" class:bad={dropouts > 0}>Dropouts {dropouts}</span>
-  <span class="pill" data-testid="latency" title={latencyMs > 40 ? BT_TIP : 'Output latency'}>
-    Latency {latency}{#if latencyMs > 40}<span class="bt">{" "}BT?</span>{/if}
+  <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
+    CPU {cpu}% · {dropouts} drop
+  </span>
+  <span class="pill" data-testid="latency" title={latencyMs > 40 ? `${latency}. ${BT_TIP}` : latency}>
+    {Math.round(latencyMs)} ms{#if latencyMs > 40}<span class="bt">{" "}BT?</span>{/if}
   </span>
 </header>
 
 <style>
-  .bar { display: flex; gap: 10px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; }
+  .bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow: hidden; }
   .spacer { flex: 1; }
+  button, .pill, input, summary { white-space: nowrap; flex: none; }
   button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }
   button { cursor: pointer; }
   button:hover { background: #33353e; }

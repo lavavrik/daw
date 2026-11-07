@@ -55,8 +55,9 @@ describe('pattern actions', () => {
     sent.length = 0;
     updateNotes(p, sink, t.id, [{ id: n.id, pitch: 200.4, vel: 0, len: 99999, start: 1e9 }]);
     const m = t.pattern.notes[0];
-    expect([m.pitch, m.vel, m.len, m.start]).toEqual([127, 1, 61440, patternTicks(t) - 1]);
-    expect(sent).toEqual([[Op.NOTE_SET, t.slot * MAX_NOTES, 127 * 128 + 1, patternTicks(t) - 1, 61440]]);
+    // start: the engine's range (16 bars), not the pattern length (past-end notes are kept).
+    expect([m.pitch, m.vel, m.len, m.start]).toEqual([127, 1, 61440, 16 * 3840 - 1]);
+    expect(sent).toEqual([[Op.NOTE_SET, t.slot * MAX_NOTES, 127 * 128 + 1, 16 * 3840 - 1, 61440]]);
     updateNotes(p, sink, t.id, [{ id: n.id, pitch: -5, vel: 500, len: 0, start: -3 }]);
     expect([m.pitch, m.vel, m.len, m.start]).toEqual([0, 127, 1, 0]);
     updateNotes(p, sink, t.id, [{ id: 'nope', pitch: 1 }]); // unknown id: ignored
@@ -83,6 +84,39 @@ describe('pattern actions', () => {
     quantizeNotes(p, sink, t.id, [], 240, NaN);
     expect(n.start).toBe(240); // NaN strength = full snap
     expect(sent.flat().every(Number.isFinite)).toBe(true);
+  });
+
+  it('updateNotes keeps a past-the-end note past the end (pitch-only edit, small left move)', () => {
+    const { p, t, sink, sent } = setup();
+    const n = addNote(p, sink, t.id, { pitch: 60, start: 3 * 3840, len: 240 })!;
+    setPatternBars(p, sink, t.id, 2); // n is now past the end: kept, silent
+    sent.length = 0;
+    updateNotes(p, sink, t.id, [{ id: n.id, pitch: 62 }]);
+    expect([n.pitch, n.start]).toEqual([62, 3 * 3840]);
+    expect(sent).toEqual([[Op.NOTE_SET, t.slot * MAX_NOTES, 62 * 128 + 100, 3 * 3840, 240]]);
+    updateNotes(p, sink, t.id, [{ id: n.id, start: 3 * 3840 - 240 }]);
+    expect(n.start).toBe(3 * 3840 - 240); // not pulled to the pattern's last tick
+    updateNotes(p, sink, t.id, [{ id: n.id, start: 1e9 }]);
+    expect(n.start).toBe(16 * 3840 - 1); // engine range still enforced
+  });
+
+  it('updateNotes sends nothing for a note whose fields did not change', () => {
+    const { p, t, sink, sent } = setup();
+    const n = addNote(p, sink, t.id, { pitch: 60, start: 480, len: 240 })!;
+    sent.length = 0;
+    updateNotes(p, sink, t.id, [{ id: n.id, pitch: 60, start: 480, len: 240, vel: 100 }]);
+    expect(sent).toEqual([]);
+  });
+
+  it('quantize skips notes past the end (all, or a selection)', () => {
+    const { p, t, sink } = setup();
+    const a = addNote(p, sink, t.id, { pitch: 60, start: 250, len: 100 })!;
+    const b = addNote(p, sink, t.id, { pitch: 60, start: 3 * 3840 + 100, len: 100 })!;
+    setPatternBars(p, sink, t.id, 2);
+    quantizeNotes(p, sink, t.id, [], 240);
+    expect([a.start, b.start]).toEqual([240, 3 * 3840 + 100]);
+    quantizeNotes(p, sink, t.id, [b.id], 240);
+    expect(b.start).toBe(3 * 3840 + 100);
   });
 
   it('quantize wraps a note snapped past the end to 0', () => {

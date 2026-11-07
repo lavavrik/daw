@@ -66,7 +66,8 @@ export function hitTest(notes: readonly NoteBox[], x: number, y: number, v: View
     const n = notes[i];
     if (n.pitch !== pitch) continue;
     const x0 = tickToX(n.start, v);
-    const x1 = tickToX(n.start + n.len, v);
+    // Drawn at least 2 px wide (PianoRoll), so hit at least that wide too.
+    const x1 = Math.max(tickToX(n.start + n.len, v), x0 + 2);
     if (x < x0 || x >= x1) continue;
     const endW = Math.min(END_ZONE, (x1 - x0) / 2);
     return { id: n.id, part: x >= x1 - endW ? 'end' : 'body' };
@@ -114,9 +115,9 @@ export const readout = (n: { pitch: number; start: number; len: number }, grid: 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * Clamp a group move so every note stays inside the pattern (start
- * 0..total-1) and 0..127, keeping the group's shape (a chord never gets
- * squashed against an edge). `+ 0` turns -0 into 0.
+ * Clamp a group move so no note leaves the pattern (start 0..total-1) or
+ * 0..127, keeping the group's shape (a chord never gets squashed against an
+ * edge). `+ 0` turns -0 into 0.
  */
 export function clampMove(
   sel: readonly { pitch: number; start: number }[], dt: number, dp: number, total: number,
@@ -125,8 +126,10 @@ export function clampMove(
   const starts = sel.map((n) => n.start);
   const pitches = sel.map((n) => n.pitch);
   const lo = -Math.min(...starts);
-  // A selection that already holds a note past the end may only move left.
-  const hi = Math.max(lo, total - 1 - Math.max(...starts));
+  // In-pattern notes may not be moved past the end. A selection that already
+  // holds a note past the end cannot move right at all, and is never pushed
+  // left by this clamp (updateNotes lets such notes stay past the end).
+  const hi = Math.max(0, total - 1 - Math.max(...starts));
   return {
     dt: clamp(dt, lo, hi) + 0,
     dp: clamp(dp, -Math.min(...pitches), 127 - Math.max(...pitches)) + 0,
@@ -147,15 +150,17 @@ export const KEYS_W = 48;
 /** Rows C2..C5 inclusive: what an empty roll opens on (bass + chords). */
 const DEFAULT_LOW = 36;
 const DEFAULT_HIGH = 72;
+/** Smallest row that still fits a note name (9 px font) inside a note. */
+export const MIN_ROW_H = 9;
 
 /**
  * Opening view for a `width` x `height` note area (width includes the
  * keyboard): the whole pattern fits horizontally; vertically it centres the
  * existing notes, or C2..C5 when empty, with rows sized so C2..C5 fits
- * (8..16 px).
+ * (MIN_ROW_H..16 px; below that it is centred, not squeezed).
  */
 export function initialView(width: number, height: number, total: number, notes: readonly { pitch: number }[]): View {
-  const rowH = clamp(Math.floor(height / (DEFAULT_HIGH - DEFAULT_LOW + 1)), 8, 16);
+  const rowH = clamp(Math.floor(height / (DEFAULT_HIGH - DEFAULT_LOW + 1)), MIN_ROW_H, 16);
   const rows = Math.max(1, Math.floor(height / rowH));
   let centre = (DEFAULT_LOW + DEFAULT_HIGH) / 2;
   if (notes.length) {

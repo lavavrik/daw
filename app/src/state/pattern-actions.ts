@@ -7,6 +7,8 @@ import type { Note, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
 
 export const MAX_NOTE_LEN = 61440;
+/** Last start tick the engine accepts (MAX_PATTERN_BARS bars). */
+const MAX_START = MAX_PATTERN_BARS * BAR_TICKS - 1;
 
 /** Grid sizes in ticks (960 PPQ). */
 export const GRID_TICKS = {
@@ -48,20 +50,34 @@ export function addNote(
   return n;
 }
 
-/** Clamps + rounds each field; unknown ids are skipped. */
+/**
+ * Clamps + rounds each field; unknown ids are skipped. Only the fields given
+ * change. A new start is clamped to the engine's range (0..16 bars - 1), NOT
+ * to this pattern's length: notes past the end are kept (silent), and editing
+ * one (pitch, velocity, a small move, or reverting a drag) must never yank it
+ * into the audible loop. Keeping in-pattern notes inside the pattern is the
+ * editor's job (prMath.clampMove). A note whose values end up unchanged sends
+ * nothing (drags re-send often).
+ */
 export function updateNotes(
   p: Project, sink: CommandSink, trackId: string,
   changes: { id: string; pitch?: number; start?: number; len?: number; vel?: number }[],
 ) {
   const t = synthTrack(p, trackId);
   if (!t) return;
+  const byId = new Map(t.pattern.notes.map((n) => [n.id, n]));
   for (const c of changes) {
-    const n = t.pattern.notes.find((x) => x.id === c.id);
+    const n = byId.get(c.id);
     if (!n) continue;
-    if (c.pitch !== undefined) n.pitch = clampInt(c.pitch, 0, 127);
-    if (c.vel !== undefined) n.vel = clampInt(c.vel, 1, 127);
-    if (c.start !== undefined) n.start = clampInt(c.start, 0, patternTicks(t) - 1);
-    if (c.len !== undefined) n.len = clampInt(c.len, 1, MAX_NOTE_LEN);
+    const pitch = c.pitch !== undefined ? clampInt(c.pitch, 0, 127) : n.pitch;
+    const vel = c.vel !== undefined ? clampInt(c.vel, 1, 127) : n.vel;
+    const start = c.start !== undefined ? clampInt(c.start, 0, MAX_START) : n.start;
+    const len = c.len !== undefined ? clampInt(c.len, 1, MAX_NOTE_LEN) : n.len;
+    if (pitch === n.pitch && vel === n.vel && start === n.start && len === n.len) continue;
+    n.pitch = pitch;
+    n.vel = vel;
+    n.start = start;
+    n.len = len;
     send(sink, t, n);
   }
 }
@@ -91,7 +107,11 @@ export function clearPattern(p: Project, sink: CommandSink, trackId: string) {
   sink.send(Op.NOTE_CLEAR, t.slot);
 }
 
-/** Moves starts toward the nearest grid line by `strength` (0..1); empty ids = all notes. A snap to >= pattern end wraps to 0. */
+/**
+ * Moves starts toward the nearest grid line by `strength` (0..1); empty ids =
+ * all notes. A snap to >= pattern end wraps to 0. Notes already past the end
+ * (kept, silent) are skipped: quantizing never brings them into the loop.
+ */
 export function quantizeNotes(
   p: Project, sink: CommandSink, trackId: string, ids: string[], gridTicks: number, strength = 1,
 ) {
@@ -103,6 +123,7 @@ export function quantizeNotes(
   const changes: { id: string; start: number }[] = [];
   for (const n of t.pattern.notes) {
     if (want && !want.has(n.id)) continue;
+    if (n.start >= total) continue;
     let snapped = Math.round(n.start / gridTicks) * gridTicks;
     if (snapped >= total) snapped = 0;
     changes.push({ id: n.id, start: n.start + (snapped - n.start) * s });

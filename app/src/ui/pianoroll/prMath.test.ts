@@ -62,6 +62,11 @@ describe('hitTest', () => {
     expect(hitTest(short, 53.5, y60, view)?.part).toBe('end');
   });
 
+  it('a note thinner than 2 px is still hit over the 2 px it is drawn', () => {
+    const tiny = [{ id: 't', pitch: 60, start: 960, len: 1 }]; // 0.05 px at 20 ticks/px
+    expect(hitTest(tiny, 49.5, y60, view)?.id).toBe('t');
+  });
+
   it('the last (topmost-drawn) note wins on overlap', () => {
     const two = [
       { id: 'under', pitch: 60, start: 960, len: 960 },
@@ -112,6 +117,13 @@ describe('clampMove', () => {
   it('passes deltas that keep every note in range', () => {
     expect(clampMove(sel, 240, 2, 3840)).toEqual({ dt: 240, dp: 2 });
   });
+  it('a selection with a note past the end: no right move, left/vertical moves untouched', () => {
+    const past = [{ pitch: 60, start: 11520 }, { pitch: 62, start: 0 }]; // 2-bar pattern = 7680
+    expect(clampMove(past, 0, 1, 7680)).toEqual({ dt: 0, dp: 1 });
+    expect(clampMove(past, 240, 0, 7680)).toEqual({ dt: 0, dp: 0 });
+    expect(clampMove([past[0]], -240, 0, 7680)).toEqual({ dt: -240, dp: 0 });
+  });
+
   it('clamps the group so chords keep their shape', () => {
     expect(clampMove(sel, -500, 0, 3840)).toEqual({ dt: 0, dp: 0 });
     expect(clampMove(sel, 3000, 0, 3840)).toEqual({ dt: 3840 - 1 - 960, dp: 0 });
@@ -136,6 +148,14 @@ describe('view', () => {
     // C2 (36) and C5 (72) both visible.
     expect(pitchToY(72, v)).toBeGreaterThanOrEqual(0);
     expect(pitchToY(36, v) + v.rowH).toBeLessThanOrEqual(37 * 10);
+  });
+
+  it('initialView shows all of C2..C5 at 9 px rows once 37 rows fit, never below 9 px', () => {
+    const v = initialView(1000, 333, 15360, []);
+    expect(v.rowH).toBe(9);
+    expect(pitchToY(72, v)).toBeGreaterThanOrEqual(0);
+    expect(pitchToY(36, v) + v.rowH).toBeLessThanOrEqual(333);
+    expect(initialView(1000, 200, 15360, []).rowH).toBe(9); // too short: centred, not squeezed
   });
 
   it('initialView centres existing notes', () => {

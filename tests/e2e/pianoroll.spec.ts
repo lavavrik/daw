@@ -152,6 +152,12 @@ test('length change keeps notes past the end; tab choice is remembered', async (
   await expect(readout(page)).toContainText('C3 · 4.1.1 · 1/16');
   await page.getByTestId('pr-length').selectOption('2');
   await expect(readout(page)).toContainText('past the end (silent)');
+  // Editing a silent note keeps it where it is (never pulled into the loop).
+  await page.getByTestId('pr-canvas').locator('..').focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(readout(page)).toContainText('C#3 · 4.1.1 · 1/16 · vel 100 · past the end (silent)');
+  await page.getByTestId('pr-quantize').click(); // quantize skips it too
+  await expect(readout(page)).toContainText('C#3 · 4.1.1');
   // Tabs: pick Instrument, visit the drums, come back: still Instrument.
   await page.getByRole('button', { name: 'Instrument' }).click();
   await page.getByTestId('track-0').click();
@@ -174,4 +180,25 @@ test('screenshot: a house bassline with one note selected', async ({ page }) => 
   await expect(readout(page)).toContainText('D#3 · 1.3.3 · 1/16');
   await page.mouse.move(p.x + 200, p.y + 40); // hover a row: its key shows its name
   await page.screenshot({ path: 'test-results/pianoroll.png' });
+});
+
+test('layout at 1280×720: C2..C5 at >= 9 px rows, top bar on one line', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openRoll(page);
+  const v = JSON.parse((await page.getByTestId('pr-canvas').getAttribute('data-view'))!) as PrView & { velTop: number };
+  expect(v.rowH).toBeGreaterThanOrEqual(9);
+  const noteH = v.velTop - 4 - v.rulerH;
+  expect(v.topPitch).toBeGreaterThanOrEqual(72); // C5 visible
+  expect(v.topPitch - Math.floor(noteH / v.rowH) + 1).toBeLessThanOrEqual(36); // C2 visible
+  const bar = await page.locator('header.bar').evaluate((el) => {
+    const kids = [...el.children].map((c) => c.getBoundingClientRect()).filter((r) => r.height > 0); // not the spacer
+    const mid = (r: DOMRect) => r.top + r.height / 2;
+    return {
+      overflow: el.scrollWidth > el.clientWidth,
+      oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4 && r.height < 34), // nothing wrapped
+    };
+  });
+  expect(bar).toEqual({ overflow: false, oneLine: true });
+  await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms/);
+  await page.locator('header.bar').screenshot({ path: 'test-results/topbar.png' });
 });

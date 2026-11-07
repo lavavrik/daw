@@ -11,17 +11,14 @@
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
   import type { NoteInput } from '../input/noteInput';
-  import type { Recorder, RecStatus } from '../state/recorder';
   import { banners } from '../state/banners.svelte';
 
-  let { p, engine, clock, noteInput = null, recorder = null, rec = { armed: false, state: 'off', takeNotes: 0 } }: {
+  let { p, engine, clock, noteInput = null }: {
     p: Project;
     engine: AudioEngine;
     clock: AudioClock | null;
     /** Played-note bus (the piano roll's keyboard auditions through it). */
     noteInput?: NoteInput | null;
-    recorder?: Recorder | null;
-    rec?: RecStatus;
   } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
@@ -65,7 +62,7 @@
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
-      {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} {recorder} {rec} />{/key}
+      {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} />{/key}
     {/if}

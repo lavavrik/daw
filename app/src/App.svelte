@@ -157,7 +157,7 @@
       <Browser />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} /></div>
-        <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} {recorder} {rec} /></div>
+        <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} /></div>
       </div>
     </div>
   {/if}
@@ -170,6 +170,8 @@
   :global(html, body) { margin: 0; height: 100%; background: #16171b; color: #c9cbd3; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
   .app { height: 100vh; display: flex; flex-direction: column; background: #16171b; }
   .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; gap: 3px; padding: 3px; }
-  .right { display: grid; grid-template-rows: 40fr 60fr; gap: 3px; min-height: 0; min-width: 0; }
+  /* The editor (piano roll / step grid / rack) gets the larger share: the roll
+     needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
+  .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
 </style>

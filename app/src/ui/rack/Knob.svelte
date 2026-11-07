@@ -29,19 +29,26 @@
   // straight into the SVG by the bus's callback, no re-render per frame), a
   // small tick marks the knob's own (base) value, and an "A" badge says it
   // is automated (grey while the lane plays nothing: Pattern mode, disabled,
-  // no points, or suspended; a suspended knob's ring is grey too). The readout and
-  // the typed entry stay the base: what is saved and what you edit.
+  // no points, or suspended; a suspended knob's ring is grey too).
+  // While the lane applies the READOUT shows the heard value too, in italics
+  // (written by paint(), not per-frame state), and aria-valuenow /
+  // aria-valuetext ("1.2 kHz, automated (base 300 Hz)") follow it at most
+  // 4 times a second; the base is in the title. The typed entry edits the
+  // base (what is saved).
   // A manual move (drag, keys, typed value, double-click) first calls
   // bus.touch, which in Song mode overrides the lane until its next point
   // (AUTO_OVERRIDE), then the normal onchange: it sets the base and is
-  // undoable. A drag starts from where the ring is. Right-click opens the
+  // undoable. A drag and the arrow keys start from what is heard (the ring).
+  // Escape mid-drag puts the old base back without a new override (the
+  // drag's own overrides still hold until the next point: the engine has no
+  // "un-override"). Right-click, the ContextMenu key or Shift+F10 opens the
   // "Automate" / "Show automation" menu (AutoMenu.svelte) on continuous
-  // params; integer ones don't offer it.
+  // params; integer ones don't register and don't offer it.
   import { onDestroy, untrack } from 'svelte';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
   import { openAutoMenu } from '../AutoMenu.svelte';
-  import { useAutoBus } from '../autoBus';
+  import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import { dragPos, formatValue, fromPos, keyStep, parseValue, toPos } from './knobMath';
   import type { KnobDef } from './knobMath';
@@ -71,7 +78,12 @@
   let autoValue: number | null = null;
   let valEl = $state<SVGCircleElement | null>(null);
   let ptrEl = $state<SVGLineElement | null>(null);
-  const autoKey = $derived(auto && !def.choices.length ? JSON.stringify([auto.owner, auto.target]) : null);
+  /** The heard value's readout (mounted while the lane applies) and the throttled aria value. */
+  let autoTextEl = $state<HTMLElement | null>(null);
+  let ariaAuto = $state<number | null>(null);
+  const aria = ariaThrottle((v) => (ariaAuto = v));
+  onDestroy(aria.dispose);
+  const autoKey = $derived(auto && !def.choices.length && !def.integer ? JSON.stringify([auto.owner, auto.target]) : null);
   $effect(() => {
     if (!bus || !autoKey) return;
     const [owner, target] = JSON.parse(autoKey) as [MixChannelTarget, AutoTarget];
@@ -98,10 +110,13 @@
       knobEl.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
       knobEl.dataset.autoValue = autoValue === null ? '' : String(autoValue);
     }
+    if (autoTextEl && autoValue !== null) autoTextEl.textContent = formatValue(def, autoValue);
+    aria.push(autoValue);
   }
   $effect(() => {
     void shown;
     void valEl;
+    void autoTextEl;
     paint();
   });
   const automated = $derived(autoStatus !== null && autoStatus !== 'none');
@@ -110,10 +125,17 @@
     if (bus && auto) bus.touch(auto.owner, auto.target);
     onchange(v);
   }
+  /** The Automate menu at (x, y), or under the knob (keyboard); false when the param can't have a lane. */
+  function menuAt(x: number | null, y: number | null): boolean {
+    if (!bus || !autoKey || !auto || !bus.canAutomate(auto.owner, auto.target)) return false;
+    const r = knobEl?.getBoundingClientRect();
+    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: knobEl });
+    return true;
+  }
   function context(e: MouseEvent) {
-    if (!bus || !auto || !bus.canAutomate(auto.owner, auto.target)) return;
-    e.preventDefault();
-    openAutoMenu({ x: e.clientX, y: e.clientY, owner: auto.owner, target: auto.target, label: name, from: knobEl });
+    // A keyboard-made contextmenu event has no pointer position: place it at the knob.
+    const kbd = e.clientX === 0 && e.clientY === 0;
+    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
   }
 
   // ---- drag state ------------------------------------------------------
@@ -188,7 +210,11 @@
     raf = 0;
     pending = null;
     dragging = false;
-    send(startValue); // no-op if nothing was sent yet
+    // The old base back, without a new override (no-op if nothing was sent yet).
+    if (startValue !== lastSent) {
+      lastSent = startValue;
+      onchange(startValue);
+    }
   }
   onDestroy(flush);
 
@@ -236,6 +262,10 @@
 
   function key(e: KeyboardEvent) {
     if (editing) return;
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      if (!dragging && menuAt(null, null)) e.preventDefault();
+      return;
+    }
     if (e.key === 'Enter') {
       e.preventDefault();
       openEntry();
@@ -249,8 +279,9 @@
       return;
     }
     let v: number | null = null;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v = keyStep(def, value, 1, e.shiftKey);
-    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v = keyStep(def, value, -1, e.shiftKey);
+    const from = autoValue ?? value; // step from what is heard
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v = keyStep(def, from, 1, e.shiftKey);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v = keyStep(def, from, -1, e.shiftKey);
     else if (e.key === 'Home') v = def.min;
     else if (e.key === 'End') v = def.max;
     if (v === null) return;
@@ -312,10 +343,12 @@
     aria-label={name}
     aria-valuemin={def.min}
     aria-valuemax={def.max}
-    aria-valuenow={shown}
-    aria-valuetext={note ? `${readout} ${note}` : readout}
+    aria-valuenow={ariaAuto ?? shown}
+    aria-valuetext={ariaAuto !== null
+      ? `${formatValue(def, ariaAuto)}${note ? ` ${note}` : ''}, automated (base ${readout})`
+      : note ? `${readout} ${note}` : readout}
     title={automated
-      ? `${name}: ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
+      ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
       : `${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
@@ -366,11 +399,13 @@
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <span
         class="readout typeable"
+        class:auto={autoStatus === 'on'}
         data-testid="knob-readout"
+        data-auto={autoStatus === 'on' ? 'on' : undefined}
         onpointerdown={(e) => { if (e.button === 0) { e.stopPropagation(); e.preventDefault(); } }}
         onclick={openEntry}
         ondblclick={(e) => e.stopPropagation()}
-      >{readout}</span>
+      >{#if autoStatus === 'on'}<span bind:this={autoTextEl}></span>{:else}{readout}{/if}</span>
     {/if}
     {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
   </div>
@@ -396,6 +431,8 @@
   .readout { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7d9e0; background: #15161a; border-radius: 2px; padding: 0 3px; min-width: 40px; text-align: center; white-space: nowrap; }
 
   .readout.typeable { cursor: text; }
+  /* The heard (automated) value: italic in the knob's colour. */
+  .readout.auto { font-style: italic; color: var(--c); }
   .readout.entry { width: 52px; min-width: 0; box-sizing: border-box; border: 1px solid #f0a23a; color: #fff; background: #000; outline: none; padding: 0 2px; }
   .readout.entry.bad { border-color: #ff5c6a; background: #3a1418; }
   .choice { display: flex; flex-direction: column; align-items: center; gap: 2px; grid-column: 1 / -1; }

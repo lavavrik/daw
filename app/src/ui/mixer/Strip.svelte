@@ -24,6 +24,8 @@
   import Fader from './Fader.svelte';
   import Meter from './Meter.svelte';
   import Section from './Section.svelte';
+  import { untrack } from 'svelte';
+  import { useAutoBus } from '../autoBus';
   import type { MeterBus } from './meterBus';
   import { SCALE_TICKS, delayClampNote, faderPos, formatDb } from './mixMath';
 
@@ -108,6 +110,36 @@
   const muted = $derived(val('mute') === 1);
   const soloed = $derived(val('solo') === 1);
   const fader = $derived(val('fader'));
+
+  // ---- fader readout under automation --------------------------------------
+  // While the fader's lane applies the readout shows the HEARD value (italic,
+  // written straight into the DOM by the autoBus callback: no re-render per
+  // frame); otherwise the fader's own value. The base is in the fader's title.
+  const autoBus = useAutoBus();
+  let faderOn = $state(false);
+  let faderAuto: number | null = null;
+  let faderAutoEl = $state<HTMLElement | null>(null);
+  const paintReadout = () => {
+    if (faderAutoEl && faderAuto !== null) faderAutoEl.textContent = formatDb(faderAuto);
+  };
+  $effect(() => {
+    if (!autoBus) return;
+    const owner = target;
+    const off = untrack(() => autoBus.register(owner, { kind: 'mix', param: 'fader' }, (v) => {
+      faderAuto = v.status === 'on' ? v.value : null;
+      if ((faderAuto !== null) !== faderOn) faderOn = faderAuto !== null;
+      paintReadout();
+    }));
+    return () => {
+      off();
+      faderAuto = null;
+      untrack(() => (faderOn = false));
+    };
+  });
+  $effect(() => {
+    void faderAutoEl;
+    paintReadout();
+  });
 </script>
 
 <div
@@ -220,7 +252,9 @@
     </div>
     <div class="mtr"><Meter {bus} {channel} {name} {ceilingDb} master={kind === 'master'} /></div>
   </div>
-  <div class="readout" data-testid="fader-readout" title={`${name} volume`}>{formatDb(fader)}</div>
+  <div class="readout" class:auto={faderOn} data-testid="fader-readout" data-auto={faderOn ? 'on' : undefined}
+    title={faderOn ? `${name} volume, automated (base ${formatDb(fader)})` : `${name} volume`}
+  >{#if faderOn}<span bind:this={faderAutoEl}></span>{:else}{formatDb(fader)}{/if}</div>
 </div>
 
 <style>
@@ -257,5 +291,6 @@
   .scale span { position: absolute; right: 0; font: 9px/10px ui-monospace, SFMono-Regular, Menlo, monospace; color: #7d808c; }
   /* Bottom padding = the fader cap's half height: meter 0 lines up with −∞. */
   .mtr { height: 100%; padding-bottom: 9px; box-sizing: border-box; }
+  .readout.auto { font-style: italic; color: #f0a23a; }
   .readout { margin-top: 3px; align-self: center; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e6e7ec; background: #15161a; border-radius: 2px; padding: 0 5px; min-width: 56px; text-align: center; }
 </style>

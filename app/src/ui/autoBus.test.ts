@@ -4,6 +4,7 @@ import { mixParam } from '../audio/mixerCatalog';
 import { laneValueAt } from '../state/automation';
 import { addLane, addPoint } from '../state/automation-actions';
 import { addAudioTrack } from '../state/audio-actions';
+import { commandEdits } from '../state/edits';
 import { Project } from '../state/project.svelte';
 import { createAutoBus } from './autoBus';
 import type { AutoView } from './autoBus';
@@ -14,19 +15,21 @@ const BAR = 3840;
 function rig() {
   const p = new Project();
   const sent: number[][] = [];
-  const sink = { send: (op: number, a = 0, b = 0, c = 0, d = 0) => (sent.push([op, a, b, c, d]), true) };
+  // Marks edits as App's engine.onCommand does (project.version: the bus's lane cache).
+  const sink = { send: (op: number, a = 0, b = 0, c = 0, d = 0) => (sent.push([op, a, b, c, d]), commandEdits(p, op), true) };
   const t = addAudioTrack(p, sink)!;
   const lane = addLane(p, sink, t.id, { kind: 'mix', param: 'fader' })!;
   addPoint(p, sink, lane.id, { tick: 0, value: -40 });
   addPoint(p, sink, lane.id, { tick: BAR, value: -20 });
   addPoint(p, sink, lane.id, { tick: 2 * BAR, value: -40 });
-  const clock = { heard: 0, engine: 0 };
+  const clock = { heard: 0, engine: 0, block: 0 };
   let suspended = new Set<string>();
   const bus = createAutoBus({
     project: p,
     sink,
     heardTicks: () => clock.heard,
     engineTicks: () => clock.engine,
+    blockTicks: () => clock.block,
     onSuspended: (s) => (suspended = s),
     raf: () => 0, // frames are driven by hand
     caf: () => {},
@@ -158,7 +161,7 @@ describe('autoBus', () => {
     const pending: (() => void)[] = [];
     const bus = createAutoBus({
       project: p, sink, heardTicks: () => 0, engineTicks: () => 0, onSuspended: () => {},
-      raf: (fn) => (pending.push(() => { frames++; fn(); }), pending.length),
+      raf: (fn) => (pending.push(() => { frames++; fn(frames * 17); }), pending.length),
       caf: () => { pending.length = 0; },
     });
     expect(bus.canAutomate(t.id, { kind: 'mix', param: 'fader' })).toBe(true);
@@ -186,5 +189,69 @@ describe('autoBus', () => {
     expect(pending.length).toBe(1);
     off();
     expect(pending.length).toBe(0); // no controls left: the frame is cancelled
+  });
+
+  it('the next breakpoint counts from where the engine will be (telemetry tick + one block)', () => {
+    const { p, t, clock, bus, views } = rig();
+    p.mode = 'song';
+    p.playing = true;
+    clock.heard = 1000;
+    clock.engine = BAR - 20; // the telemetry tick: the override lands a block later, past BAR
+    clock.block = 30;
+    bus.frame();
+    bus.touch(t.id, { kind: 'mix', param: 'fader' });
+    clock.heard = BAR + 5;
+    bus.frame();
+    expect(last(views).status).toBe('suspended'); // BAR was already behind the engine: the next one ends it
+    clock.heard = 2 * BAR;
+    bus.frame();
+    expect(last(views).status).toBe('on');
+  });
+
+  it('a loop wrap ends only the suspensions made before it', () => {
+    const { p, t, clock, bus, views } = rig();
+    p.mode = 'song';
+    p.playing = true;
+    clock.heard = 3 * BAR;
+    bus.frame();
+    // The engine has wrapped already (it runs ahead), the heard tick has not: a touch now belongs to the new pass.
+    clock.engine = 100;
+    bus.touch(t.id, { kind: 'mix', param: 'fader' });
+    clock.heard = 3 * BAR + 50; // still the old pass: its ticks are past BAR, but the suspension is the new pass's
+    bus.frame();
+    expect(last(views).status).toBe('suspended');
+    clock.heard = 60; // the wrap is heard: this suspension survives it
+    bus.frame();
+    expect(last(views).status).toBe('suspended');
+    clock.heard = BAR; // and ends at its point
+    bus.frame();
+    expect(last(views).status).toBe('on');
+  });
+
+  it('lanes added later are seen (the lane cache follows project.version); frames are at most 60 per second', () => {
+    const { p, t, sink, bus } = rig();
+    const pan: AutoView[] = [];
+    bus.register(t.id, { kind: 'mix', param: 'pan' }, (v) => pan.push({ ...v }));
+    expect(last(pan).status).toBe('none');
+    addLane(p, sink, t.id, { kind: 'mix', param: 'pan' });
+    bus.frame();
+    expect(last(pan).status).toBe('idle');
+
+    // A 120 Hz display: the loop evaluates every other frame.
+    let frames = 0;
+    const q: ((ts: number) => void)[] = [];
+    const p2 = new Project();
+    const bus2 = createAutoBus({
+      project: p2, sink: { send: () => true }, heardTicks: () => { frames++; return 0; }, engineTicks: () => 0,
+      onSuspended: () => {}, raf: (fn) => (q.push(fn), q.length), caf: () => {},
+    });
+    const t2 = addAudioTrack(p2, { send: () => true })!;
+    p2.mode = 'song';
+    p2.playing = true;
+    bus2.register(t2.id, { kind: 'mix', param: 'fader' }, () => {});
+    frames = 0;
+    for (let k = 0; k < 12; k++) q.shift()!(k * (1000 / 120));
+    expect(frames).toBeLessThanOrEqual(6);
+    expect(frames).toBeGreaterThanOrEqual(5);
   });
 });

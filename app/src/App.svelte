@@ -7,7 +7,7 @@
   import SongArea from './ui/SongArea.svelte';
   import BottomPanel from './ui/BottomPanel.svelte';
   import { Op, TELEMETRY } from './audio/protocol';
-  import { createAudioClock } from './audio/audioClock';
+  import { PPQ, createAudioClock } from './audio/audioClock';
   import type { AudioClock } from './audio/audioClock';
   import { AudioEngine } from './audio/engine';
   import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
@@ -282,6 +282,8 @@
     sink: { send: (op, a, b, c, d) => engine?.send(op, a, b, c, d) ?? false },
     heardTicks: () => clock?.heardTicks() ?? NaN,
     engineTicks: () => engine?.telemetry()[TELEMETRY.ticks] ?? NaN,
+    // One 128-frame render quantum in ticks: an override lands at the block after the telemetry's.
+    blockTicks: () => (engine ? (128 * project.tempo * PPQ) / (60 * engine.sampleRate) : 0),
     onSuspended: (ids) => (laneView.suspended = ids),
   });
   provideAutoBus(autoBus);

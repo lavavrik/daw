@@ -534,7 +534,8 @@ test('manual move overrides until the next breakpoint', async ({ page }) => {
   expect(after).toBeLessThan(0.03); // back on the lane (−36 dB) from the point
   // The move was an edit (the base): one undo puts the old base back. The lane is unchanged.
   await page.keyboard.press(undoKey);
-  await expect(strip.getByTestId('fader-readout')).toHaveText('0.0 dB');
+  // (Stopped at 0 in Song mode the lane applies: the readout shows its value, the base is in the title.)
+  await expect(fader).toHaveAttribute('title', /base 0\.0 dB/);
   expect((await savedLanes(page, slot))[0].points).toHaveLength(3);
 });
 
@@ -571,4 +572,91 @@ test('Automate on a fader opens its lane', async ({ page }) => {
   await expect(page.getByTestId(`auto-lane-${t.slot}-0`)).toBeInViewport();
   expect((await savedLanes(page, t.slot)).map((l) => l.target)).toEqual([{ mix: 'pan' }]);
   await expect(pan).toHaveAttribute('data-auto', 'idle');
+});
+
+test('automated readouts and arrow keys follow the heard value', async ({ page }) => {
+  await start(page);
+  const t = (await tracks(page))[0];
+  const fl = await addLane(page, t.slot, 'Fader');
+  await clickLane(page, fl, 0, faderPos(-40));
+  await clickLane(page, fl, BAR, faderPos(-20));
+  await page.mouse.move(0, 0); // no hover tip (its testid shares the lanes' prefix)
+  const pl = await addLane(page, t.slot, 'Pan');
+  await clickLane(page, pl, 0, 0.1);
+  await clickLane(page, pl, BAR, 0.3);
+  await page.getByTestId('mixer-tab').click();
+  const strip = page.getByTestId(`strip-${t.slot}`);
+  const fader = strip.getByTestId('fader');
+  const readout = strip.getByTestId('fader-readout');
+  const db = (s: string | null) => Number(s!.replace('−', '-').replace(' dB', ''));
+  await expect(readout).toHaveText('0.0 dB'); // Pattern mode: the base
+  await page.getByTestId('mode-song').click();
+  await page.evaluate((tick) => (window as Any).__daw.actions.seek(tick), BAR / 2);
+  await expect(fader).toHaveAttribute('data-auto', 'on');
+  const v = Number(await fader.getAttribute('data-auto-value'));
+  expect(v).toBeGreaterThan(-32);
+  expect(v).toBeLessThan(-28);
+  // The readout, aria and value show what is heard, marked as automated; the base is in the title.
+  await expect(readout).toHaveAttribute('data-auto', 'on');
+  expect(db(await readout.textContent())).toBeCloseTo(v, 1);
+  await expect(fader).toHaveAttribute('aria-valuetext', /, automated \(base 0\.0 dB\)$/);
+  // (aria follows at most 4 times a second: poll)
+  await expect.poll(async () => Number(await fader.getAttribute('aria-valuenow'))).toBeCloseTo(v, 1);
+  await expect(fader).toHaveAttribute('title', /base 0\.0 dB — Automated — dragging overrides until the next point/);
+  // ArrowUp steps from the heard value (+1 dB), not from the base: it overrides, and the readout shows the new base.
+  await fader.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(fader).toHaveAttribute('data-auto', 'suspended');
+  await expect(readout).not.toHaveAttribute('data-auto', 'on');
+  expect(db(await readout.textContent())).toBeCloseTo(Math.round((v + 1) * 10) / 10, 1);
+
+  // A knob the same way (pan: 1 % of the travel per arrow).
+  const pan = strip.getByTestId('knob-pan');
+  await expect(pan).toHaveAttribute('data-auto', 'on');
+  const pv = Number(await pan.getAttribute('data-auto-value'));
+  await expect(pan.getByTestId('knob-readout')).toHaveAttribute('data-auto', 'on');
+  await expect(pan).toHaveAttribute('aria-valuetext', /, automated \(base C\)$/);
+  await expect.poll(async () => Number(await pan.getAttribute('aria-valuenow'))).toBeCloseTo(pv, 3);
+  const span = Number(await pan.getAttribute('aria-valuemax')) - Number(await pan.getAttribute('aria-valuemin'));
+  await pan.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(pan).toHaveAttribute('data-auto', 'suspended');
+  await expect.poll(async () => Number(await pan.getAttribute('aria-valuenow'))).toBeCloseTo(pv + span / 100, 2);
+});
+
+test('Automate menu from the keyboard; the 64-lane cap', async ({ page }) => {
+  test.setTimeout(90_000);
+  await start(page);
+  await page.getByTestId('mixer-tab').click();
+  const menu = page.getByTestId('auto-ctl-menu');
+  const mf = page.getByTestId('strip-master').getByTestId('fader');
+  // Shift+F10 on the focused fader opens the menu with its item focused; Escape gives focus back.
+  await mf.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId('auto-ctl-automate')).toBeFocused();
+  const box = (await menu.boundingBox())!;
+  const fb = (await mf.boundingBox())!;
+  expect(Math.abs(box.x - fb.x)).toBeLessThan(40); // placed at the control, not at the window's corner
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(mf).toBeFocused();
+  // 64 lanes: 32 tracks with a Fader and a Pan lane each.
+  await page.evaluate(() => {
+    const d = (window as Any).__daw;
+    for (let i = 0; i < 31; i++) d.actions.addDrumTrack();
+  });
+  for (const x of await tracks(page)) {
+    await page.getByTestId(`track-auto-${x.slot}`).click();
+    await page.getByTestId(`auto-add-${x.slot}`).last().selectOption({ label: 'Fader' });
+    await page.getByTestId(`auto-add-${x.slot}`).last().selectOption({ label: 'Pan' });
+  }
+  await expect(page.locator('[data-testid^="auto-lane-"][data-lane]')).toHaveCount(64);
+  // The ContextMenu key, Enter on "Automate": refused with the reason, nothing added.
+  await mf.focus();
+  await page.keyboard.press('ContextMenu');
+  await expect(page.getByTestId('auto-ctl-automate')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('flash-hint')).toContainText('at most 64');
+  expect(await savedLanes(page, 'master')).toEqual([]);
 });

@@ -18,15 +18,20 @@
   // channel's fader target): while its lane applies the cap rides at the
   // lane's value (painted by the autoBus callback, no re-render per frame), a
   // small notch beside the slot marks the fader's own (base) value, and an
-  // "A" badge says it is automated. A drag / key / double-click first
-  // overrides the lane (Song mode) until its next point, then sets the base
-  // (one undo entry); a drag grabs the cap where it is. Right-click:
-  // "Automate" / "Show automation".
+  // "A" badge says it is automated. aria-valuenow / -valuetext follow the
+  // heard value at most 4 times a second ("−12.3 dB, automated (base 0.0
+  // dB)"), the title names the base; the readout under the strip is
+  // Strip.svelte's (it follows the lane the same way). A drag / key /
+  // double-click first overrides the lane (Song mode) until its next point,
+  // then sets the base (one undo entry); a drag and the arrows start from
+  // the heard value. Escape mid-drag restores the base without a new
+  // override. Right-click, the ContextMenu key or Shift+F10: "Automate" /
+  // "Show automation".
   import { onDestroy, untrack } from 'svelte';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
   import { openAutoMenu } from '../AutoMenu.svelte';
-  import { useAutoBus } from '../autoBus';
+  import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderDrag, faderKeyStep, faderPos, formatDb } from './mixMath';
 
@@ -65,6 +70,9 @@
   const bus = useAutoBus();
   let autoStatus = $state<AutoStatus | null>(null);
   let autoValue: number | null = null;
+  let ariaAuto = $state<number | null>(null);
+  const aria = ariaThrottle((v) => (ariaAuto = v));
+  onDestroy(aria.dispose);
   const autoKey = $derived(auto ? JSON.stringify([auto.owner, auto.target]) : null);
   $effect(() => {
     if (!bus || !autoKey) return;
@@ -90,6 +98,7 @@
       el.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
       el.dataset.autoValue = autoValue === null ? '' : String(autoValue);
     }
+    aria.push(autoValue);
   }
   $effect(() => {
     void shown;
@@ -102,10 +111,17 @@
     if (bus && auto) bus.touch(auto.owner, auto.target);
     onchange(v);
   }
+  /** The Automate menu at (x, y), or beside the fader (keyboard); false when there is no lane target. */
+  function menuAt(x: number | null, y: number | null): boolean {
+    if (!bus || !auto || !bus.canAutomate(auto.owner, auto.target)) return false;
+    const r = el?.getBoundingClientRect();
+    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: el });
+    return true;
+  }
   function context(e: MouseEvent) {
-    if (!bus || !auto || !bus.canAutomate(auto.owner, auto.target)) return;
-    e.preventDefault();
-    openAutoMenu({ x: e.clientX, y: e.clientY, owner: auto.owner, target: auto.target, label: name, from: el });
+    // A keyboard-made contextmenu event has no pointer position: place it at the fader.
+    const kbd = e.clientX === 0 && e.clientY === 0;
+    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
   }
 
   function send(v: number) {
@@ -160,11 +176,19 @@
     raf = 0;
     pending = null;
     dragging = false;
-    send(startValue);
+    // The old base back, without a new override (no-op if nothing was sent yet).
+    if (startValue !== lastSent) {
+      lastSent = startValue;
+      onchange(startValue);
+    }
   }
   onDestroy(flush);
 
   function key(e: KeyboardEvent) {
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      if (!dragging && menuAt(null, null)) e.preventDefault();
+      return;
+    }
     if (dragging) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -173,8 +197,9 @@
       return;
     }
     let v: number | null = null;
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v = faderKeyStep(value, 1, e.shiftKey);
-    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v = faderKeyStep(value, -1, e.shiftKey);
+    const from = autoValue ?? value; // step from what is heard
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') v = faderKeyStep(from, 1, e.shiftKey);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') v = faderKeyStep(from, -1, e.shiftKey);
     else if (e.key === 'Home') v = FADER_MIN_DB;
     else if (e.key === 'End') v = FADER_MAX_DB;
     if (v === null) return;
@@ -193,10 +218,10 @@
     aria-orientation="vertical"
     aria-valuemin={FADER_MIN_DB}
     aria-valuemax={FADER_MAX_DB}
-    aria-valuenow={shown}
-    aria-valuetext={readout}
+    aria-valuenow={ariaAuto ?? shown}
+    aria-valuetext={ariaAuto !== null ? `${formatDb(ariaAuto)}, automated (base ${readout})` : readout}
     title={automated
-      ? `${name}: ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
+      ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
       : `${name}: ${readout} — drag up/down (Shift = fine), double-click = 0 dB, arrows = ±1 dB${autoStatus ? ', right-click = Automate' : ''}`}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}

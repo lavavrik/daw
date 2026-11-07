@@ -21,16 +21,25 @@
 // Override (the engine's rule, engine/src/automation.rs Automation::suspend,
 // recomputed here from the same data): `touch()` sends AUTO_OVERRIDE and
 // suspends the lane, while playing until the lane's next breakpoint after the
-// ENGINE's tick at that moment (the tick the engine itself uses), while
+// tick the ENGINE will be at when the command lands (the telemetry tick,
+// which is where the next block starts, plus one block: `blockTicks`), while
 // stopped until the next jump. It ends when the HEARD tick reaches that point
 // (so the grey ends when the lane is heard again), or at any jump: Play,
 // Stop, a seek, a mode switch (a change of playing / mode / songPosition) or
-// a loop wrap (the heard tick going back).
+// a loop wrap (the heard tick going back). The engine runs ahead of what is
+// heard, so a touch can land after the engine wrapped but before the wrap is
+// heard: such a suspension belongs to the NEW pass (its engine tick is behind
+// the heard one), so the heard wrap does not end it, and its point is only
+// checked once the wrap is heard.
 //
 // The loop runs only while the transport plays in Song mode and at least one
 // control is registered (registered = mounted = visible; a hidden tab gets
-// no rAF anyway). Otherwise App calls `refresh()` when something the controls
-// show may have changed (an edit, Play / Stop, a seek, a mode switch, a load).
+// no rAF anyway), and evaluates at most ~60 times a second (a 120 Hz display
+// skips every other frame). Otherwise App calls `refresh()` when something
+// the controls show may have changed (an edit, Play / Stop, a seek, a mode
+// switch, a load). The lane lookup is cached until project.version (every
+// edit and undo) or the project's track / mixer arrays (a load) change; the
+// lanes' points and on/off are read live.
 import { getContext, setContext } from 'svelte';
 import type { CommandSink } from '../state/actions';
 import { isMasterChannel, laneValueAt, nextBreakpoint, projectLanes, targetDef } from '../state/automation';
@@ -56,11 +65,13 @@ export interface AutoBusDeps {
   sink: CommandSink;
   /** The tick heard now (AudioClock.heardTicks); NaN when unknown. */
   heardTicks: () => number;
-  /** The engine's playhead (telemetry ticks): where AUTO_OVERRIDE's "next breakpoint" is counted from. */
+  /** The engine's playhead (telemetry ticks: where the next block starts): AUTO_OVERRIDE's "next breakpoint" counts from here ... */
   engineTicks: () => number;
+  /** ... plus one block (the command lands at the block after the one the telemetry describes). Default 0. */
+  blockTicks?: () => number;
   /** The suspended lane ids changed (App: laneView.suspended, drawn grey on the timeline). */
   onSuspended: (ids: Set<string>) => void;
-  raf?: (fn: () => void) => number;
+  raf?: (fn: (now: number) => void) => number;
   caf?: (id: number) => void;
 }
 
@@ -85,6 +96,8 @@ export interface AutoBus {
 
 /** A heard tick this far behind the last one is a jump (loop wrap, seek), not clock jitter. */
 const JUMP_BACK = 120;
+/** Loop frames closer than this are skipped: at most ~60 evaluations a second on any display. */
+const MIN_FRAME_MS = 12;
 
 const targetKey = (t: AutoTarget) => (t.kind === 'mix' ? `mix:${t.param}` : `rack:${t.module}:${t.param}`);
 const keyOf = (owner: string, t: AutoTarget) => `${owner}|${targetKey(t)}`;
@@ -97,23 +110,35 @@ interface Reg {
 
 export function createAutoBus(d: AutoBusDeps): AutoBus {
   const p = d.project;
-  const raf = d.raf ?? ((fn: () => void) => requestAnimationFrame(fn));
+  const raf = d.raf ?? ((fn: (now: number) => void) => requestAnimationFrame(fn));
   const caf = d.caf ?? ((id: number) => cancelAnimationFrame(id));
+  const blockTicks = d.blockTicks ?? (() => 0);
   const regs = new Set<Reg>();
-  /** Suspended lane id -> the tick it ends at (Infinity: at the next jump). */
-  const suspended = new Map<string, number>();
+  /**
+   * Suspended lane id -> the tick it ends at (Infinity: at the next jump);
+   * `next`: made in the pass after a wrap the heard tick has not reached yet.
+   */
+  const suspended = new Map<string, { until: number; next: boolean }>();
   let sig = '';
   let lastHeard = NaN;
   let loopId = 0;
+  let lastFrameAt = -Infinity;
 
-  /** Every lane by owner|target, with its def (lanes whose target is gone are skipped). */
+  /** Every lane by owner|target, with its def (lanes whose target is gone are skipped). Cached, see the top. */
+  let cache: { key: unknown[]; map: Map<string, { lane: AutomationLane; def: AutoDef }>; ids: Set<string> } | null = null;
   function lanes(): Map<string, { lane: AutomationLane; def: AutoDef }> {
-    const m = new Map<string, { lane: AutomationLane; def: AutoDef }>();
+    return laneIndex().map;
+  }
+  function laneIndex() {
+    const key = [p.version, p.tracks, p.mixer, p.mixer.automation];
+    if (cache && cache.key.every((k, i) => k === key[i])) return cache;
+    const map = new Map<string, { lane: AutomationLane; def: AutoDef }>();
     for (const x of projectLanes(p)) {
       const def = targetDef(x.owner, x.lane.target);
-      if (def) m.set(keyOf(isMasterChannel(x.owner) ? x.owner : x.owner.id, x.lane.target), { lane: x.lane, def });
+      if (def) map.set(keyOf(isMasterChannel(x.owner) ? x.owner : x.owner.id, x.lane.target), { lane: x.lane, def });
     }
-    return m;
+    cache = { key, map, ids: new Set([...map.values()].map((x) => x.lane.id)) };
+    return cache;
   }
 
   const setSuspended = (changed: boolean) => {
@@ -132,12 +157,13 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
     const s = `${p.playing}|${p.mode}|${p.songPosition}`;
     let changed = false;
     const wrapped = p.playing && Number.isFinite(lastHeard) && tick < lastHeard - JUMP_BACK;
-    if (s !== sig || wrapped) {
+    if (s !== sig) {
       changed = suspended.size > 0;
       suspended.clear();
     } else if (p.playing) {
-      for (const [id, until] of suspended) {
-        if (tick >= until) {
+      for (const [id, x] of suspended) {
+        if (wrapped && x.next) x.next = false; // the wrap it was made after: now heard
+        else if (wrapped || (!x.next && tick >= x.until)) {
           suspended.delete(id);
           changed = true;
         }
@@ -167,9 +193,9 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
     const tick = shownTick();
     transport(tick);
     if (regs.size === 0) return;
-    const all = lanes();
+    const { map: all, ids } = laneIndex();
     for (const id of suspended.keys()) {
-      if (![...all.values()].some((x) => x.lane.id === id)) {
+      if (!ids.has(id)) {
         suspended.delete(id);
         setSuspended(true);
       }
@@ -178,9 +204,12 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
   }
 
   const shouldLoop = () => regs.size > 0 && p.playing && p.mode === 'song';
-  function loop() {
+  function loop(now: number) {
     loopId = 0;
-    frame();
+    if (!(now - lastFrameAt < MIN_FRAME_MS)) {
+      lastFrameAt = now;
+      frame();
+    }
     ensureLoop();
   }
   function ensureLoop() {
@@ -206,16 +235,19 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
       if (p.mode !== 'song') return false;
       const x = lanes().get(keyOf(owner, target));
       if (!x || !x.lane.enabled || x.lane.points.length === 0) return false;
-      transport(shownTick()); // a jump before this move ends the OLD suspensions, not this one
+      const heard = shownTick();
+      transport(heard); // a jump before this move ends the OLD suspensions, not this one
       if (!overrideLane(p, d.sink, x.lane.id)) return false;
       let until = Infinity;
+      let next = false;
       if (p.playing) {
         const e = d.engineTicks();
-        const from = Number.isFinite(e) ? e : shownTick();
+        const from = Number.isFinite(e) ? e + blockTicks() : heard;
         until = nextBreakpoint(x.lane.points, from)?.tick ?? Infinity;
+        next = Number.isFinite(e) && e < heard - JUMP_BACK; // the engine has wrapped, the ear not yet
       }
       const isNew = !suspended.has(x.lane.id);
-      suspended.set(x.lane.id, until);
+      suspended.set(x.lane.id, { until, next });
       setSuspended(isNew);
       return true;
     },
@@ -239,3 +271,36 @@ const KEY = Symbol('autoBus');
 export const provideAutoBus = (bus: AutoBus) => setContext(KEY, bus);
 /** A control's bus (undefined outside App, e.g. a component test): then it just shows its own value. */
 export const useAutoBus = (): AutoBus | undefined => getContext<AutoBus | undefined>(KEY);
+
+/** aria-valuenow / -valuetext follow a lane at most this often: a screen reader can't use 60 Hz. */
+export const ARIA_MS = 250;
+
+/**
+ * For a control's accessible value: `push` the heard value every frame;
+ * `set` gets it at most every `ms` (the latest one trailing, so the last
+ * value always lands), and at once when the lane starts or stops applying
+ * (null). Knob / Fader keep it in reactive state: 4 Hz, not 60.
+ */
+export function ariaThrottle(set: (v: number | null) => void, ms = ARIA_MS, now = () => performance.now()) {
+  let shadow: number | null = null;
+  let latest: number | null = null;
+  let at = -Infinity;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const apply = (v: number | null) => {
+    clearTimeout(timer);
+    timer = undefined;
+    at = now();
+    shadow = v;
+    set(v);
+  };
+  return {
+    push(v: number | null) {
+      latest = v;
+      if (v === shadow) return;
+      const wait = ms - (now() - at);
+      if (v === null || shadow === null || wait <= 0) apply(v);
+      else if (!timer) timer = setTimeout(() => apply(latest), wait);
+    },
+    dispose: () => clearTimeout(timer),
+  };
+}

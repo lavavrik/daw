@@ -351,9 +351,14 @@ changes nothing and sends nothing.
     when what it shows changed. The controls write the ring / pointer / cap
     straight into the DOM (`paint()`): no reactive state per frame.
   - The loop runs only while the transport plays in Song mode and a control
-    is registered (= mounted; a hidden tab gets no rAF). Otherwise App calls
-    `refresh()` when something shown may have changed: `project.version`
-    (every edit, undo), playing, mode, songPosition, loading, a new clock.
+    is registered (= mounted; a hidden tab gets no rAF), and evaluates at
+    most ~60 times a second (frames closer than 12 ms are skipped: a 120 Hz
+    display evaluates every other one). Otherwise App calls `refresh()` when
+    something shown may have changed: `project.version` (every edit, undo),
+    playing, mode, songPosition, loading, a new clock.
+  - The owner|target → lane lookup is cached until `project.version` or the
+    project's `tracks` / `mixer` / `mixer.automation` arrays (a load) change;
+    each lane's points and on/off are read live every frame.
   - Status per control: `none` (no lane), `on` (the lane applies: the value
     shown is the lane's), `idle` (a lane that plays nothing: Pattern mode,
     disabled, no points), `suspended` (overridden). Only `on` shows the
@@ -363,10 +368,20 @@ changes nothing and sends nothing.
   value, and an **A** badge (grey unless the lane applies). A suspended
   control's ring / cap is grey, and so is its timeline lane
   (`laneView.suspended`, which the bus sets only when a suspension starts or
-  ends). The tooltip says "Automated — dragging overrides until the next
-  point". The readout and typed entry stay the **base**: what is saved and
-  what you edit. `data-auto` (status) and `data-auto-pos` / `data-auto-value`
-  mirror the state for tests.
+  ends). The tooltip names the base and says "Automated — dragging
+  overrides until the next point".
+  - While the lane applies, the **readout** (the knob's, and the strip's
+    fader readout, which registers on its own) shows the heard value in
+    italics, written by the callback; otherwise the base. The typed entry
+    edits the base (what is saved).
+  - `aria-valuenow` / `aria-valuetext` ("−12.3 dB, automated (base 0.0
+    dB)") follow the heard value through `ariaThrottle`: at most every
+    250 ms (the latest value trailing), at once when the lane starts or
+    stops applying. That is reactive state at 4 Hz, not 60.
+  - `data-auto` (status) and `data-auto-pos` / `data-auto-value` on the
+    control, `data-auto="on"` on a readout showing the lane, mirror the
+    state for tests.
+  - Integer (non-choice) knobs never register (no lane can target them).
 - **Manual move.** A drag, arrow key, typed value or double-click on an
   automated control calls `bus.touch()` first, then the normal action
   (`setMix` / `setParam`: it changes the base and is one undoable edit).
@@ -377,27 +392,42 @@ changes nothing and sends nothing.
     the engine is).
   - In Pattern mode (or a disabled / empty lane) it is just the normal
     action.
-  - A drag grabs the control where its ring / cap is (the lane's value), so
-    the hand takes over from what is heard; a plain click sends nothing.
+  - A drag grabs the control where its ring / cap is (the lane's value), and
+    the arrow keys step from it, so the hand takes over from what is heard;
+    a plain click sends nothing.
+  - Escape mid-drag (or a lost capture) puts the old base back WITHOUT a new
+    override. The drag's own overrides still hold until the next point:
+    the engine has no "un-override".
   - The UI's suspension is the engine's rule (`Automation::suspend`),
     recomputed from the same data: while playing, until the lane's next
-    breakpoint after the **engine's** tick at the override (telemetry
-    `ticks`, the tick the engine counts from), ended when the **heard** tick
-    reaches it (so the grey ends when the lane is heard again); while
-    stopped, until the next jump. Any jump ends it: Play, Stop, a seek, a
-    mode switch (a change of playing / mode / songPosition) or a loop wrap
-    (the heard tick going back more than 120 ticks).
-- **"Automate".** Right-click a continuous knob or fader: the in-app menu
+    breakpoint after the tick the **engine** will be at when the command
+    lands (telemetry `ticks`, where the next block starts, plus one
+    128-frame block: `blockTicks`), ended when the **heard** tick reaches it
+    (so the grey ends when the lane is heard again); while stopped, until
+    the next jump. Any jump ends it: Play, Stop, a seek, a mode switch (a
+    change of playing / mode / songPosition) or a loop wrap (the heard tick
+    going back more than 120 ticks).
+  - A touch made after the engine wrapped but before the wrap is heard (its
+    engine tick is behind the heard one) belongs to the new pass: the heard
+    wrap does not end it, and its point is checked only after that wrap.
+- **"Automate".** Right-click a continuous knob or fader (or press the
+  ContextMenu key / Shift+F10 on the focused control: the menu opens at the
+  control, its item focused; Escape gives focus back): the in-app menu
   (`ui/AutoMenu.svelte`, one for the app) offers **Automate** (no lane yet:
   `addLane`, one undo entry) or **Show automation**. Either opens the
   owner's lanes (the track's A; the Master row for the returns and the
-  master) and scrolls the lane into view (AutoLane's `data-lane`). Integer
+  master) and scrolls the lane into view (AutoLane's `data-lane`). At 64
+  lanes it says so ("No free automation lane: a project has at most 64")
+  and adds nothing. Integer
   and choice controls do not offer it (`bus.canAutomate` = `targetDef`).
 - **Not done:** knobs have no mouse-wheel gesture (they never had one), so
   "a drag, wheel or typed value" is a drag, arrow keys, a typed value or a
   double-click here.
 - Tests: `autoBus.test.ts` (`ring follows laneValueAt at the heard tick`,
   `suspended until the next breakpoint`, `pattern mode shows the base`, the
-  loop's lifetime), e2e `knob ring follows a cutoff lane while playing`,
-  `manual move overrides until the next breakpoint`, `Automate on a fader
-  opens its lane` (tests/e2e/automation.spec.ts).
+  loop's lifetime, the one-block count, wraps, the lane cache and the 60 fps
+  cap), e2e `knob ring follows a cutoff lane while playing`, `manual move
+  overrides until the next breakpoint`, `Automate on a fader opens its
+  lane`, `automated readouts and arrow keys follow the heard value`,
+  `Automate menu from the keyboard; the 64-lane cap`
+  (tests/e2e/automation.spec.ts).

@@ -47,15 +47,34 @@ describe('encodeWav24', () => {
     const n = 5000;
     const l = new Float32Array(n).map((_, i) => Math.sin(i / 7) * 1.2);
     const r = new Float32Array(n).map((_, i) => Math.cos(i / 5) * 0.5);
-    const w = new Wav24Writer(n, 44100, 1000); // small chunks: several parts
+    const parts: Uint8Array[] = [];
+    const w = new Wav24Writer(n, 44100, (p) => parts.push(p), 1000); // small chunks: several parts
+    expect(parts.length).toBe(1); // the header, final, before any frame
+    expect(parts[0].length).toBe(44);
     for (const [a, b] of [[0, 1], [1, 1024], [1024, 1100], [1100, 4999], [4999, 5000]]) w.write(l.subarray(a, b), r.subarray(a, b));
-    const streamed = new Uint8Array(await w.finish().arrayBuffer());
+    w.finish();
+    expect(parts.length).toBe(1 + 5);
+    // Each part owns its whole buffer, so it can be transferred as is.
+    for (const p of parts) expect([p.byteOffset, p.byteLength]).toEqual([0, p.buffer.byteLength]);
+    const streamed = new Uint8Array(await new Blob(parts as BlobPart[]).arrayBuffer());
     const whole = new Uint8Array(await encodeWav24(l, r, 44100).arrayBuffer());
     expect(streamed).toEqual(whole);
   });
 
+  it('the streaming writer emits each part as soon as it is full', () => {
+    const parts: Uint8Array[] = [];
+    const w = new Wav24Writer(10, 48000, (p) => parts.push(p), 4);
+    w.write(new Float32Array(3), new Float32Array(3));
+    expect(parts.length).toBe(1); // header only: the first chunk is not full yet
+    w.write(new Float32Array(2), new Float32Array(2));
+    expect(parts.map((p) => p.length)).toEqual([44, 24]);
+    w.write(new Float32Array(5), new Float32Array(5));
+    w.finish();
+    expect(parts.map((p) => p.length)).toEqual([44, 24, 24, 12]);
+  });
+
   it('the streaming writer refuses a length other than announced', () => {
-    const w = new Wav24Writer(3, 48000);
+    const w = new Wav24Writer(3, 48000, () => {});
     w.write(new Float32Array(2), new Float32Array(2));
     expect(() => w.finish()).toThrow();
     expect(() => w.write(new Float32Array(2), new Float32Array(2))).toThrow();

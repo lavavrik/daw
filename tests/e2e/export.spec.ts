@@ -3,8 +3,10 @@ import { makeWav } from './wav';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
 // engine.wasm. showSaveFilePicker is replaced (before the app loads) by a
-// fake whose writable keeps the written Blob in window.__exported, so the
-// test can decode it in the page with decodeAudioData.
+// fake whose writable behaves like Chromium's: the streamed parts go to a
+// "swap file" and close commits them to window.__exported (a Blob), so the
+// test can decode it in the page with decodeAudioData. __writes counts the
+// write calls (the export streams ~1 s parts, not one Blob).
 
 type Daw = {
   engine: { sampleRate: number } | null;
@@ -12,7 +14,7 @@ type Daw = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   actions: Record<string, (...args: any[]) => any>;
 };
-type Win = { __daw: Daw; __exported: Blob | null; __picks: string[] };
+type Win = { __daw: Daw; __exported: Blob | null; __picks: string[]; __writes: number };
 
 const EMPTY = 'Nothing to export — the song has no clips. Add clips to the timeline in Song mode first.';
 
@@ -21,14 +23,22 @@ async function fakeSavePicker(page: Page) {
     const w = window as unknown as Win & { showSaveFilePicker: unknown };
     w.__exported = null;
     w.__picks = [];
+    w.__writes = 0;
     w.showSaveFilePicker = async (o: { suggestedName: string }) => {
       w.__picks.push(o.suggestedName);
       return {
         name: o.suggestedName,
-        createWritable: async () => ({
-          write: async (b: Blob) => void (w.__exported = b),
-          close: async () => {},
-        }),
+        createWritable: async () => {
+          const swap: BlobPart[] = [];
+          return {
+            write: async (part: ArrayBuffer) => {
+              w.__writes++;
+              swap.push(part);
+            },
+            close: async () => void (w.__exported = new Blob(swap)),
+            abort: async () => void (swap.length = 0),
+          };
+        },
         getFile: async () => ({ size: w.__exported?.size ?? 0 }),
       };
     };
@@ -88,9 +98,10 @@ test('export produces a non-silent WAV of the right length', async ({ page }) =>
     const bits = new DataView(bytes).getUint16(34, true);
     // 1 bar = 4 beats at the project tempo, plus the 2 s tail.
     const want = Math.round(4 * (60 / w.__daw.project.tempo) * sr) + 2 * sr;
-    return { length: buf.length, want, channels: buf.numberOfChannels, peak, bits, picks: w.__picks };
+    return { length: buf.length, want, channels: buf.numberOfChannels, peak, bits, picks: w.__picks, writes: w.__writes };
   });
   expect(r.picks).toEqual([`Untitled ${today()}.wav`]);
+  expect(r.writes).toBeGreaterThan(2); // streamed: the header, then ~1 s parts
   expect(r.bits).toBe(24);
   expect(r.channels).toBe(2);
   expect(r.length).toBe(r.want);

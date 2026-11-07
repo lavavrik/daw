@@ -7,7 +7,10 @@
 // hand everything to a dedicated Worker (renderWorker.ts) as transferables.
 // The Worker instantiates the same engine.wasm and renders faster than real
 // time; the live AudioContext and engine are never touched, so playback and
-// the UI carry on.
+// the UI carry on. The WAV comes back as a stream of parts (header first),
+// each handed to `write` in order and acked to the Worker once written; the
+// Worker parks after MAX_PARTS_IN_FLIGHT un-acked parts, so a slow disk
+// bounds memory instead of letting parts pile up here.
 //
 // What is rendered: Song mode from tick 0 to the end of the last clip, plus
 // a 2 s tail (reverb/delay/release ring-out), with the loop off and the
@@ -21,7 +24,7 @@ import type { EngineCommand } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
 import type { Project } from '../state/project.svelte';
-import type { JobSample, RenderRequest, WorkerReply } from './render';
+import type { JobSample, WorkerReply, WorkerRequest } from './render';
 
 /** Seconds of tail rendered after the last clip ends. */
 export const TAIL_SECONDS = 2;
@@ -38,7 +41,7 @@ export const EMPTY_SONG = 'Nothing to export — the song has no clips. Add clip
 
 /** The slice of Worker the export uses (tests pass a fake). */
 export interface RenderWorker {
-  postMessage(msg: RenderRequest, transfer: Transferable[]): void;
+  postMessage(msg: WorkerRequest, transfer?: Transferable[]): void;
   onmessage: ((e: MessageEvent<WorkerReply>) => void) | null;
   onerror: ((e: ErrorEvent) => void) | null;
   onmessageerror: ((e: MessageEvent) => void) | null;
@@ -55,8 +58,10 @@ export interface ExportDeps {
 
 /**
  * The Worker posts progress every 0.25 s of audio (and once right after its
- * setup), i.e. every few milliseconds at ~50× real time: 10 s of silence
- * means it hung or died without an error event.
+ * setup) and a part every 1 s of audio, i.e. every few milliseconds at ~50×
+ * real time: 10 s of silence means it hung or died without an error event.
+ * The watchdog only runs while no part is waiting to be written: a Worker
+ * parked on back-pressure is waiting for the disk, not stuck.
  */
 export const STALL_MS = 10_000;
 
@@ -102,16 +107,21 @@ export function exportFileName(name: string, date = new Date()): string {
 const aborted = () => new DOMException('Export cancelled', 'AbortError');
 
 /**
- * Renders the song to a 24-bit WAV Blob. `onProgress(fraction)` follows the
- * Worker (every 0.25 s of audio, 1 at the end). Aborting `signal` terminates
- * the Worker and rejects with an AbortError. Other failures reject with an
- * ExportError whose message is meant for the user; an empty song fails
- * before any Worker exists.
+ * Renders the song to a 24-bit WAV, streamed: `write(part)` gets the file's
+ * bytes in order (the 44-byte header first, final since the length is known,
+ * then ~1 s of audio per part), one call at a time; the next part waits for
+ * the previous write to resolve. Resolves once the last part is written.
+ * `onProgress(fraction)` follows the Worker (every 0.25 s of audio, 1 at the
+ * end). Aborting `signal` terminates the Worker and rejects with an
+ * AbortError; no `write` starts after that. Other failures (a write that
+ * rejects included) reject with an ExportError whose message is meant for
+ * the user; an empty song fails before any Worker exists. The caller owns
+ * what was written so far (exportFlow aborts the file's writable).
  */
 export async function exportSong(
   p: Project, ctx: SampleDecoder & { readonly sampleRate: number }, onProgress: (fraction: number) => void,
-  signal: AbortSignal, deps: ExportDeps = defaultDeps,
-): Promise<Blob> {
+  signal: AbortSignal, write: (part: ArrayBuffer) => Promise<void>, deps: ExportDeps = defaultDeps,
+): Promise<void> {
   const json = serialize(p); // a snapshot: edits made during the export do not change it
   if (songEndTicks(json) === 0) throw new ExportError(EMPTY_SONG);
   const sampleRate = ctx.sampleRate;
@@ -139,17 +149,24 @@ export async function exportSong(
   if (signal.aborted) throw aborted();
 
   const worker = deps.worker();
-  return new Promise<Blob>((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let unwritten = 0; // parts received, not yet written (and acked)
+    let writes = Promise.resolve(); // the parts' writes, in order
     const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(watchdog);
       signal.removeEventListener('abort', onAbort);
       worker.terminate();
       fn();
     };
     const fail = (why: string) => finish(() => reject(new ExportError(`Export failed — ${why}`)));
+    /** Restarts the stall watchdog, unless the Worker may be waiting on our writes. */
     const alive = () => {
       clearTimeout(watchdog);
+      if (settled || unwritten > 0) return;
       watchdog = setTimeout(() => fail('the render stopped responding'), deps.stallMs ?? STALL_MS);
     };
     const onAbort = () => finish(() => reject(aborted()));
@@ -160,12 +177,27 @@ export async function exportSong(
       fail(`the render worker crashed${e.message ? ` (${e.message})` : ''}`);
     };
     worker.onmessage = (e) => {
+      if (settled) return;
       const m = e.data;
       if (m.type === 'progress') {
         alive();
         onProgress(m.fraction);
-      } else if (m.type === 'done') finish(() => resolve(m.wav));
-      else if (m.type === 'error') fail(m.message);
+      } else if (m.type === 'part') {
+        unwritten++;
+        alive(); // a part is progress too: it pauses the watchdog until written
+        writes = writes.then(
+          async () => {
+            if (settled) return; // cancelled or failed: nothing more goes to the file
+            await write(m.bytes);
+            if (settled) return;
+            unwritten--;
+            worker.postMessage({ type: 'ack' });
+            alive();
+          },
+        ).catch((err) => fail(`the file could not be written (${err instanceof Error ? err.message : String(err)})`));
+      } else if (m.type === 'done') {
+        void writes.then(() => finish(resolve)); // every part is queued before 'done'
+      } else if (m.type === 'error') fail(m.message);
     };
     alive();
     worker.postMessage({ type: 'render', wasm, job }, [wasm, ...samples.map((s) => s.data.buffer)]);

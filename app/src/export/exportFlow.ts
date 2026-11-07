@@ -10,19 +10,34 @@
 //      banner offers the file instead.
 //   3. While rendering, banners.exporting shows the progress and Cancel
 //      (AbortSignal -> the Worker is terminated). One export at a time.
-//   4. Done: the file is written ("Exported …" notice). Cancelled or failed:
-//      a hint / an error banner, and a file the dialog created but nothing
-//      was written to is removed again.
+//      With a picked file, the WAV's parts stream straight into its
+//      writable as they arrive (exportSong's back-pressure keeps only a few
+//      parts in memory); without one, they are collected into a Blob for
+//      the download link (unavoidable: a download needs the whole file).
+//   4. Done: the writable is closed, which commits the file ("Exported …"
+//      notice). Cancelled or failed: the writable is aborted, so nothing
+//      half-written is committed (Chromium writes to a swap file until
+//      close), a hint / an error banner shows, and the picked file, still
+//      empty, is removed again.
 import type { SampleDecoder } from '../audio/samples';
 import { serialize } from '../project/serialize';
 import { banners, flashHint } from '../state/banners.svelte';
 import type { Project } from '../state/project.svelte';
 import { EMPTY_SONG, ExportError, exportFileName, exportSong, songEndTicks } from './exportSong';
 
+/** The slice of FileSystemWritableFileStream the flow uses. */
+export interface SaveWritable {
+  write(part: ArrayBuffer): Promise<void>;
+  /** Commits what was written to the file. */
+  close(): Promise<void>;
+  /** Discards what was written; the file keeps its previous (empty) contents. */
+  abort(): Promise<void>;
+}
+
 /** The slice of FileSystemFileHandle the flow uses (tests pass a fake). */
 export interface SaveHandle {
   readonly name: string;
-  createWritable(): Promise<{ write(b: Blob): Promise<void>; close(): Promise<void> }>;
+  createWritable(): Promise<SaveWritable>;
   getFile(): Promise<{ size: number }>;
   remove?(): Promise<void>;
 }
@@ -94,21 +109,28 @@ export async function runExport(
   const ac = new AbortController();
   banners.exporting = { fraction: 0, cancel: () => ac.abort() };
   clearDownload();
+  let writable: SaveWritable | null = null;
   try {
-    const blob = await deps.render(p, ctx, (f) => {
+    const parts: ArrayBuffer[] = []; // download fallback only
+    const write = handle
+      ? async (part: ArrayBuffer) => writable!.write(part)
+      : async (part: ArrayBuffer) => void parts.push(part);
+    if (handle) writable = await handle.createWritable();
+    await deps.render(p, ctx, (f) => {
       if (banners.exporting) banners.exporting.fraction = f;
-    }, ac.signal);
+    }, ac.signal, write);
     if (handle) {
-      const w = await handle.createWritable();
-      await w.write(blob);
+      const w = writable!;
+      writable = null; // committed: nothing to abort from here on
       await w.close();
       banners.notice = `Exported "${handle.name}"`;
     } else {
-      banners.download = { href: URL.createObjectURL(blob), name };
+      banners.download = { href: URL.createObjectURL(new Blob(parts, { type: 'audio/wav' })), name };
     }
   } catch (e) {
     if (isAbort(e)) flashHint('Export cancelled');
     else banners.error = message(e);
+    if (writable) await (writable as SaveWritable).abort().catch(() => {}); // already errored: nothing to discard
     if (handle) await removeIfEmpty(handle);
   } finally {
     banners.exporting = null;

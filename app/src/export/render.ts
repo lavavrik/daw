@@ -2,7 +2,7 @@
 // engine.wasm the AudioWorklet runs, through the same C ABI
 // (engine/src/ffi.rs), but offline: as fast as the CPU allows, in
 // MAX_BLOCK (1024-frame) blocks. Pure and DOM-free: the render Worker
-// (renderWorker.ts) wraps handleRenderMessage, and the tests run renderSong
+// (renderWorker.ts) wraps renderService, and the tests run renderSong
 // directly in Node against the native reference
 // (engine/tests/export_render.rs, which mirrors this file's block schedule
 // and hash exactly -- change both together).
@@ -49,11 +49,28 @@ export interface RenderRequest {
   job: RenderJob;
 }
 
-/** Worker -> main thread. `fraction` 0..1, posted every 0.25 s of audio and at the end. */
+/** Main thread -> Worker: `render` once, then one `ack` per part once it is written. */
+export type WorkerRequest = RenderRequest | { type: 'ack' };
+
+/**
+ * Worker -> main thread. `progress`: `fraction` 0..1, posted at the start,
+ * every 0.25 s of audio and at the end. `part`: the next bytes of the WAV
+ * file (the 44-byte header first, then ~1 s of audio each), transferred; the
+ * page acks each once it is on disk. Then exactly one `done` or `error`.
+ */
 export type WorkerReply =
   | { type: 'progress'; fraction: number }
-  | { type: 'done'; wav: Blob }
+  | { type: 'part'; bytes: ArrayBuffer }
+  | { type: 'done' }
   | { type: 'error'; message: string };
+
+/**
+ * Back-pressure: the Worker posts at most this many parts the page has not
+ * acked yet, then parks its render until an ack comes. So however much
+ * faster the render is than the disk, the page holds at most this many parts
+ * (~1.2 MB at 48 kHz) and the Worker one more being encoded.
+ */
+export const MAX_PARTS_IN_FLIGHT = 4;
 
 /** A render that cannot produce the song (a sample the engine refused). */
 export class RenderError extends Error {}
@@ -83,6 +100,16 @@ export const ENGINE_QUANTUM = 128;
 export function renderBlocks(
   wasm: BufferSource, job: RenderJob, onBlock: (left: Float32Array, right: Float32Array, done: number) => void,
 ): void {
+  for (const [left, right, done] of blocks(wasm, job)) onBlock(left, right, done);
+}
+
+/**
+ * renderBlocks as a generator, one block per step (the same views, valid
+ * until the next step), so a caller can pause between blocks (the Worker's
+ * back-pressure). Pausing does not change the output: the engine only
+ * advances inside a step.
+ */
+function* blocks(wasm: BufferSource, job: RenderJob): Generator<[Float32Array, Float32Array, number]> {
   // Synchronous compile: fine off the main thread (Worker, Node tests).
   const ex = new WebAssembly.Instance(new WebAssembly.Module(wasm), {}).exports as unknown as EngineExports;
   const h = ex.engine_new(job.sampleRate);
@@ -122,7 +149,7 @@ export function renderBlocks(
       }
       done += n;
     }
-    if (k > 0) onBlock(left.subarray(0, k), right.subarray(0, k), done - latency);
+    if (k > 0) yield [left.subarray(0, k), right.subarray(0, k), done - latency];
   }
 }
 
@@ -138,31 +165,65 @@ export function renderSong(wasm: BufferSource, job: RenderJob): { left: Float32A
 }
 
 /**
- * The Worker's whole job: render, encode each block as it comes
- * (Wav24Writer), reply. Progress goes out at the start (0), every 0.25 s of
- * rendered audio and at the end (1); then exactly one 'done' or 'error'.
+ * The Worker's whole job, as a message handler (renderWorker.ts feeds it
+ * every message; one render per handler). On `render`: render, encode each
+ * block as it comes (Wav24Writer) and post every finished part, transferred.
+ * After posting, if MAX_PARTS_IN_FLIGHT parts are un-acked, the render parks
+ * until an `ack` arrives (the handler returns to the event loop meanwhile,
+ * so acks get in). Progress goes out at the start (0), every 0.25 s of
+ * rendered audio and at the end (1); then exactly one `done` or `error`.
  */
-export function handleRenderMessage(msg: unknown, post: (reply: WorkerReply) => void): void {
-  const m = msg as RenderRequest;
-  if (m?.type !== 'render') return;
-  try {
-    const { job } = m;
-    post({ type: 'progress', fraction: 0 }); // alive (exportSong's stall watchdog)
-    const wav = new Wav24Writer(job.frames, job.sampleRate);
-    const every = Math.max(1, Math.round(job.sampleRate / 4));
-    let next = every;
-    renderBlocks(m.wasm, job, (left, right, done) => {
-      wav.write(left, right);
-      if (done >= next && done < job.frames) {
-        post({ type: 'progress', fraction: done / job.frames });
-        while (next <= done) next += every;
+export function renderService(post: (reply: WorkerReply, transfer?: Transferable[]) => void): (msg: unknown) => void {
+  let unacked = 0;
+  let wake: (() => void) | null = null;
+  let started = false;
+
+  const render = async (m: RenderRequest) => {
+    try {
+      const { job } = m;
+      post({ type: 'progress', fraction: 0 }); // alive (exportSong's stall watchdog)
+      const ready: Uint8Array[] = [];
+      const wav = new Wav24Writer(job.frames, job.sampleRate, (part) => ready.push(part));
+      const send = async () => {
+        for (let part = ready.shift(); part; part = ready.shift()) {
+          // Wav24Writer parts own their whole buffer: transfer it, no copy.
+          const bytes = part.buffer as ArrayBuffer;
+          post({ type: 'part', bytes }, [bytes]);
+          unacked++;
+          while (unacked >= MAX_PARTS_IN_FLIGHT) await new Promise<void>((r) => (wake = r));
+        }
+      };
+      const every = Math.max(1, Math.round(job.sampleRate / 4));
+      let next = every;
+      await send(); // the header
+      for (const [left, right, done] of blocks(m.wasm, job)) {
+        wav.write(left, right);
+        if (done >= next && done < job.frames) {
+          post({ type: 'progress', fraction: done / job.frames });
+          while (next <= done) next += every;
+        }
+        await send();
       }
-    });
-    post({ type: 'progress', fraction: 1 });
-    post({ type: 'done', wav: wav.finish() });
-  } catch (e) {
-    post({ type: 'error', message: e instanceof Error ? e.message : String(e) });
-  }
+      wav.finish();
+      post({ type: 'progress', fraction: 1 });
+      post({ type: 'done' });
+    } catch (e) {
+      post({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  return (msg) => {
+    const m = msg as WorkerRequest;
+    if (m?.type === 'ack') {
+      unacked--;
+      const w = wake;
+      wake = null;
+      w?.();
+    } else if (m?.type === 'render' && !started) {
+      started = true;
+      void render(m);
+    }
+  };
 }
 
 // --- The fixed test job (engine/tests/fixtures/export_render.txt) ----------

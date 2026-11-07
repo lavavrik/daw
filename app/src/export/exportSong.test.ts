@@ -10,44 +10,10 @@ import { sampleFile } from '../state/sampleFiles';
 import { fakeAudio } from '../project/testFixture';
 import { Project } from '../state/project.svelte';
 import { ExportError, exportCommands, exportFileName, exportFrames, exportSong, songEndTicks } from './exportSong';
-import type { RenderWorker } from './exportSong';
-import { handleRenderMessage } from './render';
-import { engineWasmBytes } from './testWasm';
-import type { WorkerReply } from './render';
+import { MAX_PARTS_IN_FLIGHT } from './render';
+import { collect, fakeWorker } from './testWorker';
 
 const ctx = { ...fakeDecoder, sampleRate: 48000 };
-
-/** A Worker stand-in running the real render core in this thread (asynchronously, like a Worker). */
-function fakeWorker(o: { hold?: boolean; stallMs?: number } = {}) {
-  const w = {
-    created: 0,
-    terminated: false,
-    posted: null as unknown,
-    onmessage: null as ((e: MessageEvent<WorkerReply>) => void) | null,
-    onerror: null as ((e: ErrorEvent) => void) | null,
-    onmessageerror: null as ((e: MessageEvent) => void) | null,
-    postMessage(msg: unknown) {
-      w.posted = msg;
-      if (o.hold) return; // never answers (cancel test)
-      setTimeout(() => {
-        if (w.terminated) return;
-        handleRenderMessage(msg, (reply) => !w.terminated && w.onmessage?.({ data: reply } as MessageEvent<WorkerReply>));
-      }, 0);
-    },
-    terminate() {
-      w.terminated = true;
-    },
-  };
-  const deps = {
-    worker: () => {
-      w.created++;
-      return w as unknown as RenderWorker;
-    },
-    wasm: async () => engineWasmBytes(),
-    stallMs: o.stallMs,
-  };
-  return { w, deps };
-}
 
 describe('export: what gets rendered', () => {
   it('song end is the end of the last clip', async () => {
@@ -92,7 +58,7 @@ describe('exportSong', () => {
     const p = new Project();
     addDrumTrack(p, nullSink); // a track, but no clips on the timeline
     const { w, deps } = fakeWorker();
-    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, deps).catch((e) => e);
+    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, collect().write, deps).catch((e) => e);
     expect(err).toBeInstanceOf(ExportError);
     expect(err.message).toBe('Nothing to export — the song has no clips. Add clips to the timeline in Song mode first.');
     expect(w.created).toBe(0); // no worker, no file
@@ -102,7 +68,7 @@ describe('exportSong', () => {
     const { p } = await buildFixture();
     p.sampleFiles.get(1)!.bytes = new ArrayBuffer(0); // the fake decoder fails on empty bytes
     const { w, deps } = fakeWorker();
-    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, deps).catch((e) => e);
+    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, collect().write, deps).catch((e) => e);
     expect(err).toBeInstanceOf(ExportError);
     expect(err.message).toBe('Export failed — sample "snare.wav" could not be decoded');
     expect(w.created).toBe(0);
@@ -112,7 +78,7 @@ describe('exportSong', () => {
     const { p } = await buildFixture();
     const { w, deps } = fakeWorker({ hold: true });
     const ac = new AbortController();
-    const run = exportSong(p, ctx, () => {}, ac.signal, deps);
+    const run = exportSong(p, ctx, () => {}, ac.signal, collect().write, deps);
     await new Promise((r) => setTimeout(r, 10));
     expect(w.created).toBe(1);
     ac.abort();
@@ -125,7 +91,9 @@ describe('exportSong', () => {
     const { p } = await buildFixture();
     const { w, deps } = fakeWorker();
     const progress: number[] = [];
-    const blob = await exportSong(p, ctx, (f) => progress.push(f), new AbortController().signal, deps);
+    const out = collect();
+    await exportSong(p, ctx, (f) => progress.push(f), new AbortController().signal, out.write, deps);
+    const blob = out.blob();
     const frames = exportFrames(serialize(p), 48000);
     expect(blob.size).toBe(44 + frames * 6);
     const pcm = new Uint8Array(await blob.arrayBuffer(), 44);
@@ -152,8 +120,9 @@ describe('exportSong', () => {
     setStep(p, nullSink, d.id, d.rows[0].id, 0, 127);
     addClip(p, nullSink, d.id, { start: 0 });
     const sound = async () => {
-      const blob = await exportSong(p, ctx, () => {}, new AbortController().signal, fakeWorker().deps);
-      return new Uint8Array(await blob.arrayBuffer(), 44).some((b) => b !== 0);
+      const out = collect();
+      await exportSong(p, ctx, () => {}, new AbortController().signal, out.write, fakeWorker().deps);
+      return new Uint8Array(await out.blob().arrayBuffer(), 44).some((b) => b !== 0);
     };
     expect(await sound()).toBe(true); // audible unmuted
     setMix(p, nullSink, d.id, 'mute', 1);
@@ -166,7 +135,7 @@ describe('exportSong', () => {
   it('a worker that stops answering fails the export with a message (and is terminated)', async () => {
     const { p } = await buildFixture();
     const { w, deps } = fakeWorker({ hold: true, stallMs: 30 });
-    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, deps).catch((e) => e);
+    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, collect().write, deps).catch((e) => e);
     expect(err).toBeInstanceOf(ExportError);
     expect(err.message).toBe('Export failed — the render stopped responding');
     expect(w.terminated).toBe(true);
@@ -175,12 +144,88 @@ describe('exportSong', () => {
   it('a message the page cannot read (messageerror) fails the export', async () => {
     const { p } = await buildFixture();
     const { w, deps } = fakeWorker({ hold: true });
-    const run = exportSong(p, ctx, () => {}, new AbortController().signal, deps);
+    const run = exportSong(p, ctx, () => {}, new AbortController().signal, collect().write, deps);
     await vi.waitFor(() => expect(w.onmessageerror).not.toBeNull());
     w.onmessageerror!({} as MessageEvent);
     const err = await run.catch((e) => e);
     expect(err).toBeInstanceOf(ExportError);
     expect(err.message).toBe('Export failed — a message from the render worker could not be read');
     expect(w.terminated).toBe(true);
+  });
+
+  it('streams with bounded in-flight parts', async () => {
+    // A disk that does not finish the first data write until released: the
+    // worker parks after MAX_PARTS_IN_FLIGHT un-acked parts, so the page
+    // never holds more than that, however fast the render is.
+    const { p } = await buildFixture();
+    const { w, deps } = fakeWorker();
+    const out = collect();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    let maxInFlight = 0;
+    const write = async (part: ArrayBuffer) => {
+      calls++;
+      maxInFlight = Math.max(maxInFlight, w.parts - w.acks); // delivered to the page, not yet acked
+      if (calls === 2) await gate;
+      await out.write(part);
+    };
+    const run = exportSong(p, ctx, () => {}, new AbortController().signal, write, deps);
+    // The header was written and acked; then MAX_PARTS_IN_FLIGHT more parts.
+    await vi.waitFor(() => expect(w.parts).toBe(1 + MAX_PARTS_IN_FLIGHT));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(w.parts).toBe(1 + MAX_PARTS_IN_FLIGHT); // parked, not racing ahead
+    expect(w.acks).toBe(1);
+    expect(calls).toBe(2); // writes go one at a time, in order
+    release();
+    await run;
+    expect(w.parts).toBeGreaterThan(MAX_PARTS_IN_FLIGHT + 2); // the fixture is ~8 parts long
+    expect(maxInFlight).toBeLessThanOrEqual(MAX_PARTS_IN_FLIGHT);
+    expect(out.blob().size).toBe(44 + exportFrames(serialize(p), 48000) * 6);
+    expect(w.terminated).toBe(true);
+  });
+
+  it('a slow disk is not a stalled render (the watchdog waits for the writes)', async () => {
+    const { p } = await buildFixture();
+    const { deps } = fakeWorker({ stallMs: 100 });
+    const out = collect();
+    let n = 0;
+    const write = async (part: ArrayBuffer) => {
+      if (++n === 2) await new Promise((r) => setTimeout(r, 400)); // 4× the stall limit
+      await out.write(part);
+    };
+    await exportSong(p, ctx, () => {}, new AbortController().signal, write, deps);
+    expect(out.blob().size).toBe(44 + exportFrames(serialize(p), 48000) * 6);
+  });
+
+  it('a write that fails fails the export (and terminates the worker)', async () => {
+    const { p } = await buildFixture();
+    const { w, deps } = fakeWorker();
+    const write = async () => Promise.reject(new Error('disk full'));
+    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, write, deps).catch((e) => e);
+    expect(err).toBeInstanceOf(ExportError);
+    expect(err.message).toBe('Export failed — the file could not be written (disk full)');
+    expect(w.terminated).toBe(true);
+  });
+
+  it('cancel mid-stream: no write after the abort', async () => {
+    const { p } = await buildFixture();
+    const { w, deps } = fakeWorker();
+    const ac = new AbortController();
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const write = async () => {
+      if (++calls === 2) await gate;
+    };
+    const run = exportSong(p, ctx, () => {}, ac.signal, write, deps);
+    await vi.waitFor(() => expect(calls).toBe(2));
+    ac.abort();
+    const err = await run.catch((e) => e);
+    expect(err.name).toBe('AbortError');
+    expect(w.terminated).toBe(true);
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(calls).toBe(2);
   });
 });

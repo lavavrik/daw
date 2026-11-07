@@ -7,9 +7,11 @@
 // guards against a misbehaving patch.
 //
 // Wav24Writer streams: the length is known up front (the export renders a
-// fixed frame count), so the header is final from the start, and each
-// rendered block is encoded straight into fixed-size byte chunks that become
-// Blob parts. The Worker never holds the song as floats, nor the file twice.
+// fixed frame count), so the header is final from the start and is the first
+// part out; each rendered block is encoded straight into fixed-size byte
+// chunks, and every chunk is handed on (`onPart`) the moment it is full. The
+// render Worker posts each part to the page, which writes it to the file, so
+// the song is never held as floats, nor the file as a whole anywhere.
 
 const FULL = 8388608; // 2^23
 const BYTES_PER_FRAME = 6;
@@ -40,20 +42,26 @@ export function wavHeader24(frames: number, sr: number): Uint8Array {
 
 /**
  * A WAV built block by block: announce the frame count, `write` exactly that
- * many frames in blocks of any size, then `finish`. Bytes are identical to
+ * many frames in blocks of any size, then `finish`. `onPart` receives the
+ * header (in the constructor), then each full chunk of `chunkFrames` frames
+ * as soon as it fills (the last one shorter). Every part owns its whole
+ * ArrayBuffer (offset 0, no spare bytes), so it can be transferred as is and
+ * is never touched again here. The parts concatenated are byte-identical to
  * encodeWav24 of the whole signal.
  */
 export class Wav24Writer {
-  private readonly parts: Uint8Array[];
   private chunk: Uint8Array;
   private at = 0;
   private written = 0;
   private done = false;
 
-  /** `chunkFrames`: frames per Blob part (default 1 s at 48 kHz). */
-  constructor(private readonly frames: number, sr: number, private readonly chunkFrames = 48000) {
-    this.parts = [wavHeader24(frames, sr)];
-    this.chunk = new Uint8Array(Math.min(frames, chunkFrames) * BYTES_PER_FRAME);
+  /** `chunkFrames`: frames per part (default 1 s at 48 kHz, 288 KB). */
+  constructor(
+    private readonly frames: number, sr: number, private readonly onPart: (part: Uint8Array) => void,
+    private readonly chunkFrames = 48000,
+  ) {
+    onPart(wavHeader24(frames, sr));
+    this.chunk = this.nextChunk();
   }
 
   write(left: Float32Array, right: Float32Array): void {
@@ -62,34 +70,37 @@ export class Wav24Writer {
       throw new Error('Wav24Writer: frames beyond the announced length (or channels differ)');
     }
     for (let i = 0; i < n; i++) {
-      if (this.at === this.chunk.length) this.flush();
       this.at = put24(this.chunk, this.at, left[i]);
       this.at = put24(this.chunk, this.at, right[i]);
+      this.written++;
+      if (this.at === this.chunk.length) {
+        // Sized to the frames left, so a full chunk is exactly a part.
+        this.onPart(this.chunk);
+        this.chunk = this.nextChunk();
+        this.at = 0;
+      }
     }
-    this.written += n;
   }
 
-  finish(): Blob {
+  /** Checks the announced length was written (every part has gone out by then). */
+  finish(): void {
     if (this.written !== this.frames) throw new Error(`Wav24Writer: ${this.written} of ${this.frames} frames written`);
-    if (this.at > 0) this.flush();
     this.done = true;
-    return new Blob(this.parts as BlobPart[], { type: 'audio/wav' });
   }
 
-  private flush() {
-    this.parts.push(this.at === this.chunk.length ? this.chunk : this.chunk.subarray(0, this.at));
-    const left = this.frames - this.written;
-    this.chunk = new Uint8Array(Math.max(1, Math.min(left, this.chunkFrames)) * BYTES_PER_FRAME);
-    this.at = 0;
+  private nextChunk() {
+    return new Uint8Array(Math.min(this.frames - this.written, this.chunkFrames) * BYTES_PER_FRAME);
   }
 }
 
 /** Interleaved L/R 24-bit little-endian PCM in a canonical 44-byte RIFF/WAVE header. */
 export function encodeWav24(left: Float32Array, right: Float32Array, sr: number): Blob {
   if (left.length !== right.length) throw new Error('encodeWav24: channels differ in length');
-  const w = new Wav24Writer(left.length, sr, Math.max(1, left.length));
+  const parts: Uint8Array[] = [];
+  const w = new Wav24Writer(left.length, sr, (p) => parts.push(p), Math.max(1, left.length));
   w.write(left, right);
-  return w.finish();
+  w.finish();
+  return new Blob(parts as BlobPart[], { type: 'audio/wav' });
 }
 
 function put24(out: Uint8Array, at: number, x: number): number {

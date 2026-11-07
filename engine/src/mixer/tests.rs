@@ -568,7 +568,12 @@ fn soft_clip_is_transparent_below_the_knee_and_never_exceeds_the_ceiling() {
         assert_eq!(soft_clip(-x, c), -y);
         (px, prev) = (x, y);
     }
-    assert!(soft_clip(f32::MAX, c) <= c && soft_clip(f32::INFINITY, c) <= c);
+    assert!(soft_clip(f32::MAX, c) <= c);
+    // Non-finite passes through (the engine backstop zeroes it) instead of
+    // becoming a full-scale sample.
+    assert!(soft_clip(f32::NAN, c).is_nan());
+    assert_eq!(soft_clip(f32::INFINITY, c), f32::INFINITY);
+    assert_eq!(soft_clip(f32::NEG_INFINITY, c), f32::NEG_INFINITY);
 }
 
 #[test]

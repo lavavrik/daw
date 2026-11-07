@@ -45,14 +45,3 @@ export function mixParam(name: string): MixParamDef {
 export function defaultMixParams(): number[] {
   return MIX_PARAMS.map((p) => p.default);
 }
-
-/**
- * Clamp to [min,max]; integer params also round. NaN falls back to the
- * default. -Infinity (a "-inf"/"Off" request) lands on the minimum, which the
- * engine treats as off for the params that have a minLabel.
- */
-export function clampMix(def: MixParamDef, v: number): number {
-  if (Number.isNaN(v)) return def.default;
-  const c = Math.min(def.max, Math.max(def.min, v));
-  return def.integer ? Math.round(c) : c;
-}

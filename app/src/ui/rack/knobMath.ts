@@ -5,6 +5,7 @@
 // gesture works in position space, so an Exp param (cutoff, envelope times)
 // moves logarithmically: each pixel of drag multiplies the value by the same
 // factor instead of adding Hz.
+import { clampParam } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 
 /**
@@ -16,13 +17,6 @@ export type KnobDef = Pick<ParamDef, 'label' | 'min' | 'max' | 'default' | 'inte
   name?: string;
   minLabel?: string;
 };
-
-/** Clamp to [min,max]; integer params also round. NaN falls back to the default. */
-function clampParam(d: KnobDef, v: number): number {
-  if (Number.isNaN(v)) return d.default;
-  const c = Math.min(d.max, Math.max(d.min, v));
-  return d.integer ? Math.round(c) : c;
-}
 
 /** Vertical drag distance that covers the whole range (Shift = 10x finer). */
 export const DRAG_PX = 150;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mixParam } from '../../audio/mixerCatalog';
 import {
-  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, holdStep, isClip,
+  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, holdStep, isClip, isMasterClip,
   linToDb, meterPos,
 } from './mixMath';
 
@@ -85,6 +85,16 @@ describe('meter mapping', () => {
     expect(isClip(0.99, 0)).toBe(false);
     expect(isClip(10 ** (-0.3 / 20), -0.3)).toBe(true);
     expect(isClip(10 ** (-0.5 / 20), -0.3)).toBe(false);
+  });
+});
+
+describe('master clip light', () => {
+  it('lights on limiter GR > 1 dB or an output within 0.5 dB of the ceiling', () => {
+    const lin = (db: number) => 10 ** (db / 20);
+    expect(isMasterClip(lin(-0.5), -0.3, 0)).toBe(true); // 0.2 dB under: the limiter's normal peak
+    expect(isMasterClip(lin(-1), -0.3, 0)).toBe(false);
+    expect(isMasterClip(lin(-6), -0.3, 1.5)).toBe(true);
+    expect(isMasterClip(lin(-6), -0.3, 1)).toBe(false);
   });
 });
 

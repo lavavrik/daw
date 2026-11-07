@@ -212,7 +212,7 @@
         <span style:bottom="calc({faderPos(db) * 100}% - 5px)">{db === SCALE_TICKS[0] ? '−∞' : db > 0 ? `+${db}` : db < 0 ? `−${-db}` : '0'}</span>
       {/each}
     </div>
-    <div class="mtr"><Meter {bus} {channel} {name} {ceilingDb} /></div>
+    <div class="mtr"><Meter {bus} {channel} {name} {ceilingDb} master={kind === 'master'} /></div>
   </div>
   <div class="readout" data-testid="fader-readout" title={`${name} volume`}>{formatDb(fader)}</div>
 </div>

@@ -166,6 +166,8 @@ export class Project {
   playing = $state(false);
   tracks = $state<Track[]>([]);
   selectedTrackId = $state<string | null>(null);
+  /** The bottom panel shows the Mixer tab instead of the selected track's editor. */
+  mixerOpen = $state(false);
   /** Most recently selected synth track; keeps receiving keys while a drum track is selected. */
   lastSynthTrackId = $state<string | null>(null);
   nextSampleId = $state(0);

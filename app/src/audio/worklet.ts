@@ -6,7 +6,7 @@
 //     (which the engine allows only while the transport is stopped).
 //   - Port message handlers also run on this thread but *between* render
 //     quanta, so they may allocate (sample uploads happen there).
-//   - Must stay DOM-free: imports only protocol.ts and ring.ts.
+//   - Must stay DOM-free: imports only protocol.ts, ring.ts and meterBallistics.ts.
 //   - Any exception from an engine call (a WASM trap, which may leave the
 //     instance half-updated) is fatal: the instance is dropped, output goes
 //     silent, and {type:'engine-error'} tells the UI to ask for a reload.

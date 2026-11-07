@@ -231,3 +231,22 @@ test('sidechain from kick ducks the synth', async ({ page }) => {
   await page.screenshot({ path: 'test-results/mixer.png' });
   await page.keyboard.up('KeyA');
 });
+
+test('timeline track headers switch the bottom panel from the mixer to that track\'s editor', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click(); // slot 1, Piano roll
+  await openMixer(page);
+  // Inside the mixer, a strip name selects the track but keeps the mixer open.
+  await strip(page, 1).getByTestId('strip-name').click();
+  await expect(page.getByTestId('track-1')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('mixer')).toBeVisible();
+  // The timeline's track header leaves the mixer for that track's editor.
+  await page.getByTestId('track-0').click();
+  await expect(page.getByTestId('mixer')).toBeHidden();
+  await expect(page.getByTestId('row-0')).toBeVisible(); // the drum track's Step grid
+  // Same for a synth track: back to the remembered Piano roll tab.
+  await openMixer(page);
+  await page.getByTestId('track-1').click();
+  await expect(page.getByTestId('mixer')).toBeHidden();
+  await expect(page.getByTestId('pianoroll')).toBeVisible();
+});

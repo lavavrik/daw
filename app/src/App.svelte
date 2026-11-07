@@ -11,7 +11,11 @@
   import type { AudioClock } from './audio/audioClock';
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
-  import { addDrumTrack, liveInputTrack, play, stop } from './state/actions';
+  import { addDrumTrack, addRow, liveInputTrack, play, setRowSample, setStep, stop } from './state/actions';
+  import { addSynthTrack } from './state/rack-actions';
+  import { addNote } from './state/pattern-actions';
+  import { setMix, setSidechain } from './state/mixer-actions';
+  import { STARTER_PATCHES } from './state/patches';
   import { installShortcuts } from './input/shortcuts';
   import { connectMidi } from './input/midi';
   import { createNoteInput } from './input/noteInput';
@@ -40,6 +44,17 @@
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
     // Real song actions for e2e (no-ops before audio starts).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
+    // Used by the spec 6 perf e2e (tests/e2e/perf.spec.ts) to build its scenario
+    // through the same code paths as the UI.
+    addDrumTrack: () => (engine ? addDrumTrack(project, engine) : null),
+    addSynthTrack: (patchName) =>
+      engine ? addSynthTrack(project, engine, undefined, STARTER_PATCHES.find((x) => x.name === patchName)) : null,
+    addRow: (trackId) => (engine ? addRow(project, engine, trackId) : null),
+    setRowSample: (trackId, rowId, sampleId, name) => engine && setRowSample(project, engine, trackId, rowId, sampleId, name),
+    setStep: (trackId, rowId, step, vel) => engine && setStep(project, engine, trackId, rowId, step, vel),
+    addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
+    setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
+    setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
   } };
 
   /**

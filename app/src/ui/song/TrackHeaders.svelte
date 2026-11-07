@@ -30,7 +30,10 @@
         data-testid={`track-${t.slot}`}
         aria-pressed={sel}
         title="{t.name} — {t.kind === 'drum' ? 'drum track' : `synth track (${t.patchName})`}. Click to edit it below."
-        onclick={() => selectTrack(p, engine, t.id)}
+        onclick={() => {
+          selectTrack(p, engine, t.id);
+          p.mixerOpen = false; // show this track's editor, not the mixer
+        }}
       >
         <span class="mark">{sel ? '▶' : ''}</span>
         <span class="txt">

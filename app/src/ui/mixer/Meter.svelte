@@ -5,18 +5,20 @@
   // instant attack, 60 dB/s fall; see audio/meterBallistics.ts) and a
   // peak-hold line that stays at the highest peak for 1 s (holdStep).
   //
-  // Clip light: lights when a peak reaches the ceiling (0 dBFS on strips, the
-  // limiter ceiling on the master) and stays lit until clicked, so a single
-  // over is never missed.
+  // Clip light: lights when a peak reaches 0 dBFS (strips) and stays lit until
+  // clicked, so a single over is never missed. On the master (`master` prop)
+  // the limiter output sits ~0.2 dB under its ceiling, so a plain peak test
+  // would never fire; there it lights when limiter gain reduction exceeds 1 dB
+  // or the output is within 0.5 dB of the ceiling (mixMath.isMasterClip).
   //
   // Updated from the mixer's single rAF loop (MeterBus) by writing styles
   // directly; data-peak-db / data-hold-db expose the values to tests.
   import { MIX_METER_STRIDE } from '../../audio/protocol';
   import type { MeterBus } from './meterBus';
-  import { holdStep, isClip, linToDb, meterPos } from './mixMath';
+  import { holdStep, isClip, isMasterClip, linToDb, meterPos } from './mixMath';
   import type { Hold } from './mixMath';
 
-  let { bus, channel, ceilingDb = 0, name }: {
+  let { bus, channel, ceilingDb = 0, name, master = false }: {
     bus: MeterBus;
     /** Mixer channel index (0..31 track slot, MIX_REVERB/DELAY/MASTER). */
     channel: number;
@@ -24,6 +26,8 @@
     ceilingDb?: number;
     /** For the accessible name ("Drums meter"). */
     name: string;
+    /** The master: clip light follows limiter GR / near-ceiling (see above). */
+    master?: boolean;
   } = $props();
 
   let root = $state<HTMLElement | null>(null);
@@ -59,12 +63,15 @@
           el.style.visibility = hp > 0 ? 'visible' : 'hidden';
         }
       }
-      if (!clipped && isClip(lin, ceilingDb)) clipped = true;
+      if (!clipped && (master ? isMasterClip(lin, ceilingDb, m[base + 2] ?? 0) : isClip(lin, ceilingDb))) clipped = true;
     }
     if (root) {
       const r = (x: number) => (x > -200 ? x.toFixed(1) : '-inf');
-      root.dataset.peakDb = r(peakDb);
-      root.dataset.holdDb = r(Math.max(holds[0].db, holds[1].db));
+      // Only write when the string changed (dataset writes cost style recalcs).
+      const pk = r(peakDb);
+      const hd = r(Math.max(holds[0].db, holds[1].db));
+      if (root.dataset.peakDb !== pk) root.dataset.peakDb = pk;
+      if (root.dataset.holdDb !== hd) root.dataset.holdDb = hd;
     }
   }));
 </script>

@@ -2,7 +2,8 @@
 // engine command. Channel index on the wire: the track's slot, or
 // MIX_REVERB / MIX_DELAY / MIX_MASTER for the shared channels.
 import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
-import { MIX_PARAMS, clampMix, mixParam } from '../audio/mixerCatalog';
+import { clampParam } from '../audio/catalog';
+import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
@@ -32,7 +33,7 @@ export function setMix(p: Project, sink: CommandSink, target: MixChannelTarget, 
   const def = MIX_PARAMS.find((d) => d.name === param);
   // The engine rejects params that do not apply to the channel kind; so do we.
   if (!r || !def || !def.appliesTo.includes(r.kind)) return;
-  const v = clampMix(def, value);
+  const v = clampParam(def, value);
   r.ch.params[def.id] = v;
   sink.send(Op.MIX_SET, r.index, def.id, v);
 }

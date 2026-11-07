@@ -346,36 +346,8 @@ async function fillArena(page: Page, leave: number) {
   expect(code).toBe(0);
 }
 
-test('deferred drop while playing: notice, loads on Stop, engine keeps running', async ({ page }) => {
-  await startAudio(page);
-  // Leave less room than the kick (50 ms = 2205..2400 frames) needs.
-  await fillArena(page, 100);
-  await page.keyboard.press('Space');
-  await expect.poll(slot(page, 1)).toBe(1);
-  // NOT asserted: the dropouts() delta. Under parallel Playwright workers CPU
-  // contention causes real audio overruns that have nothing to do with the
-  // deferred load (flaky ~50%). What this test owns is that parking the load
-  // does not break the engine: no failure, and the transport keeps advancing.
-  const ticks = () => page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.telemetry()[2]);
-  const before = await ticks();
-  await dropFile(page, 'row-0', 'kick.wav', 'audio/wav', [...makeWav()]);
-  await expect(page.getByTestId('notice')).toContainText('"kick" will load when playback stops');
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
-  await page.waitForTimeout(1000); // keep playing with the load parked
-  await expect.poll(ticks).not.toBe(before); // still playing with the load parked
-  expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
-  // Select a synth track first: the step grid unmounts, but the pending load
-  // is session state (state/sampleLoads.ts) and must still land on Stop.
-  await page.getByTestId('add-synth-track').click();
-  await expect(page.getByTestId('pianoroll')).toBeVisible();
-  await expect(page.getByTestId('row-0')).toHaveCount(0);
-  await page.keyboard.press('Space'); // Stop -> retry (grows memory)
-  await expect(page.getByTestId('notice')).toBeHidden();
-  await page.getByTestId('track-0').click(); // back to the drums
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
-  await expect(page.getByTestId('notice')).toBeHidden();
-  await expect(page.getByTestId('banner')).toBeHidden();
-});
+// 'deferred drop while playing' lives in serial.spec.ts (it asserts real-time
+// block rates, so it must not share the machine with parallel workers).
 
 test('a deferred load evicted from the retry queue shows an error', async ({ page }) => {
   await startAudio(page);

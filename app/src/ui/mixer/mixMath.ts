@@ -120,3 +120,19 @@ export function holdStep(h: Hold, db: number, now: number): Hold {
 export function isClip(lin: number, ceilingDb: number): boolean {
   return linToDb(lin) >= ceilingDb - 0.001;
 }
+
+/** Master clip light: limiter GR above this (dB) counts as "hitting the ceiling". */
+export const MASTER_CLIP_GR_DB = 1;
+/** ...as does an output peak within this many dB of the ceiling. */
+export const MASTER_CLIP_MARGIN_DB = 0.5;
+
+/**
+ * Master clip test. The limiter's output sits a little *under* its ceiling
+ * (lookahead peak detection, ~0.2 dB), so plain isClip never fires there.
+ * Instead the master light means "the limiter is working hard": gain reduction
+ * above MASTER_CLIP_GR_DB, or an output peak within MASTER_CLIP_MARGIN_DB of
+ * the ceiling.
+ */
+export function isMasterClip(lin: number, ceilingDb: number, grDb: number): boolean {
+  return grDb > MASTER_CLIP_GR_DB || linToDb(lin) >= ceilingDb - MASTER_CLIP_MARGIN_DB;
+}

@@ -92,6 +92,44 @@ top bar; positive = notes land earlier). Playing live still feels delayed;
 wired headphones or speakers fix that. Design notes:
 `docs/architecture/sequencer.md`.
 
+## Mix
+
+Design notes: `docs/architecture/mixer.md`.
+
+1. **Mixer tab.** The bottom panel's **Mixer** tab shows one strip per track,
+   the **Reverb** and **Delay** returns and the **Master**. Each strip has the
+   track colour and name (click it to select the track; the mixer stays open),
+   M / S, a fader with a dB readout, pan, a stereo peak meter (peak-hold line,
+   clip light: click to reset) and collapsible **EQ** and **Comp** sections.
+   Selecting a track from the timeline's track list leaves the mixer for that
+   track's editor.
+2. **Sends.** Each track has two send knobs, **Reverb** and **Delay**
+   (Off .. 0 dB). They tap *after* the fader; the **post/pre** button beside a
+   send makes it tap *before* the fader, so the send level stays when you pull
+   the fader down. Muting or soloing out a track also stops its sends (the
+   effect tails still ring out).
+3. **Sidechain pumping, step by step.**
+   1. Put a kick on a drum track's row and make a four-on-the-floor pattern.
+   2. Add a synth track (a pad or chord patch) playing a held chord.
+   3. In the mixer, expand the synth strip's **Comp** and switch it **on**.
+   4. In **Sidechain**, pick the drum track's kick row (shown as
+      "SC: Drums · kick").
+   5. Lower **Threshold** until the strip's gain-reduction meter dips on every
+      kick; raise **Ratio** (4-8) for a deeper duck, shorten **Release** to
+      let the pad swell back before the next kick.
+   Up to 8 distinct drum rows can be sidechain keys at once.
+4. **Master limiter.** The Master strip has a **Ceiling** knob (default
+   -0.3 dB) and a **Limiter GR** readout: the output never goes above the
+   ceiling. The master clip light turns on when the limiter works hard (more
+   than 1 dB of reduction); click it to reset. The limiter delays the output by
+   1.5 ms; the playhead and recording take that into account.
+5. **Gain-staging tips.** Poly patches (Chord Stab, Pad, Pluck) are about 9 dB
+   quieter than the mono ones (Deep Bass, Lead): raise their faders (up to
+   +6 dB) instead of lowering everything else. Keep meters peaking around
+   -12 .. -6 dB on the strips and let the limiter only catch the occasional
+   peak; if GR sits above 3-4 dB, turn some faders down. The pan law keeps
+   centre at unity and gives +3 dB at a hard pan.
+
 ## Arrange a song
 
 Design notes: `docs/architecture/arrangement.md`.

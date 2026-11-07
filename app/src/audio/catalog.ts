@@ -64,8 +64,20 @@ export function portIndex(def: ModuleDef, dir: 'in' | 'out', name: string): numb
   return i;
 }
 
-/** Clamp to [min,max]; integer params also round. NaN falls back to the default. */
-export function clampParam(def: ParamDef, v: number): number {
+/** The minimal shape clamping needs; rack ParamDef, MixParamDef and KnobDef all fit. */
+export interface ClampRange {
+  min: number;
+  max: number;
+  default: number;
+  integer: boolean;
+}
+
+/**
+ * The one clamp for every parameter table (rack, mixer, knobs): to [min,max];
+ * integer params also round. NaN falls back to the default; -Infinity lands
+ * on the minimum (the mixer treats that as "off" where it has a minLabel).
+ */
+export function clampParam(def: ClampRange, v: number): number {
   if (Number.isNaN(v)) return def.default;
   const c = Math.min(def.max, Math.max(def.min, v));
   return def.integer ? Math.round(c) : c;

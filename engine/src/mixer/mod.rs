@@ -721,10 +721,14 @@ pub const SOFT_KNEE: f32 = 0.9;
 /// The post-limiter safety stage (the click is added after the limiter):
 /// bit-transparent while `|x| ≤ SOFT_KNEE·ceiling`, above that a tanh knee
 /// with slope 1 at the knee (continuous value and slope, so no corner) that
-/// approaches but never exceeds `ceiling`. Monotonic, odd, NaN in -> NaN out
-/// (the engine's backstop zeroes it).
+/// approaches but never exceeds `ceiling`. Monotonic, odd. A non-finite input
+/// (NaN, and also +-inf) is returned unchanged rather than turned into a
+/// full-scale +-ceiling sample; the engine's is_finite backstop then zeroes it.
 #[inline]
 pub fn soft_clip(x: f32, ceiling: f32) -> f32 {
+    if !x.is_finite() {
+        return x;
+    }
     let k = SOFT_KNEE * ceiling;
     let a = x.abs();
     if a <= k {

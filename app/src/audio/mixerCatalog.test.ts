@@ -1,6 +1,7 @@
+import { clampParam } from './catalog';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MIXER_CATALOG, MIX_PARAMS, clampMix, defaultMixParams, mixParam } from './mixerCatalog';
+import { MIXER_CATALOG, MIX_PARAMS, defaultMixParams, mixParam } from './mixerCatalog';
 
 describe('mixer catalog', () => {
   it('loads the golden verbatim', () => {
@@ -20,10 +21,10 @@ describe('mixer catalog', () => {
     expect(defaultMixParams()).toHaveLength(MIX_PARAMS.length);
   });
   it('clampMix', () => {
-    expect(clampMix(mixParam('fader'), -Infinity)).toBe(-60);
-    expect(clampMix(mixParam('fader'), 20)).toBe(6);
-    expect(clampMix(mixParam('fader'), NaN)).toBe(0);
-    expect(clampMix(mixParam('mute'), 0.4)).toBe(0);
+    expect(clampParam(mixParam('fader'), -Infinity)).toBe(-60);
+    expect(clampParam(mixParam('fader'), 20)).toBe(6);
+    expect(clampParam(mixParam('fader'), NaN)).toBe(0);
+    expect(clampParam(mixParam('mute'), 0.4)).toBe(0);
   });
   it('mixParam throws on unknown', () => {
     expect(() => mixParam('nope')).toThrow();

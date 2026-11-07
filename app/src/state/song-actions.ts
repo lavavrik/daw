@@ -228,7 +228,7 @@ export function splitClips(p: Project, sink: CommandSink, ids: string[], tick: n
         const seconds = fileSeconds(p, left.sampleId);
         let offset = left.offset + d / ticksPerSecond(p.tempo);
         if (left.loop && seconds) offset %= seconds;
-        if (offset > MAX_AUDIO_OFFSET) continue; // could not be placed: leave it whole
+        if (seconds === null && offset > MAX_AUDIO_OFFSET) continue; // would be clamped: leave it whole
         const fadeOut = left.fadeOut;
         updateAudioClip(p, sink, f.t, left, { len: d, fadeOut: 0 });
         const right = placeAudioClip(p, sink, f.t, { ...left, start: at, len: end - at, offset, fadeIn: 0, fadeOut });

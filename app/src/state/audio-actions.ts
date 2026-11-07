@@ -30,11 +30,18 @@ export const CLIP_GAIN_MIN_DB = -60;
 /** The loudest clip gain: +12 dB (MAX_CLIP_GAIN = 4 linear in the engine). */
 export const CLIP_GAIN_MAX_DB = 12;
 /**
- * Largest clip offset in seconds: a sanity bound only (the engine refuses an
- * offset past MAX_SAMPLE_FLOATS frames at its rate; real offsets lie inside
- * their file, which is at most that long).
+ * Largest clip offset in seconds when the file's length is not known: within
+ * MAX_SAMPLE_FLOATS frames at any rate up to 192 kHz. With a known length a
+ * one-shot's offset stops at the file's end (no file is longer than
+ * MAX_SAMPLE_FLOATS frames at the rate it was decoded at). The engine also
+ * clamps an offset past MAX_SAMPLE_FLOATS frames at its own rate.
  */
-export const MAX_AUDIO_OFFSET = MAX_SAMPLE_FLOATS / 48000;
+export const MAX_AUDIO_OFFSET = MAX_SAMPLE_FLOATS / 192000;
+/**
+ * The largest offset a project file may hold (any rate down to 8 kHz): the
+ * schema's sanity bound. The engine clamps what its rate cannot address.
+ */
+export const MAX_SAVED_OFFSET = MAX_SAMPLE_FLOATS / 8000;
 
 /** dB -> the engine's linear clip gain (0..MAX_CLIP_GAIN; the minimum is silence). */
 export function clipGainLinear(db: number): number {
@@ -102,8 +109,10 @@ type ClipFields = Omit<AudioClip, 'id' | 'idx'>;
 
 /**
  * `want` made valid, or null when it cannot be (start/len outside the song,
- * a bad offset, gain or sample). Rounds ticks, clamps the gain to its range,
- * wraps a loop clip's offset into its file, shortens fades that do not fit
+ * a negative or non-finite offset, a bad gain or sample). Rounds ticks,
+ * clamps the gain to its range, wraps a loop clip's offset into its file,
+ * stops a one-shot's offset at its file's end (MAX_AUDIO_OFFSET when the
+ * length is unknown), shortens fades that do not fit
  * the clip, and with `capLen` stops a one-shot clip's right edge at the end
  * of its file at the current tempo (when the file length is known).
  */
@@ -113,11 +122,13 @@ function normalize(p: Project, want: ClipFields, capLen: boolean): ClipFields | 
   const { sampleId, loop } = want;
   let offset = want.offset;
   if (!Number.isFinite(start) || !Number.isFinite(len) || start < 0 || len < 1 || start + len > MAX_SONG_TICKS) return null;
-  if (!Number.isFinite(offset) || offset < 0 || offset > MAX_AUDIO_OFFSET) return null;
+  if (!Number.isFinite(offset) || offset < 0) return null;
   if (Number.isNaN(want.gain) || typeof loop !== 'boolean') return null;
   if (sampleId !== null && !(Number.isInteger(sampleId) && sampleId >= 0 && sampleId < MAX_SAMPLES)) return null;
   const seconds = fileSeconds(p, sampleId);
   if (loop && seconds && offset >= seconds) offset %= seconds; // the same position: the file repeats
+  else if (seconds !== null) offset = Math.min(offset, seconds); // past a one-shot's end: silence either way
+  else offset = Math.min(offset, MAX_AUDIO_OFFSET);
   if (capLen && !loop && seconds !== null) {
     len = Math.min(len, Math.max(1, Math.ceil((seconds - offset) * ticksPerSecond(p.tempo) - 1e-9)));
   }

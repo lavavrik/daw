@@ -120,4 +120,32 @@ describe('deferred sample loads across an audio restart', () => {
     undo();
     expect(next.onSampleLoaded).toBeUndefined();
   });
+
+  it('a deferred import that fails later gives its reserved floats back (a reset does not)', () => {
+    const p = new Project();
+    const { e } = fakeEngine();
+    const undo = installSampleLoads(p, e);
+    const t = addDrumTrack(p, e)!;
+    // importSample reserved 0.5 s of stereo at 48 kHz for each and recorded its meta.
+    for (const id of [21, 22, 23, 24]) p.sampleMeta.set(id, { seconds: 0.5, channels: 2, peaks: null });
+    p.arenaFloats = 4 * 48000 + 7;
+    for (const id of [21, 22, 23, 24]) deferSampleLoad(id, t.id, t.rows[0].id, `s${id}`);
+    e.onSampleLoaded!(21, Err.OK); // loaded: its space stays used
+    e.onSampleLoaded!(22, Err.OUT_OF_MEMORY);
+    expect(p.arenaFloats).toBe(3 * 48000 + 7);
+    e.onSampleLoaded!(23, HostErr.RESET); // a load reset the count itself
+    expect(p.arenaFloats).toBe(3 * 48000 + 7);
+    // An audio restart settles from its own uploads, which it counted itself:
+    // a refusal there was never counted; one still deferred is, at the new rate.
+    const { e: e2 } = fakeEngine();
+    rebindSampleLoads(e2, new Map([[24, Err.DEFERRED]]));
+    p.arenaFloats = 1000 + 48000;
+    e2.onSampleLoaded!(24, Err.OUT_OF_MEMORY);
+    expect(p.arenaFloats).toBe(1000);
+    deferSampleLoad(25, t.id, t.rows[0].id, 's25');
+    p.sampleMeta.set(25, { seconds: 1, channels: 1, peaks: null });
+    rebindSampleLoads(fakeEngine().e, new Map([[25, Err.OUT_OF_MEMORY]]));
+    expect(p.arenaFloats).toBe(1000);
+    undo();
+  });
 });

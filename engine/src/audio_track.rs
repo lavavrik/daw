@@ -315,13 +315,17 @@ impl AudioTracks {
     }
 
     /// `AUDIO_CLIP_SOURCE`: stage the sample, the offset (seconds, converted
-    /// to frames at the engine rate; beyond `MAX_SAMPLE_FLOATS` frames is
-    /// `ERR_BAD_VALUE`) and the loop flag.
+    /// to frames at the engine rate and clamped to `MAX_SAMPLE_FLOATS`
+    /// frames, past any file's end) and the loop flag. Clamped, not
+    /// refused: the UI cannot know the engine rate, and a refused SOURCE
+    /// would let the GAIN + SET that follow commit a stale staged source.
+    /// (Negative or non-finite offsets never get here: `decode` refuses them.)
     pub fn stage_source(&mut self, slot: usize, idx: usize, sample: Option<u32>, offset: f64, looped: bool) -> Result<(), i32> {
         let frames = (offset * self.sample_rate as f64).round();
-        if !(frames >= 0.0 && frames <= MAX_SAMPLE_FLOATS as f64) {
+        if !(frames >= 0.0) {
             return Err(ERR_BAD_VALUE);
         }
+        let frames = frames.min(MAX_SAMPLE_FLOATS as f64);
         let s = self.staged_mut(slot, idx)?;
         (s.sample, s.offset_frames, s.looped) = (sample, frames as u32, looped);
         Ok(())

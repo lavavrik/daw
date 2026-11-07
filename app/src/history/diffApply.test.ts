@@ -267,4 +267,31 @@ describe('diffApply', () => {
     expect(view(r.m, before)).toEqual(loaded(before));
     expect(r.m.errors).toEqual([]);
   });
+
+  it('undo of a move between audio lanes keeps the clip\'s id (the UI selection survives)', async () => {
+    const r = await rig({ audio: true });
+    const { loop, vox } = r.audio!;
+    const c = loop.clips[0];
+    const id = c.id;
+    const A = serialize(r.p);
+    expect(moveClips(r.p, r.sink, [id], 960, 1)).toBe(true);
+    const B = serialize(r.p);
+    diffApply(r.p, r.sink, B, A);
+    expect(loop.clips.find((x) => x.idx === c.idx)?.id).toBe(id);
+    expect(vox.clips.some((x) => x.id === id)).toBe(false);
+    diffApply(r.p, r.sink, A, B);
+    expect(vox.clips.filter((x) => x.id === id)).toHaveLength(1);
+    expect(loop.clips.some((x) => x.id === id)).toBe(false);
+    expect(view(r.m, B)).toEqual(loaded(B));
+    expect(r.m.errors).toEqual([]);
+  });
+
+  it('the engine model flags an audio clip committed before it was staged', () => {
+    const m = run(blankModel(), [[Op.ADD_AUDIO_TRACK, 0], [Op.AUDIO_CLIP_SET, 0, 0, 960]]);
+    expect(m.errors).toEqual([expect.stringMatching(/before .*SOURCE and GAIN/)]);
+    const ok = run(blankModel(), [
+      [Op.ADD_AUDIO_TRACK, 0], [Op.AUDIO_CLIP_SOURCE, 0, -1, 0, 0], [Op.AUDIO_CLIP_GAIN, 0, 1, 0, 0], [Op.AUDIO_CLIP_SET, 0, 0, 960],
+    ]);
+    expect(ok.errors).toEqual([]);
+  });
 });

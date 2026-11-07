@@ -300,9 +300,10 @@ export class Project {
   /**
    * Sample floats uploaded into the current engine since the last load or
    * audio restart, live and replaced ones together: the engine's arena is a
-   * bump allocator (state/sampleBudget.ts). Not reactive.
+   * bump allocator (state/sampleBudget.ts). Reactive: the Browser footer
+   * shows it (budgetText).
    */
-  arenaFloats = 0;
+  arenaFloats = $state(0);
   tempo = $state(124);
   metronome = $state(false);
   playing = $state(false);

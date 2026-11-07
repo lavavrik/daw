@@ -127,7 +127,7 @@ Plan 9 (spec addendum §3.1); engine side in `engine/src/audio_track.rs`.
 | Pattern length | 16 bars (synth), 64 steps (drum) |
 | Audio-clip gain | 0..4 linear (`MAX_CLIP_GAIN`, +12 dB) |
 | Audio-clip fades | `fadeIn + fadeOut <= len` (ticks) |
-| Audio-clip offset | `<= MAX_SAMPLE_FLOATS` frames |
+| Audio-clip offset | clamped to `MAX_SAMPLE_FLOATS` frames (at the engine rate) |
 | Declick fade / gain ramp | 2 ms / 5 ms |
 | Sample memory | 1 GiB (`MAX_ARENA_FLOATS`), 256 MB per file |
 

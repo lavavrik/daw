@@ -640,9 +640,17 @@ fn audio_clip_commands_validate() {
     assert_eq!(e.command(OP_AUDIO_CLIP_SET, a, song, 1.0, 0.0), ERR_BAD_VALUE, "start at the song end");
     assert_eq!(e.command(OP_AUDIO_CLIP_SET, a, 1.0, song, 0.0), ERR_BAD_VALUE, "past the song end");
     assert_eq!(e.command(OP_AUDIO_CLIP_SET, a, 0.0, 0.0, 0.0), ERR_BAD_VALUE, "length 0");
-    // An offset beyond MAX_SAMPLE_FLOATS frames (at the engine's rate).
+    // An offset beyond MAX_SAMPLE_FLOATS frames (at the engine's rate) is
+    // clamped there, not refused: a refused SOURCE would let the GAIN + SET
+    // after it commit a stale staged source (half an edit). Past any file's
+    // end, a one-shot is silent there anyway.
     let too_far = (crate::MAX_SAMPLE_FLOATS as f64 + 1.0) / SR as f64;
-    assert_eq!(e.command(OP_AUDIO_CLIP_SOURCE, a, 0.0, too_far, 0.0), ERR_BAD_VALUE);
+    ok(e.command(OP_AUDIO_CLIP_SOURCE, a, 0.0, too_far, 0.0));
+    ok(e.command(OP_AUDIO_CLIP_GAIN, a, 1.0, 0.0, 0.0));
+    ok(e.command(OP_AUDIO_CLIP_SET, a, 0.0, 3840.0, 0.0));
+    let c = e.audio.clip(2, 255).expect("committed");
+    assert_eq!((c.sample, c.offset_frames), (Some(0), crate::MAX_SAMPLE_FLOATS as u32), "offset clamped");
+    ok(e.command(OP_CLIP_REMOVE, a, 0.0, 0.0, 0.0));
     ok(e.command(OP_AUDIO_CLIP_SOURCE, a, -1.0, crate::MAX_SAMPLE_FLOATS as f64 / SR as f64, 1.0));
     // Fades longer than the clip are refused at SET, which changes nothing.
     ok(e.command(OP_AUDIO_CLIP_GAIN, a, 4.0, 2000.0, 1841.0));

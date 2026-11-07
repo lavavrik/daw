@@ -102,7 +102,7 @@ export const Op = {
    *  old track and every clip there fade out over 2 ms. */
   ADD_AUDIO_TRACK: 45,
   /** a=slot*MAX_CLIPS+idx b=sample id or -1 c=offset in seconds (>= 0; the
-   *  engine converts to frames at its rate, BAD_VALUE past MAX_SAMPLE_FLOATS
+   *  engine converts to frames at its rate, clamped to MAX_SAMPLE_FLOATS
    *  frames) d=loop 0/1. Stages the change. */
   AUDIO_CLIP_SOURCE: 46,
   /** a=slot*MAX_CLIPS+idx b=gain 0..MAX_CLIP_GAIN (linear) c=fade-in ticks

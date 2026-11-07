@@ -27,8 +27,8 @@ interface Slot {
   clips: Record<number, number[]>;
   /** Audio clips as committed by AUDIO_CLIP_SET: [sample, offset, loop, gain, fadeIn, fadeOut, start, len]. */
   audio: Record<number, number[]>;
-  /** Per clip slot: what SOURCE and GAIN staged ([sample, offset, loop] and [gain, fadeIn, fadeOut]). */
-  staged: Record<number, { source: number[]; gain: number[] }>;
+  /** Per clip slot: what SOURCE and GAIN staged ([sample, offset, loop] and [gain, fadeIn, fadeOut]; null: not yet). */
+  staged: Record<number, { source: number[] | null; gain: number[] | null }>;
 }
 export interface EngineModel {
   slots: (Slot | null)[];
@@ -102,7 +102,7 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.AUDIO_CLIP_SOURCE: case Op.AUDIO_CLIP_GAIN: {
         const t = slotOf(Math.floor(a / MAX_CLIPS), 'audio');
         if (!t) break;
-        const s = (t.staged[a % MAX_CLIPS] ??= { source: [-1, 0, 0], gain: [1, 0, 0] });
+        const s = (t.staged[a % MAX_CLIPS] ??= { source: null, gain: null });
         if (op === Op.AUDIO_CLIP_SOURCE) s.source = [b, cc, d];
         else s.gain = [b, cc, d];
         break;
@@ -110,8 +110,10 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.AUDIO_CLIP_SET: {
         const t = slotOf(Math.floor(a / MAX_CLIPS), 'audio');
         if (!t) break;
-        const s = t.staged[a % MAX_CLIPS] ?? { source: [-1, 0, 0], gain: [1, 0, 0] };
-        if (s.gain[1] + s.gain[2] > cc) bad('fades longer than the clip');
+        // The engine would commit its defaults; every sender stages both first.
+        const s = t.staged[a % MAX_CLIPS];
+        if (!s?.source || !s.gain) bad('audio clip committed before its SOURCE and GAIN');
+        else if (s.gain[1] + s.gain[2] > cc) bad('fades longer than the clip');
         else t.audio[a % MAX_CLIPS] = [...s.source, ...s.gain, b, cc];
         break;
       }

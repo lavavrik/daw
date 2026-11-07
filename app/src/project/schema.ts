@@ -28,7 +28,7 @@ import { accepts } from '../state/mixer-actions';
 import { validatePatch } from '../state/patches';
 import type { Patch } from '../state/patches';
 import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from '../state/project.svelte';
-import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_AUDIO_OFFSET } from '../state/audio-actions';
+import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
 
 /** Plan 9: 2 (Audio tracks). Older files are migrated (migrate.ts). */
@@ -471,9 +471,10 @@ function readAudioClips(r: Reader, v: unknown, sampleIds: Set<number>, at: strin
       sample,
       start,
       len,
-      offset: r.num(c.offset, 0, 0, MAX_AUDIO_OFFSET, `${at} clip offset`),
+      offset: r.num(c.offset, 0, 0, MAX_SAVED_OFFSET, `${at} clip offset`),
       loop: r.bool(c.loop, false, `${at} clip loop`),
-      gain: r.num(c.gain, 0, CLIP_GAIN_MIN_DB, CLIP_GAIN_MAX_DB, `${at} clip gain`),
+      // null is what JSON.stringify makes of -Infinity: -inf, the minimum.
+      gain: c.gain === null ? CLIP_GAIN_MIN_DB : r.num(c.gain, 0, CLIP_GAIN_MIN_DB, CLIP_GAIN_MAX_DB, `${at} clip gain`),
       fadeIn,
       fadeOut,
     });

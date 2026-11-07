@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MAX_ARENA_FLOATS } from '../audio/protocol';
 import { Project } from './project.svelte';
@@ -30,5 +31,12 @@ describe('sample budget', () => {
     );
     // Never "needs 120, 120 free": the need rounds up, the free space down.
     expect(overBudgetText(p, 'x.wav', 120 * MB + 1)).toMatch(/needs 121 MB.*120 MB is free/);
+  });
+
+  it('arenaFloats is reactive state (the Browser footer redraws from it)', () => {
+    // Vitest runs Svelte's server build, where effects never run, so the
+    // reactivity is checked at its source: a $state field, like `version`.
+    const src = readFileSync(new URL('./project.svelte.ts', import.meta.url), 'utf8');
+    expect(src).toMatch(/^\s*arenaFloats = \$state\(0\);/m);
   });
 });

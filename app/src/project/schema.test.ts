@@ -5,7 +5,7 @@ import { projectFingerprint, sampleFilePath, serialize } from './serialize';
 import { sampleFile } from '../state/sampleFiles';
 import { buildFixture } from './testFixture';
 import { Project } from '../state/project.svelte';
-import { addAudioClip, addAudioTrack, setAudioClip } from '../state/audio-actions';
+import { CLIP_GAIN_MIN_DB, addAudioClip, addAudioTrack, setAudioClip } from '../state/audio-actions';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -189,6 +189,7 @@ describe('project schema', () => {
     clips[0].offset = -2;
     clips[0].loop = 'yes';
     clips[0].fadeIn = clips[0].len; // with fadeOut 480: too long, cut
+    clips[1].gain = null; // JSON.stringify(-Infinity): -inf, silently
     clips[1].sample = 77; // not in the project
     clips.push({ idx: 0, sample: 1, start: 0, len: 10, offset: 0, loop: false, gain: 0, fadeIn: 0, fadeOut: 0 }); // idx taken
     clips.push('junk');
@@ -201,6 +202,8 @@ describe('project schema', () => {
     expect(vj.clips[0]).toMatchObject({ gain: 12, offset: 0, loop: false, fadeOut: 480 });
     expect(vj.clips[0].fadeIn + vj.clips[0].fadeOut).toBeLessThanOrEqual(vj.clips[0].len);
     expect(vj.clips[1].sample).toBeNull();
+    expect(vj.clips[1].gain).toBe(CLIP_GAIN_MIN_DB);
+    expect(r.warnings.some((x) => /clip gain: not a number/.test(x))).toBe(false);
     expect(vj.clips[2].len).toBe(1);
     const w = r.warnings.join('\n');
     for (const re of [/gain/, /offset/, /loop/, /fade/i, /sample 77/, /slot/, /malformed/]) expect(w).toMatch(re);

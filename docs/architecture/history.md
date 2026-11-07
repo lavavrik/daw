@@ -210,7 +210,9 @@ Order:
      → `AUDIO_CLIP_GAIN` → `AUDIO_CLIP_SET` for each new or changed clip
      (always the three: the first two only stage). An unchanged clip is not
      re-sent and keeps its UI id. A clip moved between Audio lanes is a
-     removal on one track and an add on the other (a slot that changed kind
+     removal on one track and an add on the other, and the added clip takes
+     the leaving one's UI id (matched by sample, length, offset, loop, gain
+     and fades), so a selection survives the undo (a slot that changed kind
      was removed in step 1 and is rebuilt whole).
 3. **Mixer** params by name, then sidechain **keys** (sources exist now;
    keys going to none first, so drum-row key slots are free).

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
+import { MAX_CLIPS, MAX_SAMPLE_FLOATS, MAX_SONG_TICKS, Op } from '../audio/protocol';
 import { Project } from './project.svelte';
 import { addDrumTrack } from './actions';
 import {
-  CLIP_GAIN_MIN_DB, addAudioClip, addAudioTrack, clipGainLinear, sendAudioClip, setAudioClip, trimAudioClipStart,
+  CLIP_GAIN_MIN_DB, MAX_AUDIO_OFFSET, addAudioClip, addAudioTrack, clipGainLinear, sendAudioClip, setAudioClip, trimAudioClipStart,
 } from './audio-actions';
 
 function setup() {
@@ -138,5 +138,32 @@ describe('audio clips', () => {
     trimAudioClipStart(p, sink, l.id, 3840 * 4 - 960);
     expect([l.start, l.len]).toEqual([3840 * 4 - 960, 3840 + 960]);
     expect(l.offset).toBeCloseTo(1.5, 12); // -0.5 s, modulo the 2 s file
+  });
+
+  it('the offset stays where the engine can play it at any rate', () => {
+    const { p, sink, sent, a } = setup();
+    // A one-shot's offset stops at its file's end (2 s): past it is silence anyway.
+    const c = addAudioClip(p, sink, a.id, { sampleId: 4, start: 0, len: 100 })!;
+    expect(setAudioClip(p, sink, c.id, { offset: 50 })).toBe(true);
+    expect(c.offset).toBe(2);
+    // Unknown file length: bounded so offset x 192 kHz stays within MAX_SAMPLE_FLOATS frames.
+    expect(MAX_AUDIO_OFFSET * 192000).toBeLessThanOrEqual(MAX_SAMPLE_FLOATS);
+    const u = addAudioClip(p, sink, a.id, { sampleId: 5, start: 0 })!;
+    sent.length = 0;
+    expect(setAudioClip(p, sink, u.id, { offset: 1000 })).toBe(true);
+    expect(u.offset).toBe(MAX_AUDIO_OFFSET);
+    expect(sent[0][3]).toBe(MAX_AUDIO_OFFSET);
+    // A long file (20 min): an offset deep inside it is kept, beyond the unknown-length bound.
+    p.sampleMeta.set(6, { seconds: 1200, channels: 1, peaks: null });
+    const long = addAudioClip(p, sink, a.id, { sampleId: 6, start: 0, len: 100 })!;
+    setAudioClip(p, sink, long.id, { offset: 900 });
+    expect(long.offset).toBe(900);
+    // A left trim of a one-shot clip that outlives its file (a tempo change) never passes the file's end either.
+    const l = addAudioClip(p, sink, a.id, { sampleId: 4, start: 3840 * 2, len: 3840 })!;
+    p.tempo = 240; // the 2 s file now covers 7680 ticks; the clip is 3840
+    setAudioClip(p, sink, l.id, { len: 7680 });
+    p.tempo = 60; // ... and now only 1920
+    trimAudioClipStart(p, sink, l.id, 3840 * 2 + 7000);
+    expect(l.offset).toBeLessThanOrEqual(2);
   });
 });

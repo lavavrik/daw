@@ -116,7 +116,8 @@ used included. `Project.arenaFloats` mirrors that count
 needs 230 MB of sample memory; 120 MB is free (1 GB limit). Removed
 samples are freed when the project is reopened." — with no id taken,
 nothing uploaded and no clip placed. It reserves the floats when it takes
-the id and gives them back if the engine refuses the upload. A load starts
+the id and gives them back if the engine refuses the upload (or a load
+deferred until Stop fails then: `sampleLoads.ts`). A load starts
 the count over from the samples it uploads (only the used ones, compact
 ids), the audio restart from the ones it re-uploads (its late uploads add
 theirs). The engine's own `ERR_OUT_OF_MEMORY` stays the backstop.
@@ -201,8 +202,14 @@ notice banner after the load (all of them in the console):
 - a row/SamplePlayer using a sample not in `samples`, or a sample with a bad
   file path (anything but `samples/<one name>`) → cleared/dropped;
 - an audio clip: a sample not in `samples` → `null` (the clip is kept);
-  gain, offset, start, length and fades clamped; fades that together exceed
-  the clip shorten the fade-in.
+  gain, offset (0..`MAX_SAMPLE_FLOATS` frames at 8 kHz, a sanity bound),
+  start, length and fades clamped; fades that together exceed the clip
+  shorten the fade-in; `gain: null` (what JSON makes of −∞) is −∞ (−60 dB).
+  The engine clamps an offset its rate cannot address to
+  `MAX_SAMPLE_FLOATS` frames (never a refusal, which would let the GAIN and
+  SET after it commit a stale source); edits keep a one-shot's offset
+  inside its file, and within `MAX_SAMPLE_FLOATS` frames at 192 kHz when
+  the length is unknown.
 
 ## Load order (`loadProject`)
 

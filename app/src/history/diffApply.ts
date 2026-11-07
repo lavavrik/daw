@@ -22,7 +22,9 @@
 //      (modules added, params, cables); an Audio track: its clips by idx
 //      (CLIP_REMOVE for the ones that go, then SOURCE, GAIN, SET for each
 //      new or changed one; an unchanged clip keeps its UI id and is not
-//      re-sent);
+//      re-sent; a clip that moved between Audio lanes keeps its UI id: a
+//      new clip takes the id of a clip leaving another Audio track with the
+//      same sample, length, offset, loop, gain and fades);
 //   3. mixer params by name, then sidechain keys (their sources exist now);
 //   4. tempo, metronome, loop, mode; selection and the live input track.
 // The project name is not restored (a Save As names the project, not an edit).
@@ -74,6 +76,16 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
     if (t.kind === 'synth' && tj?.kind === 'synth' && !same(was.get(t.slot), tj)) removeModules(sink, t, tj);
   }
 
+  // Audio clips leaving their track (a move between Audio lanes, undone or
+  // redone): a matching new clip on another Audio track takes the id back.
+  const leaving: AudioClip[] = [];
+  for (const t of p.tracks) {
+    const tj = want.get(t.slot);
+    if (t.kind !== 'audio' || tj?.kind !== 'audio') continue;
+    const kept = new Set(tj.clips.map((c) => c.idx));
+    leaving.push(...t.clips.filter((c) => !kept.has(c.idx)));
+  }
+
   // 2. Every track of `to`, in its order.
   const bySlot = new Map<number, Track>();
   const order: Track[] = [];
@@ -89,7 +101,7 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
       t.color = tj.color;
       if (t.kind === 'drum') diffDrum(p, sink, t, tj as DrumTrackJson);
       else if (t.kind === 'synth') diffSynth(p, sink, t, tj as SynthTrackJson);
-      else diffAudio(sink, t, tj as AudioTrackJson);
+      else diffAudio(sink, t, tj as AudioTrackJson, leaving);
     }
     bySlot.set(t.slot, t);
     order.push(t);
@@ -220,8 +232,12 @@ function diffClips(sink: CommandSink, t: PatternTrack, clips: ClipJson[]) {
   t.clips = next;
 }
 
-/** An Audio track's clips by idx: removals first, then each new or changed clip (SOURCE, GAIN, SET). */
-function diffAudio(sink: CommandSink, t: AudioTrack, tj: AudioTrackJson) {
+/**
+ * An Audio track's clips by idx: removals first, then each new or changed
+ * clip (SOURCE, GAIN, SET). A new clip takes the id of a matching clip in
+ * `leaving` (removed from it), so a selection survives a cross-lane move.
+ */
+function diffAudio(sink: CommandSink, t: AudioTrack, tj: AudioTrackJson, leaving: AudioClip[]) {
   const byIdx = new Map(t.clips.map((c) => [c.idx, c]));
   const wanted = new Set(tj.clips.map((c) => c.idx));
   for (const c of t.clips) if (!wanted.has(c.idx)) sink.send(Op.CLIP_REMOVE, t.slot * MAX_CLIPS + c.idx);
@@ -234,7 +250,13 @@ function diffAudio(sink: CommandSink, t: AudioTrack, tj: AudioTrackJson) {
     };
     let c = byIdx.get(cj.idx);
     const same = c && (Object.keys(fields) as (keyof typeof fields)[]).every((k) => c![k] === fields[k]);
-    if (!c) c = { id: crypto.randomUUID(), idx: cj.idx, ...fields };
+    if (!c) {
+      const i = leaving.findIndex((x) =>
+        x.sampleId === fields.sampleId && x.len === fields.len && x.offset === fields.offset && x.loop === fields.loop &&
+        x.gain === fields.gain && x.fadeIn === fields.fadeIn && x.fadeOut === fields.fadeOut);
+      const id = i >= 0 ? leaving.splice(i, 1)[0].id : crypto.randomUUID();
+      c = { id, idx: cj.idx, ...fields };
+    }
     else Object.assign(c, fields);
     next.push(c);
     if (!same) changed.push(c);

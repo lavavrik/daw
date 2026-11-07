@@ -13,9 +13,15 @@ it glitch-free. Code: `app/src/audio/{engine,sendQueue,worklet,ring,protocol}.ts
                                      DawEngineProcessor: 1 drain ring -> engine_command
                                                          2 engine_process(128)
                                                          3 copy out L/R -> outputs[0]  ──► speakers
-                                                         4 copy telemetry -> telemetry SAB
+                                                         4 copy telemetry -> telemetry SAB,
+                                                           meters (ballistics) -> meters SAB
+                                                         4b visuals -> vis SAB, only what the
+                                                           want mask asks (visCopy.ts)
                                                          5/6 cpu load, overrun count
  AudioEngine.telemetry() ◄──────────── telemetry SAB (Float64Array(9), overwritten each block)
+ AudioEngine.meters()    ◄──────────── meters SAB (MIX_CHANNELS × 3 f32, overwritten each block)
+ frameLoop ── want mask ─────────────► vis SAB header[0]
+ AudioEngine.vis()       ◄──────────── vis SAB (rings with published heads, voices; ~400 KB)
 
  AudioEngine.loadSample() ── port.postMessage({type:'sample'}) ──► arena alloc + copy
                           ◄── {type:'sample-result', id, code} ──┘
@@ -25,7 +31,8 @@ it glitch-free. Code: `app/src/audio/{engine,sendQueue,worklet,ring,protocol}.ts
 
 `AudioEngine.start()` (from the "Click to start audio" gesture) creates the
 `AudioContext`, fetches `/engine.wasm`, loads the worklet module, and passes the
-wasm bytes plus both SABs as `processorOptions`. The worklet compiles and
+wasm bytes plus the SABs (command ring, telemetry, meters, visuals) as
+`processorOptions`. The worklet compiles and
 instantiates the module synchronously in its constructor (0 imports) and posts
 `ready`. Cross-origin isolation (COOP/COEP headers in `vite.config.ts`) is what
 makes `SharedArrayBuffer` available at all.
@@ -226,7 +233,9 @@ leaves the user exactly where they were:
 5. Success: `unwireEngine` (the old engine's transport watch and stall watch),
    then `wireEngine(new engine)` in the same task as the last replayed
    command: `engine` (a prop: TopBar, Browser, song area, editors and the
-   mixer's meter loop read it each time), a new `AudioClock` (telemetry
+   mixer's meter consumer read it each time), the visual frame loop
+   re-attached to the new engine's vis SAB (`frameLoop().attach`; the old
+   one is detached by `unwireEngine`), a new `AudioClock` (telemetry
    history is per engine), `onCommand` / `onRackAddRefused`, deferred sample
    loads moved over and settled from the upload results (`rebindSampleLoads`),
    and the transport watch. TopBar re-attaches `onError` and the Browser drops
@@ -327,6 +336,16 @@ Consequences worth knowing:
   gr_db)]` f32s refreshed every block (track/return peaks post-fader; master =
   the final output, gr = the limiter's). Telemetry `PEAK_L/R` is the final
   output too.
+- **Visuals (plan 12), step 4b.** `engine_vis(e)` points at the engine's
+  visual block (`engine/src/vis.rs`): the strip tap (`VIS_TAP` (55) picks one
+  track strip or return; the mixer writes its post-fader stereo) and
+  per-voice activity of every synth track. After the meters the worklet calls
+  `copyVis` (`app/src/audio/visCopy.ts`): it reads the want mask the UI's
+  frame loop writes into the vis SAB and copies only those parts (the output
+  into the master ring, the tap into the tap ring, voice levels with meter
+  ballistics), each ring's head published with `Atomics.store` after its
+  data. With nothing on screen the mask is 0 and step 4b is one
+  `Atomics.load`. See `docs/architecture/visuals.md`.
 - **Mixer params** are a catalog (`engine/mixer_catalog.json`, golden-tested
   like the rack catalog): `MIX_SET` (41) validates against it, `MIX_SET_KEY`
   (42) sets a sidechain key, `MIX_RESET` (43) restores a channel's defaults.

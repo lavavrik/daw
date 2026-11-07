@@ -16,6 +16,13 @@ describe('edit tracking (fix 5)', () => {
     expect([p.dirty, p.version]).toEqual([true, 7]);
   });
 
+  it('VIS_TAP is not an edit', () => {
+    // The strip tap only picks what the analyser shows (plan 12).
+    const p = new Project();
+    commandEdits(p, Op.VIS_TAP);
+    expect([p.dirty, p.version]).toEqual([false, 0]);
+  });
+
   it('nothing is marked while a load replaces the session', () => {
     const p = new Project();
     p.loading = true;

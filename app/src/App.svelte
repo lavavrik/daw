@@ -50,6 +50,7 @@
   import { cancelOpenConfirms } from './ui/inlineConfirms';
   import { serialize } from './project/serialize';
   import { createAutoBus, provideAutoBus } from './ui/autoBus';
+  import { frameLoop } from './ui/vis/frameLoop';
   import AutoMenu from './ui/AutoMenu.svelte';
   import { laneView } from './ui/song/laneView.svelte';
 
@@ -310,7 +311,7 @@
   };
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
+  window.__daw = { engine: null, Op, clock: null, recorder: null, project, vis: { stats: () => frameLoop().stats() }, actions: {
     // Real song actions for e2e (no-ops before audio starts).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
     // Song position (as a ruler click does), e.g. a mid-clip seek timed in the audio clips e2e.
@@ -447,6 +448,8 @@
   function wireEngine(e: AudioEngine, codes?: Map<number, number>) {
     engine = e;
     window.__daw.engine = e;
+    // The one frame loop for every visual serves this engine's visSab.
+    frameLoop().attach(e);
     unwatchStalls = preparedStalls ?? watchStalls(e);
     preparedStalls = null;
     // Telemetry history (heard time) is per engine: a new clock, which the
@@ -469,6 +472,7 @@
 
   /** Detach the per-engine loops from an engine about to close (audio restart). */
   function unwireEngine() {
+    frameLoop().attach(null);
     stopWatch?.();
     stopWatch = null;
     unwatchStalls?.();

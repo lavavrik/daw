@@ -14,12 +14,13 @@ import type { Project } from './project.svelte';
 
 /**
  * Commands that are not edits of the saved project: transport, live playing,
- * selection, and an automation override (AUTO_OVERRIDE only suspends a lane;
- * the manual move's own MIX_SET / RACK_SET_PARAM that follows is the edit).
+ * selection, an automation override (AUTO_OVERRIDE only suspends a lane;
+ * the manual move's own MIX_SET / RACK_SET_PARAM that follows is the edit),
+ * and the strip tap (VIS_TAP only picks what the analyser shows).
  */
 export const NON_EDIT_OPS: ReadonlySet<number> = new Set([
   Op.NOTE_ON, Op.NOTE_OFF, Op.PLAY, Op.STOP, Op.SEEK, Op.SET_INPUT_TRACK,
-  Op.PITCH_BEND, Op.MOD_WHEEL, Op.SUSTAIN, Op.RESET_ALL, Op.AUTO_OVERRIDE,
+  Op.PITCH_BEND, Op.MOD_WHEEL, Op.SUSTAIN, Op.RESET_ALL, Op.AUTO_OVERRIDE, Op.VIS_TAP,
 ]);
 
 /**

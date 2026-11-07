@@ -5,7 +5,7 @@ import {
   PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
   MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode,
   MAX_ARENA_FLOATS, MAX_CLIP_GAIN, CLIP_FADE_SECONDS, MAX_AUTO_LANES, MAX_AUTO_POINTS, AUTO_KIND, packAutoParam,
-  autoPoint,
+  autoPoint, VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -22,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(60);
+    expect(Object.keys(rust).length).toBe(61);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -43,7 +43,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
 describe('size and telemetry parity with engine/src/lib.rs', () => {
   // `pub const NAME: usize = <integer product>;`, e.g. `64 * 1024 * 1024`.
   const rust: Record<string, number> = {};
-  for (const m of read('lib.rs').matchAll(/pub const ((?:MAX|TELEMETRY|MIX)_\w+): usize = ([\d\s*]+);/g)) {
+  for (const m of read('lib.rs').matchAll(/pub const ((?:MAX|TELEMETRY|MIX|VIS)_\w+): usize = ([\d\s*]+);/g)) {
     rust[m[1]] = m[2].split('*').reduce((p: number, x: string) => p * Number(x.trim()), 1);
   }
   const snake = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase(); // peakL -> PEAK_L
@@ -52,11 +52,12 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
     MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_CLIPS, MAX_SONG_TICKS,
     MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, MAX_ARENA_FLOATS,
     MAX_AUTO_LANES, MAX_AUTO_POINTS,
+    VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
-  it('parsed every MAX_*, TELEMETRY_* and MIX_* constant', () => {
-    expect(Object.keys(rust).length).toBe(19 + 10 + 5);
+  it('parsed every MAX_*, TELEMETRY_*, MIX_* and VIS_* constant', () => {
+    expect(Object.keys(rust).length).toBe(19 + 10 + 5 + 6);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);

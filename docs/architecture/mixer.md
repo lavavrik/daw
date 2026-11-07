@@ -162,7 +162,9 @@ clamped against rounding). Non-finite input is returned as is so the final
    meters SAB.
 3. `TELEMETRY.peakL/peakR` (the master peaks the older tests and the
    status line use) are **not** ballistic: they stay raw per-block peaks.
-4. `MeterBus` (`ui/mixer/meterBus.ts`) reads the SAB in one rAF loop and
+4. `MeterBus` (`ui/mixer/meterBus.ts`) reads the SAB once per frame of the
+   app's shared visual frame loop (`ui/vis/frameLoop.ts`: a want-0 consumer
+   on the mixer element, paused off screen and in a hidden tab; plan 12) and
    fans out to every `Meter`/GR readout, which write styles directly (no
    reactive state per frame). The peak-hold line (1 s) is a UI concern
    (`holdStep`). The clip light latches until clicked. On a strip it is red
@@ -171,6 +173,14 @@ clamped against rounding). Non-finite input is returned as is so the final
    master) and turns red only when the output reaches the ceiling (>= ceiling
    - 0.01 dB), which a hard-limited mix does since the limiter output passes
    bit-exact outside clicks (see Click soft clip). It latches its worst state.
+
+## Strip tap (plan 12)
+
+`VIS_TAP` (55) picks one track strip or return whose post-fader stereo the
+mixer also writes into the engine's visual block, for the analysers: the
+same `l`/`r` values `mix_out` adds to the master bus, so its peaks equal the
+strip's meter exactly and the mix is unchanged. Off (−1) costs nothing. See
+`docs/architecture/visuals.md`.
 
 ## Engine reset
 

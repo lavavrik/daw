@@ -16,6 +16,7 @@ pub mod samples;
 pub mod sequencer;
 pub mod synth;
 pub mod transport;
+pub mod vis;
 
 pub use engine::Engine;
 
@@ -107,6 +108,23 @@ pub const TELEMETRY_LAST_ERROR: usize = 7;
 pub const TELEMETRY_FRAME: usize = 8;
 pub const TELEMETRY_LEN: usize = 9;
 
+// Visual data path (plan 12, docs/architecture/visuals.md). Mirrored in
+// app/src/audio/protocol.ts (parity-checked); the shared `visSab` layout
+// built from them lives in app/src/audio/visLayout.ts.
+/// Scope bank slots (engine-wide).
+pub const VIS_SCOPES: usize = 8;
+/// Entries per scope ring; an entry is 4 f32: A min, A max, B min, B max.
+pub const VIS_SCOPE_RING: usize = 2048;
+/// Most entries a scope window shows.
+pub const VIS_SCOPE_WINDOW: usize = 1024;
+/// i32 per scope header.
+pub const VIS_SCOPE_HDR: usize = 8;
+/// Frames in the master and strip-tap rings of `visSab` (stereo, planar).
+pub const VIS_TAP_RING: usize = 8192;
+/// Voice activity floats: level and gate per voice, per track slot
+/// (`[(slot * MAX_POLY + k) * 2]` = level, `+ 1` = gate).
+pub const VIS_VOICE_LEN: usize = 32 * 16 * 2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +139,9 @@ mod tests {
         assert_eq!(MIX_CHANNELS, MAX_TRACKS + 3);
         // Key codes pack `slot * 32 + row + 1`.
         assert!(MAX_ROWS < 32 && MAX_TRACKS <= 32);
+        assert_eq!(VIS_VOICE_LEN, MAX_TRACKS * MAX_POLY * 2);
+        // The worklet adds at most one block per ring per block, and readers
+        // keep VIS_GUARD (256) entries away from the head.
+        assert!(MAX_BLOCK <= VIS_TAP_RING / 4 && VIS_SCOPE_WINDOW < VIS_SCOPE_RING);
     }
 }

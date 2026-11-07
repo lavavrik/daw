@@ -80,7 +80,7 @@ use crate::rack::Rack;
 use crate::samples::SampleView;
 use crate::sequencer::{EventBuf, NotePattern, SeqNote, Voicing};
 use crate::transport::tick_to_offset;
-use crate::{MAX_CLIPS, MAX_PATTERNS, MAX_TRACKS};
+use crate::{MAX_CLIPS, MAX_PATTERNS, MAX_POLY, MAX_TRACKS};
 
 /// One synth track: its patch, its note patterns and one voicing per clip.
 pub struct SynthTrack {
@@ -185,6 +185,18 @@ impl Synths {
     /// The shared FX pool (slot usage, for tests and telemetry).
     pub fn fx_pool(&self) -> &FxPool {
         &self.fx
+    }
+
+    /// Voice activity (plan 12, `vis.rs`): for every track slot, `voices[(slot
+    /// × MAX_POLY + k) × 2]` = voice `k`'s peak level since the last call
+    /// (its racks' Outs; below `vis::VOICE_FLOOR` it reads 0), `+ 1` = its
+    /// gate. Every rack that rendered meanwhile writes its values, every
+    /// other slot zeros. The engine calls it once per block, after the
+    /// tracks rendered. Allocation-free; reads only.
+    pub fn write_voices(&mut self, voices: &mut [f32]) {
+        for (t, out) in self.tracks.iter_mut().zip(voices.chunks_exact_mut(MAX_POLY * 2)) {
+            t.rack.take_voices(out, crate::vis::VOICE_FLOOR);
+        }
     }
 
     /// Add a module to the patch of active synth track `slot` (see
@@ -563,5 +575,95 @@ fn release(rack: &mut Rack, mut mask: u128) {
         let pitch = mask.trailing_zeros() as u8;
         rack.note(NoteEvent::Off { note: pitch });
         mask &= mask - 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::protocol::{
+        OK, OP_ADD_SYNTH_TRACK, OP_NOTE_OFF, OP_NOTE_ON, OP_RACK_ADD_MODULE, OP_RACK_CONNECT, OP_RACK_SET_PARAM,
+        OP_SET_INPUT_TRACK,
+    };
+    use crate::{Engine, MAX_POLY};
+
+    const SR: f32 = 48000.0;
+    const RELEASE: f64 = 0.1;
+
+    /// Synth track `slot`: MIDI In (`mode` 0 Poly / 1 Mono) -> Osc (sine) ->
+    /// VCA <- ADSR (release `RELEASE`) -> Out.l, the live input track.
+    fn patch(e: &mut Engine, slot: f64, mode: f64) {
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, slot, 0.0, 0.0, 0.0), OK);
+        for (m, kind) in [(0.0, 0.0), (1.0, 1.0), (2.0, 4.0), (3.0, 5.0), (4.0, 8.0)] {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, m, kind, 0.0), OK);
+        }
+        let pk = |m: usize, p: usize| (m * 16 + p) as f64;
+        for (from, to) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+            assert_eq!(e.command(OP_RACK_CONNECT, slot, pk(from.0, from.1), pk(to.0, to.1), 0.0), OK);
+        }
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 0.0, 1.0, mode), OK);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 1.0, 0.0, 3.0), OK); // sine
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 2.0, 3.0, RELEASE), OK);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, slot, 0.0, 0.0, 0.0), OK);
+    }
+
+    fn blocks(e: &mut Engine, n: usize) {
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        for _ in 0..n {
+            e.process(&mut l, &mut r);
+        }
+    }
+
+    /// `(level, gate)` of voice `k` of track `slot`.
+    fn voice(e: &Engine, slot: usize, k: usize) -> (f32, f32) {
+        let v = &e.vis().voices;
+        (v[(slot * MAX_POLY + k) * 2], v[(slot * MAX_POLY + k) * 2 + 1])
+    }
+
+    #[test]
+    fn voice_activity_follows_voices() {
+        let mut e = Engine::new(SR);
+        patch(&mut e, 2.0, 0.0);
+        for n in [60.0, 64.0, 67.0] {
+            assert_eq!(e.command(OP_NOTE_ON, n, 100.0, 0.0, 0.0), OK);
+        }
+        blocks(&mut e, 40); // ~107 ms: attack done
+        for k in 0..MAX_POLY {
+            let (level, gate) = voice(&e, 2, k);
+            if k < 3 {
+                assert!(level > 0.0 && gate == 1.0, "voice {k}: {level} {gate}");
+            } else {
+                assert_eq!((level, gate), (0.0, 0.0), "voice {k}");
+            }
+        }
+        // Every other track slot is all zeros.
+        assert!((0..32).filter(|&s| s != 2).all(|s| (0..MAX_POLY).all(|k| voice(&e, s, k) == (0.0, 0.0))));
+        for n in [60.0, 64.0, 67.0] {
+            assert_eq!(e.command(OP_NOTE_OFF, n, 0.0, 0.0, 0.0), OK);
+        }
+        blocks(&mut e, 1);
+        blocks(&mut e, 1); // the gate drops at the next sub-block
+        assert!((0..MAX_POLY).all(|k| voice(&e, 2, k).1 == 0.0), "gates closed");
+        // Within release + 100 ms every level is 0.
+        let limit = ((RELEASE + 0.1) * SR as f64 / 128.0).ceil() as usize;
+        let mut at = None;
+        for b in 0..limit {
+            blocks(&mut e, 1);
+            if (0..MAX_POLY).all(|k| voice(&e, 2, k).0 == 0.0) {
+                at = Some(b);
+                break;
+            }
+        }
+        assert!(at.is_some(), "levels reach 0 within release + 100 ms");
+
+        // A mono patch uses only voice 0.
+        let mut e = Engine::new(SR);
+        patch(&mut e, 0.0, 1.0);
+        for n in [60.0, 64.0, 67.0] {
+            assert_eq!(e.command(OP_NOTE_ON, n, 100.0, 0.0, 0.0), OK);
+        }
+        blocks(&mut e, 40);
+        let (level, gate) = voice(&e, 0, 0);
+        assert!(level > 0.0 && gate == 1.0);
+        assert!((1..MAX_POLY).all(|k| voice(&e, 0, k) == (0.0, 0.0)));
     }
 }

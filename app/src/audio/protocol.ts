@@ -141,6 +141,11 @@ export const Op = {
    *  seek). Not an edit (NON_EDIT_OPS): sent right before a manual move's own
    *  MIX_SET / RACK_SET_PARAM, so that edit is heard at once. */
   AUTO_OVERRIDE: 54,
+  /** a=mixer channel 0..MIX_DELAY (track strips, returns) or -1 = off: the
+   *  strip the engine taps for the visuals (visCopy.ts); the master is
+   *  BAD_VALUE (the worklet taps the output itself). Not an edit
+   *  (NON_EDIT_OPS), never in projectCommands; re-sent after a restart. */
+  VIS_TAP: 55,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -216,6 +221,20 @@ export const BAR_TICKS = 3840;
 export const STEP_TICKS = 240;
 
 /** Automation lanes per project, and point slots per lane (lib.rs). */
+// Visual data path (lib.rs VIS_*; plan 12, docs/architecture/visuals.md).
+// The shared visSab layout built from these lives in visLayout.ts.
+/** Scope bank slots (engine-wide). */
+export const VIS_SCOPES = 8;
+/** Entries per scope ring; an entry is 4 f32: A min, A max, B min, B max. */
+export const VIS_SCOPE_RING = 2048;
+/** Most entries a scope window shows. */
+export const VIS_SCOPE_WINDOW = 1024;
+/** i32 per scope header. */
+export const VIS_SCOPE_HDR = 8;
+/** Frames in the master and strip-tap rings (stereo, planar). */
+export const VIS_TAP_RING = 8192;
+/** Level and gate per voice, per track slot (`(slot * MAX_POLY + k) * 2`). */
+export const VIS_VOICE_LEN = 32 * 16 * 2;
 export const MAX_AUTO_LANES = 64;
 export const MAX_AUTO_POINTS = 512;
 /** AUTO_LANE_SET target kinds (b). */

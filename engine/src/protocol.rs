@@ -15,7 +15,7 @@ use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
     BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
-    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS,
+    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY,
 };
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
@@ -93,6 +93,8 @@ pub const OP_AUTO_POINT_REMOVE: u32 = 51; // a=lane*512+idx
 pub const OP_AUTO_LANE_CLEAR: u32 = 52; // a=lane: no points, no target; the param goes back to its base
 pub const OP_AUTO_LANE_ENABLE: u32 = 53; // a=lane b=0/1
 pub const OP_AUTO_OVERRIDE: u32 = 54; // a=lane: suspend until the next breakpoint (not an edit)
+// Visual data path (plan 12, docs/architecture/visuals.md). Not an edit.
+pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=33 (tracks, returns) or -1 = off; the master is BAD_VALUE
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -192,6 +194,8 @@ pub enum Command {
     AutoLaneEnable { lane: usize, on: bool },
     /// Suspend `lane` until its next breakpoint (a manual move).
     AutoOverride { lane: usize },
+    /// The strip tap: mixer channel `0..=MIX_DELAY`, or −1 (off).
+    VisTap { ch: i32 },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -576,6 +580,9 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_AUTO_LANE_CLEAR => Command::AutoLaneClear { lane: index(a, MAX_AUTO_LANES)? },
         OP_AUTO_LANE_ENABLE => Command::AutoLaneEnable { lane: index(a, MAX_AUTO_LANES)?, on: flag(b)? },
         OP_AUTO_OVERRIDE => Command::AutoOverride { lane: index(a, MAX_AUTO_LANES)? },
+        // −1 (off) or a track / return channel; the master (the worklet taps
+        // the output itself) and anything else are BAD_VALUE.
+        OP_VIS_TAP => Command::VisTap { ch: if a == -1.0 { -1 } else { int_in(a, 0, MIX_DELAY as u32)? as i32 } },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }

@@ -95,6 +95,14 @@
 //! fade) and forgets pending releases and handovers, so the engine can then
 //! free the whole pool (`FxPool::release_all`) without a stale release ever
 //! freeing a slot claimed afterwards.
+//!
+//! # Voice activity (plan 12)
+//! Each sub-block the rack keeps, per voice `k`, the max of its Outs' peaks
+//! (`Out::peak`) since the last [`Rack::take_voices`], and the gate of its
+//! first MIDI In (lowest module index; channel `k`, last frame of the
+//! sub-block; 0 past its channels, all 0 without one). The engine takes them
+//! once per block (`Synths::write_voices`) for the UI's voice LEDs. Reading
+//! only: nothing here touches the rendered output.
 
 pub mod catalog;
 pub mod fx_pool;
@@ -104,7 +112,7 @@ pub mod modules;
 pub mod port;
 
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, ERR_OUT_OF_MEMORY, OK};
-use crate::{MAX_MODULES, MAX_PARAMS, MAX_PORTS, RACK_BLOCK};
+use crate::{MAX_MODULES, MAX_PARAMS, MAX_POLY, MAX_PORTS, RACK_BLOCK};
 use catalog::{spec, ModuleKind};
 use fx_pool::{FxKind, FxPool, NO_SLOT};
 use modules::{Ctx, Module, NoteEvent};
@@ -195,6 +203,12 @@ pub struct Rack {
     /// Slots taken over by a queued add from a queued Remove/Clear (see the
     /// module docs): the next release of each is absorbed, not recorded.
     handed: [u32; 3],
+    /// Voice activity since the last `take_voices` (see the module docs):
+    /// the max Out peak per voice, the MIDI In gates, and whether a
+    /// sub-block rendered at all.
+    vis_level: [f32; MAX_POLY],
+    vis_gate: [f32; MAX_POLY],
+    vis_rendered: bool,
 }
 
 /// Is module `m` reachable from itself through modules in `within`?
@@ -241,6 +255,9 @@ impl Rack {
             blk_pos: RACK_BLOCK,
             released: [0; 3],
             handed: [0; 3],
+            vis_level: [0.0; MAX_POLY],
+            vis_gate: [0.0; MAX_POLY],
+            vis_rendered: false,
         }
     }
 
@@ -265,6 +282,23 @@ impl Rack {
         self.blk_pos = RACK_BLOCK;
         self.released = [0; 3];
         self.handed = [0; 3];
+        self.vis_level = [0.0; MAX_POLY];
+        self.vis_gate = [0.0; MAX_POLY];
+        self.vis_rendered = false;
+    }
+
+    /// Write the voice activity since the last call into `out` (`2 *
+    /// MAX_POLY` floats: level, gate per voice; levels below `floor` read
+    /// 0) and start over. A rack that rendered no sub-block meanwhile
+    /// writes zeros.
+    pub fn take_voices(&mut self, out: &mut [f32], floor: f32) {
+        for (k, pair) in out.chunks_exact_mut(2).take(MAX_POLY).enumerate() {
+            let (level, gate) = if self.vis_rendered { (self.vis_level[k], self.vis_gate[k]) } else { (0.0, 0.0) };
+            pair[0] = if level >= floor { level } else { 0.0 };
+            pair[1] = gate;
+        }
+        self.vis_level = [0.0; MAX_POLY];
+        self.vis_rendered = false;
     }
 
     /// No module, running or queued, and nothing queued.
@@ -842,6 +876,22 @@ impl Rack {
                 for i in 0..RACK_BLOCK {
                     self.blk_l[i] += o.l[i];
                     self.blk_r[i] += o.r[i];
+                }
+                // Voice activity (module docs): reads only.
+                for (v, &p) in self.vis_level.iter_mut().zip(&o.peak) {
+                    if p > *v {
+                        *v = p;
+                    }
+                }
+            }
+        }
+        self.vis_rendered = true;
+        self.vis_gate = [0.0; MAX_POLY];
+        if let Some(m) = self.slots.iter().position(|s| matches!(s.module, Some(Module::MidiIn(_)))) {
+            // MIDI In's port 1 is `gate`.
+            if let Some(g) = self.outs.get(m * MAX_PORTS + 1) {
+                for (k, v) in self.vis_gate.iter_mut().enumerate().take(g.channels.min(MAX_POLY)) {
+                    *v = g.data[k][RACK_BLOCK - 1];
                 }
             }
         }

@@ -85,6 +85,16 @@
 //! after a reset, take a step at once, so a replayed project starts at its
 //! automated values.
 //!
+//! # Strip tap (plan 12)
+//! `OP_VIS_TAP` picks one channel ([`Mixer::set_tap`]: a track strip or a
+//! return, or −1 = off). While on, `process` zeroes the engine's tap buffer
+//! (`vis::VisBlock`) at block start and `mix_out` writes the tapped strip's
+//! post-fader `l`/`r` into it: the very values it adds to the master bus,
+//! computed once, so the mix is unchanged bit for bit. A strip that does not
+//! run this block leaves zeros. Turning the tap off zeroes the buffer once
+//! more; after that an untapped mixer does not touch it. The tap is view
+//! state, not part of the session: the engine reset keeps it.
+//!
 //! Everything is allocated in [`Mixer::new`]; `process` and the setters
 //! never allocate, block or panic.
 
@@ -554,6 +564,10 @@ pub struct Mixer {
     /// No block has run since `new` / `reset_all`: an automation step on a
     /// return or the master lands at once (track strips use `fresh`).
     auto_fresh: bool,
+    /// The tapped channel (`0..=MIX_DELAY`), or −1 (off); see "Strip tap".
+    tap_ch: i32,
+    /// The tap buffer may hold data from an earlier block (zero it once).
+    tap_dirty: bool,
 }
 
 impl Mixer {
@@ -582,6 +596,8 @@ impl Mixer {
             gate_len: gate_len as usize,
             tail_len: (TAIL_SECONDS * sr) as usize,
             auto_fresh: true,
+            tap_ch: -1,
+            tap_dirty: false,
         };
         m.apply_defaults();
         m
@@ -620,6 +636,17 @@ impl Mixer {
         self.limiter.reset();
         self.meters.fill(0.0);
         self.auto_fresh = true;
+    }
+
+    /// The strip tap: `ch` in `0..=MIX_DELAY`, or −1 (off). Anything else
+    /// (the master included) turns it off; `protocol::decode` refuses those.
+    pub fn set_tap(&mut self, ch: i32) {
+        self.tap_ch = if (0..=MIX_DELAY as i32).contains(&ch) { ch } else { -1 };
+    }
+
+    /// The tapped channel, or −1.
+    pub fn tap(&self) -> i32 {
+        self.tap_ch
     }
 
     /// Latency of the master (the limiter lookahead), in samples.
@@ -883,7 +910,8 @@ impl Mixer {
     /// slot that holds a track or rendered audio this block. `auto` holds
     /// the block's automation values (see "Automation" in the module docs).
     /// Writes the limited master to `out_l` / `out_r` (`n` frames, delayed
-    /// by [`latency`](Mixer::latency)).
+    /// by [`latency`](Mixer::latency)) and, while the strip tap is on, the
+    /// tapped strip's post-fader output to `tap` (see "Strip tap").
     #[allow(clippy::too_many_arguments)]
     pub fn process(
         &mut self,
@@ -895,8 +923,18 @@ impl Mixer {
         out_l: &mut [f32],
         out_r: &mut [f32],
         auto: &AutoFrame,
+        tap: (&mut [f32], &mut [f32]),
     ) {
         let n = n.min(MAX_BLOCK).min(out_l.len()).min(out_r.len());
+        let (tap_l, tap_r) = tap;
+        if self.tap_ch >= 0 || self.tap_dirty {
+            tap_l.fill(0.0);
+            tap_r.fill(0.0);
+            self.tap_dirty = self.tap_ch >= 0;
+        }
+        // An empty tap when off: `chunk` then never writes it.
+        let tap_n = if self.tap_ch >= 0 { n.min(tap_l.len()).min(tap_r.len()) } else { 0 };
+        let mut tap = Tap { ch: self.tap_ch, l: &mut tap_l[..tap_n], r: &mut tap_r[..tap_n] };
         self.buses.master.clear(n);
         self.buses.send_a.clear(n);
         self.buses.send_b.clear(n);
@@ -919,7 +957,7 @@ impl Mixer {
         let blk = Block { tracks, keys, runs, solo };
         if !auto.has_mix() {
             // The whole block at once: exactly the mix without automation.
-            self.chunk(&blk, 0, n, out_l, out_r);
+            self.chunk(&blk, 0, n, out_l, out_r, &mut tap);
         } else {
             let mut from = 0;
             for k in 0..auto.subs() {
@@ -937,18 +975,18 @@ impl Mixer {
                         }
                     }
                 }
-                self.chunk(&blk, from, to, out_l, out_r);
+                self.chunk(&blk, from, to, out_l, out_r, &mut tap);
                 from = to;
             }
             if from < n {
-                self.chunk(&blk, from, n, out_l, out_r);
+                self.chunk(&blk, from, n, out_l, out_r, &mut tap);
             }
         }
         self.auto_fresh = false;
     }
 
     /// Mix frames `from..to` of the block: strips, returns, master, limiter.
-    fn chunk(&mut self, blk: &Block, from: usize, to: usize, out_l: &mut [f32], out_r: &mut [f32]) {
+    fn chunk(&mut self, blk: &Block, from: usize, to: usize, out_l: &mut [f32], out_r: &mut [f32], tap: &mut Tap) {
         let Block { tracks, keys, runs, solo } = *blk;
         let len = to - from;
         let Mixer { strips, reverb, delay, limiter, master_gain, row_keys, buses, meters, .. } = self;
@@ -979,7 +1017,7 @@ impl Mixer {
                 }
             };
             buses.comp(st, key, from, to);
-            let (pl, pr) = buses.mix_out(st, from, to, true);
+            let (pl, pr) = buses.mix_out(st, from, to, true, tap.span(ch, from, to));
             let gr = if st.comp_ins.idle { 0.0 } else { st.comp.gain_reduction_db() };
             write_meter(meters, ch, pl, pr, gr);
             st.count_hold(len);
@@ -1002,7 +1040,7 @@ impl Mixer {
             }
             st.gate.set(if st.flag(P_MUTE) { 0.0 } else { 1.0 });
             buses.eq(st, from, to);
-            let (pl, pr) = buses.mix_out(st, from, to, false);
+            let (pl, pr) = buses.mix_out(st, from, to, false, tap.span(ch, from, to));
             write_meter(meters, ch, pl, pr, 0.0);
         }
 
@@ -1028,6 +1066,24 @@ impl Mixer {
         }
         limiter.process(ol, or);
         write_meter(meters, MIX_MASTER, 0.0, 0.0, limiter.gain_reduction_db());
+    }
+}
+
+/// The strip tap for one block: the tapped channel and its buffers (empty
+/// while off, so nothing is ever written then).
+struct Tap<'a> {
+    ch: i32,
+    l: &'a mut [f32],
+    r: &'a mut [f32],
+}
+
+impl Tap<'_> {
+    /// Frames `from..to` of the tap if `ch` is the tapped channel.
+    fn span(&mut self, ch: usize, from: usize, to: usize) -> Option<(&mut [f32], &mut [f32])> {
+        if self.ch != ch as i32 {
+            return None;
+        }
+        Some((self.l.get_mut(from..to)?, self.r.get_mut(from..to)?))
     }
 }
 
@@ -1166,8 +1222,16 @@ impl Buses {
     }
 
     /// Fader·pan and gate on the work buffer into the master bus, plus (for
-    /// tracks) the sends. Returns the post-fader peaks.
-    fn mix_out(&mut self, st: &mut Strip, from: usize, to: usize, sends: bool) -> (f32, f32) {
+    /// tracks) the sends, and into `tap` (the strip tap) when given. Returns
+    /// the post-fader peaks.
+    fn mix_out(
+        &mut self,
+        st: &mut Strip,
+        from: usize,
+        to: usize,
+        sends: bool,
+        mut tap: Option<(&mut [f32], &mut [f32])>,
+    ) -> (f32, f32) {
         let pre_a = st.flag(P_SEND_A_PRE);
         let pre_b = st.flag(P_SEND_B_PRE);
         let Buses { master, send_a, send_b, work, .. } = self;
@@ -1192,6 +1256,12 @@ impl Buses {
             pr = pr.max(r.abs());
             ml[i] += l;
             mr[i] += r;
+            // The strip tap reads the values the master bus just got.
+            if let Some((tl, tr)) = &mut tap {
+                if let (Some(a), Some(b)) = (tl.get_mut(i), tr.get_mut(i)) {
+                    (*a, *b) = (l, r);
+                }
+            }
             // Post-fader taps `l`/`r`, which already carry the gate; a
             // pre-fader tap applies the gate itself (once either way).
             if use_a {

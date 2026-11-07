@@ -5,32 +5,28 @@
   // which are styled neutrally so they never pass for tracks. Clicking a
   // track strip's name selects that track (the tab stays on the mixer).
   //
-  // Meters: ONE requestAnimationFrame loop for the whole view reads
-  // engine.meters() and fans it out over the MeterBus; it is cancelled when
-  // the view is destroyed (switching tabs).
+  // Meters: the app's one frame loop (ui/vis/frameLoop.ts) ticks the
+  // MeterBus, which reads engine.meters() and fans it out to every strip. A
+  // consumer with want 0 (the meters have their own SAB), watching the mixer
+  // element: it stops while the mixer is off screen or the tab is hidden, and
+  // is removed when the view is destroyed (switching tabs).
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_DELAY, MIX_MASTER, MIX_REVERB } from '../../audio/protocol';
   import { selectTrack } from '../../state/actions';
   import type { Project } from '../../state/project.svelte';
   import { createMeterBus } from './meterBus';
+  import { frameLoop } from '../vis/frameLoop';
   import Strip from './Strip.svelte';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
 
   const bus = createMeterBus();
-  onMount(() => {
-    let raf = 0;
-    const loop = (now: number) => {
-      bus.tick(engine.meters(), now);
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  });
+  let mixerEl: HTMLDivElement;
+  onMount(() => frameLoop().add({ want: 0, el: mixerEl, frame: (now) => bus.tick(engine.meters(), now) }));
 </script>
 
-<div class="mixer" data-testid="mixer">
+<div class="mixer" data-testid="mixer" bind:this={mixerEl}>
   {#each p.tracks as t (t.id)}
     <Strip
       {p} {engine} {bus}

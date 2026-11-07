@@ -107,6 +107,20 @@ pub extern "C" fn engine_meters(e: *mut Host) -> *const f32 {
     }
 }
 
+/// The visual block (`vis::VisBlock`, `VIS_BLOCK_LEN` f32): the strip tap
+/// (`tap_l`, `tap_r`: the tapped strip's post-fader output, first `frames`
+/// of the last `engine_process`), `tap_ch` (−1 = off) and voice activity.
+/// Refreshed by every `engine_process`; the pointer is stable for the
+/// instance lifetime (offsets: `vis::VIS_*`, mirrored in visLayout.ts).
+#[no_mangle]
+pub extern "C" fn engine_vis(e: *mut Host) -> *const f32 {
+    // SAFETY: see module contract.
+    match unsafe { e.as_ref() } {
+        Some(h) => h.engine.vis().as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
 /// Output latency in frames (the master limiter's lookahead: 72 at 48 kHz);
 /// constant for the instance. The worklet adds it to `TELEMETRY_FRAME` so
 /// heard time matches what leaves the engine. 0 for a null handle.
@@ -146,6 +160,12 @@ mod tests {
         engine_process(e, 100_000); // clamped, must not panic
         assert_eq!(engine_meters(e), meters, "stable pointer");
         assert_eq!(engine_latency(e), 72, "1.5 ms lookahead at 48 kHz");
+        // The visual block: stable, the tap channel -1 (off) at start.
+        let vis = engine_vis(e);
+        assert!(!vis.is_null());
+        assert_eq!(unsafe { *vis.add(crate::vis::VIS_TAP_CH) }, -1.0);
+        engine_process(e, 128);
+        assert_eq!(engine_vis(e), vis, "stable pointer");
         assert!(engine_sample_alloc(e, 9999, 1, 1).is_null());
         let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
         assert_eq!(t[7], ERR_BAD_INDEX as f64);
@@ -163,5 +183,6 @@ mod tests {
         assert!(engine_telemetry(n).is_null());
         assert!(engine_meters(n).is_null());
         assert_eq!(engine_latency(n), 0);
+        assert!(engine_vis(n).is_null());
     }
 }

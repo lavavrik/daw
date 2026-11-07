@@ -114,6 +114,14 @@
 //!   tick 0 when stopped and keeps the playhead while playing (patterns loop
 //!   on `ticks mod period`, like a pattern switch).
 //!
+//! # Visual data (plan 12)
+//! The engine fills a preallocated [`VisBlock`] every block for the UI's
+//! visuals (`vis.rs`, docs/architecture/visuals.md): the strip tap
+//! (`VIS_TAP`, the mixer writes it) and per-voice activity
+//! (`Synths::write_voices`, after the tracks rendered). Both only read
+//! signals: `VIS_TAP` is not an edit, never fades, and leaves every rendered
+//! sample unchanged. The tap survives `RESET_ALL` (view state).
+//!
 //! # Engine reset
 //! `OP_RESET_ALL` returns the engine to a blank session, as `Engine::new`
 //! left it, so a project load can replay its commands onto it. It is
@@ -152,6 +160,7 @@ use crate::mixer::{ClickClip, Key, Mixer, StereoBufs};
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Mode, Piece, Transport};
+use crate::vis::VisBlock;
 use crate::{
     BAR_TICKS, MAX_BLOCK, MAX_KEYS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, MIX_MASTER, MIX_METER_STRIDE, PPQ,
     TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN, TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING,
@@ -260,6 +269,9 @@ pub struct Engine {
     automation: Automation,
     /// The current block's loop-wrap pieces (`MAX_BLOCK + 2`, preallocated).
     pieces: Vec<Piece>,
+    /// Visual data for the UI (strip tap, voice activity; `vis.rs`), boxed
+    /// so `engine_vis` hands out a pointer that never moves.
+    vis: Box<VisBlock>,
 }
 
 impl Engine {
@@ -311,6 +323,7 @@ impl Engine {
             },
             automation: Automation::new(),
             pieces: vec![Piece::default(); MAX_BLOCK + 2],
+            vis: VisBlock::new(),
         }
     }
 
@@ -352,6 +365,12 @@ impl Engine {
     /// Output latency in samples (the master limiter's lookahead).
     pub fn latency(&self) -> usize {
         self.mixer.latency()
+    }
+
+    /// The visual block (`vis.rs`): the strip tap and voice activity of the
+    /// last block. Its address is stable for the engine's lifetime.
+    pub fn vis(&self) -> &VisBlock {
+        &self.vis
     }
 
     /// The mixer (params, keys, meters).
@@ -994,6 +1013,12 @@ impl Engine {
                 let playing = self.transport.playing && self.transport.mode == Mode::Song;
                 self.automation.suspend(lane, self.transport.ticks, playing);
             }
+            // The strip tap (`vis.rs`): view state, never an edit; it only
+            // reads the strip, so the mix is unchanged.
+            Command::VisTap { ch } => {
+                self.mixer.set_tap(ch);
+                self.vis.tap_ch = self.mixer.tap() as f32;
+            }
         }
         Ok(())
     }
@@ -1072,9 +1097,13 @@ impl Engine {
                 active |= 1 << slot;
             }
         }
+        // Voice activity of every synth track for this block (`vis.rs`).
+        self.synths.write_voices(&mut self.vis.voices);
         let (out_l, out_r) = (&mut left[..n], &mut right[..n]);
         let auto = self.automation.frame_ref();
-        self.mixer.process(n, &self.tracks, &self.keys, active, self.transport.bpm, out_l, out_r, auto);
+        let vis = &mut *self.vis;
+        let tap = (&mut vis.tap_l[..n], &mut vis.tap_r[..n]);
+        self.mixer.process(n, &self.tracks, &self.keys, active, self.transport.bpm, out_l, out_r, auto, tap);
         // Click: delayed by the limiter latency (stereo rings of latency + 1:
         // the slot after the write position holds the oldest sample), at the
         // legacy master gain, after the limiter, then the soft clip.
@@ -3419,5 +3448,146 @@ mod tests {
         assert_eq!(e.command(OP_COPY_PATTERN, 1.0, 1.0, 0.0, 0.0), OK);
         s.extend(render(&mut e, 96000 - 3200));
         assert_eq!(rising(&s), vec![6000, 21000]);
+    }
+
+    // ---- visual data path (plan 12) -----------------------------------------
+
+    use crate::protocol::{OP_MIX_SET, OP_VIS_TAP};
+    use crate::{MIX_DELAY, MIX_REVERB};
+
+    fn max_abs(s: &[f32]) -> f32 {
+        s.iter().fold(0.0f32, |m, x| m.max(x.abs()))
+    }
+
+    #[test]
+    fn vis_tap_is_the_strip_post_fader() {
+        // A drum track on slot 3, fader -6 dB, pan left of centre; tap 3: the
+        // tap's peaks are the strip's meter peaks, block by block, exactly.
+        let mut e = drum_engine();
+        load_const(&mut e, 1, 4800, 0.5);
+        drum_setup(&mut e, 3.0, 1.0, &[0.0, 4.0, 8.0, 12.0]);
+        assert_eq!(e.command(OP_MIX_SET, 3.0, 0.0, -6.0, 0.0), OK); // fader
+        assert_eq!(e.command(OP_MIX_SET, 3.0, 1.0, -0.5, 0.0), OK); // pan
+        assert_eq!(e.command(OP_VIS_TAP, 3.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.vis().tap_ch, 3.0);
+        play(&mut e, 0.0);
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        let mut loud = 0;
+        for _ in 0..200 {
+            e.process(&mut l, &mut r);
+            let m = &e.meters()[3 * MIX_METER_STRIDE..];
+            let (tl, tr) = (max_abs(&e.vis().tap_l[..128]), max_abs(&e.vis().tap_r[..128]));
+            assert_eq!(tl, m[0], "tap L = meter L");
+            assert_eq!(tr, m[1], "tap R = meter R");
+            if tl > 0.0 && tr > 0.0 {
+                loud += 1;
+            }
+            assert!(e.vis().tap_l[128..].iter().all(|&x| x == 0.0), "only n frames are written");
+        }
+        assert!(loud > 10, "the drum sounds on both sides ({loud} blocks)");
+        // Off: tap_ch -1 and the tap zeroed from the next block on.
+        assert_eq!(e.command(OP_VIS_TAP, -1.0, 0.0, 0.0, 0.0), OK);
+        e.process(&mut l, &mut r);
+        assert_eq!(e.vis().tap_ch, -1.0);
+        assert!(e.vis().tap_l.iter().chain(&e.vis().tap_r).all(|&x| x == 0.0));
+        // A strip that does not run (empty slot 5) leaves zeros.
+        assert_eq!(e.command(OP_VIS_TAP, 5.0, 0.0, 0.0, 0.0), OK);
+        e.process(&mut l, &mut r);
+        assert!(e.vis().tap_l.iter().chain(&e.vis().tap_r).all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn vis_tap_taps_a_return() {
+        // Returns are tapped like tracks: the Reverb return's meter peaks.
+        let mut e = drum_engine();
+        load_const(&mut e, 1, 4800, 0.5);
+        drum_setup(&mut e, 0.0, 1.0, &[0.0, 8.0]);
+        assert_eq!(e.command(OP_MIX_SET, 0.0, 17.0, 0.0, 0.0), OK); // send A 0 dB
+        assert_eq!(e.command(OP_VIS_TAP, MIX_REVERB as f64, 0.0, 0.0, 0.0), OK);
+        play(&mut e, 0.0);
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        let mut loud = false;
+        for _ in 0..200 {
+            e.process(&mut l, &mut r);
+            let m = &e.meters()[MIX_REVERB * MIX_METER_STRIDE..];
+            assert_eq!(max_abs(&e.vis().tap_l[..128]), m[0]);
+            assert_eq!(max_abs(&e.vis().tap_r[..128]), m[1]);
+            loud |= m[0] > 0.0;
+        }
+        assert!(loud, "the reverb return sounds");
+    }
+
+    #[test]
+    fn vis_tap_validates() {
+        let mut e = test_engine();
+        for ch in [-1.0, 0.0, 33.0] {
+            assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), OK, "tap {ch}");
+            assert_eq!(e.vis().tap_ch, ch as f32);
+        }
+        for ch in [34.0, 35.0, 1.5, -2.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), ERR_BAD_VALUE, "tap {ch}");
+            assert_eq!(e.vis().tap_ch, 33.0, "a refused tap keeps the old one");
+        }
+        assert_eq!(MIX_DELAY, 33);
+    }
+
+    /// The export fixture job (tests/fixtures/export_render.txt) on a native
+    /// engine, 128-frame blocks; `at(block, e)` runs before each block.
+    fn render_export_fixture(mut at: impl FnMut(usize, &mut Engine)) -> (Vec<f32>, Vec<f32>) {
+        let text = include_str!("../tests/fixtures/export_render.txt");
+        let mut e = Engine::new(48000.0);
+        let mut frames = 0;
+        for line in text.lines() {
+            let w: Vec<&str> = line.split_whitespace().collect();
+            if w.is_empty() || w[0].starts_with('#') {
+                continue;
+            }
+            let num = |i: usize| -> f64 { w[i].parse().unwrap() };
+            match w[0] {
+                "frames" => frames = num(1) as usize,
+                "sample" => {
+                    let (id, n, ch, seed) = (num(1) as u32, num(2) as u32, num(3) as u32, num(4) as u32);
+                    let p = e.sample_alloc(id, n, ch).unwrap();
+                    let dst = unsafe { std::slice::from_raw_parts_mut(p, (n * ch) as usize) };
+                    let mut x = seed;
+                    for (i, d) in dst.iter_mut().enumerate() {
+                        x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+                        let k = (i % n as usize) as u32;
+                        *d = (((x >> 16) as f64 - 32768.0) * (n - k) as f64 / (32768.0 * n as f64)) as f32;
+                    }
+                    assert_eq!(e.sample_ready(id), OK);
+                }
+                "cmd" => assert_eq!(e.command(num(1) as u32, num(2), num(3), num(4), num(5)), OK, "{line}"),
+                _ => {}
+            }
+        }
+        let (mut ol, mut or) = (Vec::new(), Vec::new());
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        for b in 0..frames / 128 {
+            at(b, &mut e);
+            e.process(&mut l, &mut r);
+            ol.extend_from_slice(&l);
+            or.extend_from_slice(&r);
+        }
+        (ol, or)
+    }
+
+    #[test]
+    fn vis_tap_does_not_change_audio() {
+        let (pl, pr) = render_export_fixture(|_, _| {});
+        let (tl, tr) = render_export_fixture(|b, e| {
+            let ch = match b {
+                50 => 0.0,
+                250 => 1.0,
+                450 => MIX_REVERB as f64,
+                650 => -1.0,
+                700 => MIX_DELAY as f64,
+                _ => return,
+            };
+            assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), OK);
+        });
+        assert!(max_abs(&pl) > 0.01, "the fixture sounds");
+        assert!(pl.iter().zip(&tl).all(|(a, b)| a.to_bits() == b.to_bits()), "left bit-identical");
+        assert!(pr.iter().zip(&tr).all(|(a, b)| a.to_bits() == b.to_bits()), "right bit-identical");
     }
 }

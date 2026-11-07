@@ -6,7 +6,8 @@
 //     (which the engine allows only while the transport is stopped).
 //   - Port message handlers also run on this thread but *between* render
 //     quanta, so they may allocate (sample uploads happen there).
-//   - Must stay DOM-free: imports only protocol.ts, ring.ts and meterBallistics.ts.
+//   - Must stay DOM-free: imports only protocol.ts, ring.ts, meterBallistics.ts,
+//     visLayout.ts and visCopy.ts.
 //   - Any exception from an engine call (a WASM trap, which may leave the
 //     instance half-updated) is fatal: the instance is dropped, output goes
 //     silent, and {type:'engine-error'} tells the UI to ask for a reload.
@@ -23,6 +24,8 @@
 
 import { CommandRing } from './ring';
 import { applyMeters, meterFall } from './meterBallistics';
+import { copyVis } from './visCopy';
+import { ENGINE_VIS, visViews, type VisViews } from './visLayout';
 import {
   Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, Op, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN,
 } from './protocol';
@@ -46,6 +49,8 @@ export interface ProcessorOptions {
   telemetrySab: SharedArrayBuffer;
   /** MIX_CHANNELS * MIX_METER_STRIDE floats, overwritten every block. */
   metersSab: SharedArrayBuffer;
+  /** The visual data path (visLayout.ts): filled only as its want mask asks. */
+  visSab: SharedArrayBuffer;
   sampleRate: number;
 }
 
@@ -64,6 +69,8 @@ interface EngineExports {
   engine_latency(e: number): number;
   /** MIX_CHANNELS * MIX_METER_STRIDE f32: peak L, peak R, gain reduction dB per channel. */
   engine_meters(e: number): number;
+  /** The visual block (ENGINE_VIS f32: strip tap, tapped channel, voice activity). */
+  engine_vis(e: number): number;
 }
 
 /** Floats in the meters array: peak L, peak R, gain reduction (dB) per mixer channel. */
@@ -107,6 +114,9 @@ class DawEngineProcessor extends AudioWorkletProcessor {
   /** UI-visible meters (shared) and the engine's own meters (wasm memory). */
   private meters: Float32Array;
   private engMeters = new Float32Array(0);
+  /** visSab (shared) and the engine's visual block (wasm memory). */
+  private readonly vis: VisViews;
+  private engVis = new Float32Array(ENGINE_VIS.len);
   /** Sample rate and the meters' per-block fall factor for 128-frame blocks. */
   private readonly sr: number;
   private readonly meterFall128: number;
@@ -134,6 +144,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.ring = new CommandRing(o.ringSab);
     this.tele = new Float64Array(o.telemetrySab, 0, TELEMETRY_LEN);
     this.meters = new Float32Array(o.metersSab, 0, METER_LEN);
+    this.vis = visViews(o.visSab);
     const sr = o.sampleRate || sampleRate;
     this.sr = sr;
     this.meterFall128 = meterFall(sr, 128);
@@ -164,6 +175,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.ex = null;
     console.error('daw-engine: engine failed', e);
     this.meters.fill(0);
+    this.vis.voices.fill(0);
     this.tele[TELEMETRY.playing] = 0;
     this.tele[TELEMETRY.peakL] = 0;
     this.tele[TELEMETRY.peakR] = 0;
@@ -192,6 +204,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.outR = new Float32Array(b, ex.engine_out_right(this.h) >>> 0, MAX_BLOCK);
     this.engTele = new Float64Array(b, ex.engine_telemetry(this.h) >>> 0, TELEMETRY_LEN);
     this.engMeters = new Float32Array(b, ex.engine_meters(this.h) >>> 0, METER_LEN);
+    this.engVis = new Float32Array(b, ex.engine_vis(this.h) >>> 0, ENGINE_VIS.len);
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
@@ -240,7 +253,11 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       tele[TELEMETRY.frame] = currentFrame + n + this.latency;
       // Meters: peak ballistics (meterBallistics.ts), no allocation (views are
       // rebuilt only on memory growth).
-      applyMeters(this.meters, this.engMeters, n === 128 ? this.meterFall128 : meterFall(this.sr, n));
+      const fall = n === 128 ? this.meterFall128 : meterFall(this.sr, n);
+      applyMeters(this.meters, this.engMeters, fall);
+      // 4b. Visuals (visCopy.ts): only what the UI's want mask asks for;
+      // with nothing on screen this is one Atomics.load.
+      copyVis(this.vis, srcL, srcR, this.engVis, n, fall);
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

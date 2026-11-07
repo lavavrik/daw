@@ -21,6 +21,7 @@ import { CommandSender } from './sendQueue';
 import { ResetAcks } from './resetAck';
 import { Err, HostErr, Op, MIX_CHANNELS, MIX_METER_STRIDE, TELEMETRY, TELEMETRY_LEN } from './protocol';
 import type { ProcessorOptions } from './worklet';
+import { createVisSab, visViews, type VisViews } from './visLayout';
 
 type WorkletMessage =
   | { type: 'ready' }
@@ -79,6 +80,7 @@ export class AudioEngine {
   private readonly sender: CommandSender;
   private readonly tele: Float64Array;
   private readonly meterView: Float32Array;
+  private readonly visView: VisViews;
   /** FIFO of loadSample resolvers per sample id (the worklet replies in order). */
   private readonly waiting = new Map<number, ((code: number) => void)[]>();
   /** RESET_ALL confirmations from the worklet (resetAll). */
@@ -94,6 +96,7 @@ export class AudioEngine {
     ringSab: SharedArrayBuffer,
     telemetrySab: SharedArrayBuffer,
     metersSab: SharedArrayBuffer,
+    visSab: SharedArrayBuffer,
     latencyHint: LatencyHint,
   ) {
     this.sampleRate = ctx.sampleRate;
@@ -111,6 +114,7 @@ export class AudioEngine {
     });
     this.tele = new Float64Array(telemetrySab, 0, TELEMETRY_LEN);
     this.meterView = new Float32Array(metersSab, 0, MIX_CHANNELS * MIX_METER_STRIDE);
+    this.visView = visViews(visSab);
     this.ready = new Promise((resolve, reject) => {
       // Before 'ready' a failure rejects start(); after it, it's reported via onError.
       const failed = (message: string) =>
@@ -182,11 +186,13 @@ export class AudioEngine {
       const ringSab = createRingBuffer();
       const telemetrySab = new SharedArrayBuffer(TELEMETRY_LEN * 8);
       const metersSab = new SharedArrayBuffer(MIX_CHANNELS * MIX_METER_STRIDE * 4);
+      const visSab = createVisSab();
       const processorOptions: ProcessorOptions = {
         wasmBytes,
         ringSab,
         telemetrySab,
         metersSab,
+        visSab,
         sampleRate: ctx.sampleRate,
       };
       const node = new AudioWorkletNode(ctx, 'daw-engine', {
@@ -195,7 +201,7 @@ export class AudioEngine {
         outputChannelCount: [2],
         processorOptions,
       });
-      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab, latencyHint);
+      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab, visSab, latencyHint);
       await engine.ready;
       node.connect(ctx.destination);
       await resumed;
@@ -326,6 +332,24 @@ export class AudioEngine {
    */
   meters(): Float32Array {
     return this.meterView;
+  }
+
+  /**
+   * Live views of visSab (visLayout.ts): the master and strip-tap rings,
+   * voice activity and (Task 2) the scopes. The worklet fills only what the
+   * want mask asks for; the frame loop (ui/vis/frameLoop.ts) writes it.
+   */
+  vis(): VisViews {
+    return this.visView;
+  }
+
+  /**
+   * The strip the engine taps for the visuals: a mixer channel
+   * 0..MIX_DELAY (track strips, returns), or -1 = off. Not an edit; a new
+   * engine (audio restart) starts with it off, so its user re-sends it.
+   */
+  setVisTap(ch: number): boolean {
+    return this.send(Op.VIS_TAP, ch);
   }
 
   /** Output underruns if the browser reports them, else worklet overrun count. */

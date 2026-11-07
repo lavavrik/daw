@@ -924,3 +924,51 @@ fn house_patches_do_not_allocate() {
 
     assert_eq!(disarm(), 0, "house patch loads and playback allocated");
 }
+
+/// Plan 12: the visual data path. The strip tap switched across track,
+/// return and off while playing, and voice activity through a chord on a
+/// poly patch and its release, all with the counter ARMED.
+#[test]
+fn vis_path_does_not_allocate() {
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let s = 1.0;
+    ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, s, pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_SET_INPUT_TRACK, s, 0., 0., 0.));
+    for _ in 0..4 {
+        e.process(&mut l, &mut r); // warm up outside the counted region
+    }
+
+    arm();
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+    for b in 0..300u32 {
+        match b {
+            10 => ok(e.command(OP_VIS_TAP, s, 0., 0., 0.)),
+            20 => {
+                for n in [60.0, 64.0, 67.0, 71.0] {
+                    ok(e.command(OP_NOTE_ON, n, 100., 0., 0.));
+                }
+            }
+            60 => ok(e.command(OP_VIS_TAP, 32., 0., 0., 0.)),
+            100 => {
+                for n in [60.0, 64.0, 67.0, 71.0] {
+                    ok(e.command(OP_NOTE_OFF, n, 0., 0., 0.));
+                }
+            }
+            120 => ok(e.command(OP_VIS_TAP, -1., 0., 0., 0.)),
+            150 => ok(e.command(OP_VIS_TAP, 0., 0., 0., 0.)),
+            200 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+    }
+    assert_eq!(disarm(), 0, "vis path allocated");
+    assert!(e.vis().voices.iter().all(|x| x.is_finite()));
+}

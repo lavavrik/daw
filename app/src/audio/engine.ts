@@ -237,6 +237,25 @@ export class AudioEngine {
     });
   }
 
+  /**
+   * Resume the AudioContext if the browser suspended it; resolves true once
+   * it runs. Chrome keeps resume() pending until a user gesture allows it,
+   * so this waits at most `timeoutMs`. Called on every click / key press
+   * (App) and by a project load before it blanks the session.
+   */
+  async ensureRunning(timeoutMs = 1000): Promise<boolean> {
+    const c = this.ctx;
+    if (c.state === 'running') return true;
+    if (c.state === 'closed' || this.failMsg !== null) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      c.resume().catch(() => {}),
+      new Promise<void>((r) => (timer = setTimeout(r, timeoutMs))),
+    ]);
+    clearTimeout(timer);
+    return (c.state as AudioContextState) === 'running';
+  }
+
   /** The engine's AudioContext, for decodeAudioData (resamples to engine rate). */
   get context(): BaseAudioContext {
     return this.ctx;

@@ -3,7 +3,9 @@
 // Order (each step only starts when the previous one cannot fail the load
 // half-way):
 //   1. validate (pure): an error throws ProjectLoadError and changes nothing.
-//   2. decode every sample (async, nothing touched yet).
+//   2. decode every sample (async, nothing touched yet), then make sure the
+//      AudioContext runs (a suspended one would never ack the reset): if it
+//      cannot be resumed the load fails here, before anything is blanked.
 //   3. STOP, blank the UI state, RESET_ALL, and wait for the worklet's ack:
 //      sample uploads go by postMessage and must not overtake the reset.
 //   4. upload the samples with compact ids 0..n-1 (old -> new id map).
@@ -41,6 +43,12 @@ export interface LoadEngine extends CommandSink {
   /** Sends RESET_ALL; resolves with its code once the worklet has applied it. */
   resetAll(): Promise<number>;
   loadSample(id: number, channels: Float32Array[]): Promise<number>;
+  /**
+   * Resume the AudioContext if it is suspended; true once it runs. A load
+   * checks it before blanking anything: a suspended context never answers
+   * RESET_ALL, which would leave a blank session behind.
+   */
+  ensureRunning(): Promise<boolean>;
 }
 
 /** The project could not be loaded (invalid file, or the engine refused the reset). */
@@ -87,6 +95,10 @@ export async function loadProject(
       } catch {
         warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
       }
+    }
+
+    if (!(await engine.ensureRunning())) {
+      throw new ProjectLoadError('Audio is paused — click to start audio, then open again');
     }
 
     opts.beforeLoad?.();

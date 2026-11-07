@@ -94,6 +94,24 @@ describe('loadProject', () => {
     expect(e.log.some((x) => 'sample' in x)).toBe(false);
   });
 
+  it('a paused AudioContext fails the load before anything is blanked (M6)', async () => {
+    const { p: src } = await buildFixture();
+    const json = roundJson(serialize(src));
+    const { p } = await buildFixture();
+    p.folder = {} as FileSystemDirectoryHandle;
+    const before = serialize(p);
+    const e = fakeEngine({ audioRunning: false });
+    let before_ = 0;
+    await expect(loadProject(p, e, json, filesOf(json, src), fakeDecoder, { beforeLoad: () => before_++ })).rejects.toThrow(
+      'Audio is paused — click to start audio, then open again',
+    );
+    expect(before_).toBe(0);
+    expect(e.log).toEqual([]); // no STOP, no RESET_ALL
+    expect(serialize(p)).toEqual(before);
+    expect(p.folder).not.toBeNull(); // the session is intact: Save still goes to its folder
+    expect(p.loading).toBe(false);
+  });
+
   it('an invalid project changes nothing', async () => {
     const { p } = await buildFixture();
     const before = serialize(p);

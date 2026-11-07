@@ -351,6 +351,21 @@
     void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
   }
 
+  // The browser may suspend the AudioContext (device change, long idle);
+  // resume() needs a user gesture, so every click / key press wakes it. This
+  // is the "click to start audio" a paused project load asks for (load.ts).
+  onMount(() => {
+    const wake = () => {
+      if (engine?.context.state === 'suspended') void engine.ensureRunning();
+    };
+    window.addEventListener('pointerdown', wake, true);
+    window.addEventListener('keydown', wake, true);
+    return () => {
+      window.removeEventListener('pointerdown', wake, true);
+      window.removeEventListener('keydown', wake, true);
+    };
+  });
+
   onDestroy(() => {
     dirtyCheck.dispose();
     autosave.dispose();

@@ -108,7 +108,11 @@ notice banner after the load (all of them in the console):
 1. `validate` (error → throw, nothing touched). From here `p.loading` is set
    (App shows "Loading…"; shortcuts, transport and drops are ignored).
 2. Decode every listed sample (a missing or undecodable file → warning; its
-   rows/players load without it).
+   rows/players load without it). Then `engine.ensureRunning()`: a
+   suspended AudioContext would never ack the reset, so if it cannot be
+   resumed the load fails here — "Audio is paused — click to start audio,
+   then open again" — with the session untouched (App resumes the context on
+   any click or key press).
 3. `beforeLoad` (App: stop via the recorder's path, release keys), `STOP`,
    blank the UI state, `RESET_ALL`; **await the worklet's `reset-done`**
    (audio-path.md): uploads must not overtake the reset. Any failure from

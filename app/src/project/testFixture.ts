@@ -99,7 +99,7 @@ export type LogEntry = { op: number; args: number[] } | { sample: number };
  * A fake engine recording every command and sample upload in one log.
  * `holdReset`: resetAll() stays pending until `ack()` is called.
  */
-export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) => number } = {}) {
+export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) => number; audioRunning?: boolean } = {}) {
   const log: LogEntry[] = [];
   let release: ((code: number) => void) | null = null;
   const engine: LoadEngine & { log: LogEntry[]; ack: (code?: number) => void } = {
@@ -114,6 +114,7 @@ export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) =
       if (!o.holdReset) return Promise.resolve(0);
       return new Promise<number>((r) => (release = r));
     },
+    ensureRunning: async () => o.audioRunning ?? true,
     loadSample(id: number) {
       log.push({ sample: id });
       return Promise.resolve(o.sampleCode ? o.sampleCode(id) : 0);

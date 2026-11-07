@@ -3,13 +3,21 @@ import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } fr
 import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17)', () => {
+  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18)', () => {
     expect(CATALOG.modules.map((m) => m.id)).toEqual([
       'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
       'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
-      'sample_player', 'formant',
+      'sample_player', 'formant', 'scope',
     ]);
-    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(18).keys()]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(19).keys()]);
+  });
+  it('the scope is a pooled utility sink (no outputs, a bank of 8)', () => {
+    const s = moduleDef('scope');
+    expect(s.category).toBe('utility');
+    expect(s.outputs).toEqual([]);
+    expect(s.inputs.map((p) => p.name)).toEqual(['a', 'b']);
+    expect(fxPoolSlots(s)).toBe(8);
+    expect(s.params.map((p) => p.name)).toEqual(['time', 'sync', 'division', 'gain_a', 'gain_b', 'mode', 'trig']);
   });
   it('the formant is an inline shaping module', () => {
     const f = moduleDef('formant');

@@ -12,13 +12,17 @@
 //   4 voices  voice levels with the meters' ballistics (instant attack,
 //             METER_FALL_DB_PER_S fall, dark below −60 dB like the engine),
 //             gates copied as is;
-//   8 scopes  Task 2.
+//   8 scopes  per scope slot the engine owns (owner track >= 0): the
+//             entries from the slot's mirrored head to the engine's head
+//             (at most a ring's worth), then the header fields, then the
+//             head (Atomics.store). Free slots copy only the header (the
+//             owner reads -1, so no view finds them).
 //
 // ORDERING RULE: a ring's head is published with Atomics.store only after
 // every data write of that ring (and the tap channel) for this block, so a
 // reader that Atomics.loads the head first sees complete frames up to it.
-import { VIS_HDR, VIS_WANT, ENGINE_VIS, type VisViews } from './visLayout';
-import { VIS_TAP_RING, VIS_VOICE_LEN } from './protocol';
+import { VIS_HDR, VIS_WANT, ENGINE_VIS, SCOPE_HDR, type EngineScopes, type VisViews } from './visLayout';
+import { VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES, VIS_TAP_RING, VIS_VOICE_LEN } from './protocol';
 
 const MASK = VIS_TAP_RING - 1;
 /**
@@ -43,12 +47,50 @@ function ring(
   }
 }
 
+const SCOPE_MASK = VIS_SCOPE_RING - 1;
+
+/** Want bit 8: every scope slot's new entries, its header, then its head. */
+function copyScopes(v: VisViews, es: EngineScopes): void {
+  const hdr = v.hdr;
+  const src = es.rings;
+  const dst = v.scopes;
+  const eh = es.hdr;
+  for (let s = 0; s < VIS_SCOPES; s++) {
+    const eb = s * VIS_SCOPE_HDR;
+    const vb = VIS_HDR.scopes + eb;
+    const head = eh[eb + SCOPE_HDR.head];
+    if (eh[eb + SCOPE_HDR.ownerTrack] >= 0) {
+      let from = hdr[vb + SCOPE_HDR.head];
+      let count = (head - from) | 0;
+      // Far behind (the bit was off) or ahead (never: heads only grow):
+      // the last ring's worth.
+      if (count < 0 || count > VIS_SCOPE_RING) {
+        count = VIS_SCOPE_RING;
+        from = (head - VIS_SCOPE_RING) | 0;
+      }
+      const base = s * VIS_SCOPE_RING * 4;
+      for (let i = 0; i < count; i++) {
+        const at = base + (((from + i) & SCOPE_MASK) << 2);
+        dst[at] = src[at];
+        dst[at + 1] = src[at + 1];
+        dst[at + 2] = src[at + 2];
+        dst[at + 3] = src[at + 3];
+      }
+    }
+    for (let f = 0; f < VIS_SCOPE_HDR; f++) if (f !== SCOPE_HDR.head) hdr[vb + f] = eh[eb + f];
+    Atomics.store(hdr, vb + SCOPE_HDR.head, head); // after the entries and fields
+  }
+}
+
 /**
  * Step 4b. `outL`/`outR`: the engine's output buffers (`n` valid frames);
  * `eng`: the engine's visual block (ENGINE_VIS layout); `fall`: the meters'
- * per-block fall factor (meterFall(sr, n)).
+ * per-block fall factor (meterFall(sr, n)); `scopes`: the engine's scope
+ * bank (want bit 8; omitted = no scopes).
  */
-export function copyVis(v: VisViews, outL: Float32Array, outR: Float32Array, eng: Float32Array, n: number, fall: number): void {
+export function copyVis(
+  v: VisViews, outL: Float32Array, outR: Float32Array, eng: Float32Array, n: number, fall: number, scopes?: EngineScopes,
+): void {
   const hdr = v.hdr;
   const want = Atomics.load(hdr, VIS_HDR.want);
   if (want === 0) return;
@@ -76,4 +118,5 @@ export function copyVis(v: VisViews, outL: Float32Array, outR: Float32Array, eng
       dst[k + 1] = g === g ? g : 0;
     }
   }
+  if (want & VIS_WANT.scopes && scopes !== undefined) copyScopes(v, scopes);
 }

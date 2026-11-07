@@ -718,6 +718,7 @@
           samples={moduleDef(m.kind).id === 'sample_player' ? sampleOptions : null}
           onsampledrop={moduleDef(m.kind).id === 'sample_player' ? (e) => void dropSample(e, m.idx) : undefined}
           onsamplesopen={() => sampleTick++}
+          scope={moduleDef(m.kind).id === 'scope' ? { track: track.slot, sampleRate: engine.sampleRate } : null}
         />
       {/each}
       {#if modules.length === 0}

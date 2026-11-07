@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copyVis } from './visCopy';
-import { ENGINE_VIS, VIS_HDR, VIS_WANT, visBytes, visViews, type VisViews } from './visLayout';
-import { MAX_BLOCK, VIS_TAP_RING, VIS_VOICE_LEN } from './protocol';
+import { ENGINE_VIS, SCOPE_HDR, VIS_HDR, VIS_WANT, visBytes, visViews, type EngineScopes, type VisViews } from './visLayout';
+import { MAX_BLOCK, VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES, VIS_TAP_RING, VIS_VOICE_LEN } from './protocol';
 import { meterFall } from './meterBallistics';
 
 const fresh = () => visViews(new SharedArrayBuffer(visBytes()));
@@ -161,6 +161,70 @@ describe('visCopy (worklet step 4b)', () => {
     e[V + 0] = 0;
     for (let i = 0; i < 1000; i++) copyVis(v, out(128, 0), out(128, 0), e, 128, 0.999);
     expect(v.voices[0]).toBe(0);
+  });
+
+  it('copies new scope entries and headers, head last', () => {
+    const v = fresh();
+    v.hdr[VIS_HDR.want] = VIS_WANT.scopes;
+    const RING = VIS_SCOPE_RING;
+    const H = VIS_SCOPE_HDR;
+    // The engine's bank (engine_scopes / engine_scope_hdr): every slot free.
+    const es: EngineScopes = { rings: new Float32Array(VIS_SCOPES * RING * 4), hdr: new Int32Array(VIS_SCOPES * H) };
+    for (let s = 0; s < VIS_SCOPES; s++) es.hdr.fill(-1, s * H, s * H + 2);
+    const vh = (s: number, f: number) => VIS_HDR.scopes + s * H + f;
+    // Slot 3: owned by track 1, module 4; its mirror is at a head 30 entries
+    // before the ring end and the engine is 100 entries ahead (wraps by 70).
+    const from = RING * 5 - 30;
+    const to = from + 100;
+    v.hdr[vh(3, SCOPE_HDR.head)] = from;
+    const e3 = (f: number) => 3 * H + f;
+    es.hdr[e3(SCOPE_HDR.ownerTrack)] = 1;
+    es.hdr[e3(SCOPE_HDR.ownerModule)] = 4;
+    es.hdr[e3(SCOPE_HDR.head)] = to;
+    es.hdr[e3(SCOPE_HDR.decim)] = 7;
+    es.hdr[e3(SCOPE_HDR.epoch)] = from - 500;
+    es.hdr[e3(SCOPE_HDR.gridPrev)] = from - 50;
+    es.hdr[e3(SCOPE_HDR.gridLast)] = from + 40;
+    es.hdr[e3(SCOPE_HDR.flags)] = 7;
+    for (let j = from - 10; j < to + 10; j++) for (let k = 0; k < 4; k++) es.rings[3 * RING * 4 + (j & (RING - 1)) * 4 + k] = j + k / 10;
+    // Slot 5 is free but its head moved (the last owner wrote, then left):
+    // its header is copied, its entries are not.
+    es.hdr[5 * H + SCOPE_HDR.head] = 64;
+    es.rings.fill(9, 5 * RING * 4, 6 * RING * 4);
+    v.scopes.fill(-7);
+    // At each head's store, everything else of that slot is already there.
+    const ready: boolean[] = [];
+    const store = Atomics.store.bind(Atomics) as (a: Int32Array, i: number, x: number) => number;
+    const spy = vi.spyOn(Atomics, 'store') as unknown as { mockImplementation(f: (a: Int32Array, i: number, x: number) => number): void };
+    spy.mockImplementation((arr, i, val) => {
+      if (i === vh(3, SCOPE_HDR.head)) {
+        let ok = v.hdr[vh(3, SCOPE_HDR.flags)] === 7 && v.hdr[vh(3, SCOPE_HDR.epoch)] === from - 500;
+        for (let j = from; j < to; j++) ok &&= v.scopes[3 * RING * 4 + (j & (RING - 1)) * 4] === j;
+        ready.push(ok);
+      }
+      return store(arr, i, val);
+    });
+    copyVis(v, out(128, 0), out(128, 0), engineBlock(128, -1), 128, 1, es);
+    expect(ready).toEqual([true]);
+    for (let f = 0; f < H; f++) expect(v.hdr[vh(3, f)], `field ${f}`).toBe(es.hdr[e3(f)]);
+    for (let j = from; j < to; j++) {
+      const at = 3 * RING * 4 + (j & (RING - 1)) * 4;
+      expect([v.scopes[at], v.scopes[at + 3]]).toEqual([j, Math.fround(j + 0.3)]);
+    }
+    // Only the new entries: the ones before the mirrored head are untouched.
+    expect(v.scopes[3 * RING * 4 + ((from - 1) & (RING - 1)) * 4]).toBe(-7);
+    expect(v.scopes.filter((x) => x !== -7)).toHaveLength(100 * 4);
+    expect([v.hdr[vh(5, SCOPE_HDR.ownerTrack)], v.hdr[vh(5, SCOPE_HDR.head)]]).toEqual([-1, 64]);
+    // Nothing new: nothing copied, the head stays.
+    v.scopes.fill(-7);
+    copyVis(v, out(128, 0), out(128, 0), engineBlock(128, -1), 128, 1, es);
+    expect(v.scopes.every((x) => x === -7)).toBe(true);
+    expect(v.hdr[vh(3, SCOPE_HDR.head)]).toBe(to);
+    // A mirror far behind (the bit was off for a while): only the last ring's worth.
+    v.hdr[vh(3, SCOPE_HDR.head)] = to - 10 * RING;
+    copyVis(v, out(128, 0), out(128, 0), engineBlock(128, -1), 128, 1, es);
+    expect(v.scopes.filter((x) => x !== -7)).toHaveLength(RING * 4);
+    expect(v.hdr[vh(3, SCOPE_HDR.head)]).toBe(to);
   });
 
   it('the layout fits the plan (about 400 KB) and the engine block mirrors vis.rs', () => {

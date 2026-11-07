@@ -12,13 +12,13 @@
 
 use super::fx_pool::{FxKind, CHORUS_SLOTS, DELAY_SLOTS, REVERB_SLOTS};
 use crate::mixer::catalog::{DELAY_DEFAULT_DIVISION, DELAY_DIVISIONS};
-use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
+use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK, VIS_SCOPES};
 
 /// Module kinds. The discriminants are **fixed wire ids** (commands and saved
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
 /// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
 /// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15,
-/// SamplePlayer=16, Formant=17.
+/// SamplePlayer=16, Formant=17, Scope=18.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -40,6 +40,7 @@ pub enum ModuleKind {
     Attenuator = 15,
     SamplePlayer = 16,
     Formant = 17,
+    Scope = 18,
 }
 
 impl ModuleKind {
@@ -63,6 +64,7 @@ impl ModuleKind {
         ModuleKind::Attenuator,
         ModuleKind::SamplePlayer,
         ModuleKind::Formant,
+        ModuleKind::Scope,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
@@ -71,12 +73,13 @@ impl ModuleKind {
     }
 
     /// The FX-pool bank a module of this kind needs a slot in (Delay, Reverb,
-    /// Chorus), or `None` for inline modules (see `rack/fx_pool.rs`).
+    /// Chorus, Scope), or `None` for inline modules (see `rack/fx_pool.rs`).
     pub fn fx_kind(self) -> Option<FxKind> {
         match self {
             ModuleKind::Delay => Some(FxKind::Delay),
             ModuleKind::Reverb => Some(FxKind::Reverb),
             ModuleKind::Chorus => Some(FxKind::Chorus),
+            ModuleKind::Scope => Some(FxKind::Scope),
             _ => None,
         }
     }
@@ -583,6 +586,31 @@ static FORMANT: ModuleSpec = ModuleSpec {
     ],
 };
 
+// ---- visualisation (plan 12) ---------------------------------------------------
+
+static SCOPE: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Scope,
+    id: "scope",
+    name: "Scope",
+    category: "utility",
+    // A sink (see `modules::scope`): no outputs, so it can never change the
+    // sound; each input's channels are summed (as Out sums voices).
+    inputs: &[port("a", Signal::Audio), port("b", Signal::Audio)],
+    outputs: &[],
+    params: &[
+        // Free window = 10 divisions.
+        exp("time", "Time/div", 0.1, 100.0, 5.0, "ms"),
+        choice("sync", "Sync", &["Free", "Sync"], 0.0),
+        // Sync window = one division at the current tempo (the LFO's table).
+        choice("division", "Division", LFO_DIVISIONS, 3.0),
+        // Display only (the UI scales the trace; the engine ignores them).
+        exp("gain_a", "Gain A", 0.1, 10.0, 1.0, ""),
+        exp("gain_b", "Gain B", 0.1, 10.0, 1.0, ""),
+        choice("mode", "Mode", &["A+B", "XY"], 0.0),
+        choice("trig", "Trigger", &["Auto", "Free"], 0.0),
+    ],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -604,6 +632,7 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::Attenuator => &ATTENUATOR,
         ModuleKind::SamplePlayer => &SAMPLE_PLAYER,
         ModuleKind::Formant => &FORMANT,
+        ModuleKind::Scope => &SCOPE,
     }
 }
 
@@ -660,12 +689,12 @@ fn param(p: &ParamSpec) -> String {
 
 /// The whole catalog as JSON (the contents of `engine/catalog.json`):
 /// `{"version":1,"rackBlock":32,"maxModules":32,"maxPoly":16,
-/// "fxPool":{"delay":8,"reverb":8,"chorus":16},"modules":[...]}`
+/// "fxPool":{"delay":8,"reverb":8,"chorus":16,"scope":8},"modules":[...]}`
 /// with modules ordered by kind id, one module (and one param) per line so the
 /// golden file diffs readably. Test/tool-only: it allocates.
 pub fn catalog_json() -> String {
     let mut o = format!(
-        "{{\n  \"version\": 1,\n  \"rackBlock\": {RACK_BLOCK},\n  \"maxModules\": {MAX_MODULES},\n  \"maxPoly\": {MAX_POLY},\n  \"fxPool\": {{\"delay\": {DELAY_SLOTS}, \"reverb\": {REVERB_SLOTS}, \"chorus\": {CHORUS_SLOTS}}},\n  \"modules\": ["
+        "{{\n  \"version\": 1,\n  \"rackBlock\": {RACK_BLOCK},\n  \"maxModules\": {MAX_MODULES},\n  \"maxPoly\": {MAX_POLY},\n  \"fxPool\": {{\"delay\": {DELAY_SLOTS}, \"reverb\": {REVERB_SLOTS}, \"chorus\": {CHORUS_SLOTS}, \"scope\": {VIS_SCOPES}}},\n  \"modules\": ["
     );
     for (i, &k) in ModuleKind::ALL.iter().enumerate() {
         let s = spec(k);
@@ -772,7 +801,6 @@ mod tests {
         let k = ModuleKind::Formant;
         assert_eq!(k as u8, 17);
         assert_eq!(ModuleKind::from_id(17), Some(k));
-        assert_eq!(ModuleKind::from_id(18), None);
         assert_eq!(k.fx_kind(), None, "inline: no FX pool");
         let s = spec(k);
         assert_eq!((s.id, s.name, s.category), ("formant", "Formant", "shaping"));
@@ -797,6 +825,40 @@ mod tests {
         );
         assert!(s.params.iter().all(|p| p.smooth && !p.integer), "every Formant param is smooth");
         assert!(s.params.len() <= crate::MAX_PARAMS);
+    }
+
+    #[test]
+    fn catalog_id_18() {
+        let k = ModuleKind::Scope;
+        assert_eq!(k as u8, 18);
+        assert_eq!(ModuleKind::from_id(18), Some(k));
+        assert_eq!(ModuleKind::from_id(19), None);
+        assert_eq!(k.fx_kind(), Some(FxKind::Scope), "its rings live in the FX pool's scope bank");
+        let s = spec(k);
+        assert_eq!((s.id, s.name, s.category), ("scope", "Scope", "utility"));
+        let names = |ps: &[PortSpec]| ps.iter().map(|p| (p.name, p.signal)).collect::<Vec<_>>();
+        assert_eq!(names(s.inputs), [("a", Signal::Audio), ("b", Signal::Audio)]);
+        assert!(s.outputs.is_empty(), "a sink: no outputs, so it can never change the sound");
+        let ps: Vec<_> = s.params.iter().map(|p| (p.name, p.label, p.min, p.max, p.default, p.integer, p.curve)).collect();
+        assert_eq!(
+            ps,
+            [
+                ("time", "Time/div", 0.1, 100.0, 5.0, false, Curve::Exp),
+                ("sync", "Sync", 0.0, 1.0, 0.0, true, Curve::Lin),
+                ("division", "Division", 0.0, 7.0, 3.0, true, Curve::Lin),
+                ("gain_a", "Gain A", 0.1, 10.0, 1.0, false, Curve::Exp),
+                ("gain_b", "Gain B", 0.1, 10.0, 1.0, false, Curve::Exp),
+                ("mode", "Mode", 0.0, 1.0, 0.0, true, Curve::Lin),
+                ("trig", "Trigger", 0.0, 1.0, 0.0, true, Curve::Lin),
+            ]
+        );
+        assert_eq!(s.params[0].unit, "ms");
+        assert_eq!(s.params[1].choices, &["Free", "Sync"]);
+        assert_eq!(s.params[2].choices, LFO_DIVISIONS, "the LFO's 8 divisions");
+        assert_eq!(s.params[5].choices, &["A+B", "XY"]);
+        assert_eq!(s.params[6].choices, &["Auto", "Free"]);
+        assert!(s.params.iter().all(|p| !p.smooth));
+        assert!(catalog_json().contains("\"fxPool\": {\"delay\": 8, \"reverb\": 8, \"chorus\": 16, \"scope\": 8}"));
     }
 
     #[test]

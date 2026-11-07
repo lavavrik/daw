@@ -31,8 +31,8 @@ mod common;
 use common::{house_patches, HousePatch, Phrase};
 use daw_engine::engine::Engine;
 use daw_engine::protocol::{
-    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_CONNECT, OP_RACK_DISCONNECT, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
-    OP_SET_TEMPO,
+    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_CONNECT, OP_RACK_DISCONNECT, OP_RACK_REMOVE_MODULE,
+    OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN, OP_SET_TEMPO,
 };
 use daw_engine::rack::catalog::{spec, ModuleKind};
 
@@ -66,6 +66,9 @@ const PRE: f32 = 8.0;
 struct Render {
     m: Vec<f32>,
     peak: f32,
+    /// FNV-1a over every raw output sample's bits, L then R per block
+    /// (bit-identical renders compare equal; plan 12 scopes).
+    bits: u64,
 }
 
 impl Render {
@@ -117,11 +120,18 @@ enum Ev {
 /// Render `dur` seconds, applying each `(time s, event)` at the first block
 /// start at or after its time (events in list order within a block).
 fn run(e: &mut Engine, events: &[(f32, Ev)], dur: f32) -> Render {
+    run_with(e, events, dur, &mut |_, _| {})
+}
+
+/// [`run`], calling `hook(engine, frame)` before every block (after its
+/// events), `frame` counted from the first block.
+fn run_with(e: &mut Engine, events: &[(f32, Ev)], dur: f32, hook: &mut dyn FnMut(&mut Engine, usize)) -> Render {
     let lat = e.latency();
     let frames = (dur * SR) as usize + lat;
     let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
     let mut m = Vec::with_capacity(frames + BLOCK);
     let mut peak = 0.0f32;
+    let mut bits = 0xcbf2_9ce4_8422_2325u64;
     let mut next = 0;
     let mut t = 0usize;
     while t < frames {
@@ -134,7 +144,11 @@ fn run(e: &mut Engine, events: &[(f32, Ev)], dur: f32) -> Render {
             assert_eq!(code, OK, "{:?}", events[next]);
             next += 1;
         }
+        hook(e, t);
         e.process(&mut l, &mut r);
+        for x in l.iter().chain(&r) {
+            bits = (bits ^ x.to_bits() as u64).wrapping_mul(0x0100_0000_01b3);
+        }
         for i in 0..BLOCK {
             let (a, b) = (l[i] * PRE, r[i] * PRE);
             assert!(a.is_finite() && b.is_finite(), "non-finite output");
@@ -147,7 +161,7 @@ fn run(e: &mut Engine, events: &[(f32, Ev)], dur: f32) -> Render {
         t += BLOCK;
     }
     m.truncate(frames - lat);
-    Render { m, peak }
+    Render { m, peak, bits }
 }
 
 /// When an event at `t` s takes effect in a [`run`] render: the first block
@@ -167,6 +181,18 @@ fn play(e: &mut Engine, notes: &[u8], vel: u8, hold: f32, release: f32) -> Rende
 /// A patch's phrase at `vel`: each step held `step` s (the next step starts as
 /// the previous one is released), then `release` s more.
 fn play_phrase(e: &mut Engine, phrase: Phrase, vel: u8, step: f32, release: f32) -> Render {
+    play_phrase_with(e, phrase, vel, step, release, &mut |_, _| {})
+}
+
+/// [`play_phrase`] with a [`run_with`] hook.
+fn play_phrase_with(
+    e: &mut Engine,
+    phrase: Phrase,
+    vel: u8,
+    step: f32,
+    release: f32,
+    hook: &mut dyn FnMut(&mut Engine, usize),
+) -> Render {
     let mut ev = Vec::new();
     for (i, notes) in phrase.steps().iter().enumerate() {
         let t = i as f32 * step;
@@ -174,7 +200,7 @@ fn play_phrase(e: &mut Engine, phrase: Phrase, vel: u8, step: f32, release: f32)
         ev.extend(notes.iter().map(|&n| (t + step, Ev::Off(n))));
     }
     ev.sort_by(|a, b| a.0.total_cmp(&b.0)); // stable: offs stay before ons at a step change
-    run(e, &ev, phrase.steps().len() as f32 * step + release)
+    run_with(e, &ev, phrase.steps().len() as f32 * step + release, hook)
 }
 
 /// A phrase with its own step (an arp), transposed by `tr` semitones, at
@@ -1119,4 +1145,73 @@ fn warm_pad_moves() {
     let (lo, hi) = (cs.iter().cloned().fold(f32::MAX, f32::min), cs.iter().cloned().fold(f32::MIN, f32::max));
     eprintln!("Warm Pad: centroid over one 2-bar cycle {lo:.0}–{hi:.0} Hz ({:.2}×): {:?}", hi / lo, cs.iter().map(|c| c.round()).collect::<Vec<_>>());
     assert!(hi >= 1.15 * lo, "centroid varies only {:.1} %", 100.0 * (hi / lo - 1.0));
+}
+
+// ---- plan 12: a Scope never changes the sound ----------------------------------
+
+/// The first module of `kind` in `p` (its idx).
+fn first_of(p: &HousePatch, kind: ModuleKind) -> usize {
+    (0..32).find(|&i| kind_at(p, i) == Some(kind)).unwrap_or_else(|| panic!("{} has no {kind:?}", p.name))
+}
+
+/// The packed output feeding Out's `l` in `p`.
+fn into_out(p: &HousePatch) -> f64 {
+    let out = first_of(p, ModuleKind::Out);
+    p.cmds
+        .iter()
+        .find(|c| c[0] as u32 == OP_RACK_CONNECT && c[3] as usize == out * 16)
+        .map(|c| c[2])
+        .expect("a cable into Out.l")
+}
+
+#[test]
+fn scopes_never_change_the_sound() {
+    // The Sax and the Warm Pad phrase, rendered plain and with four Scopes
+    // (modules 28..31) added mid-note on four outputs: an oscillator (the
+    // feedback-free audio path), what feeds Out, the LFO (a modulation
+    // path) and an envelope. Then every Scope param is set (choices too),
+    // a B input is disconnected and two Scopes are removed, all while
+    // sounding. Every output sample is bit-identical.
+    for name in ["Sax", "Warm Pad"] {
+        let p = patch(name);
+        let osc = (first_of(&p, ModuleKind::Osc) * 16) as f64;
+        let lfo = (first_of(&p, ModuleKind::Lfo) * 16) as f64;
+        let env = (first_of(&p, ModuleKind::Adsr) * 16) as f64;
+        let out = into_out(&p);
+        let step = p.phrase.step().unwrap_or(1.5);
+        let plain = play_phrase(&mut load(name), p.phrase, 100, step, 0.5);
+        let scope = spec(ModuleKind::Scope);
+        let at = |sec: f32| ((sec * SR) as usize).div_ceil(BLOCK) * BLOCK;
+        let ok = |c: i32| assert_eq!(c, OK);
+        let mut e = load(name);
+        let scoped = play_phrase_with(&mut e, p.phrase, 100, step, 0.5, &mut |e, t| {
+            let cmd = |e: &mut Engine, op: u32, b: f64, c: f64, d: f64| ok(e.command(op, 0., b, c, d));
+            if t == at(0.2) {
+                for (s, (a, b)) in [(osc, out), (lfo, env), (out, -1.0), (env, lfo)].into_iter().enumerate() {
+                    let m = 28 + s;
+                    cmd(e, OP_RACK_ADD_MODULE, m as f64, ModuleKind::Scope as u32 as f64, 0.);
+                    cmd(e, OP_RACK_CONNECT, a, (m * 16) as f64, 0.);
+                    if b >= 0.0 {
+                        cmd(e, OP_RACK_CONNECT, b, (m * 16 + 1) as f64, 0.);
+                    }
+                }
+            } else if t == at(0.4) {
+                for m in 28..32 {
+                    for (i, q) in scope.params.iter().enumerate() {
+                        cmd(e, OP_RACK_SET_PARAM, m as f64, i as f64, q.max as f64);
+                        cmd(e, OP_RACK_SET_PARAM, m as f64, i as f64, q.min as f64);
+                    }
+                }
+            } else if t == at(0.6) {
+                cmd(e, OP_RACK_DISCONNECT, (28 * 16 + 1) as f64, 0., 0.);
+                cmd(e, OP_RACK_REMOVE_MODULE, 29., 0., 0.);
+                cmd(e, OP_RACK_REMOVE_MODULE, 31., 0., 0.);
+            }
+        });
+        assert!(plain.peak > 0.01, "{name} sounds");
+        assert_eq!(plain.m.len(), scoped.m.len());
+        let first = plain.m.iter().zip(&scoped.m).position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(first, None, "{name}: the scopes changed the sound at sample {first:?}");
+        assert_eq!(plain.bits, scoped.bits, "{name}: raw L/R differ");
+    }
 }

@@ -121,6 +121,31 @@ pub extern "C" fn engine_vis(e: *mut Host) -> *const f32 {
     }
 }
 
+/// The scope bank's rings (`VIS_SCOPES × VIS_SCOPE_RING × 4` f32: A min,
+/// A max, B min, B max per entry; slot `s` at `s × VIS_SCOPE_RING × 4`,
+/// entry `h` at `h mod VIS_SCOPE_RING`). Written by the Scope modules as
+/// their racks render; the pointer is stable for the instance lifetime.
+#[no_mangle]
+pub extern "C" fn engine_scopes(e: *mut Host) -> *const f32 {
+    // SAFETY: see module contract.
+    match unsafe { e.as_ref() } {
+        Some(h) => h.engine.scope_rings().as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
+/// The scope headers (`VIS_SCOPES × VIS_SCOPE_HDR` i32; fields
+/// `rack::modules::scope::HDR_*`: owner track (−1 free), owner module,
+/// head, decim, epoch, grid prev, grid last, flags). Stable pointer.
+#[no_mangle]
+pub extern "C" fn engine_scope_hdr(e: *mut Host) -> *const i32 {
+    // SAFETY: see module contract.
+    match unsafe { e.as_ref() } {
+        Some(h) => h.engine.scope_hdrs().as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
 /// Output latency in frames (the master limiter's lookahead: 72 at 48 kHz);
 /// constant for the instance. The worklet adds it to `TELEMETRY_FRAME` so
 /// heard time matches what leaves the engine. 0 for a null handle.
@@ -166,6 +191,25 @@ mod tests {
         assert_eq!(unsafe { *vis.add(crate::vis::VIS_TAP_CH) }, -1.0);
         engine_process(e, 128);
         assert_eq!(engine_vis(e), vis, "stable pointer");
+        // The scope bank: a Scope (kind 18) at module 2 of track 0, fed by
+        // the LFO, stamps its slot and writes entries.
+        let (rings, hdr) = (engine_scopes(e), engine_scope_hdr(e));
+        assert!(!rings.is_null() && !hdr.is_null());
+        let h = || unsafe { core::slice::from_raw_parts(engine_scope_hdr(e), crate::VIS_SCOPES * crate::VIS_SCOPE_HDR) };
+        assert_eq!(h()[0], -1, "free");
+        assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 0.0, 2.0, 18.0, 0.0), 0);
+        assert_eq!(engine_command(e, OP_RACK_CONNECT, 0.0, 0.0, 32.0, 0.0), 0);
+        assert_eq!((h()[0], h()[1]), (0, 2), "owner track 0, module 2");
+        engine_process(e, 128);
+        assert!(h()[2] > 0, "head moved");
+        let ring = unsafe { core::slice::from_raw_parts(rings, crate::VIS_SCOPES * crate::VIS_SCOPE_RING * 4) };
+        assert!(ring[..h()[2] as usize * 4].iter().any(|&x| x != 0.0), "entries written");
+        assert_eq!((engine_scopes(e), engine_scope_hdr(e)), (rings, hdr), "stable pointers");
+        // Each rack knows its track slot: a Scope on track 3 says so.
+        assert_eq!(engine_command(e, OP_ADD_SYNTH_TRACK, 3.0, 0.0, 0.0, 0.0), 0);
+        assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 3.0, 5.0, 18.0, 0.0), 0);
+        let hd = crate::VIS_SCOPE_HDR;
+        assert_eq!((h()[hd], h()[hd + 1]), (3, 5), "slot 1: track 3, module 5");
         assert!(engine_sample_alloc(e, 9999, 1, 1).is_null());
         let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
         assert_eq!(t[7], ERR_BAD_INDEX as f64);
@@ -184,5 +228,6 @@ mod tests {
         assert!(engine_meters(n).is_null());
         assert_eq!(engine_latency(n), 0);
         assert!(engine_vis(n).is_null());
+        assert!(engine_scopes(n).is_null() && engine_scope_hdr(n).is_null());
     }
 }

@@ -43,6 +43,12 @@
 //! * Adding a module never changes the sound (it has no cables yet), so it
 //!   applies at once without a fade, even while sounding, unless edits are
 //!   already queued (then it queues, to keep edits in order).
+//! * **Scope edits never fade** (plan 12): a Scope is a sink (no outputs),
+//!   so removing one, connecting into or disconnecting from its inputs and
+//!   setting any of its params (choices too) cannot change the sound. Like
+//!   an add they apply at once, even while sounding, and never restart the
+//!   output gain; with edits already queued they queue behind them, in
+//!   order, without a fade of their own (`EditClass::Sink`).
 //! * Structural edits while [`Rack::is_sounding`]: the edit is validated now
 //!   (the caller gets its `ERR_*`/`OK` code immediately) and queued in a fixed
 //!   64-entry queue. The rack output then fades to 0 over round(0.002·sr)
@@ -56,7 +62,7 @@
 //!   `order`) report the *running* graph.
 //!
 //! # FX pool
-//! Delay, Reverb and Chorus need a slot of the engine-wide [`FxPool`]
+//! Delay, Reverb, Chorus and Scope need a slot of the engine-wide [`FxPool`]
 //! (`fx_pool.rs`, shared by every track's rack). `add_module` claims it at
 //! validation time, so a queued add holds its slot and a full bank is
 //! reported at once as `ERR_OUT_OF_MEMORY` (nothing is added). A slot is
@@ -114,7 +120,7 @@ pub mod port;
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, ERR_OUT_OF_MEMORY, OK};
 use crate::{MAX_MODULES, MAX_PARAMS, MAX_POLY, MAX_PORTS, RACK_BLOCK};
 use catalog::{spec, ModuleKind};
-use fx_pool::{FxKind, FxPool, NO_SLOT};
+use fx_pool::{FxKind, FxPool, FX_KINDS, NO_SLOT};
 use modules::{Ctx, Module, NoteEvent};
 use port::PortBuf;
 
@@ -153,6 +159,9 @@ enum EditClass {
     Stepped,
     /// A new, cable-less module: cannot change the sound, never faded.
     Add,
+    /// A Scope edit (remove, cable into it, param): it has no outputs, so
+    /// it cannot change the sound; never faded (like `Add`).
+    Sink,
     /// Cables, removal, clear: faded (queued while sounding).
     Structural,
 }
@@ -199,10 +208,12 @@ pub struct Rack {
     blk_pos: usize,
     /// FX-pool slots of removed modules not yet handed back (bit = slot, one
     /// mask per `FxKind`); see [`Rack::reclaim`].
-    released: [u32; 3],
+    released: [u32; FX_KINDS],
     /// Slots taken over by a queued add from a queued Remove/Clear (see the
     /// module docs): the next release of each is absorbed, not recorded.
-    handed: [u32; 3],
+    handed: [u32; FX_KINDS],
+    /// The track slot this rack belongs to (stamped on its Scopes' slots).
+    track: u8,
     /// Voice activity since the last `take_voices` (see the module docs):
     /// the max Out peak per voice, the MIDI In gates, and whether a
     /// sub-block rendered at all.
@@ -253,8 +264,9 @@ impl Rack {
             blk_l: [0.0; RACK_BLOCK],
             blk_r: [0.0; RACK_BLOCK],
             blk_pos: RACK_BLOCK,
-            released: [0; 3],
-            handed: [0; 3],
+            released: [0; FX_KINDS],
+            handed: [0; FX_KINDS],
+            track: 0,
             vis_level: [0.0; MAX_POLY],
             vis_gate: [0.0; MAX_POLY],
             vis_rendered: false,
@@ -280,11 +292,17 @@ impl Rack {
         self.blk_l = [0.0; RACK_BLOCK];
         self.blk_r = [0.0; RACK_BLOCK];
         self.blk_pos = RACK_BLOCK;
-        self.released = [0; 3];
-        self.handed = [0; 3];
+        self.released = [0; FX_KINDS];
+        self.handed = [0; FX_KINDS];
         self.vis_level = [0.0; MAX_POLY];
         self.vis_gate = [0.0; MAX_POLY];
         self.vis_rendered = false;
+    }
+
+    /// The track slot this rack belongs to (`Synths::new`; 0 by default).
+    /// Its Scopes stamp it on their scope-bank slots (`FxPool::stamp_scope`).
+    pub fn set_track(&mut self, slot: usize) {
+        self.track = slot.min(u8::MAX as usize) as u8;
     }
 
     /// Write the voice activity since the last call into `out` (`2 *
@@ -452,6 +470,10 @@ impl Rack {
             },
             None => (NO_SLOT, false),
         };
+        if kind.fx_kind() == Some(FxKind::Scope) {
+            // The claim (or the handover) names the new owner for the UI.
+            fx.stamp_scope(fx_slot, self.track as usize, idx);
+        }
         self.pending[idx] = Some(kind);
         self.submit(Edit::Add(idx as u8, kind, fx_slot, handed), EditClass::Add);
         OK
@@ -540,12 +562,31 @@ impl Rack {
     /// Remove module `idx` and every cable into or out of it.
     /// `ERR_BAD_INDEX` if there is no module there.
     pub fn remove_module(&mut self, idx: usize) -> i32 {
-        match self.pending.get_mut(idx) {
-            Some(slot @ Some(_)) => *slot = None,
-            _ => return ERR_BAD_INDEX,
+        let kind = self.pending_kind(idx);
+        if kind.is_none() {
+            return ERR_BAD_INDEX;
         }
-        self.submit(Edit::Remove(idx as u8), EditClass::Structural);
+        let class = self.sink_or(kind, EditClass::Structural);
+        if let Some(slot) = self.pending.get_mut(idx) {
+            *slot = None;
+        }
+        self.submit(Edit::Remove(idx as u8), class);
         OK
+    }
+
+    /// `EditClass::Sink` for an edit on a module of pending kind `kind` that
+    /// is a Scope (see the module docs), else `class`.
+    fn sink_or(&self, kind: Option<ModuleKind>, class: EditClass) -> EditClass {
+        if kind == Some(ModuleKind::Scope) {
+            EditClass::Sink
+        } else {
+            class
+        }
+    }
+
+    /// The class of an edit on input `to`: `Sink` into a Scope.
+    fn input_class(&self, to: (usize, usize)) -> EditClass {
+        self.sink_or(self.pending_kind(to.0), EditClass::Structural)
     }
 
     /// Cable output `from = (module, port)` to input `to = (module, port)`,
@@ -559,7 +600,7 @@ impl Rack {
             return OK; // no-op: don't dip the output for a re-sent edit
         }
         let e = Edit::Connect { from: (from.0 as u8, from.1 as u8), to: (to.0 as u8, to.1 as u8) };
-        self.submit(e, EditClass::Structural);
+        self.submit(e, self.input_class(to));
         OK
     }
 
@@ -572,7 +613,7 @@ impl Rack {
         if self.queued == 0 && self.cable(to).is_none() {
             return OK; // no-op: don't dip the output
         }
-        self.submit(Edit::Disconnect((to.0 as u8, to.1 as u8)), EditClass::Structural);
+        self.submit(Edit::Disconnect((to.0 as u8, to.1 as u8)), self.input_class(to));
         OK
     }
 
@@ -587,7 +628,7 @@ impl Rack {
         if !(value >= p.min && value <= p.max) || (p.integer && value.fract() != 0.0) {
             return ERR_BAD_VALUE;
         }
-        let class = if p.integer { EditClass::Stepped } else { EditClass::Param };
+        let class = self.sink_or(Some(kind), if p.integer { EditClass::Stepped } else { EditClass::Param });
         if class == EditClass::Stepped && self.queued == 0 && self.param(idx, param) == Some(value) {
             return OK; // no-op: don't dip the output for a re-sent value
         }
@@ -630,6 +671,12 @@ impl Rack {
                 EditClass::Param => {}
                 EditClass::Stepped => self.gain = 0.0,
                 EditClass::Add => self.rebuild_order(),
+                // A param needs no new order; cables and removal do.
+                EditClass::Sink => {
+                    if !matches!(e, Edit::SetParam(..)) {
+                        self.rebuild_order();
+                    }
+                }
                 EditClass::Structural => {
                     self.rebuild_order();
                     self.gain = 0.0;
@@ -1442,6 +1489,87 @@ mod tests {
         assert_eq!(r.set_param(0, OSC_OCTAVE, -3.0), OK);
         let out = render(&mut r, 480);
         assert!(!dipped(&out), "output dipped");
+    }
+
+    /// Plan 12: a Scope is a sink. Adding one, cabling both its inputs,
+    /// setting every param (choices too), disconnecting and removing it, on
+    /// a sounding rack, never dips or changes the output: every sample is
+    /// bit-identical to the same rack without them, also when its edits
+    /// queue behind another edit's fade.
+    #[test]
+    fn scope_edits_never_dip() {
+        use super::modules::scope::HDR_HEAD;
+        let lr = |r: &mut Rack, fx: &mut FxPool, blocks: usize, out: &mut Vec<u32>| {
+            for _ in 0..blocks {
+                let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+                r.render_add(&ctx(), fx, SampleView::NONE, &mut l, &mut rr);
+                out.extend(l.iter().chain(&rr).map(|x| x.to_bits()));
+            }
+        };
+        let (mut plain, mut scoped) = (sounding_square(), sounding_square());
+        let (mut fp, mut fs) = (FxPool::new(SR), FxPool::new(SR));
+        let (mut op, mut os) = (Vec::new(), Vec::new());
+        // `edit(rack, pool, scoped)` runs on both racks: Scope edits only
+        // on the scoped one (`scoped` true), anything else on both.
+        let mut both = |edit: &mut dyn FnMut(&mut Rack, &mut FxPool, bool), blocks: usize| {
+            edit(&mut plain, &mut fp, false);
+            edit(&mut scoped, &mut fs, true);
+            lr(&mut plain, &mut fp, blocks, &mut op);
+            lr(&mut scoped, &mut fs, blocks, &mut os);
+        };
+        let scope = spec(ModuleKind::Scope);
+        let pi = |n: &str| scope.params.iter().position(|p| p.name == n).unwrap();
+        both(&mut |r, fx, s| if s { assert_eq!(r.add_module(5, ModuleKind::Scope, fx), OK) }, 2);
+        both(&mut |r, _, s| {
+            if s {
+                assert!(r.is_sounding());
+                assert_eq!(r.connect((1, 0), (5, 0)), OK); // the VCA (audio path)
+                assert_eq!(r.connect((0, 0), (5, 1)), OK); // the LFO (modulation)
+                assert_eq!(r.cable((5, 1)), Some((0, 0)), "applied at once");
+            }
+        }, 3);
+        for (name, values) in [
+            ("time", &[0.1f32, 50.0, 100.0][..]),
+            ("sync", &[1.0, 0.0, 1.0]),
+            ("division", &[0.0, 7.0, 5.0]),
+            ("gain_a", &[10.0, 0.1]),
+            ("gain_b", &[3.0]),
+            ("mode", &[1.0, 0.0, 1.0]),
+            ("trig", &[1.0, 0.0]),
+        ] {
+            for &v in values {
+                both(&mut |r, _, s| {
+                    if s {
+                        assert_eq!(r.set_param(5, pi(name), v), OK);
+                        assert_eq!(r.param(5, pi(name)), Some(v), "{name} applied at once");
+                    }
+                }, 1);
+            }
+        }
+        // Behind another edit's fade (on both racks): the Scope's edits
+        // queue in order and add no fade of their own.
+        both(&mut |r, _, s| {
+            assert_eq!(r.set_param(0, LFO_WAVE, 0.0), OK); // stepped: queued
+            if s {
+                assert_eq!(r.set_param(5, pi("time"), 2.0), OK);
+                assert_eq!(r.disconnect((5, 1)), OK);
+                assert_eq!(r.param(5, pi("time")), Some(100.0), "queued behind the fade");
+            }
+        }, 8);
+        both(&mut |r, _, s| {
+            if s {
+                assert_eq!(r.param(5, pi("time")), Some(2.0));
+                assert_eq!(r.cable((5, 1)), None);
+                assert_eq!(r.disconnect((5, 0)), OK);
+                assert_eq!(r.remove_module(5), OK);
+                assert_eq!(r.kind(5), None, "removed at once");
+            }
+        }, 4);
+        assert!(fs.scope_hdrs()[HDR_HEAD] > 0, "the scope ran");
+        assert_eq!(fs.in_use(FxKind::Scope), 0, "its slot is back");
+        assert_eq!(op.len(), os.len());
+        let first = op.iter().zip(&os).position(|(a, b)| a != b);
+        assert_eq!(first, None, "the output changed at sample {first:?}");
     }
 
     #[test]

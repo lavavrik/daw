@@ -135,7 +135,7 @@ fn catalog_ids_fixed() {
         assert_eq!(spec(k).id, name);
         assert_eq!(spec(k).category, category, "{name}");
     }
-    assert_eq!(ModuleKind::from_id(18), None);
+    assert_eq!(ModuleKind::from_id(19), None);
     // The stereo effects: l, r (+ sc), 1-channel l/r outs.
     for k in [ModuleKind::Delay, ModuleKind::Reverb, ModuleKind::Chorus, ModuleKind::Eq, ModuleKind::Compressor] {
         let s = spec(k);
@@ -154,6 +154,7 @@ fn catalog_ids_fixed() {
     assert_eq!(ModuleKind::Delay.fx_kind(), Some(FxKind::Delay));
     assert_eq!(ModuleKind::Reverb.fx_kind(), Some(FxKind::Reverb));
     assert_eq!(ModuleKind::Chorus.fx_kind(), Some(FxKind::Chorus));
+    assert_eq!(ModuleKind::Scope.fx_kind(), Some(FxKind::Scope));
     for k in [ModuleKind::Eq, ModuleKind::Compressor, ModuleKind::Saturator, ModuleKind::Attenuator, ModuleKind::Osc] {
         assert_eq!(k.fx_kind(), None);
     }
@@ -647,4 +648,71 @@ fn reset_of_a_pooled_module_restarts_slot_zeroing() {
         m.process(&ctx(120.0), &params, &ins, &mut outs, &mut fx, SampleView::NONE);
         assert!(outs[0].data[0].iter().chain(&outs[1].data[0]).all(|&x| x == 0.0), "old ring replayed");
     }
+}
+
+// ---- the scope bank (plan 12) -------------------------------------------------
+
+#[test]
+fn scope_bank_stamps_owners() {
+    use super::modules::scope::{HDR_EPOCH, HDR_HEAD, HDR_OWNER_MODULE, HDR_OWNER_TRACK};
+    use crate::VIS_SCOPE_HDR;
+    let owner = |fx: &FxPool, s: u8| {
+        let h = &fx.scope_hdrs()[s as usize * VIS_SCOPE_HDR..][..VIS_SCOPE_HDR];
+        (h[HDR_OWNER_TRACK], h[HDR_OWNER_MODULE])
+    };
+    let ok = |c: i32| assert_eq!(c, OK);
+    let mut fx = FxPool::new(SR);
+    assert!((0..8).all(|s| owner(&fx, s) == (-1, -1)), "free at start");
+
+    // A claim stamps the rack's track slot and the module idx.
+    let mut a = Rack::new(SR);
+    a.set_track(5);
+    ok(a.add_module(2, ModuleKind::Scope, &mut fx));
+    assert_eq!(a.fx_slot(2), Some((FxKind::Scope, 0)));
+    assert_eq!(owner(&fx, 0), (5, 2));
+    // Seven more on another track fill the bank; a ninth add is refused.
+    let mut b = Rack::new(SR);
+    b.set_track(9);
+    for m in 0..7 {
+        ok(b.add_module(m, ModuleKind::Scope, &mut fx));
+        assert_eq!(owner(&fx, m as u8 + 1), (9, m as i32));
+    }
+    assert_eq!(fx.in_use(FxKind::Scope), 8);
+    assert_eq!(a.add_module(3, ModuleKind::Scope, &mut fx), ERR_OUT_OF_MEMORY);
+    assert_eq!(a.kind(3), None, "nothing added");
+
+    // A release writes -1 (the silent rack's removal applies at once).
+    render(&mut a, &mut fx, 256);
+    let head = fx.scope_hdrs()[HDR_HEAD];
+    assert!(head > 0, "the scope wrote entries");
+    ok(a.remove_module(2));
+    a.reclaim(&mut fx);
+    assert_eq!(owner(&fx, 0), (-1, -1));
+    // Reclaimed: the next claim restamps it, and its epoch is the head.
+    ok(a.add_module(4, ModuleKind::Scope, &mut fx));
+    assert_eq!(owner(&fx, 0), (5, 4));
+    assert_eq!(fx.scope_hdrs()[HDR_EPOCH], head, "never read the old owner's entries");
+
+    // A handover restamps: on a sounding rack whose Scope's removal is
+    // queued (behind a fade), an add on the full bank takes its slot over.
+    let mut fx = FxPool::with_slots(SR, 0, 0, 0);
+    let mut c = Rack::new(SR);
+    c.set_track(1);
+    ok(c.add_module(0, ModuleKind::Lfo, &mut fx));
+    ok(c.add_module(1, ModuleKind::Out, &mut fx));
+    ok(c.connect((0, 0), (1, 0)));
+    for m in 2..10 {
+        ok(c.add_module(m, ModuleKind::Scope, &mut fx));
+    }
+    render(&mut c, &mut fx, 4800);
+    assert!(c.is_sounding());
+    assert_eq!(c.fx_slot(2), Some((FxKind::Scope, 0)));
+    ok(c.disconnect((1, 0))); // queued behind its fade
+    ok(c.remove_module(2)); // queued behind it
+    ok(c.add_module(12, ModuleKind::Scope, &mut fx)); // the bank is full: takes slot 0 over
+    assert_eq!(owner(&fx, 0), (1, 12), "restamped at the handover");
+    render(&mut c, &mut fx, 4800);
+    assert_eq!(c.fx_slot(12), Some((FxKind::Scope, 0)));
+    assert_eq!(owner(&fx, 0), (1, 12), "the old owner's release was absorbed");
+    assert_eq!(fx.in_use(FxKind::Scope), 8);
 }

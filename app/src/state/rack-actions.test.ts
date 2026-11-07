@@ -113,6 +113,28 @@ describe('rack actions', () => {
     expect(addModule(p, sink, a.id, 'delay')).not.toBeNull();
   });
 
+  it('the ninth scope is refused like a full FX bank', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const empty = { name: 'e', modules: [], cables: [] };
+    const a = addSynthTrack(p, sink, 'A', empty)!;
+    const b = addSynthTrack(p, sink, 'B', empty)!;
+    expect(fxSlotsFree(p, 'scope')).toBe(8);
+    for (let i = 0; i < 5; i++) expect(addModule(p, sink, a.id, 'scope')).not.toBeNull();
+    for (let i = 0; i < 3; i++) expect(addModule(p, sink, b.id, 'scope')).not.toBeNull();
+    expect(fxSlotsFree(p, 'scope')).toBe(0);
+    sent.length = 0;
+    expect(addModule(p, sink, b.id, 'scope')).toBeNull();
+    expect(sent).toEqual([]); // never sent
+    expect(fxPoolFullText(moduleDef('scope'))).toBe('All 8 scopes in use');
+    expect(fxSlotsFree(p, 'delay')).toBe(8); // their own bank
+    removeModule(p, sink, a.id, a.modules[0].idx);
+    expect(addModule(p, sink, b.id, 'scope')).not.toBeNull();
+    // The engine refusing one anyway (a slot still held elsewhere) rolls back with the same text.
+    const idx = b.modules[b.modules.length - 1].idx;
+    expect(rollbackRefusedAdd(p, b.slot, idx, moduleDef('scope').kind)).toBe('All 8 scopes in use');
+  });
+
   it('setParam clamps', () => {
     const p = new Project();
     const { sink, sent } = fake();

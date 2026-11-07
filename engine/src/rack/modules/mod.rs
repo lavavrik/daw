@@ -13,9 +13,10 @@
 //! * Params marked `smooth` in the catalog are smoothed per sample with
 //!   [`Smooth`] (5 ms one-pole), so knob moves never click.
 //! * Outputs must be finite; DSP state below 1e-20 is flushed to 0.
-//! * Delay, Reverb and Chorus hold an FX-pool slot index (`fx_pool.rs`), not
-//!   memory: `process` gets the shared [`FxPool`] and borrows the slot's
-//!   memory from it for the call. Other modules ignore the pool.
+//! * Delay, Reverb, Chorus and Scope hold an FX-pool slot index
+//!   (`fx_pool.rs`), not memory: `process` gets the shared [`FxPool`] and
+//!   borrows the slot's memory from it for the call. Other modules ignore
+//!   the pool.
 //! * The Sample Player reads the engine's sample pool through the
 //!   [`SampleView`] `process` also gets (read-only; others ignore it).
 
@@ -36,6 +37,7 @@ pub mod out;
 pub mod reverb;
 pub mod sample_player;
 pub mod saturator;
+pub mod scope;
 pub mod vca;
 
 use super::catalog::{spec, ModuleKind};
@@ -94,6 +96,7 @@ pub enum Module {
     Attenuator(attenuator::Attenuator),
     SamplePlayer(sample_player::SamplePlayer),
     Formant(formant::Formant),
+    Scope(scope::Scope),
 }
 
 impl Module {
@@ -126,6 +129,7 @@ impl Module {
             ModuleKind::Vca => Module::Vca(vca::Vca::new(sr)),
             ModuleKind::Lfo => Module::Lfo(lfo::Lfo::new(sr)),
             ModuleKind::Out => Module::Out(out::Out::new(sr)),
+            ModuleKind::Scope => Module::Scope(scope::Scope::new(sr, slot)),
         }
     }
 
@@ -133,7 +137,7 @@ impl Module {
     /// once (automation on a silent rack; see `Rack::automate`).
     pub fn snap(&mut self) {
         match self {
-            Module::MidiIn(_) | Module::Chorus(_) | Module::Eq(_) | Module::Compressor(_) => {}
+            Module::MidiIn(_) | Module::Chorus(_) | Module::Eq(_) | Module::Compressor(_) | Module::Scope(_) => {}
             Module::Osc(m) => m.snap(),
             Module::Noise(m) => m.snap(),
             Module::Filter(m) => m.snap(),
@@ -171,6 +175,7 @@ impl Module {
             Module::Attenuator(_) => ModuleKind::Attenuator,
             Module::SamplePlayer(_) => ModuleKind::SamplePlayer,
             Module::Formant(_) => ModuleKind::Formant,
+            Module::Scope(_) => ModuleKind::Scope,
         }
     }
 
@@ -180,6 +185,7 @@ impl Module {
             Module::Delay(m) => (FxKind::Delay, m.slot()),
             Module::Reverb(m) => (FxKind::Reverb, m.slot()),
             Module::Chorus(m) => (FxKind::Chorus, m.slot()),
+            Module::Scope(m) => (FxKind::Scope, m.slot()),
             _ => return None,
         };
         (slot != NO_SLOT).then_some((kind, slot))
@@ -214,6 +220,7 @@ impl Module {
             Module::Attenuator(m) => m.process(params, ins, outs),
             Module::SamplePlayer(m) => m.process(params, ins, outs, smp),
             Module::Formant(m) => m.process(params, ins, outs),
+            Module::Scope(m) => m.process(ctx, params, ins, fx),
         }
     }
 
@@ -253,6 +260,7 @@ impl Module {
             Module::Attenuator(_) => {}
             Module::SamplePlayer(m) => m.reset(),
             Module::Formant(m) => m.reset(),
+            Module::Scope(m) => m.reset(),
         }
     }
 }
@@ -328,6 +336,14 @@ impl PoolSlot {
             fx.reassign(self.kind, self.slot);
         }
         fx.buffer(self.kind, self.slot)
+    }
+
+    /// [`buffer`](PoolSlot::buffer) for a scope slot: its ring and header.
+    pub(crate) fn scope<'a>(&mut self, fx: &'a mut FxPool) -> Option<(&'a mut [f32], &'a mut [i32])> {
+        if std::mem::take(&mut self.rezero) {
+            fx.reassign(self.kind, self.slot);
+        }
+        fx.scope(self.slot)
     }
 }
 

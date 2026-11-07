@@ -79,6 +79,11 @@ fades out over 2 ms (`DECLICK_SECONDS`), the queue applies at a sub-block
 boundary, then it fades in over 2 ms. On a silent rack the edit applies at
 once but the output still ramps up from 0. Adding a module (it has no cables
 yet) applies immediately unless edits are already queued.
+**Scope edits never fade** (plan 12): a Scope has no outputs, so removing
+it, plugging cables into its inputs or unplugging them and setting any of its params
+(choices too) apply at once even while sounding and never ramp the output;
+behind already-queued edits they queue in order without a fade of their
+own (`EditClass::Sink`; see *Scope (18)*).
 Parameters marked `smooth` in the catalog glide over 5 ms. Integer and
 choice parameters (osc wave/octave/unison, filter mode, LFO wave/sync/
 division, MIDI In voices/mode/bend/glide_mode) switch the signal in a step, so they are
@@ -217,7 +222,7 @@ Saturator (14) and Attenuator (15). They wrap the mixer's DSP
   Chorus (50 ms ring) never own memory. They hold a `u8` slot of an
   engine-owned pool, allocated once for the context sample rate and
   **shared by all tracks**: 8 delay, 8 reverb and 16 chorus slots (10.5 MiB
-  at 48 kHz). The dsp structs come as a `*Core` that takes the ring in
+  at 48 kHz), plus the 8-slot scope bank (256 KiB; see *Scope (18)*). The dsp structs come as a `*Core` that takes the ring in
   `process(buf, l, r)`; the mixer's own Delay/Reverb wrap the same core with
   a `Vec`, bit-identically (`mixer_delay_reverb_unchanged`).
   - Adding one when its bank is full returns `ERR_OUT_OF_MEMORY` and adds
@@ -309,6 +314,50 @@ the "bloom"/"wah" of Brass Stab and Garage Organ. Inline (no FX pool).
   and organ "wah" with 10 params (≤ 12). A vowel morph table (a/e/i/o/u
   presets interpolated by a knob) would need either more params or a fixed
   table that fits only one voice size; it is a follow-up if wanted.
+
+## Scope (18)
+
+A *Utility* module (`rack/modules/scope.rs`, plan 12): a patchable
+two-input oscilloscope drawn live in its own panel (`ScopeView.svelte`).
+
+- **What it shows.** Inputs `a` (orange) and `b` (cyan), each input's
+  channels **summed unnormalised** (as Out sums voices, so a poly cable
+  shows what an Out would get; Gain A/B scale the trace on screen). Free:
+  `time` per division over 10 divisions (0.1..100 ms/div). Sync: one
+  `division` (the LFO's 1/16 … 4 bars) at the current tempo. Trigger Auto
+  locks to the latest rising zero crossing of A (a Schmitt trigger with 2 %
+  hysteresis; none: free-running, tagged *no trig*); Free shows the latest
+  entries; Sync while playing shows exactly the last whole division,
+  between the engine's grid marks. XY plots A against B. A click freezes
+  the view (UI only, not saved).
+- **The sink rule.** No outputs, so nothing can be cabled *from* a Scope
+  and it can never change the sound. Its edits skip the declick (see
+  *Declicked edits and smoothing*): `scope_edits_never_dip` (rack) and
+  `scopes_never_change_the_sound` (Sax and Warm Pad, four Scopes added,
+  edited and removed mid-note) pin every output sample bit-identical.
+- **Engine side: record only.** Per sub-block it writes min/max entries
+  (A min, A max, B min, B max) over `decim = max(1, ceil(window /
+  VIS_SCOPE_WINDOW))` frames into its ring, so a long timebase draws the
+  honest envelope rather than an aliased line; a `decim` change moves the
+  header's `epoch` to the head (readers never mix timebases). In Sync while
+  playing it also marks the head at each division line from `ctx.ticks`,
+  exact to the entry; a stop, seek, loop wrap or division change clears
+  *grid valid* until two new lines have passed. Triggering, XY, gain and
+  freezing are UI maths (`ui/vis/scopeMath.ts`).
+- **The bank of 8.** The rings and headers are a fourth FX-pool kind
+  (`FxKind::Scope`, `VIS_SCOPES` slots of `VIS_SCOPE_RING` × 4 f32), claimed,
+  released, handed over and zeroed exactly like the effects' (a scope ring
+  is one `CLEAR_CHUNK`: one sub-block). The claim stamps the owner (the
+  rack's track slot, the module idx) on the slot's header, a handover
+  restamps it, a release writes −1; the view finds its slot by that owner.
+  The ninth Scope is refused (`ERR_OUT_OF_MEMORY`) and greyed in the add
+  menu with "All 8 scopes in use". The header's `head` lives beside the
+  bank, so it keeps counting across owners. The worklet mirrors owned slots
+  into `visSab` while a Scope is on screen (want bit 8; see
+  `visuals.md`).
+- **Idle.** A Scope runs only while its rack renders (the track is active
+  or still sounding), like every module; when no new entries arrive for
+  250 ms the view keeps the last frame, dimmed, tagged *idle*.
 
 ## Adding a module
 

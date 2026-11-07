@@ -5,8 +5,8 @@
 //! [`Synths::new`] preallocates all `MAX_TRACKS` tracks (racks and all
 //! `MAX_PATTERNS` patterns each, ~12.3 KB per pattern, ~6.3 MB in all), the
 //! shared event buffer and the rack effects' [`FxPool`] (8 delay, 8 reverb,
-//! 16 chorus slots shared by every track, ~10.5 MiB at 48 kHz; see
-//! `rack/fx_pool.rs`) up front (in `Engine::new`, for the context sample
+//! 16 chorus and 8 scope slots shared by every track, ~10.75 MiB at 48 kHz;
+//! see `rack/fx_pool.rs`) up front (in `Engine::new`, for the context sample
 //! rate), so adding a synth track, editing its patch or patterns, switching or
 //! copying patterns, playing notes and rendering never allocate.
 //!
@@ -166,8 +166,8 @@ pub struct Synths {
     active: [bool; MAX_TRACKS],
     /// Per-block event scratch, shared by the tracks (they render in turn).
     events: Box<EventBuf>,
-    /// Memory for the racks' Delay/Reverb/Chorus modules, shared by all
-    /// tracks.
+    /// Memory for the racks' Delay/Reverb/Chorus/Scope modules, shared by
+    /// all tracks.
     fx: FxPool,
 }
 
@@ -176,8 +176,10 @@ impl Synths {
     /// allocating call.
     pub fn new(sample_rate: f32) -> Synths {
         let mut tracks = Vec::with_capacity(MAX_TRACKS);
-        for _ in 0..MAX_TRACKS {
-            tracks.push(SynthTrack::new(sample_rate));
+        for slot in 0..MAX_TRACKS {
+            let mut t = SynthTrack::new(sample_rate);
+            t.rack.set_track(slot); // its Scopes name it (plan 12)
+            tracks.push(t);
         }
         Synths { tracks, active: [false; MAX_TRACKS], events: Box::new(EventBuf::new()), fx: FxPool::new(sample_rate) }
     }

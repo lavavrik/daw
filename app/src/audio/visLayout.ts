@@ -12,13 +12,15 @@
 //                                      with `(a - b) | 0`)
 //     [3]        tapped channel (-1 off), as the engine reported it
 //     [4..8)     reserved
-//     [8..72)    VIS_SCOPES scope headers of VIS_SCOPE_HDR i32 (Task 2)
+//     [8..72)    VIS_SCOPES scope headers of VIS_SCOPE_HDR i32 (SCOPE_HDR
+//                fields, mirrored from the engine's; the head stored last)
 //   Float32Arrays, right after the header
 //     master ring  L then R, VIS_TAP_RING frames each (the engine output)
 //     tap ring     L then R, VIS_TAP_RING frames each (one strip, post-fader)
 //     voices       VIS_VOICE_LEN: [(slot*16 + k)*2] level (meter ballistics),
 //                  +1 gate
-//     scope rings  VIS_SCOPES × VIS_SCOPE_RING × 4 (Task 2)
+//     scope rings  VIS_SCOPES × VIS_SCOPE_RING entries × 4 f32 (A min,
+//                  A max, B min, B max), entry `h` at `h & (RING - 1)`
 //   = 288 + 397 312 bytes (about 400 KB).
 //
 // Ring rule: frame `h` of a ring lives at index `h & (VIS_TAP_RING - 1)` (the
@@ -39,6 +41,29 @@ export const VIS_WANT = { master: 1, tap: 2, voices: 4, scopes: 8 } as const;
 
 /** Readers keep this many frames / entries away from a ring's oldest end. */
 export const VIS_GUARD = 256;
+
+/**
+ * Scope header fields (i32, VIS_SCOPE_HDR per slot; the engine's
+ * engine/src/rack/modules/scope.rs HDR_*, parity-tested in scopeMath.test):
+ * owner track (-1 free) and module, head (entries written), decim (frames
+ * per entry), epoch (never read before it), the heads at the last two sync
+ * division lines, flags.
+ */
+export const SCOPE_HDR = {
+  ownerTrack: 0, ownerModule: 1, head: 2, decim: 3, epoch: 4, gridPrev: 5, gridLast: 6, flags: 7,
+} as const;
+/** SCOPE_HDR.flags bits: B connected, grid marks valid, the sync param on. */
+export const SCOPE_FLAG = { b: 1, grid: 2, sync: 4 } as const;
+
+/**
+ * The engine's scope bank in wasm memory (`engine_scopes`: VIS_SCOPES ×
+ * VIS_SCOPE_RING × 4 f32; `engine_scope_hdr`: VIS_SCOPES × VIS_SCOPE_HDR
+ * i32), the worklet's source for want bit 8.
+ */
+export interface EngineScopes {
+  rings: Float32Array;
+  hdr: Int32Array;
+}
 
 /** Header slots (Int32Array indices). */
 export const VIS_HDR = { want: 0, masterHead: 1, tapHead: 2, tapCh: 3, scopes: 8 } as const;
@@ -69,7 +94,7 @@ export interface VisViews {
   tapL: Float32Array;
   tapR: Float32Array;
   voices: Float32Array;
-  /** VIS_SCOPES rings of VIS_SCOPE_RING entries × 4 f32 (Task 2). */
+  /** VIS_SCOPES rings of VIS_SCOPE_RING entries × 4 f32 (slot s at s × RING × 4). */
   scopes: Float32Array;
 }
 

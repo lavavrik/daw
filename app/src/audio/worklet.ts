@@ -25,9 +25,10 @@
 import { CommandRing } from './ring';
 import { applyMeters, meterFall } from './meterBallistics';
 import { copyVis } from './visCopy';
-import { ENGINE_VIS, visViews, type VisViews } from './visLayout';
+import { ENGINE_VIS, visViews, type EngineScopes, type VisViews } from './visLayout';
 import {
   Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, Op, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN,
+  VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES,
 } from './protocol';
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
@@ -71,6 +72,10 @@ interface EngineExports {
   engine_meters(e: number): number;
   /** The visual block (ENGINE_VIS f32: strip tap, tapped channel, voice activity). */
   engine_vis(e: number): number;
+  /** The scope bank's rings (VIS_SCOPES × VIS_SCOPE_RING × 4 f32). */
+  engine_scopes(e: number): number;
+  /** The scope headers (VIS_SCOPES × VIS_SCOPE_HDR i32). */
+  engine_scope_hdr(e: number): number;
 }
 
 /** Floats in the meters array: peak L, peak R, gain reduction (dB) per mixer channel. */
@@ -117,6 +122,8 @@ class DawEngineProcessor extends AudioWorkletProcessor {
   /** visSab (shared) and the engine's visual block (wasm memory). */
   private readonly vis: VisViews;
   private engVis = new Float32Array(ENGINE_VIS.len);
+  /** The engine's scope bank (wasm memory), the source of want bit 8. */
+  private readonly engScopes: EngineScopes = { rings: new Float32Array(0), hdr: new Int32Array(0) };
   /** Sample rate and the meters' per-block fall factor for 128-frame blocks. */
   private readonly sr: number;
   private readonly meterFall128: number;
@@ -205,6 +212,8 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.engTele = new Float64Array(b, ex.engine_telemetry(this.h) >>> 0, TELEMETRY_LEN);
     this.engMeters = new Float32Array(b, ex.engine_meters(this.h) >>> 0, METER_LEN);
     this.engVis = new Float32Array(b, ex.engine_vis(this.h) >>> 0, ENGINE_VIS.len);
+    this.engScopes.rings = new Float32Array(b, ex.engine_scopes(this.h) >>> 0, VIS_SCOPES * VIS_SCOPE_RING * 4);
+    this.engScopes.hdr = new Int32Array(b, ex.engine_scope_hdr(this.h) >>> 0, VIS_SCOPES * VIS_SCOPE_HDR);
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
@@ -257,7 +266,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       applyMeters(this.meters, this.engMeters, fall);
       // 4b. Visuals (visCopy.ts): only what the UI's want mask asks for;
       // with nothing on screen this is one Atomics.load.
-      copyVis(this.vis, srcL, srcR, this.engVis, n, fall);
+      copyVis(this.vis, srcL, srcR, this.engVis, n, fall, this.engScopes);
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

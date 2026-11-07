@@ -10,6 +10,10 @@
   // whole panel accepts a sample dropped on it (Finder file or library
   // sample; Rack.svelte imports it and assigns it).
   //
+  // Scope (plan 12): its screen (ScopeView.svelte) sits above the knobs;
+  // Rack passes `scope` = the track's engine slot (with the module idx it
+  // finds its scope-bank slot) and the sample rate.
+  //
   // Knobs follow their automation lanes (`owner` = the track: Knob.svelte
   // registers module idx + param name with the app's autoBus) and offer
   // "Automate" on right-click when the param is continuous.
@@ -20,9 +24,10 @@
   import { categoryColor } from './cables';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
+  import ScopeView from './ScopeView.svelte';
 
   let {
-    module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen,
+    module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
   }: {
     module: RackModule;
     def: ModuleDef;
@@ -46,6 +51,8 @@
     onsampledrop?: (e: DragEvent) => void;
     /** Sample Player only: the dropdown is about to open (refresh `samples`). */
     onsamplesopen?: () => void;
+    /** Scope only: the track's engine slot and the sample rate (its screen). */
+    scope?: { track: number; sampleRate: number } | null;
   } = $props();
 
   /** The `sample` param, shown as a dropdown (Sample Player). */
@@ -110,6 +117,9 @@
         {/each}
       </select>
     </label>
+  {/if}
+  {#if scope}
+    <ScopeView track={scope.track} idx={module.idx} params={module.params} sampleRate={scope.sampleRate} {tempo} />
   {/if}
   {#if def.params.length}
     <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>

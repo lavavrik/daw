@@ -344,3 +344,75 @@ fn formant_and_adsr_do_not_allocate() {
     assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
 }
+
+#[test]
+fn scope_does_not_allocate() {
+    // Plan 12: LFO 0 -> Osc 1 (fm) -> Out 2, a Scope 3 on both. Scope
+    // params: time 0, sync 1, division 2, gain_a 3, gain_b 4, mode 5, trig 6.
+    let mut r = Rack::new(48000.0);
+    r.set_track(4);
+    let mut fx = FxPool::new(48000.0);
+    let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+    let tpf = 124.0 * 960.0 / 60.0 / 48000.0;
+    let mut ctx = Ctx { sr: 48000.0, bpm: 124.0, playing: true, ticks: 0.0, ticks_per_frame: tpf };
+    let mut render = |r: &mut Rack, fx: &mut FxPool, blocks: usize, ctx: &mut Ctx| {
+        for _ in 0..blocks {
+            r.render_add(ctx, fx, SampleView::NONE, &mut l, &mut rr);
+            ctx.ticks += 128.0 * ctx.ticks_per_frame;
+        }
+    };
+
+    ARMED.with(|a| a.set(true));
+    COUNT.with(|c| c.set(0));
+
+    assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut fx), OK);
+    assert_eq!(r.add_module(1, ModuleKind::Osc, &mut fx), OK);
+    assert_eq!(r.add_module(2, ModuleKind::Out, &mut fx), OK);
+    assert_eq!(r.connect((0, 0), (1, 1)), OK);
+    assert_eq!(r.connect((1, 0), (2, 0)), OK);
+    render(&mut r, &mut fx, 20, &mut ctx);
+    assert!(r.is_sounding());
+    // Add and cable it while sounding.
+    assert_eq!(r.add_module(3, ModuleKind::Scope, &mut fx), OK);
+    assert_eq!(r.connect((1, 0), (3, 0)), OK);
+    assert_eq!(r.connect((0, 0), (3, 1)), OK);
+    render(&mut r, &mut fx, 10, &mut ctx);
+    // Timebase and sync changes (decim and epoch move; grid tracking).
+    for (blk, t) in [0.1f32, 1.0, 5.0, 33.0, 100.0].into_iter().enumerate() {
+        assert_eq!(r.set_param(3, 0, t), OK);
+        assert_eq!(r.set_param(3, 3, 0.5 + blk as f32), OK);
+        render(&mut r, &mut fx, 3, &mut ctx);
+    }
+    assert_eq!(r.set_param(3, 1, 1.0), OK); // Sync
+    for d in 0..8 {
+        assert_eq!(r.set_param(3, 2, d as f32), OK);
+        render(&mut r, &mut fx, 40, &mut ctx);
+    }
+    assert_eq!(r.set_param(3, 5, 1.0), OK);
+    assert_eq!(r.set_param(3, 6, 1.0), OK);
+    // Transport stop, then a seek (ticks jump) while playing.
+    ctx.playing = false;
+    ctx.ticks_per_frame = 0.0;
+    render(&mut r, &mut fx, 10, &mut ctx);
+    ctx.playing = true;
+    ctx.ticks_per_frame = tpf;
+    ctx.ticks = 3840.0 * 7.0 + 17.0;
+    render(&mut r, &mut fx, 10, &mut ctx);
+    ctx.ticks = -1920.0; // count-in
+    render(&mut r, &mut fx, 400, &mut ctx);
+    // Disconnect B, then remove it while sounding; a new one reuses the slot.
+    assert_eq!(r.disconnect((3, 1)), OK);
+    render(&mut r, &mut fx, 5, &mut ctx);
+    assert_eq!(r.remove_module(3), OK);
+    render(&mut r, &mut fx, 5, &mut ctx);
+    assert_eq!(r.add_module(5, ModuleKind::Scope, &mut fx), OK);
+    assert_eq!(r.connect((1, 0), (5, 0)), OK);
+    render(&mut r, &mut fx, 5, &mut ctx);
+    assert_eq!(fx.in_use(FxKind::Scope), 1);
+    r.clear();
+    render(&mut r, &mut fx, 10, &mut ctx);
+
+    ARMED.with(|a| a.set(false));
+    assert_eq!(COUNT.with(|c| c.get()), 0, "scope allocated");
+    assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
+}

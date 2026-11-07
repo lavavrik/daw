@@ -1,6 +1,6 @@
 // Every user edit: mutate Project AND send the matching engine command.
 import { BAR_TICKS, Op } from '../audio/protocol';
-import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern } from './project.svelte';
+import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, newChannel } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
 
@@ -57,6 +57,8 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackNa
     clips: [],
   });
   const track = p.tracks[p.tracks.length - 1] as DrumTrack; // reactive proxy
+  // The engine resets the mixer slot on ADD; mirror it with default state.
+  p.mixer.channels[track.id] = newChannel();
   sink.send(Op.ADD_DRUM_TRACK, slot);
   selectTrack(p, sink, track.id);
   return track;
@@ -189,6 +191,10 @@ export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
   const before = liveInputTrack(p);
   const slot = p.tracks[i].slot;
   p.tracks.splice(i, 1);
+  // Mirror the engine: the strip goes away and every key that pointed at the
+  // track falls back to none (state only; the engine already does the same).
+  delete p.mixer.channels[trackId];
+  for (const ch of Object.values(p.mixer.channels)) if (ch.key?.trackId === trackId) ch.key = null;
   sink.send(Op.REMOVE_TRACK, slot);
   if (p.selectedTrackId === trackId) {
     p.selectedTrackId = (p.tracks[i] ?? p.tracks[i - 1] ?? null)?.id ?? null;

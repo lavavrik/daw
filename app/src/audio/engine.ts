@@ -13,7 +13,7 @@
 import workletUrl from './worklet.ts?worker&url';
 import { CommandRing, createRingBuffer } from './ring';
 import { CommandSender } from './sendQueue';
-import { Err, HostErr, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import { Err, HostErr, MIX_CHANNELS, MIX_METER_STRIDE, TELEMETRY, TELEMETRY_LEN } from './protocol';
 import type { ProcessorOptions } from './worklet';
 
 type WorkletMessage =
@@ -44,6 +44,7 @@ export class AudioEngine {
   private readonly ring: CommandRing;
   private readonly sender: CommandSender;
   private readonly tele: Float64Array;
+  private readonly meterView: Float32Array;
   /** FIFO of loadSample resolvers per sample id (the worklet replies in order). */
   private readonly waiting = new Map<number, ((code: number) => void)[]>();
   private readonly ready: Promise<void>;
@@ -55,6 +56,7 @@ export class AudioEngine {
     private readonly node: AudioWorkletNode,
     ringSab: SharedArrayBuffer,
     telemetrySab: SharedArrayBuffer,
+    metersSab: SharedArrayBuffer,
   ) {
     this.sampleRate = ctx.sampleRate;
     this.ring = new CommandRing(ringSab);
@@ -69,6 +71,7 @@ export class AudioEngine {
       },
     });
     this.tele = new Float64Array(telemetrySab, 0, TELEMETRY_LEN);
+    this.meterView = new Float32Array(metersSab, 0, MIX_CHANNELS * MIX_METER_STRIDE);
     this.ready = new Promise((resolve, reject) => {
       // Before 'ready' a failure rejects start(); after it, it's reported via onError.
       const failed = (message: string) =>
@@ -128,10 +131,12 @@ export class AudioEngine {
       ]);
       const ringSab = createRingBuffer();
       const telemetrySab = new SharedArrayBuffer(TELEMETRY_LEN * 8);
+      const metersSab = new SharedArrayBuffer(MIX_CHANNELS * MIX_METER_STRIDE * 4);
       const processorOptions: ProcessorOptions = {
         wasmBytes,
         ringSab,
         telemetrySab,
+        metersSab,
         sampleRate: ctx.sampleRate,
       };
       const node = new AudioWorkletNode(ctx, 'daw-engine', {
@@ -140,7 +145,7 @@ export class AudioEngine {
         outputChannelCount: [2],
         processorOptions,
       });
-      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab);
+      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab);
       await engine.ready;
       node.connect(ctx.destination);
       await resumed;
@@ -203,6 +208,14 @@ export class AudioEngine {
   /** Live view of the telemetry slots (see TELEMETRY); updated every block. */
   telemetry(): Float64Array {
     return this.tele;
+  }
+
+  /**
+   * Live view of the mixer meters, updated every block: per channel
+   * (MIX_METER_STRIDE floats) peak L, peak R (linear), gain reduction (dB).
+   */
+  meters(): Float32Array {
+    return this.meterView;
   }
 
   /** Output underruns if the browser reports them, else worklet overrun count. */

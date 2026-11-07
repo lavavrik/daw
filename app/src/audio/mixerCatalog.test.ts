@@ -1,0 +1,31 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { MIXER_CATALOG, MIX_PARAMS, clampMix, defaultMixParams, mixParam } from './mixerCatalog';
+
+describe('mixer catalog', () => {
+  it('loads the golden verbatim', () => {
+    const golden = JSON.parse(readFileSync(new URL('../../../engine/mixer_catalog.json', import.meta.url), 'utf8'));
+    expect(MIXER_CATALOG).toEqual(golden);
+  });
+  it('param ids are unique and equal their index', () => {
+    expect(new Set(MIX_PARAMS.map((p) => p.id)).size).toBe(MIX_PARAMS.length);
+    MIX_PARAMS.forEach((p, i) => expect(p.id).toBe(i));
+    expect(new Set(MIX_PARAMS.map((p) => p.name)).size).toBe(MIX_PARAMS.length);
+  });
+  it('defaults are inside their ranges', () => {
+    for (const p of MIX_PARAMS) {
+      expect(p.default).toBeGreaterThanOrEqual(p.min);
+      expect(p.default).toBeLessThanOrEqual(p.max);
+    }
+    expect(defaultMixParams()).toHaveLength(MIX_PARAMS.length);
+  });
+  it('clampMix', () => {
+    expect(clampMix(mixParam('fader'), -Infinity)).toBe(-60);
+    expect(clampMix(mixParam('fader'), 20)).toBe(6);
+    expect(clampMix(mixParam('fader'), NaN)).toBe(0);
+    expect(clampMix(mixParam('mute'), 0.4)).toBe(0);
+  });
+  it('mixParam throws on unknown', () => {
+    expect(() => mixParam('nope')).toThrow();
+  });
+});

@@ -1,6 +1,7 @@
 // Reactive project state (Svelte 5 runes). Mutate only through actions.ts so
 // every UI edit is mirrored to the audio engine.
 import { BAR_TICKS, STEP_TICKS } from '../audio/protocol';
+import { defaultMixParams } from '../audio/mixerCatalog';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -132,6 +133,33 @@ export interface SynthTrack {
 
 export type Track = DrumTrack | SynthTrack;
 
+/** A sidechain source: a whole track (row null) or one drum row of a drum track. */
+export interface SidechainKey {
+  trackId: string;
+  row: number | null;
+}
+
+/** One mixer strip (track, return or master). */
+export interface ChannelState {
+  /** All mixer params in catalog order (index = param id), defaults filled in. */
+  params: number[];
+  /** Compressor sidechain source; null = the channel's own signal. Tracks only. */
+  key: SidechainKey | null;
+}
+
+export interface MixerState {
+  /** Keyed by track id; created with the track, deleted with it. */
+  channels: Record<string, ChannelState>;
+  reverb: ChannelState;
+  delay: ChannelState;
+  master: ChannelState;
+}
+
+export const newChannel = (): ChannelState => ({ params: defaultMixParams(), key: null });
+export const newMixer = (): MixerState => ({
+  channels: {}, reverb: newChannel(), delay: newChannel(), master: newChannel(),
+});
+
 export class Project {
   tempo = $state(124);
   metronome = $state(false);
@@ -141,6 +169,8 @@ export class Project {
   /** Most recently selected synth track; keeps receiving keys while a drum track is selected. */
   lastSynthTrackId = $state<string | null>(null);
   nextSampleId = $state(0);
+  /** Mixer strips, returns and master; edit only through mixer-actions.ts. */
+  mixer = $state<MixerState>(newMixer());
   /** 'pattern': each track loops its current pattern; 'song': clips play on the timeline. */
   mode = $state<'pattern' | 'song'>('pattern');
   /** Song-mode loop range in ticks (sent to the engine only while `on`). */

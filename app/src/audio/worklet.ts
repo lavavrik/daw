@@ -13,7 +13,7 @@
 //     Every 'sample' request still gets exactly one reply, with its original id.
 
 import { CommandRing } from './ring';
-import { Err, HostErr, MAX_BLOCK, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import { Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
 declare const sampleRate: number;
@@ -32,6 +32,8 @@ export interface ProcessorOptions {
   wasmBytes: ArrayBuffer;
   ringSab: SharedArrayBuffer;
   telemetrySab: SharedArrayBuffer;
+  /** MIX_CHANNELS * MIX_METER_STRIDE floats, overwritten every block. */
+  metersSab: SharedArrayBuffer;
   sampleRate: number;
 }
 
@@ -48,7 +50,12 @@ interface EngineExports {
   engine_telemetry(e: number): number;
   /** Output latency in frames (the master limiter's lookahead). */
   engine_latency(e: number): number;
+  /** MIX_CHANNELS * MIX_METER_STRIDE f32: peak L, peak R, gain reduction dB per channel. */
+  engine_meters(e: number): number;
 }
+
+/** Floats in the meters array: peak L, peak R, gain reduction (dB) per mixer channel. */
+const METER_LEN = MIX_CHANNELS * MIX_METER_STRIDE;
 
 /** Fixed capacity of the deferred-sample queue (oldest dropped when full). */
 const PENDING_CAP = 32;
@@ -85,6 +92,9 @@ class DawEngineProcessor extends AudioWorkletProcessor {
   private outL = new Float32Array(0);
   private outR = new Float32Array(0);
   private engTele = new Float64Array(0);
+  /** UI-visible meters (shared) and the engine's own meters (wasm memory). */
+  private meters: Float32Array;
+  private engMeters = new Float32Array(0);
 
   // CPU / overrun accounting (milliseconds).
   private readonly budgetMs: number;
@@ -108,6 +118,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     const o = options.processorOptions;
     this.ring = new CommandRing(o.ringSab);
     this.tele = new Float64Array(o.telemetrySab, 0, TELEMETRY_LEN);
+    this.meters = new Float32Array(o.metersSab, 0, METER_LEN);
     const sr = o.sampleRate || sampleRate;
     this.budgetMs = (128 / sr) * 1000;
     this.port.onmessage = (ev) => this.onMessage(ev.data);
@@ -135,6 +146,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     if (this.ex === null) return;
     this.ex = null;
     console.error('daw-engine: engine failed', e);
+    this.meters.fill(0);
     this.tele[TELEMETRY.playing] = 0;
     this.tele[TELEMETRY.peakL] = 0;
     this.tele[TELEMETRY.peakR] = 0;
@@ -157,6 +169,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.outL = new Float32Array(b, ex.engine_out_left(this.h) >>> 0, MAX_BLOCK);
     this.outR = new Float32Array(b, ex.engine_out_right(this.h) >>> 0, MAX_BLOCK);
     this.engTele = new Float64Array(b, ex.engine_telemetry(this.h) >>> 0, TELEMETRY_LEN);
+    this.engMeters = new Float32Array(b, ex.engine_meters(this.h) >>> 0, METER_LEN);
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
@@ -193,6 +206,10 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       // start of the next block plus the engine's own latency (the limiter
       // lookahead delays everything by `latency` frames).
       tele[TELEMETRY.frame] = currentFrame + n + this.latency;
+      // Meters: plain copy, no allocation (views are rebuilt only on memory growth).
+      const em = this.engMeters;
+      const m = this.meters;
+      for (let k = 0; k < METER_LEN; k++) m[k] = em[k];
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

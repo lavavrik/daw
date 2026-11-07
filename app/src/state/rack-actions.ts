@@ -2,7 +2,7 @@
 // AND sends the matching engine command(s), so UI and engine never diverge.
 import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
-import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, synthTrack } from './project.svelte';
+import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, newChannel, synthTrack } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
@@ -38,6 +38,7 @@ export function addSynthTrack(
     clips: [],
   });
   const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
+  p.mixer.channels[track.id] = newChannel(); // the engine resets the mixer slot on ADD
   sink.send(Op.ADD_SYNTH_TRACK, slot);
   sink.send(Op.SET_PATTERN_BARS, slot, DEFAULT_PATTERN_BARS);
   loadPatch(p, sink, track.id, patch);

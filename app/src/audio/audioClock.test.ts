@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { heardContextTime, heardTicksFallback, mod, ticksAtContextTime } from './audioClock';
+import { heardContextTime, heardContextTimeFallback, mod, ticksAtContextTime } from './audioClock';
 
 const SR = 48000;
 
@@ -27,8 +27,8 @@ describe('audioClock', () => {
 
   it('fallback without getOutputTimestamp', () => {
     // currentTime 5 s, base 0.01 + output 0.25 latency -> heard 4.74 s.
-    expect(heardTicksFallback(5, 0.01, 0.25)).toBeCloseTo(4.74, 9);
-    expect(heardTicksFallback(5, 0.01, 0)).toBeCloseTo(4.99, 9);
+    expect(heardContextTimeFallback(5, 0.01, 0.25)).toBeCloseTo(4.74, 9);
+    expect(heardContextTimeFallback(5, 0.01, 0)).toBeCloseTo(4.99, 9);
   });
 
   it('mod is non-negative', () => {

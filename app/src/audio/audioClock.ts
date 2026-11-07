@@ -38,7 +38,7 @@ export function heardContextTime(
 }
 
 /** Heard context time when getOutputTimestamp is unusable: now minus reported latency. */
-export function heardTicksFallback(
+export function heardContextTimeFallback(
   currentTime: number,
   baseLatency: number,
   outputLatency: number,
@@ -74,7 +74,7 @@ export function createAudioClock(src: ClockSource, getBpm: () => number): AudioC
       // Unavailable (early / headless): approximate from currentTime. The
       // fallback has no mapping for past events, so perfMs is taken as "now".
       const f = src.fallbackTimes();
-      c = heardTicksFallback(f.currentTime, f.baseLatency, f.outputLatency) - offsetMs / 1000;
+      c = heardContextTimeFallback(f.currentTime, f.baseLatency, f.outputLatency) - offsetMs / 1000;
       c -= (performance.now() - perfMs) / 1000;
     }
     const t = src.telemetry();

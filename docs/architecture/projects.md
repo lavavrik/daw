@@ -234,3 +234,60 @@ written once it is answered). A New / Open while it is open answers it
   (`savedFingerprint = NEVER_SAVED`, which no fingerprint matches).
 - **Start fresh** → `discardAutosave`: the marker is removed first, then
   `autosave/` and `autosave.tmp/`.
+
+## Library (`app/src/library/`)
+
+The Browser pane (`ui/Browser.svelte`) shows one **library** in every
+project: a folder the user picks once, or the bundled starter kit.
+
+```
+My Sounds/                any layout; every audio file below is listed
+  drums/kick.wav          (wav aif aiff mp3 flac ogg m4a, the plan-1 list)
+  patches/Acid.json       saved rack patches (a Patch, by catalog name)
+```
+
+- **Handle + permission** (`handles.ts`): the `FileSystemDirectoryHandle`
+  is stored in IndexedDB `daw-library` / `library` / `current` as
+  `{ kind: 'folder', handle }` (or `{ kind: 'starter' }`). On start
+  `queryPermission({ mode: 'readwrite' })` — never a prompt — and, unless
+  it says `granted` (after a browser restart it usually says `prompt`), the
+  library is **lost** and the pane offers **Reconnect folder**, whose click
+  calls `requestPermission` (Chrome needs the gesture).
+- **State** (`library.svelte.ts`): `none` / `loading` / `ready` / `lost`.
+  Every access failure — scan, preview, drag, patch save; `NotAllowedError`,
+  `NotFoundError`, `SecurityError`, `InvalidStateError` — becomes **one**
+  switch to `lost` with one message in the pane, and the read throws
+  `LibraryLostError`, which callers never report again (plan 6 review focus
+  4: no error spam). A read that fails while the root is still listable
+  (one file renamed or deleted) is not `lost`: it rescans and reports that
+  file once. The pane rescans when the tab becomes visible again, which is
+  also when a revoked permission or a deleted folder shows.
+- **Scan** (`scan.ts`): names and `/`-paths only (no handles kept); hidden
+  entries skipped; folders without audio pruned; `patches/*.json` (not
+  nested) listed under Patches; capped at 5000 entries / depth 8.
+- **Starter kit** (`starter.ts`): `samples/starter/*` through Vite
+  (`import.meta.glob(…, { query: '?url' })`: `/@fs/` in dev, emitted assets
+  in a build), read with `fetch`. Read-only: Save patch is disabled ("Choose
+  a library folder to save patches").
+- **Preview** (`preview.ts`): an `AudioBufferSourceNode` to the context's
+  destination, never through the engine; one at a time; a decode that was
+  superseded never starts; decoded buffers cached (16, LRU), cleared on
+  rescan.
+- **Into the project** (`drag.ts`, `state/sampleImport.ts`): a library
+  sample is dragged with the private type `application/x-daw-library-sample`
+  (its path). Rows, "+ Add row" and Sample Player panels read it with
+  `droppedFiles` and import it exactly like a Finder file: decoded, loaded
+  into the next sample id, its **original bytes** kept in `p.sampleFiles`
+  (so Save copies the file into the project's `samples/`: projects stay
+  self-contained). Dropped while playing (`DEFERRED`): attached when the load
+  settles (`deferSampleLoad` for rows, `deferSampleAssign` for any target).
+- **Patches**: Save patch (Instrument tab) writes
+  `patches/<name>.json` (`patchFileName`: reserved characters → spaces, no
+  leading dot, ≤ 64 chars; starter names refused) with `trackPatch(t, () =>
+  -1)` — a Sample Player's `sample` is a session id, so a library patch keeps
+  none. An existing file is replaced only after an inline "Replace it?".
+  The patch dropdown lists library patches after the starters (value
+  `lib:<path>`; the file name is the patch name). Loading goes through
+  `loadPatch` → `validatePatch`: unknown modules, bad cables, out-of-range
+  params and pooled effects beyond the FX pool are dropped or clamped, and
+  what was dropped shows in the Rack's inline banner.

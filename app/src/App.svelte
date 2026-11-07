@@ -48,6 +48,9 @@
   import { createGestures, installGestures } from './history/gestures';
   import { cancelOpenConfirms } from './ui/inlineConfirms';
   import { serialize } from './project/serialize';
+  import { createAutoBus, provideAutoBus } from './ui/autoBus';
+  import AutoMenu from './ui/AutoMenu.svelte';
+  import { laneView } from './ui/song/laneView.svelte';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -268,6 +271,30 @@
     loadSample: (id, channels) => engine!.loadSample(id, channels),
     ensureRunning: () => engine!.ensureRunning(),
   };
+  // Knobs and faders follow automation (ui/autoBus.ts): one rAF loop while
+  // playing in Song mode with automatable controls on screen; otherwise a
+  // single evaluation whenever something they show may have changed (an
+  // edit or undo bumps project.version; Play / Stop, a seek, a mode switch,
+  // a load). It reads the CURRENT engine and clock (they change on an audio
+  // restart).
+  const autoBus = createAutoBus({
+    project,
+    sink: { send: (op, a, b, c, d) => engine?.send(op, a, b, c, d) ?? false },
+    heardTicks: () => clock?.heardTicks() ?? NaN,
+    engineTicks: () => engine?.telemetry()[TELEMETRY.ticks] ?? NaN,
+    onSuspended: (ids) => (laneView.suspended = ids),
+  });
+  provideAutoBus(autoBus);
+  $effect(() => {
+    void project.version;
+    void project.playing;
+    void project.mode;
+    void project.songPosition;
+    void project.loading;
+    void clock;
+    untrack(() => autoBus.refresh());
+  });
+
   /** Same for the clock: each engine gets a new one (its telemetry history is per engine). */
   const liveClock: AudioClock = {
     heardTicks: () => clock!.heardTicks(),
@@ -710,6 +737,7 @@
         <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} /></div>
       </div>
     </div>
+    <AutoMenu p={project} {engine} bus={autoBus} />
   {/if}
 </div>
 {#if !engine}

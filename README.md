@@ -274,6 +274,15 @@ and drops. Design notes:
 - **Song mode only.** Lanes play in SONG mode (playing, or stopped at the
   song position). In PAT mode you can still edit them (the header says
   "SONG only"), but the knobs keep their own values.
+- **Knobs and faders follow.** In SONG mode an automated knob's ring (a
+  fader's cap) moves with its lane; a small tick shows the knob's own value
+  and an **A** badge marks it. Grab it to take over: your move is heard at
+  once and holds until the lane's next point (the knob and its lane turn
+  grey meanwhile), and it changes the knob's own value (undoable). In PAT
+  mode a move is just a move.
+- **Automate.** Right-click a knob or fader for **Automate** (adds its lane)
+  or **Show automation**: the lane opens on the timeline (the Master row for
+  the master and the returns). Switches and choices don't offer it.
 - Removing a rack module or a track removes its lanes too; undo brings them
   back.
 

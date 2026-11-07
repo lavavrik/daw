@@ -334,3 +334,70 @@ changes nothing and sends nothing.
   target ("Filter · Cutoff", "Fader", "Master · Ceiling"; module titles as
   the rack shows them), the on/off dot, ×, and "+ Lane" on the owner's last
   lane row, listing `automatableParams` without a lane yet.
+
+## UI: knobs and faders (plan 10 Task 4)
+
+- **`ui/autoBus.ts`** works like the mixer's meterBus: ONE
+  requestAnimationFrame loop for every automatable control on screen.
+  - `Knob.svelte` (rack and mixer knobs) and `Fader.svelte` register their
+    target (owner + `AutoTarget`, the `auto` prop: `ModulePanel` passes the
+    track and module idx, `Strip` the channel) with a callback. App creates
+    the bus and hands it down by context (`provideAutoBus` /
+    `useAutoBus`).
+  - Each frame the bus reads the tick once (the **heard** tick from
+    `AudioClock` while playing; the parked `songPosition` while stopped, where
+    the engine applies the lanes too), evaluates `laneValueAt` for every
+    registered control whose target has a lane, and calls the callback only
+    when what it shows changed. The controls write the ring / pointer / cap
+    straight into the DOM (`paint()`): no reactive state per frame.
+  - The loop runs only while the transport plays in Song mode and a control
+    is registered (= mounted; a hidden tab gets no rAF). Otherwise App calls
+    `refresh()` when something shown may have changed: `project.version`
+    (every edit, undo), playing, mode, songPosition, loading, a new clock.
+  - Status per control: `none` (no lane), `on` (the lane applies: the value
+    shown is the lane's), `idle` (a lane that plays nothing: Pattern mode,
+    disabled, no points), `suspended` (overridden). Only `on` shows the
+    lane's value; the others show the control's own (base) value.
+- **Display.** A control with a lane draws its ring (or fader cap) at the
+  automated value, a small tick (fader: a notch beside the slot) at its base
+  value, and an **A** badge (grey unless the lane applies). A suspended
+  control's ring / cap is grey, and so is its timeline lane
+  (`laneView.suspended`, which the bus sets only when a suspension starts or
+  ends). The tooltip says "Automated — dragging overrides until the next
+  point". The readout and typed entry stay the **base**: what is saved and
+  what you edit. `data-auto` (status) and `data-auto-pos` / `data-auto-value`
+  mirror the state for tests.
+- **Manual move.** A drag, arrow key, typed value or double-click on an
+  automated control calls `bus.touch()` first, then the normal action
+  (`setMix` / `setParam`: it changes the base and is one undoable edit).
+  - In Song mode, with an enabled lane that has points, `touch` sends
+    `overrideLane` (AUTO_OVERRIDE, not an edit) and suspends the lane in the
+    UI too. Every send of a drag does this, so the hand keeps the param for
+    as long as it moves (each override re-counts "the next point" from where
+    the engine is).
+  - In Pattern mode (or a disabled / empty lane) it is just the normal
+    action.
+  - A drag grabs the control where its ring / cap is (the lane's value), so
+    the hand takes over from what is heard; a plain click sends nothing.
+  - The UI's suspension is the engine's rule (`Automation::suspend`),
+    recomputed from the same data: while playing, until the lane's next
+    breakpoint after the **engine's** tick at the override (telemetry
+    `ticks`, the tick the engine counts from), ended when the **heard** tick
+    reaches it (so the grey ends when the lane is heard again); while
+    stopped, until the next jump. Any jump ends it: Play, Stop, a seek, a
+    mode switch (a change of playing / mode / songPosition) or a loop wrap
+    (the heard tick going back more than 120 ticks).
+- **"Automate".** Right-click a continuous knob or fader: the in-app menu
+  (`ui/AutoMenu.svelte`, one for the app) offers **Automate** (no lane yet:
+  `addLane`, one undo entry) or **Show automation**. Either opens the
+  owner's lanes (the track's A; the Master row for the returns and the
+  master) and scrolls the lane into view (AutoLane's `data-lane`). Integer
+  and choice controls do not offer it (`bus.canAutomate` = `targetDef`).
+- **Not done:** knobs have no mouse-wheel gesture (they never had one), so
+  "a drag, wheel or typed value" is a drag, arrow keys, a typed value or a
+  double-click here.
+- Tests: `autoBus.test.ts` (`ring follows laneValueAt at the heard tick`,
+  `suspended until the next breakpoint`, `pattern mode shows the base`, the
+  loop's lifetime), e2e `knob ring follows a cutoff lane while playing`,
+  `manual move overrides until the next breakpoint`, `Automate on a fader
+  opens its lane` (tests/e2e/automation.spec.ts).

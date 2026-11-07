@@ -10,7 +10,9 @@
   //   toggles (tracks) · Pan · Limiter ceiling + GR (master) ·
   //   fader | dB scale | stereo meter · fader readout.
   // All edits go through mixer-actions.ts (state + engine command); knobs and
-  // the fader coalesce their sends to one per animation frame.
+  // the fader coalesce their sends to one per animation frame. Every
+  // continuous knob and the fader follow their automation lane (`auto`,
+  // plan 10 Task 4) and offer "Automate" on right-click.
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
@@ -49,6 +51,8 @@
   );
   const val = (n: string) => ch?.params[mixParam(n).id] ?? mixParam(n).default;
   const set = (n: string, v: number) => setMix(p, engine, target, n, v);
+  /** The lane target of mixer param `n` on this channel (Knob / Fader follow it: ui/autoBus.ts). */
+  const autoOf = (n: string) => ({ owner: target, target: { kind: 'mix' as const, param: n } });
 
   const group = (g: string): MixParamDef[] => MIX_PARAMS.filter((d) => d.group === g && d.appliesTo.includes(kind));
   const eqKnobs = $derived(group('eq').filter((d) => d.name !== 'eq_on'));
@@ -137,7 +141,7 @@
 
   <Section title="EQ" {name} testid="eq" on={val('eq_on') === 1} ontoggle={() => set('eq_on', val('eq_on') ? 0 : 1)}>
     {#each eqKnobs as d (d.id)}
-      <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} onchange={(v) => set(d.name, v)} />
+      <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
     {/each}
   </Section>
 
@@ -166,7 +170,7 @@
         </select>
       </label>
       {#each compKnobs as d (d.id)}
-        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} onchange={(v) => set(d.name, v)} />
+        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
       {/each}
     </Section>
   {/if}
@@ -175,7 +179,7 @@
     <Section title={target === 'reverb' ? 'Reverb' : 'Delay'} {name} testid="fx">
       {#each fxKnobs as d (d.id)}
         <!-- Synced delay times are clamped to 2 s by the engine: say so. -->
-        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} onchange={(v) => set(d.name, v)}
+        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)}
           note={d.name === 'delay_time' ? delayClampNote(val(d.name), p.tempo) : ''} />
       {/each}
     </Section>
@@ -186,7 +190,7 @@
       {#each [['send_a', 'send_a_pre'], ['send_b', 'send_b_pre']] as [s, pre] (s)}
         {@const isPre = val(pre) === 1}
         <div class="send">
-          <Knob def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} onchange={(v) => set(s, v)} />
+          <Knob def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
           <button type="button" class="pre" class:lit={isPre} aria-pressed={isPre} aria-label={`${name} ${mixParam(s).label} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}>{isPre ? 'pre' : 'post'}</button>
         </div>
       {/each}
@@ -195,11 +199,11 @@
 
   {#if kind !== 'master'}
     <div class="row">
-      <Knob def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" onchange={(v) => set('pan', v)} />
+      <Knob def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" auto={autoOf('pan')} onchange={(v) => set('pan', v)} />
     </div>
   {:else}
     <div class="row limiter" title="Master limiter: the output never exceeds the ceiling">
-      <Knob def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" onchange={(v) => set('limiter_ceiling', v)} />
+      <Knob def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" auto={autoOf('limiter_ceiling')} onchange={(v) => set('limiter_ceiling', v)} />
       <div class="grbox" title="Limiter gain reduction: how much the master is being turned down to stay under the ceiling">
         <span>Limiter GR</span>
         <span class="grv" bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span>
@@ -208,7 +212,7 @@
   {/if}
 
   <div class="fm">
-    <Fader value={fader} name={`${name} volume`} onchange={(v) => set('fader', v)} />
+    <Fader value={fader} name={`${name} volume`} auto={autoOf('fader')} onchange={(v) => set('fader', v)} />
     <div class="scale" aria-hidden="true">
       {#each SCALE_TICKS as db (db)}
         <span style:bottom="calc({faderPos(db) * 100}% - 5px)">{db === SCALE_TICKS[0] ? '−∞' : db > 0 ? `+${db}` : db < 0 ? `−${-db}` : '0'}</span>

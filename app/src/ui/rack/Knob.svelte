@@ -22,11 +22,31 @@
   // Click-safety: a drag sends `onchange` at most once per animation frame
   // (the latest value wins) plus the final value on pointerup, so dragging
   // never floods the engine's command ring. The engine smooths the rest.
-  import { onDestroy } from 'svelte';
+  //
+  // Automation (plan 10 Task 4; `auto` = this knob's lane target): the knob
+  // registers with the app's autoBus (ui/autoBus.ts). While its lane applies
+  // the ring and pointer show the LANE's value at the heard tick (written
+  // straight into the SVG by the bus's callback, no re-render per frame), a
+  // small tick marks the knob's own (base) value, and an "A" badge says it
+  // is automated (grey while the lane plays nothing: Pattern mode, disabled,
+  // no points, or suspended; a suspended knob's ring is grey too). The readout and
+  // the typed entry stay the base: what is saved and what you edit.
+  // A manual move (drag, keys, typed value, double-click) first calls
+  // bus.touch, which in Song mode overrides the lane until its next point
+  // (AUTO_OVERRIDE), then the normal onchange: it sets the base and is
+  // undoable. A drag starts from where the ring is. Right-click opens the
+  // "Automate" / "Show automation" menu (AutoMenu.svelte) on continuous
+  // params; integer ones don't offer it.
+  import { onDestroy, untrack } from 'svelte';
+  import type { MixChannelTarget } from '../../state/mixer-actions';
+  import type { AutoTarget } from '../../state/project.svelte';
+  import { openAutoMenu } from '../AutoMenu.svelte';
+  import { useAutoBus } from '../autoBus';
+  import type { AutoStatus } from '../autoBus';
   import { dragPos, formatValue, fromPos, keyStep, parseValue, toPos } from './knobMath';
   import type { KnobDef } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color = '#f0a23a', testid, note = '' }: {
+  let { def, value, onchange, moduleName = '', color = '#f0a23a', testid, note = '', auto = null }: {
     /** A rack ParamDef or a mixer MixParamDef. */
     def: KnobDef;
     value: number;
@@ -38,9 +58,63 @@
     testid?: string;
     /** Extra line under the label, e.g. the mixer delay's "(max 2 s)"; "" = none. */
     note?: string;
+    /** What an automation lane on this knob targets (null: not automatable here). */
+    auto?: { owner: MixChannelTarget; target: AutoTarget } | null;
   } = $props();
 
   const name = $derived(`${moduleName} ${def.label}`.trim());
+
+  // ---- automation ----------------------------------------------------------
+  const bus = useAutoBus();
+  /** The lane's state (changes rarely: reactive); its value changes per frame (not reactive). */
+  let autoStatus = $state<AutoStatus | null>(null);
+  let autoValue: number | null = null;
+  let valEl = $state<SVGCircleElement | null>(null);
+  let ptrEl = $state<SVGLineElement | null>(null);
+  const autoKey = $derived(auto && !def.choices.length ? JSON.stringify([auto.owner, auto.target]) : null);
+  $effect(() => {
+    if (!bus || !autoKey) return;
+    const [owner, target] = JSON.parse(autoKey) as [MixChannelTarget, AutoTarget];
+    // Untracked: the callback (it runs at once) reads and writes state this effect must not depend on.
+    const off = untrack(() => bus.register(owner, target, (v) => {
+      if (v.status !== autoStatus) autoStatus = v.status;
+      autoValue = v.value;
+      paint();
+    }));
+    return () => {
+      off();
+      autoValue = null;
+      untrack(() => (autoStatus = null));
+    };
+  });
+  /** Ring + pointer at the lane's value while it applies, else at the knob's own. */
+  function paint() {
+    const v = autoValue ?? (dragging ? local : value);
+    const pos = toPos(def, v);
+    const a = -135 + 270 * pos;
+    valEl?.setAttribute('stroke-dasharray', `${(a + 135).toFixed(1)} 360`);
+    ptrEl?.setAttribute('transform', `rotate(${a.toFixed(1)} 16 16)`);
+    if (knobEl && autoStatus) {
+      knobEl.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
+      knobEl.dataset.autoValue = autoValue === null ? '' : String(autoValue);
+    }
+  }
+  $effect(() => {
+    void shown;
+    void valEl;
+    paint();
+  });
+  const automated = $derived(autoStatus !== null && autoStatus !== 'none');
+  /** A manual move: override the lane first (Song mode), then the normal action. */
+  function change(v: number) {
+    if (bus && auto) bus.touch(auto.owner, auto.target);
+    onchange(v);
+  }
+  function context(e: MouseEvent) {
+    if (!bus || !auto || !bus.canAutomate(auto.owner, auto.target)) return;
+    e.preventDefault();
+    openAutoMenu({ x: e.clientX, y: e.clientY, owner: auto.owner, target: auto.target, label: name, from: knobEl });
+  }
 
   // ---- drag state ------------------------------------------------------
   let dragging = $state(false);
@@ -52,6 +126,7 @@
   let startValue = 0;
   let pending: number | null = null;
   let raf = 0;
+  let moved = false;
 
   const shown = $derived(dragging ? local : value);
   const angle = $derived(-135 + 270 * toPos(def, shown));
@@ -60,7 +135,7 @@
   function send(v: number) {
     if (v === lastSent) return;
     lastSent = v;
-    onchange(v);
+    change(v);
   }
   function flush() {
     if (raf) cancelAnimationFrame(raf);
@@ -78,11 +153,15 @@
     e.preventDefault(); // no text selection / native drag
     (e.currentTarget as HTMLElement).focus();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    // An automated knob is grabbed where its ring is (the lane's value), not
+    // where its base is: the hand takes over from what is heard.
+    const from = autoValue ?? value;
     dragging = true;
-    local = value;
+    moved = false;
+    local = from;
     lastSent = value;
     startValue = value;
-    pos = toPos(def, value);
+    pos = toPos(def, from);
     lastY = e.clientY;
   }
   function move(e: PointerEvent) {
@@ -92,13 +171,14 @@
     const v = fromPos(def, pos);
     if (v !== local) {
       local = v;
+      moved = true;
       schedule(v);
     }
   }
   function up() {
     if (!dragging) return;
     flush();
-    send(local); // final value, even if a frame was still pending
+    if (moved) send(local); // final value, even if a frame was still pending (a click sends nothing)
     dragging = false;
   }
   /** Abort the drag and restore the value it started from. */
@@ -131,7 +211,7 @@
       return false;
     }
     editing = false;
-    if (v !== value) onchange(v);
+    if (v !== value) change(v);
     return true;
   }
   function closeEntry() {
@@ -175,7 +255,7 @@
     else if (e.key === 'End') v = def.max;
     if (v === null) return;
     e.preventDefault(); // don't scroll the panel
-    if (v !== value) onchange(v);
+    if (v !== value) change(v);
   }
 
   // ---- choice params -----------------------------------------------------
@@ -234,8 +314,14 @@
     aria-valuemax={def.max}
     aria-valuenow={shown}
     aria-valuetext={note ? `${readout} ${note}` : readout}
-    title={`${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one`}
+    title={automated
+      ? `${name}: ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
+      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`}
     data-testid={testid}
+    data-auto={autoStatus ?? undefined}
+    class:auto-on={autoStatus === 'on'}
+    class:auto-off={automated && autoStatus !== 'on'}
+    class:auto-susp={autoStatus === 'suspended'}
     style:--c={color}
     bind:this={knobEl}
     onpointerdown={down}
@@ -243,16 +329,23 @@
     onpointerup={up}
     onpointercancel={cancel}
     onlostpointercapture={cancel}
-    ondblclick={() => { if (value !== def.default) onchange(def.default); }}
+    ondblclick={() => { if (value !== def.default) change(def.default); }}
     onkeydown={key}
+    oncontextmenu={context}
   >
     <svg class="dial" viewBox="0 0 32 32" aria-hidden="true">
-      <!-- track arc (270°) and value arc, then the cap with its pointer -->
+      <!-- track arc (270°) and value arc, then the cap with its pointer. The
+           value arc and the pointer are painted by paint() (the lane's value
+           while it applies); the base tick shows the knob's own value then. -->
       <circle class="track" cx="16" cy="16" r="13" pathLength="360" stroke-dasharray="270 360" transform="rotate(135 16 16)" />
-      <circle class="val" cx="16" cy="16" r="13" pathLength="360" stroke-dasharray={`${(angle + 135).toFixed(1)} 360`} transform="rotate(135 16 16)" />
+      <circle class="val" bind:this={valEl} cx="16" cy="16" r="13" pathLength="360" transform="rotate(135 16 16)" />
+      {#if automated}
+        <line class="base" data-testid="auto-base" x1="16" y1="1.5" x2="16" y2="5" transform={`rotate(${angle.toFixed(1)} 16 16)`} />
+      {/if}
       <circle class="cap" cx="16" cy="16" r="9.5" />
-      <line class="ptr" x1="16" y1="16" x2="16" y2="8" transform={`rotate(${angle.toFixed(1)} 16 16)`} />
+      <line class="ptr" bind:this={ptrEl} x1="16" y1="16" x2="16" y2="8" />
     </svg>
+    {#if automated}<span class="badge" data-testid="auto-badge" aria-hidden="true">A</span>{/if}
     <span class="label">{def.label}</span>
     {#if editing}
       <input
@@ -284,7 +377,7 @@
 {/if}
 
 <style>
-  .knob { display: flex; flex-direction: column; align-items: center; gap: 1px; width: 56px; padding: 2px 0; border-radius: 4px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; }
+  .knob { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; width: 56px; padding: 2px 0; border-radius: 4px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; }
   .knob:focus-visible { box-shadow: 0 0 0 1px #f0a23a; }
   .knob:hover .readout, .knob.dragging .readout, .knob:focus-visible .readout { color: #fff; background: #000; }
   .dial { width: 30px; height: 30px; }
@@ -293,6 +386,11 @@
   .val { stroke: var(--c); }
   .cap { fill: #34363e; stroke: #50535e; stroke-width: 1; }
   .ptr { stroke: #e8e9ee; stroke-width: 2; stroke-linecap: round; }
+  /* Automated: the base (own value) tick, the A badge; grey while the lane is idle / suspended. */
+  .base { stroke: #e8e9ee; stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
+  .badge { position: absolute; top: 1px; right: 4px; font: 700 8px/10px ui-sans-serif, system-ui, sans-serif; width: 10px; text-align: center; border-radius: 2px; background: var(--c); color: #111; pointer-events: none; }
+  .knob.auto-off .badge { background: #6b6e7a; }
+  .knob.auto-susp .val { stroke: #7d808c; }
   .label { font-size: 10px; color: #a3a6b3; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .note { font-size: 9px; color: #f0a43a; white-space: nowrap; }
   .readout { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7d9e0; background: #15161a; border-radius: 2px; padding: 0 3px; min-width: 40px; text-align: center; white-space: nowrap; }

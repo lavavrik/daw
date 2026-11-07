@@ -1,0 +1,122 @@
+<script module lang="ts">
+  // The in-app menu a right-click on a continuous knob or fader opens (plan 10
+  // Task 4): "Automate" (no lane on that target yet: creates it, one undo
+  // entry) or "Show automation". Either way it opens the owner's lanes on
+  // the timeline (the track's A; the Master row for the returns and the
+  // master) and scrolls the lane into view. Integer / choice controls never
+  // open it (autoBus.canAutomate). One menu for the whole app, rendered by
+  // App; the controls call openAutoMenu.
+  import type { MixChannelTarget } from '../state/mixer-actions';
+  import type { AutoTarget } from '../state/project.svelte';
+
+  export interface AutoMenuReq {
+    x: number;
+    y: number;
+    owner: MixChannelTarget;
+    target: AutoTarget;
+    /** The control's accessible name ("Drums volume"), the menu's title. */
+    label: string;
+    /** Focus goes back here when the menu closes. */
+    from: HTMLElement | null;
+  }
+  const menu = $state<{ req: AutoMenuReq | null }>({ req: null });
+
+  export function openAutoMenu(req: AutoMenuReq) {
+    menu.req = req;
+  }
+</script>
+
+<script lang="ts">
+  import { tick } from 'svelte';
+  import type { CommandSink } from '../state/actions';
+  import { isMasterChannel } from '../state/automation';
+  import { addLane } from '../state/automation-actions';
+  import { flashHint } from '../state/banners.svelte';
+  import type { Project } from '../state/project.svelte';
+  import type { AutoBus } from './autoBus';
+  import { laneView, setOpen } from './song/laneView.svelte';
+  import { MASTER_ROW } from './song/tlMath';
+
+  let { p, engine, bus }: { p: Project; engine: CommandSink; bus: AutoBus } = $props();
+
+  let el = $state<HTMLDivElement | null>(null);
+  const req = $derived(menu.req);
+  const exists = $derived(req ? bus.laneFor(req.owner, req.target) !== null : false);
+  /** Kept inside the window (the menu is about 170 x 60 px). */
+  const left = $derived(req ? Math.max(4, Math.min(req.x, window.innerWidth - 180)) : 0);
+  const top = $derived(req ? Math.max(4, Math.min(req.y, window.innerHeight - 70)) : 0);
+
+  function close(refocus = true) {
+    const from = menu.req?.from ?? null;
+    menu.req = null;
+    if (refocus) queueMicrotask(() => from?.focus());
+  }
+
+  async function act() {
+    const r = menu.req;
+    if (!r) return;
+    close();
+    const lane = bus.laneFor(r.owner, r.target) ?? addLane(p, engine, r.owner, r.target);
+    if (!lane) {
+      flashHint('No free automation lane: a project has at most 64');
+      return;
+    }
+    if (isMasterChannel(r.owner)) {
+      laneView.master = true;
+      setOpen(MASTER_ROW, true);
+    } else setOpen(r.owner, true);
+    bus.refresh();
+    await tick();
+    // AutoLane mirrors its engine lane (unique in the project) as data-lane.
+    document.querySelector(`[data-testid^="auto-lane-"][data-lane="${lane.lane}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+
+  // Focus the item on open; a press anywhere else closes the menu.
+  $effect(() => {
+    if (!req || !el) return;
+    el.querySelector<HTMLElement>('button')?.focus();
+    const away = (e: PointerEvent) => {
+      if (el && !el.contains(e.target as Node)) close(false);
+    };
+    window.addEventListener('pointerdown', away, true);
+    return () => window.removeEventListener('pointerdown', away, true);
+  });
+
+  function key(e: KeyboardEvent) {
+    e.stopPropagation(); // not the QWERTY piano / transport while the menu is open
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+    }
+  }
+</script>
+
+{#if req}
+  <div
+    class="menu"
+    bind:this={el}
+    data-testid="auto-ctl-menu"
+    role="menu"
+    tabindex="-1"
+    aria-label={`Automation of ${req.label}`}
+    style:left="{left}px"
+    style:top="{top}px"
+    onkeydown={key}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <div class="ttl">{req.label}</div>
+    <button
+      role="menuitem"
+      data-testid="auto-ctl-automate"
+      title={exists ? 'Open its automation lane on the timeline' : 'Add an automation lane for it on the timeline'}
+      onclick={() => void act()}
+    >{exists ? 'Show automation' : 'Automate'}</button>
+  </div>
+{/if}
+
+<style>
+  .menu { position: fixed; z-index: 60; min-width: 140px; padding: 4px; background: #24262c; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }
+  .ttl { font-size: 10px; color: #8d90a0; padding: 2px 6px 4px; white-space: nowrap; }
+  button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: 3px; background: transparent; color: #e4e5ea; cursor: pointer; }
+  button:hover, button:focus-visible { background: #343846; outline: none; }
+</style>

@@ -433,3 +433,142 @@ test('a loaded Master row stays when its last lane goes; the 64-lane cap is show
   await expect(page.getByTestId(`auto-add-${t.slot}`)).toBeDisabled();
   await expect(page.getByTestId('auto-full').first()).toHaveText('64 max');
 });
+
+// ---- Task 4: knobs and faders follow automation; manual override; "Automate" ----
+
+test('knob ring follows a cutoff lane while playing', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await setTempo(page, 240);
+  await page.getByTestId('add-synth-track').click();
+  const t = (await tracks(page)).at(-1)!;
+  const lane = await addLane(page, t.slot, 'Filter · Cutoff');
+  await clickLane(page, lane, 0, 0.1);
+  await clickLane(page, lane, BAR, 0.9);
+  await page.getByTestId(`track-${t.slot}`).click();
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  const knob = page.getByTestId('knob-4-cutoff');
+  // Pattern mode: the lane plays nothing, the knob shows its own value; the A badge says it has a lane.
+  await expect(knob).toHaveAttribute('data-auto', 'idle');
+  await expect(knob.getByTestId('auto-badge')).toBeVisible();
+  await expect(knob).toHaveAttribute('title', /Automated — dragging overrides until the next point/);
+  // Song mode, stopped at 0: the ring is at the first point.
+  await page.getByTestId('mode-song').click();
+  await page.evaluate(() => (window as Any).__daw.actions.seek(0));
+  await expect(knob).toHaveAttribute('data-auto', 'on');
+  await page.getByTestId('module-4').screenshot({ path: 'test-results/automation-knob.png' });
+  const pos0 = Number(await knob.getAttribute('data-auto-pos'));
+  expect(pos0).toBeGreaterThan(0.05);
+  expect(pos0).toBeLessThan(0.15);
+  // Play: the ring follows the line at the heard tick.
+  await page.getByTestId('play').click();
+  const samples: { t: number; pos: number }[] = await page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const out: { t: number; pos: number }[] = [];
+        const el = document.querySelector('[data-testid="knob-4-cutoff"]')!;
+        const t0 = performance.now();
+        const step = () => {
+          out.push({ t: (window as Any).__daw.clock.heardTicks(), pos: Number(el.getAttribute('data-auto-pos')) });
+          if (performance.now() - t0 < 1400) requestAnimationFrame(step);
+          else resolve(out);
+        };
+        requestAnimationFrame(step);
+      }),
+  );
+  await page.getByTestId('play').click();
+  const pos1 = samples.at(-1)!.pos; // after the last point: its value
+  expect(pos1).toBeGreaterThan(0.85);
+  expect(pos1).toBeLessThan(0.95);
+  const mid = samples.filter((s) => s.t > 200 && s.t < BAR - 200);
+  expect(mid.length).toBeGreaterThan(20);
+  let worst = 0;
+  for (const s of mid) worst = Math.max(worst, Math.abs(s.pos - (pos0 + ((pos1 - pos0) * s.t) / BAR)));
+  console.log(`cutoff ring: ${mid.length} frames, worst ${worst.toFixed(4)} off the line`);
+  expect(worst).toBeLessThan(0.03); // within a frame (16 ms = 1.6 % of the bar) of the heard tick
+});
+
+test('manual move overrides until the next breakpoint', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 4);
+  const lane = await addLane(page, slot, 'Fader');
+  // A quiet ride: −40 dB, −36 dB at bar 2, −40 dB at bar 3.
+  await clickLane(page, lane, 0, faderPos(-40));
+  await clickLane(page, lane, BAR, faderPos(-36));
+  await clickLane(page, lane, 2 * BAR, faderPos(-40));
+  await page.getByTestId('mixer-tab').click();
+  const strip = page.getByTestId(`strip-${slot}`);
+  const fader = strip.getByTestId('fader');
+  await expect(fader).toHaveAttribute('data-auto', 'idle');
+  await page.getByTestId('mode-song').click();
+  await page.evaluate(() => (window as Any).__daw.actions.seek(0));
+  await expect(fader).toHaveAttribute('data-auto', 'on');
+  await page.getByTestId('play').click();
+  await expect.poll(() => page.evaluate(() => (window as Any).__daw.engine.telemetry()[1])).toBe(1);
+  const rec = record(page, 2400);
+  await page.waitForTimeout(350);
+  // Mid-ride: drag the fader up (from where the lane has it) to +6 dB.
+  const b = (await fader.boundingBox())!;
+  const tDown: number = await page.evaluate(() => (window as Any).__daw.engine.telemetry()[2]);
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height - 12);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width / 2, b.y - 200, { steps: 4 });
+  await page.mouse.up();
+  const tUp: number = await page.evaluate(() => (window as Any).__daw.engine.telemetry()[2]);
+  expect(tUp).toBeLessThan(BAR - 1000);
+  await expect(fader).toHaveAttribute('data-auto', 'suspended');
+  await expect(strip.getByTestId('fader-readout')).toHaveText('+6.0 dB'); // the base changed
+  await strip.screenshot({ path: 'test-results/automation-fader-suspended.png' });
+  // The lane takes over again at its next point (bar 2).
+  await expect(fader).toHaveAttribute('data-auto', 'on', { timeout: 3000 });
+  const r = await rec;
+  await page.getByTestId('play').click();
+  const before = peakIn(r, 300, tDown);
+  const held = peakIn(r, tUp + 200, BAR - 40);
+  const after = peakIn(r, BAR + 100, 2 * BAR - 100);
+  console.log(`override: before ${before.toFixed(4)}, held ${held.toFixed(3)}, after the point ${after.toFixed(4)}`);
+  expect(before).toBeLessThan(0.03); // the lane's −40 dB
+  expect(held).toBeGreaterThan(0.3); // the hand's +6 dB, heard at once
+  expect(after).toBeLessThan(0.03); // back on the lane (−36 dB) from the point
+  // The move was an edit (the base): one undo puts the old base back. The lane is unchanged.
+  await page.keyboard.press(undoKey);
+  await expect(strip.getByTestId('fader-readout')).toHaveText('0.0 dB');
+  expect((await savedLanes(page, slot))[0].points).toHaveLength(3);
+});
+
+test('Automate on a fader opens its lane', async ({ page }) => {
+  await start(page);
+  const t = (await tracks(page))[0];
+  await page.getByTestId('mixer-tab').click();
+  await expect(page.getByTestId('tl-master-row')).toHaveCount(0);
+  // The master fader: right-click -> Automate. The Master row opens with the new lane, in view.
+  await page.getByTestId('strip-master').getByTestId('fader').click({ button: 'right' });
+  const menu = page.getByTestId('auto-ctl-menu');
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Automate');
+  await page.getByTestId('auto-ctl-automate').click();
+  await expect(menu).toBeHidden();
+  await expect(page.getByTestId('tl-master-row')).toBeVisible();
+  await expect(page.getByTestId('auto-lane-m-0')).toBeInViewport();
+  const [m] = await savedLanes(page, 'master');
+  expect(m).toMatchObject({ channel: 'master', target: { mix: 'fader' }, enabled: true, points: [] });
+  // Again: "Show automation", no second lane.
+  await page.getByTestId('strip-master').getByTestId('fader').click({ button: 'right' });
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Show automation');
+  await page.getByTestId('auto-ctl-automate').click();
+  expect(await savedLanes(page, 'master')).toHaveLength(1);
+  // A track's pan knob: the track's lanes open with it. Escape closes the menu without acting.
+  const pan = page.getByTestId(`strip-${t.slot}`).getByTestId('knob-pan');
+  await pan.click({ button: 'right' });
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  expect(await savedLanes(page, t.slot)).toEqual([]);
+  await pan.click({ button: 'right' });
+  await page.getByTestId('auto-ctl-automate').click();
+  await expect(page.getByTestId(`track-auto-${t.slot}`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId(`auto-lane-${t.slot}-0`)).toBeInViewport();
+  expect((await savedLanes(page, t.slot)).map((l) => l.target)).toEqual([{ mix: 'pan' }]);
+  await expect(pan).toHaveAttribute('data-auto', 'idle');
+});

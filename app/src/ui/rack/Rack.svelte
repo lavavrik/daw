@@ -703,6 +703,7 @@
         <ModulePanel
           module={m}
           def={moduleDef(m.kind)}
+          owner={track.id}
           title={titles.get(m.idx) ?? ''}
           isConnected={(port) => track.cables.some((c) => c.to.m === m.idx && c.to.port === port)}
           onparam={(i, v) => param(m.idx, i, v)}

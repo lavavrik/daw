@@ -9,6 +9,10 @@
   // dropdown of the project's loaded samples instead of a knob, and the
   // whole panel accepts a sample dropped on it (Finder file or library
   // sample; Rack.svelte imports it and assigns it).
+  //
+  // Knobs follow their automation lanes (`owner` = the track: Knob.svelte
+  // registers module idx + param name with the app's autoBus) and offer
+  // "Automate" on right-click when the param is continuous.
   import type { ModuleDef } from '../../audio/catalog';
   import { isSampleDrag } from '../../library/drag';
   import type { RackModule } from '../../state/project.svelte';
@@ -18,10 +22,12 @@
   import Knob from './Knob.svelte';
 
   let {
-    module, def, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen,
+    module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen,
   }: {
     module: RackModule;
     def: ModuleDef;
+    /** The synth track's id: its continuous knobs follow their automation lanes (ui/autoBus.ts). */
+    owner?: string | null;
     /** Display name, numbered when the rack has several of a kind ("Oscillator 2"). */
     title: string;
     isConnected: (inputPort: number) => boolean;
@@ -112,7 +118,8 @@
           note={noteFor(pd.name, module.params[i])} />
       {/each}
       {#each knobs as { pd, i } (pd.name)}
-        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`} />
+        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+          auto={owner ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null} />
       {/each}
     </div>
   {/if}

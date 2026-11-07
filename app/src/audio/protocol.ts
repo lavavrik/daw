@@ -77,6 +77,18 @@ export const Op = {
   SET_LOOP: 39,
   /** a=song ticks 0..MAX_SONG_TICKS (Song mode only; ignored in Pattern mode). */
   SEEK: 40,
+  // Mixer (engine/src/mixer). Channels: 0..31 track strips, MIX_REVERB,
+  // MIX_DELAY, MIX_MASTER. Params, ranges and which channels take them:
+  // engine/mixer_catalog.json.
+  /** a=channel 0..MIX_CHANNELS-1 b=param id c=value (catalog range; flags 0/1).
+   *  BAD_INDEX for an unknown param or one the channel does not take. */
+  MIX_SET: 41,
+  /** a=track channel 0..31 b=key: -1 none, slot*32 a track, slot*32+row+1 a
+   *  drum row (the source must exist; a track keyed by itself is none; at most
+   *  MAX_KEYS distinct rows, else BAD_VALUE). */
+  MIX_SET_KEY: 42,
+  /** a=channel: every param to its catalog default, key none. */
+  MIX_RESET: 43,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -122,6 +134,19 @@ export const MAX_PATTERNS = 16;
 export const MAX_CLIPS = 256;
 /** Song length limit in ticks, 999 bars (lib.rs MAX_SONG_TICKS). */
 export const MAX_SONG_TICKS = 999 * 3840;
+/** Distinct drum rows usable as sidechain keys at once (lib.rs MAX_KEYS). */
+export const MAX_KEYS = 8;
+/** Mixer channels (lib.rs MIX_*): 0..31 are the track strips. */
+export const MIX_REVERB = 32;
+export const MIX_DELAY = 33;
+export const MIX_MASTER = 34;
+export const MIX_CHANNELS = 35;
+/** Floats per channel in the meters array: peak L, peak R, gain reduction dB. */
+export const MIX_METER_STRIDE = 3;
+/** Sidechain key code (Op.MIX_SET_KEY b): none, a whole track, or a drum row. */
+export const keyCode = (key: { slot: number; row?: number } | null): number =>
+  key === null ? -1 : key.slot * 32 + (key.row === undefined ? 0 : key.row + 1);
+
 /** Ticks per bar, 4/4 at 960 PPQ (lib.rs BAR_TICKS); also the count-in length. */
 export const BAR_TICKS = 3840;
 /** Ticks per drum step, a 1/16 note (lib.rs STEP_TICKS). */

@@ -8,11 +8,13 @@
 //! own line in the form `pub const NAME: u32|i32 = N;`.
 
 use crate::arrangement::Clip;
+use crate::mixer::catalog;
+use crate::mixer::Key;
 use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
     BAR_TICKS, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
-    MAX_SONG_TICKS, MAX_TRACKS,
+    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS,
 };
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
@@ -67,6 +69,11 @@ pub const OP_CLIP_CLEAR: u32 = 37; // a=slot
 pub const OP_SET_MODE: u32 = 38; // a=0 pattern / 1 song
 pub const OP_SET_LOOP: u32 = 39; // a=start ticks b=end ticks (b <= a disables the loop)
 pub const OP_SEEK: u32 = 40; // a=song ticks (Song mode; ignored in Pattern mode)
+// Mixer (mixer/mod.rs). Channels: 0..31 tracks, 32 Reverb return, 33 Delay
+// return, 34 master. Params and their ranges: mixer/catalog.rs.
+pub const OP_MIX_SET: u32 = 41; // a=channel 0..34 b=param id c=value (catalog range; flags 0/1)
+pub const OP_MIX_SET_KEY: u32 = 42; // a=track channel 0..31 b=key: -1 none, slot*32 track, slot*32+row+1 drum row
+pub const OP_MIX_RESET: u32 = 43; // a=channel 0..34: every param to its default, key none
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -133,6 +140,14 @@ pub enum Command {
     SetLoop { start: u32, end: u32 },
     /// Move the song playhead (Song mode only).
     Seek { ticks: u32 },
+    /// Set mixer param `param` (a catalog id the channel accepts) to `value`
+    /// (in the catalog range; integral for integer params).
+    MixSet { channel: usize, param: u32, value: f32 },
+    /// Sidechain key of track channel `channel` (the engine checks that the
+    /// source exists and, for a row, is a drum track).
+    MixSetKey { channel: usize, key: Key },
+    /// Every param of `channel` to its default (and its key to none).
+    MixReset { channel: usize },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -272,6 +287,36 @@ fn clip(op: f64, start: f64, len: f64) -> Result<Clip, i32> {
     })
 }
 
+/// Sidechain key code: −1 is none, `slot * 32` is track `slot` and
+/// `slot * 32 + row + 1` is drum row `row` of track `slot` (row < MAX_ROWS).
+/// Anything else is `ERR_BAD_VALUE`.
+fn key_code(v: f64) -> Result<Key, i32> {
+    if v == -1.0 {
+        return Ok(Key::None);
+    }
+    let code = int_in(v, 0, (MAX_TRACKS * 32 - 1) as u32)? as usize;
+    match (code / 32, code % 32) {
+        (slot, 0) => Ok(Key::Track(slot)),
+        (slot, r) if r <= MAX_ROWS => Ok(Key::Row(slot, r - 1)),
+        _ => Err(ERR_BAD_VALUE),
+    }
+}
+
+/// `OP_MIX_SET`: the param must exist (`ERR_BAD_INDEX`) and apply to the
+/// channel (`ERR_BAD_INDEX`); the value must be valid for it (`ERR_BAD_VALUE`).
+fn mix_set(a: f64, b: f64, c: f64) -> Result<Command, i32> {
+    let channel = index(a, MIX_CHANNELS)?;
+    let id = index(b, catalog::MIX_PARAMS)? as u32;
+    let p = catalog::param(id).ok_or(ERR_BAD_INDEX)?;
+    if !p.accepts(channel) {
+        return Err(ERR_BAD_INDEX);
+    }
+    if !p.valid(c) {
+        return Err(ERR_BAD_VALUE);
+    }
+    Ok(Command::MixSet { channel, param: id, value: c as f32 })
+}
+
 /// Decode and range-check one record. Never panics.
 pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
     Ok(match op {
@@ -391,6 +436,9 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
             Command::SetLoop { start: int_in(a, 0, song)?, end: int_in(b, 0, song)? }
         }
         OP_SEEK => Command::Seek { ticks: int_in(a, 0, MAX_SONG_TICKS as u32)? },
+        OP_MIX_SET => mix_set(a, b, c)?,
+        OP_MIX_SET_KEY => Command::MixSetKey { channel: index(a, MAX_TRACKS)?, key: key_code(b)? },
+        OP_MIX_RESET => Command::MixReset { channel: index(a, MIX_CHANNELS)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -613,6 +661,37 @@ mod tests {
             assert_eq!(decode(OP_SET_LOOP, 0., bad, 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
             assert_eq!(decode(OP_SEEK, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
         }
+    }
+    #[test]
+    fn decode_mix_commands() {
+        use crate::mixer::catalog::*;
+        assert_eq!(decode(OP_MIX_SET, 3., P_FADER as f64, -6., 0.), Ok(Command::MixSet { channel: 3, param: P_FADER, value: -6.0 }));
+        assert_eq!(decode(OP_MIX_SET, 34., P_LIMITER_CEILING as f64, -6., 0.), Ok(Command::MixSet { channel: 34, param: 29, value: -6.0 }));
+        assert_eq!(decode(OP_MIX_SET, 32., P_REV_DECAY as f64, 20., 0.), Ok(Command::MixSet { channel: 32, param: 22, value: 20.0 }));
+        assert_eq!(decode(OP_MIX_SET, 33., P_DELAY_TIME as f64, 11., 0.), Ok(Command::MixSet { channel: 33, param: 25, value: 11.0 }));
+        // Channel, param id and channel kind are indices; values are values.
+        for (a, b) in [(35., 0.), (-1., 0.), (0.5, 0.), (f64::NAN, 0.), (0., 30.), (0., -1.), (0., 0.5), (0., f64::INFINITY)] {
+            assert_eq!(decode(OP_MIX_SET, a, b, 0., 0.), Err(ERR_BAD_INDEX), "{a} {b}");
+        }
+        for (a, b) in [(34., P_PAN), (34., P_COMP_ON), (32., P_SOLO), (32., P_DELAY_TIME), (33., P_REV_SIZE), (0., P_LIMITER_CEILING), (0., P_REV_SIZE)] {
+            assert_eq!(decode(OP_MIX_SET, a, b as f64, 0., 0.), Err(ERR_BAD_INDEX), "channel {a} param {b}");
+        }
+        for (b, c) in [(P_FADER, 6.5), (P_FADER, -61.), (P_FADER, f64::NAN), (P_MUTE, 0.5), (P_MUTE, 2.), (P_PAN, 1.01), (P_EQ_HP, 19.), (P_COMP_RATIO, 0.5), (P_DELAY_TIME, 12.), (P_DELAY_TIME, 1.5)] {
+            let ch = if b == P_DELAY_TIME { 33. } else { 0. };
+            assert_eq!(decode(OP_MIX_SET, ch, b as f64, c, 0.), Err(ERR_BAD_VALUE), "param {b} value {c}");
+        }
+        assert_eq!(decode(OP_MIX_SET_KEY, 5., -1., 0., 0.), Ok(Command::MixSetKey { channel: 5, key: Key::None }));
+        assert_eq!(decode(OP_MIX_SET_KEY, 5., 2. * 32., 0., 0.), Ok(Command::MixSetKey { channel: 5, key: Key::Track(2) }));
+        assert_eq!(decode(OP_MIX_SET_KEY, 5., 2. * 32. + 1., 0., 0.), Ok(Command::MixSetKey { channel: 5, key: Key::Row(2, 0) }));
+        assert_eq!(decode(OP_MIX_SET_KEY, 0., 31. * 32. + 16., 0., 0.), Ok(Command::MixSetKey { channel: 0, key: Key::Row(31, 15) }));
+        for bad in [-2., 2. * 32. + 17., 2. * 32. + 31., 32. * 32., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_MIX_SET_KEY, 5., bad, 0., 0.), Err(ERR_BAD_VALUE), "key {bad}");
+        }
+        for bad in [32., 34., -1., 0.5] {
+            assert_eq!(decode(OP_MIX_SET_KEY, bad, -1., 0., 0.), Err(ERR_BAD_INDEX), "channel {bad}");
+        }
+        assert_eq!(decode(OP_MIX_RESET, 34., 0., 0., 0.), Ok(Command::MixReset { channel: 34 }));
+        assert_eq!(decode(OP_MIX_RESET, 35., 0., 0., 0.), Err(ERR_BAD_INDEX));
     }
     #[test]
     fn decode_value_ranges() {

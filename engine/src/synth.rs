@@ -69,6 +69,7 @@
 //! also resets its pattern (empty, `DEFAULT_BARS` long).
 
 use crate::arrangement::{Clip, Timeline};
+use crate::mixer::StereoBufs;
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::rack::Rack;
 use crate::sequencer::{EventBuf, NotePattern, SeqNote, Voicing};
@@ -385,7 +386,9 @@ impl Synths {
     }
 
     /// Render every active track (and any removed track still fading out),
-    /// **adding** into `left`/`right`. `window` is the transport's
+    /// **adding** into frames `from..to` of its own buffer in `tracks`
+    /// (pair = slot). Returns a mask of the slots rendered (bit = slot).
+    /// `window` is the transport's
     /// `(t0, t1, samples_per_tick)` for this block (or block segment, split at
     /// a loop wrap) while playing, `None` while stopped; `timeline` says
     /// whether the current patterns or the clips play. `ctx.ticks` must equal
@@ -395,15 +398,18 @@ impl Synths {
         ctx: &Ctx,
         window: Option<(f64, f64, f64)>,
         timeline: Timeline,
-        left: &mut [f32],
-        right: &mut [f32],
-    ) {
-        let n = left.len().min(right.len());
+        tracks: &mut StereoBufs,
+        (from, to): (usize, usize),
+    ) -> u32 {
+        let n = to.saturating_sub(from);
         let events = &mut *self.events;
+        let mut rendered = 0u32;
         for (slot, (t, &active)) in self.tracks.iter_mut().zip(self.active.iter()).enumerate() {
             if !(active || t.rack.is_sounding()) {
                 continue;
             }
+            let Some((left, right)) = tracks.pair_mut(slot, from, to) else { continue };
+            rendered |= 1 << slot;
             events.clear();
             if let (true, Some((t0, t1, spt))) = (active, window) {
                 match timeline {
@@ -431,6 +437,7 @@ impl Synths {
                 render_segment(&mut t.rack, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
             }
         }
+        rendered
     }
 }
 

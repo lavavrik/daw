@@ -94,10 +94,24 @@ pub extern "C" fn engine_telemetry(e: *mut Host) -> *const f64 {
     }
 }
 
+/// `[MIX_CHANNELS × (peakL, peakR, gr_db)]` f32s, refreshed by every
+/// `engine_process` (track/return peaks post-fader, the master's the final
+/// output, gr = compressor / limiter gain reduction in dB). The pointer is
+/// stable for the instance lifetime.
+#[no_mangle]
+pub extern "C" fn engine_meters(e: *mut Host) -> *const f32 {
+    // SAFETY: see module contract.
+    match unsafe { e.as_ref() } {
+        Some(h) => h.engine.meters().as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::protocol::{OP_ADD_SYNTH_TRACK, OP_RACK_ADD_MODULE, OP_RACK_CONNECT};
+    use crate::{MIX_CHANNELS, MIX_MASTER, MIX_METER_STRIDE};
 
     #[test]
     fn ffi_roundtrip() {
@@ -110,9 +124,15 @@ mod tests {
         engine_process(e, 128);
         let left = unsafe { core::slice::from_raw_parts(engine_out_left(e), 128) };
         assert!(left.iter().any(|&s| s != 0.0));
+        let meters = engine_meters(e);
+        let m = unsafe { core::slice::from_raw_parts(meters, MIX_CHANNELS * MIX_METER_STRIDE) };
+        assert!(m[0] > 0.0, "track 0 peak L");
+        let master = MIX_MASTER * MIX_METER_STRIDE;
+        assert_eq!(m[master], left.iter().fold(0.0f32, |p, x| p.max(x.abs())), "master = output peak");
         let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
         assert_eq!(t[0], 1.0);
         engine_process(e, 100_000); // clamped, must not panic
+        assert_eq!(engine_meters(e), meters, "stable pointer");
         assert!(engine_sample_alloc(e, 9999, 1, 1).is_null());
         let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
         assert_eq!(t[7], ERR_BAD_INDEX as f64);
@@ -128,5 +148,6 @@ mod tests {
         assert!(engine_sample_alloc(n, 0, 1, 1).is_null());
         assert_eq!(engine_sample_ready(n, 0), ERR_BAD_INDEX);
         assert!(engine_telemetry(n).is_null());
+        assert!(engine_meters(n).is_null());
     }
 }

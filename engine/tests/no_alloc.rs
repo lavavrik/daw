@@ -458,3 +458,115 @@ fn song_mode_loops_and_clip_edits_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.05, "song should be audible, peak {peak}");
 }
+
+/// The mixer: every `OP_MIX_SET` param on every channel it applies to (min,
+/// max and default), key changes (rows and tracks, up to all `MAX_KEYS`
+/// row slots), solo/mute toggles, channel resets, a key source removed and
+/// re-added, all while playing (Pattern and Song mode), with the counter
+/// ARMED.
+#[test]
+fn mixer_commands_do_not_allocate() {
+    use daw_engine::mixer::catalog::{PARAMS, P_SOLO, P_SEND_A, P_SEND_B, P_COMP_ON, P_EQ_ON, P_MUTE};
+    use daw_engine::{MIX_CHANNELS, MAX_KEYS};
+    let mut e = Engine::new(48000.0);
+    let p = e.sample_alloc(0, 4800, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 4800) }
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, x)| *x = ((i as f32) * 0.05).sin() * (1.0 - i as f32 / 4800.0));
+    assert_eq!(e.sample_ready(0), 0);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+
+    arm();
+
+    // Two drum tracks (8 rows each) and a synth pad with a held note.
+    for d in [0.0, 1.0] {
+        ok(e.command(OP_ADD_DRUM_TRACK, d, 0., 0., 0.));
+        for row in 0..8u32 {
+            ok(e.command(OP_SET_ROW_SAMPLE, d, row as f64, 0., 0.));
+            for step in (row % 4..16).step_by(4) {
+                ok(e.command(OP_SET_STEP, d, row as f64, step as f64, 100.));
+            }
+        }
+    }
+    let s = 2.0;
+    ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, s, pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_SET_INPUT_TRACK, s, 0., 0., 0.));
+    ok(e.command(OP_NOTE_ON, 48., 100., 0., 0.));
+    for ch in 0..3 {
+        ok(e.command(OP_MIX_SET, ch as f64, P_SEND_A as f64, 0., 0.));
+        ok(e.command(OP_MIX_SET, ch as f64, P_SEND_B as f64, -6., 0.));
+        ok(e.command(OP_MIX_SET, ch as f64, P_EQ_ON as f64, 1., 0.));
+        ok(e.command(OP_MIX_SET, ch as f64, P_COMP_ON as f64, 1., 0.));
+    }
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    // Every param on every channel it applies to: min, max, then default,
+    // one channel per block.
+    let mut b = 0u32;
+    for ch in 0..MIX_CHANNELS {
+        for p in PARAMS.iter().filter(|p| p.accepts(ch)) {
+            for v in [p.min, p.max, p.default] {
+                if p.id == P_MUTE as u32 && ch < 3 && v == 1.0 {
+                    continue; // keep the sounding tracks audible
+                }
+                assert_eq!(e.command(OP_MIX_SET, ch as f64, p.id as f64, v as f64, 0.), OK, "ch {ch} {} = {v}", p.name);
+            }
+        }
+        e.process(&mut l, &mut r);
+        b += 1;
+    }
+    for blk in 0..1200u32 {
+        match blk {
+            // Keys: every row of track 0 keys a strip (all 8 key slots), the
+            // pad is keyed by track 1, then by a keyed row.
+            10 => {
+                for row in 0..MAX_KEYS {
+                    ok(e.command(OP_MIX_SET_KEY, (3 + row) as f64, row as f64 + 1.0, 0., 0.));
+                }
+                ok(e.command(OP_MIX_SET_KEY, s, 32., 0., 0.));
+            }
+            50 => {
+                // A 9th distinct row is refused; a row already keyed shares.
+                assert_eq!(e.command(OP_MIX_SET_KEY, s, 32. + 3., 0., 0.), ERR_BAD_VALUE);
+                ok(e.command(OP_MIX_SET_KEY, s, 4., 0., 0.));
+            }
+            60 => ok(e.command(OP_MIX_SET, s, P_SOLO as f64, 1., 0.)),
+            90 => ok(e.command(OP_MIX_SET, 0., P_SOLO as f64, 1., 0.)),
+            120 => ok(e.command(OP_MIX_SET, s, P_SOLO as f64, 0., 0.)),
+            130 => ok(e.command(OP_MIX_SET, 0., P_SOLO as f64, 0., 0.)),
+            140 => ok(e.command(OP_MIX_SET, 1., P_MUTE as f64, 1., 0.)),
+            150 => ok(e.command(OP_MIX_SET, 1., P_MUTE as f64, 0., 0.)),
+            200 => ok(e.command(OP_REMOVE_TRACK, 0., 0., 0., 0.)), // 8 keys fall back
+            210 => ok(e.command(OP_ADD_DRUM_TRACK, 0., 0., 0., 0.)),
+            220 => ok(e.command(OP_SET_ROW_SAMPLE, 0., 0., 0., 0.)),
+            221 => ok(e.command(OP_SET_STEP, 0., 0., 0., 120.)),
+            230 => ok(e.command(OP_MIX_SET_KEY, s, 1., 0., 0.)),
+            300 => ok(e.command(OP_ADD_SYNTH_TRACK, 1., 0., 0., 0.)), // retype a key source
+            400 => ok(e.command(OP_SET_MASTER_GAIN, 1.5, 0., 0., 0.)),
+            450 => {
+                for ch in 0..MIX_CHANNELS {
+                    ok(e.command(OP_MIX_RESET, ch as f64, 0., 0., 0.));
+                }
+            }
+            500 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)), // Song mode, no clips: tails only
+            600 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            700 => ok(e.command(OP_PLAY, 0., 0., 0., 0.)),
+            800 => ok(e.command(OP_SET_TEMPO, 77., 0., 0., 0.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        b += 1;
+    }
+
+    assert_eq!(disarm(), 0, "mixer path allocated ({b} blocks)");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(e.meters().iter().all(|x| x.is_finite()));
+}

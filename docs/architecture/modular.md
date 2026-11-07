@@ -67,7 +67,8 @@ of a knob drag.
 Out sums every poly channel unnormalised (8 voices at full level would be
 8x one voice), times `level`. The poly starter patches therefore set a low
 Out `level` (Chord Stab 0.4, Pad 0.25, Pluck 0.3) so a 4-note chord (5 for
-Pad) peaks below ~0.9 before the master clamp. `engine/tests/starter_patches.rs`
+Pad) peaks below ~0.9 before the master limiter (plan 5; it replaced the
+plan-1 hard clamp). `engine/tests/starter_patches.rs`
 replays each starter patch's exact UI command list from
 `engine/tests/fixtures/starter_patches.txt` (generated and parity-checked by
 `app/src/state/patches.fixture.test.ts`) and asserts this.

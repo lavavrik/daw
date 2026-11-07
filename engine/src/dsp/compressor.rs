@@ -40,6 +40,10 @@ pub struct Compressor {
     rel: f32,
     /// Smoothed gain reduction (dB, ≥ 0).
     gr: f32,
+    /// [`release_to_unity`](Compressor::release_to_unity): samples left and
+    /// dB per sample.
+    unity_left: u32,
+    unity_step: f32,
     fresh: bool,
 }
 
@@ -59,6 +63,8 @@ impl Compressor {
             att: 0.0,
             rel: 0.0,
             gr: 0.0,
+            unity_left: 0,
+            unity_step: 0.0,
             fresh: true,
         };
         c.set_attack_ms(5.0);
@@ -106,9 +112,21 @@ impl Compressor {
         self.gr
     }
 
+    /// The key source vanished (the mixer's sidechain fallback): ramp the
+    /// reduction linearly (in dB) to 0 over `samples`, ignoring the detector
+    /// meanwhile, then detect normally again (attacking from 0 dB). A 2 ms
+    /// ramp is a declick, so the duck never snaps open.
+    pub fn release_to_unity(&mut self, samples: usize) {
+        if self.gr > 0.0 && samples > 0 {
+            self.unity_left = samples.min(u32::MAX as usize) as u32;
+            self.unity_step = self.gr / samples as f32;
+        }
+    }
+
     /// Clear the detector state and jump to the targets (no allocation).
     pub fn reset(&mut self) {
         self.gr = 0.0;
+        self.unity_left = 0;
         self.fresh = true;
     }
 
@@ -143,6 +161,11 @@ impl Compressor {
         self.thr_s.step(self.threshold);
         self.ratio_s.step(self.ratio);
         self.makeup_s.step(self.makeup);
+        if self.unity_left > 0 {
+            self.unity_left -= 1;
+            self.gr = if self.unity_left == 0 { 0.0 } else { (self.gr - self.unity_step).max(0.0) };
+            return 10f32.powf((self.makeup_s.value - self.gr) * 0.05);
+        }
         let level = finite(kl).abs().max(finite(kr).abs());
         let target = if level < FLOOR {
             0.0
@@ -281,6 +304,43 @@ mod tests {
         let (mut l, mut r) = ([0.1f32; 128], [0.1f32; 128]);
         c.process(&mut l, &mut r, &[], &[]);
         assert!((l[127] - 0.1 * db_amp(6.0)).abs() < 1e-4, "{}", l[127]);
+    }
+
+    #[test]
+    fn release_to_unity_ramps_gr_to_zero_linearly() {
+        // Deep ducking from a loud key, then the key source vanishes: the
+        // reduction falls to 0 dB linearly over exactly the given samples
+        // (ignoring the detector meanwhile), then normal detection resumes.
+        let mut c = Compressor::new(48000.0);
+        let loud: [f32; 128] = std::array::from_fn(|i| sine(i, 1.0));
+        for _ in 0..50 {
+            c.process(&mut [0.0; 128], &mut [0.0; 128], &loud, &loud);
+        }
+        let gr0 = c.gain_reduction_db();
+        assert!(gr0 > 6.0, "{gr0}");
+        c.release_to_unity(96);
+        let mut gains = Vec::new();
+        for _ in 0..96 {
+            // A still-loud key during the fade is ignored.
+            let (mut l, mut r) = ([1.0f32], [1.0f32]);
+            c.process(&mut l, &mut r, &[1.0], &[1.0]);
+            gains.push(-20.0 * l[0].log10());
+        }
+        assert!(c.gain_reduction_db().abs() < 1e-4, "{}", c.gain_reduction_db());
+        for w in gains.windows(2) {
+            assert!((w[0] - w[1] - gr0 / 96.0).abs() < 1e-3, "linear in dB: {w:?}");
+        }
+        // Afterwards the detector works again (attack from 0 dB).
+        for _ in 0..50 {
+            c.process(&mut [0.0; 128], &mut [0.0; 128], &loud, &loud);
+        }
+        assert!(c.gain_reduction_db() > 6.0);
+        // From no reduction it is a no-op.
+        let mut c = Compressor::new(48000.0);
+        c.release_to_unity(96);
+        let (mut l, mut r) = ([0.01f32; 4], [0.01f32; 4]);
+        c.process_self(&mut l, &mut r);
+        assert_eq!(l, [0.01; 4]);
     }
 
     #[test]

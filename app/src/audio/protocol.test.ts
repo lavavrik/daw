@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
   PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
+  MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -19,7 +20,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(46);
+    expect(Object.keys(rust).length).toBe(49);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -34,18 +35,19 @@ describe('protocol parity with engine/src/protocol.rs', () => {
 describe('size and telemetry parity with engine/src/lib.rs', () => {
   // `pub const NAME: usize = <integer product>;`, e.g. `64 * 1024 * 1024`.
   const rust: Record<string, number> = {};
-  for (const m of read('lib.rs').matchAll(/pub const ((?:MAX|TELEMETRY)_\w+): usize = ([\d\s*]+);/g)) {
+  for (const m of read('lib.rs').matchAll(/pub const ((?:MAX|TELEMETRY|MIX)_\w+): usize = ([\d\s*]+);/g)) {
     rust[m[1]] = m[2].split('*').reduce((p: number, x: string) => p * Number(x.trim()), 1);
   }
   const snake = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase(); // peakL -> PEAK_L
   const ts: Record<string, number> = {
     MAX_BLOCK, MAX_TRACKS, MAX_ROWS, MAX_STEPS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, TELEMETRY_LEN,
     MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_CLIPS, MAX_SONG_TICKS,
+    MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
-  it('parsed every MAX_* and TELEMETRY_* constant', () => {
-    expect(Object.keys(rust).length).toBe(15 + 10);
+  it('parsed every MAX_*, TELEMETRY_* and MIX_* constant', () => {
+    expect(Object.keys(rust).length).toBe(16 + 10 + 5);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -58,5 +60,36 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   it('BAR_TICKS matches', () => {
     const m = read('lib.rs').match(/pub const BAR_TICKS: f64 = ([\d.]+);/);
     expect(Number(m?.[1])).toBe(BAR_TICKS);
+  });
+});
+
+describe('mixer constants', () => {
+  it('channels follow the track strips', () => {
+    expect([MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS]).toEqual([32, 33, 34, 35]);
+  });
+  it('key codes pack slot*32 (+ row + 1)', () => {
+    expect(keyCode(null)).toBe(-1);
+    expect(keyCode({ slot: 2 })).toBe(64);
+    expect(keyCode({ slot: 2, row: 0 })).toBe(65);
+    expect(keyCode({ slot: 31, row: 15 })).toBe(31 * 32 + 16);
+  });
+});
+
+describe('mixer catalog golden', () => {
+  const cat = JSON.parse(readFileSync(new URL('../../../engine/mixer_catalog.json', import.meta.url), 'utf8'));
+  it('channels match the constants', () => {
+    expect(cat.channels).toEqual({ tracks: 32, reverb: MIX_REVERB, delay: MIX_DELAY, master: MIX_MASTER });
+  });
+  it('param ids are their positions, defaults in range', () => {
+    cat.params.forEach((p: { id: number; min: number; max: number; default: number }, i: number) => {
+      expect(p.id).toBe(i);
+      expect(p.default).toBeGreaterThanOrEqual(p.min);
+      expect(p.default).toBeLessThanOrEqual(p.max);
+    });
+  });
+  it('the EQ low cut labels its minimum Off', () => {
+    const hp = cat.params.find((p: { name: string }) => p.name === 'eq_hp');
+    expect(hp.minLabel).toBe('Off');
+    expect(hp.min).toBe(20);
   });
 });

@@ -58,7 +58,8 @@ use crate::arena::{SampleArena, SampleSlice};
 use crate::arrangement::{for_each_overlapping, Clip, Timeline};
 use crate::samples::SamplePool;
 use crate::transport::{events_in_window, tick_to_offset};
-use crate::{MAX_CLIPS, MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
+use crate::mixer::StereoBufs;
+use crate::{MAX_CLIPS, MAX_KEYS, MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
 
 /// Max step events handled per track per block (a block spans at most a
 /// couple of steps at any sane tempo/block size, per playing clip; extras are
@@ -550,22 +551,31 @@ impl Drums {
         }
     }
 
-    /// Add all drum output for one block (or block segment) into `l`/`r`.
-    /// `window` is `(t0, t1, samples_per_tick)` while playing (new hits are
-    /// scheduled sample-accurately from the current patterns or the clips,
-    /// per `timeline`); `None` when stopped, in which case only tails (fading
-    /// voices) are rendered.
+    /// Add every track's drum output for frames `from..to` of a block (a
+    /// Song-mode piece, or the whole block) into its own buffer in
+    /// `tracks` (pair = slot). A row that is a sidechain key
+    /// (`row_keys[slot][row]` = key slot `k`) renders into key buffer `k`
+    /// first and is then added to its track buffer, so the key holds that
+    /// row's voices only. `window` is `(t0, t1, samples_per_tick)` while
+    /// playing (new hits are scheduled sample-accurately from the current
+    /// patterns or the clips, per `timeline`); `None` when stopped, in which
+    /// case only tails (fading voices) are rendered. Returns a mask of the
+    /// slots that had sounding voices (bit = slot).
+    #[allow(clippy::too_many_arguments)]
     pub fn render_add(
         &mut self,
         window: Option<(f64, f64, f64)>,
         timeline: Timeline,
         pool: &SamplePool,
         arena: &SampleArena,
-        l: &mut [f32],
-        r: &mut [f32],
-    ) {
-        let n = l.len().min(r.len());
+        tracks: &mut StereoBufs,
+        keys: &mut StereoBufs,
+        row_keys: &[[u8; MAX_ROWS]],
+        (from, to): (usize, usize),
+    ) -> u32 {
+        let n = to.saturating_sub(from);
         let fade = self.fade;
+        let mut sounding = 0u32;
         for (slot, track) in self.tracks.iter_mut().enumerate() {
             let mut hits = Hits::new();
             let current = if track.current < MAX_PATTERNS { track.current } else { 0 };
@@ -597,32 +607,69 @@ impl Drums {
                 }
             }
             let DrumTrack { patterns, rows, voices, .. } = track;
+            let live = voices.iter().any(|v| v.active.live || v.fading.live);
+            if !live && hits.len == 0 {
+                continue; // nothing sounds and nothing starts: skip the slot
+            }
+            let Some((tl, tr)) = tracks.pair_mut(slot, from, to) else { continue };
+            sounding |= 1 << slot;
+            let keyed = row_keys.get(slot);
             for (ri, (row, rv)) in rows.iter().zip(voices.iter_mut()).enumerate() {
-                let mut pos = 0;
-                for h in hits.as_slice() {
-                    let off = h.offset;
-                    let vel = patterns
-                        .get(h.pattern as usize)
-                        .and_then(|p| p.steps.get(ri))
-                        .and_then(|steps| steps.get(h.step as usize))
-                        .copied()
-                        .unwrap_or(0);
-                    if vel == 0 || row.mute {
-                        continue;
+                let key = keyed.and_then(|rk| rk.get(ri)).copied().filter(|&k| (k as usize) < MAX_KEYS);
+                match key.and_then(|k| keys.pair_mut(k as usize, from, to)) {
+                    Some((kl, kr)) => {
+                        render_row(row, rv, ri, patterns, hits.as_slice(), pool, arena, fade, kl, kr);
+                        for i in 0..n.min(kl.len()).min(tl.len()) {
+                            tl[i] += kl[i];
+                            tr[i] += kr[i];
+                        }
                     }
-                    let Some(id) = row.sample else { continue };
-                    if pool.playable(arena, id as usize).is_none() {
-                        continue;
-                    }
-                    let at = off.max(pos);
-                    rv.render_add(pool, arena, fade, &mut l[pos..at], &mut r[pos..at]);
-                    pos = at;
-                    let g = row.gain * vel as f32 / 127.0;
-                    let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-                    rv.trigger(id, pool.get(id as usize).map(|s| s.slice), g * a.cos(), g * a.sin(), fade);
+                    None => render_row(row, rv, ri, patterns, hits.as_slice(), pool, arena, fade, tl, tr),
                 }
-                rv.render_add(pool, arena, fade, &mut l[pos..n], &mut r[pos..n]);
             }
         }
+        sounding
     }
+}
+
+/// Render one row's voices into `l`/`r`, triggering the row's hits (those
+/// with a non-zero velocity on row `ri`) at their offsets.
+#[allow(clippy::too_many_arguments)]
+fn render_row(
+    row: &DrumRow,
+    rv: &mut RowVoices,
+    ri: usize,
+    patterns: &[DrumPattern],
+    hits: &[Hit],
+    pool: &SamplePool,
+    arena: &SampleArena,
+    fade: usize,
+    l: &mut [f32],
+    r: &mut [f32],
+) {
+    let n = l.len().min(r.len());
+    let mut pos = 0;
+    for h in hits {
+        let off = h.offset.min(n);
+        let vel = patterns
+            .get(h.pattern as usize)
+            .and_then(|p| p.steps.get(ri))
+            .and_then(|steps| steps.get(h.step as usize))
+            .copied()
+            .unwrap_or(0);
+        if vel == 0 || row.mute {
+            continue;
+        }
+        let Some(id) = row.sample else { continue };
+        if pool.playable(arena, id as usize).is_none() {
+            continue;
+        }
+        let at = off.max(pos);
+        rv.render_add(pool, arena, fade, &mut l[pos..at], &mut r[pos..at]);
+        pos = at;
+        let g = row.gain * vel as f32 / 127.0;
+        let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
+        rv.trigger(id, pool.get(id as usize).map(|s| s.slice), g * a.cos(), g * a.sin(), fade);
+    }
+    rv.render_add(pool, arena, fade, &mut l[pos..n], &mut r[pos..n]);
 }

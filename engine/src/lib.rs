@@ -7,6 +7,7 @@ pub mod dsp;
 pub mod engine;
 pub mod ffi;
 pub mod metronome;
+pub mod mixer;
 pub mod protocol;
 pub mod rack;
 pub mod samples;
@@ -54,6 +55,19 @@ pub const MAX_CLIPS: usize = 256;
 /// loop range and seek positions lie within `0..=MAX_SONG_TICKS`.
 pub const MAX_SONG_TICKS: usize = 999 * 3840;
 
+/// Distinct drum rows that can be sidechain keys at once (each renders into
+/// its own preallocated key buffer; whole-track keys need no slot).
+pub const MAX_KEYS: usize = 8;
+// Mixer channels (`mixer` module): 0..MAX_TRACKS-1 are the track strips,
+// then the two returns and the master. Mirrored in app/src/audio/protocol.ts.
+pub const MIX_REVERB: usize = 32;
+pub const MIX_DELAY: usize = 33;
+pub const MIX_MASTER: usize = 34;
+pub const MIX_CHANNELS: usize = 35;
+/// Floats per channel in the meters array (`Engine::meters`):
+/// peak L, peak R, gain reduction (dB, ≥ 0).
+pub const MIX_METER_STRIDE: usize = 3;
+
 // Telemetry slots (indices into `Engine::telemetry()`, an `[f64; TELEMETRY_LEN]`
 // the worklet copies into the shared telemetry buffer every block). Mirrored
 // by `TELEMETRY` in app/src/audio/protocol.ts (parity-checked by
@@ -84,5 +98,11 @@ mod tests {
     fn constants_are_consistent() {
         assert_eq!(STEP_TICKS * 4.0, PPQ);
         assert_eq!(BAR_TICKS, 4.0 * PPQ);
+        assert_eq!(MIX_REVERB, MAX_TRACKS);
+        assert_eq!(MIX_DELAY, MAX_TRACKS + 1);
+        assert_eq!(MIX_MASTER, MAX_TRACKS + 2);
+        assert_eq!(MIX_CHANNELS, MAX_TRACKS + 3);
+        // Key codes pack `slot * 32 + row + 1`.
+        assert!(MAX_ROWS < 32 && MAX_TRACKS <= 32);
     }
 }

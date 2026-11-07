@@ -62,10 +62,21 @@ pub struct Limiter {
 }
 
 impl Limiter {
-    /// A limiter with ceiling 1.0 (0 dBFS) and release 50 ms.
+    /// A limiter with ceiling 1.0 (0 dBFS), release 50 ms and the 1.5 ms
+    /// lookahead.
     pub fn new(sr: f32) -> Limiter {
+        Limiter::with_lookahead(sr, LOOKAHEAD_SECONDS)
+    }
+
+    /// [`new`](Limiter::new) with another lookahead (seconds, 0..0.1). 0 is
+    /// allowed: no latency, and the gain then follows the required gain
+    /// sample by sample (the ceiling still holds; the attack is instant).
+    /// The engine uses the default; zero-latency engines exist for tests
+    /// that assert exact sample positions.
+    pub fn with_lookahead(sr: f32, lookahead: f32) -> Limiter {
         let sr = valid_sr(sr);
-        let d = (LOOKAHEAD_SECONDS * sr).round().max(1.0) as usize;
+        let lookahead = if lookahead.is_finite() { clampf(lookahead, 0.0, 0.1) } else { LOOKAHEAD_SECONDS };
+        let d = (lookahead * sr).round() as usize;
         let w = d + 1;
         let dcap = w.next_power_of_two();
         let mut lim = Limiter {
@@ -356,6 +367,19 @@ mod tests {
         let max_step = gain.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
         assert!(max_step <= 0.5 / (d + 1) as f32 + 1e-5, "gain step {max_step}");
         assert!((gain[1000..].iter().fold(0.0f32, |m, g| m.max(*g)) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn zero_lookahead_has_no_latency_and_holds_the_ceiling() {
+        let mut lim = Limiter::with_lookahead(48000.0, 0.0);
+        lim.set_ceiling(0.5);
+        assert_eq!(lim.latency(), 0);
+        let input: Vec<(f32, f32)> = (0..4800).map(|i| if i < 2400 { (0.25, -0.25) } else { (2.0, 1.0) }).collect();
+        let out = run(&mut lim, &input);
+        assert_eq!(out[0], (0.25, -0.25), "transparent and undelayed");
+        assert!(out.iter().all(|(a, b)| a.abs() <= 0.5 && b.abs() <= 0.5));
+        assert_eq!(lim.clamp_hits, 0);
+        assert_eq!(Limiter::with_lookahead(48000.0, f32::NAN).latency(), 72, "NaN: the default");
     }
 
     #[test]

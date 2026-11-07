@@ -18,14 +18,23 @@
 //! ones (a second pw LFO for Osc B and a sub oscillator into Mixer in4) make
 //! it 13, which only makes the budget stricter.
 //!
-//! The Song-mode variant drives the whole [`Engine`] through commands: the
-//! same four synth tracks (8 notes held live on one of them) plus two 8-row
-//! drum tracks, each track with 32 two-bar clips starting every bar (so two
-//! clips of different patterns always overlap: twice the note events), a
-//! 4-bar loop (one wrap in the 10 s) and the metronome on.
+//! The spec §6 pair ([`spec6`]) drives the whole [`Engine`] through
+//! commands with the plan-5 mix: 4 synth tracks (all 8 voices held, plus
+//! arpeggios), 4 drum tracks, EQ on every strip, sends to both returns, 2
+//! sidechained compressors and the limiter, under 40% of real time. The
+//! Song-mode variant plays the same tracks through overlapping clips with a
+//! loop wrap, so it is at least as heavy as the Pattern-mode one.
+//!
+//! ```text
+//! cargo test --release -p daw-engine --test perf -- --ignored --nocapture
+//! ```
 
 use daw_engine::arrangement::Timeline;
 use daw_engine::protocol::*;
+use daw_engine::mixer::catalog::{
+    P_COMP_ON, P_COMP_RATIO, P_COMP_THRESHOLD, P_EQ_HIGH, P_EQ_HP, P_EQ_LOW, P_EQ_MID_GAIN, P_EQ_ON, P_FADER, P_SEND_A, P_SEND_B,
+};
+use daw_engine::mixer::StereoBufs;
 use daw_engine::Engine;
 use daw_engine::rack::catalog::ModuleKind as K;
 use daw_engine::rack::modules::{Ctx, NoteEvent};
@@ -114,22 +123,18 @@ fn four_synth_tracks_render_under_budget() {
     let bpm = 124.0f32;
     let tpf = bpm as f64 * 960.0 / 60.0 / SR as f64;
     let mut ctx = Ctx { sr: SR, bpm, playing: true, ticks: 0.0, ticks_per_frame: tpf };
-    let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    let mut bufs = StereoBufs::new(daw_engine::MAX_TRACKS);
     let blocks = SECONDS * SR as usize / BLOCK;
 
     // Warm up (caches, branch predictors), then measure.
     for _ in 0..100 {
-        l.fill(0.0);
-        r.fill(0.0);
-        render(&mut s, &mut ctx, tpf, &mut l, &mut r);
+        render(&mut s, &mut ctx, tpf, &mut bufs);
     }
     let mut peak = 0.0f32;
     let t0 = Instant::now();
     for _ in 0..blocks {
-        l.fill(0.0);
-        r.fill(0.0);
-        render(&mut s, &mut ctx, tpf, &mut l, &mut r);
-        peak = peak.max(l[0].abs());
+        render(&mut s, &mut ctx, tpf, &mut bufs);
+        peak = peak.max(bufs.pair(0, BLOCK).map_or(0.0, |(l, _)| l[0].abs()));
     }
     let elapsed = t0.elapsed().as_secs_f64();
     let audio = (blocks * BLOCK) as f64 / SR as f64;
@@ -144,9 +149,10 @@ fn four_synth_tracks_render_under_budget() {
 
 /// One playing block: patterns get the transport window, then the playhead
 /// advances by exactly the window.
-fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, l: &mut [f32], r: &mut [f32]) {
+fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, bufs: &mut StereoBufs) {
     let t1 = ctx.ticks + BLOCK as f64 * tpf;
-    s.render_add(ctx, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, l, r);
+    bufs.clear(BLOCK);
+    s.render_add(ctx, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK));
     ctx.ticks = t1;
 }
 
@@ -155,9 +161,20 @@ fn arp(i: u32, transpose: u32) -> (f64, f64) {
     ((60 + (i * 5 + transpose) % 24) as f64, (i * 240) as f64)
 }
 
-#[test]
-#[ignore = "perf: run in release with --ignored --nocapture"]
-fn song_mode_renders_under_budget() {
+/// Synth tracks are slots `0..TRACKS`, drum tracks `TRACKS..2*TRACKS`.
+const DRUMS: usize = 4;
+
+/// The spec §6 scenario through engine commands: 4 synth tracks (the
+/// 13-module, 8-voice patch; patterns 0 and 1 each hold an 8-note chord
+/// for the whole bar, so all 8 voices are busy, plus the 16-note arpeggio
+/// stealing voices), 4 drum tracks (8 rows, swing), EQ on every strip, sends
+/// to both returns from every track, 2 sidechained compressors (synth 0
+/// keyed by the kick row of drum track 0, synth 1 by the whole drum track
+/// 1), the limiter, and the metronome. `song`: the tracks play through 32
+/// overlapping 2-bar clips each (two clips of different patterns always
+/// sound: twice the note events) with a 4-bar loop; otherwise pattern 0
+/// loops.
+fn spec6(song: bool) -> Engine {
     let mut e = Engine::new(SR);
     let ok = |code: i32| assert_eq!(code, OK);
     let max_notes = daw_engine::MAX_NOTES as f64;
@@ -181,17 +198,22 @@ fn song_mode_renders_under_budget() {
         for (m, p, v) in PARAMS {
             ok(e.command(OP_RACK_SET_PARAM, s, m as f64, p as f64, v as f64));
         }
-        // Patterns 0 and 1: 1-bar arpeggios (16 notes each).
+        // Patterns 0 and 1: an 8-note chord held all bar + a 1-bar arpeggio.
         for pat in 0..2u32 {
             ok(e.command(OP_SET_CURRENT_PATTERN, s, pat as f64, 0., 0.));
             ok(e.command(OP_SET_PATTERN_BARS, s, 1., 0., 0.));
+            for (i, n) in [36u32, 40, 43, 47, 50, 53, 57, 60].into_iter().enumerate() {
+                let a = s * max_notes + 16.0 + i as f64;
+                ok(e.command(OP_NOTE_SET, a, ((n + slot as u32 + pat) * 128 + 90) as f64, 0., 3840.));
+            }
             for i in 0..16u32 {
                 let (pitch, start) = arp(i, slot as u32 + 7 * pat);
                 ok(e.command(OP_NOTE_SET, s * max_notes + i as f64, pitch * 128. + 100., start, 120.));
             }
         }
+        ok(e.command(OP_SET_CURRENT_PATTERN, s, 0., 0., 0.));
     }
-    for slot in TRACKS..TRACKS + 2 {
+    for slot in TRACKS..TRACKS + DRUMS {
         let s = slot as f64;
         ok(e.command(OP_ADD_DRUM_TRACK, s, 0., 0., 0.));
         for row in 0..8u32 {
@@ -203,27 +225,53 @@ fn song_mode_renders_under_budget() {
                 }
             }
         }
+        ok(e.command(OP_SET_CURRENT_PATTERN, s, 0., 0., 0.));
         ok(e.command(OP_SET_SWING, s, 0.4, 0., 0.));
     }
-    // 32 two-bar clips per track, one starting every bar, alternating
-    // patterns and offsets: two clips always overlap.
-    for slot in 0..TRACKS + 2 {
-        for i in 0..32u32 {
-            let (pat, offset) = ((i % 2) as f64, ((i % 4) * 480) as f64);
-            let a = slot as f64 * max_clips + i as f64;
-            ok(e.command(OP_CLIP_SET, a, offset * 16. + pat, i as f64 * 3840., 7680.));
-        }
+    // The mix: EQ on every strip, sends to both returns, two keyed comps.
+    let mix = |e: &mut Engine, ch: usize, id: u32, v: f64| ok(e.command(OP_MIX_SET, ch as f64, id as f64, v, 0.));
+    for ch in 0..TRACKS + DRUMS {
+        mix(&mut e, ch, P_EQ_ON, 1.);
+        mix(&mut e, ch, P_EQ_HP, 80.);
+        mix(&mut e, ch, P_EQ_LOW, 2.);
+        mix(&mut e, ch, P_EQ_MID_GAIN, -3.);
+        mix(&mut e, ch, P_EQ_HIGH, 1.5);
+        mix(&mut e, ch, P_SEND_A, -12.);
+        mix(&mut e, ch, P_SEND_B, -18.);
+        mix(&mut e, ch, P_FADER, -6.);
     }
-    ok(e.command(OP_SET_INPUT_TRACK, 0., 0., 0., 0.));
-    for n in [48., 52., 55., 59., 62., 65., 69., 72.] {
-        ok(e.command(OP_NOTE_ON, n, 100., 0., 0.));
+    for ch in [daw_engine::MIX_REVERB, daw_engine::MIX_DELAY, daw_engine::MIX_MASTER] {
+        mix(&mut e, ch, P_EQ_ON, 1.);
+        mix(&mut e, ch, P_EQ_MID_GAIN, 2.);
+    }
+    for (ch, key) in [(0usize, TRACKS * 32 + 1), (1, (TRACKS + 1) * 32)] {
+        mix(&mut e, ch, P_COMP_ON, 1.);
+        mix(&mut e, ch, P_COMP_THRESHOLD, -30.);
+        mix(&mut e, ch, P_COMP_RATIO, 8.);
+        ok(e.command(OP_MIX_SET_KEY, ch as f64, key as f64, 0., 0.));
+    }
+    if song {
+        // 32 two-bar clips per track, one starting every bar, alternating
+        // patterns and offsets: two clips always overlap.
+        for slot in 0..TRACKS + DRUMS {
+            for i in 0..32u32 {
+                let (pat, offset) = ((i % 2) as f64, ((i % 4) * 480) as f64);
+                let a = slot as f64 * max_clips + i as f64;
+                ok(e.command(OP_CLIP_SET, a, offset * 16. + pat, i as f64 * 3840., 7680.));
+            }
+        }
+        ok(e.command(OP_SET_LOOP, 0., 4. * 3840., 0., 0.)); // 10 s at 124 bpm is ~5.2 bars
+        ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
     }
     ok(e.command(OP_SET_TEMPO, 124., 0., 0., 0.));
     ok(e.command(OP_SET_METRONOME, 1., 0., 0., 0.));
-    ok(e.command(OP_SET_LOOP, 0., 4. * 3840., 0., 0.)); // 10 s at 124 bpm is ~5.2 bars
-    ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
     ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+    e
+}
 
+/// Render 10 s of `e` (after a warm-up); returns (share of real time, peak,
+/// wrapped, min ducking seen on channel 0 in dB).
+fn run(e: &mut Engine) -> (f64, f64, bool, f32) {
     let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
     let blocks = SECONDS * SR as usize / BLOCK;
     for _ in 0..100 {
@@ -231,6 +279,7 @@ fn song_mode_renders_under_budget() {
     }
     let mut peak = 0.0f64;
     let mut wrapped = false;
+    let mut gr = 0.0f32;
     let mut last = e.telemetry()[2];
     let t0 = Instant::now();
     for _ in 0..blocks {
@@ -238,15 +287,38 @@ fn song_mode_renders_under_budget() {
         peak = peak.max(e.telemetry()[5]);
         wrapped |= e.telemetry()[2] < last;
         last = e.telemetry()[2];
+        gr = gr.max(e.meters()[2]);
     }
     let elapsed = t0.elapsed().as_secs_f64();
     let audio = (blocks * BLOCK) as f64 / SR as f64;
-    let ratio = elapsed / audio;
+    (elapsed / audio, peak, wrapped, gr)
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn spec6_mix_renders_under_budget() {
+    let mut e = spec6(false);
+    let (ratio, peak, _, gr) = run(&mut e);
     println!(
-        "perf (song): {TRACKS} synth + 2 drum tracks x 32 clips (2 overlapping), loop, metronome: {elapsed:.3} s for {audio:.1} s of audio = {:.1}% of real time",
+        "perf (spec 6, pattern): {TRACKS} synth x 13 modules x 8 voices (held chords + arps) + {DRUMS} drum tracks, EQ on all, 2 sidechained comps, reverb + delay sends, limiter, metronome: {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(peak > 0.0 && peak.is_finite(), "must sound (peak {peak})");
+    assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn spec6_mix_song_mode_renders_under_budget() {
+    let mut e = spec6(true);
+    let (ratio, peak, wrapped, gr) = run(&mut e);
+    println!(
+        "perf (spec 6, song): the same mix, every track through 32 overlapping 2-bar clips, 4-bar loop: {:.1}% of real time",
         ratio * 100.0
     );
     assert!(wrapped, "the loop must wrap during the run");
     assert!(peak > 0.0 && peak.is_finite(), "song must sound (peak {peak})");
-    assert!(ratio < 0.25, "over budget: {:.1}% of real time", ratio * 100.0);
+    assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
 }

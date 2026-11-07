@@ -150,6 +150,31 @@ overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
   `ceil(loopTicks * samplesPerTick)` frames and nothing double-fires or
   skips. See `docs/architecture/sequencer.md` (Song timeline).
 
+## One engine block (plan 5: the mixer)
+
+`Engine::process` (engine/src/engine.rs) renders every track into its *own*
+stereo buffer, piece by piece across a Song-mode loop wrap (drum rows used as
+sidechain keys also render into key buffers), then runs the mixer **once per
+block** (engine/src/mixer/mod.rs: strips → sends → Reverb/Delay returns →
+master → lookahead limiter), then adds the metronome after the limiter
+(delayed by the limiter's 1.5 ms / 72-sample lookahead so it stays on the
+beat; never compressed), then a NaN-safe ±1 clamp as a backstop only.
+Consequences worth knowing:
+
+- **Output latency +1.5 ms.** Everything leaves the engine 72 samples (48 kHz)
+  after it was rendered. Sequencing is unchanged; the heard-time mapping
+  absorbs it (well under its tolerance). Engine unit tests that pin exact
+  sample positions build the engine with `Engine::with_lookahead(sr, 0.0)`.
+- **Jumps never reset effects.** Stop, seek and loop wraps release notes only;
+  reverb/delay tails, compressor and limiter state carry on.
+- **Meters:** `engine_meters(e)` points at `[MIX_CHANNELS × (peakL, peakR,
+  gr_db)]` f32s refreshed every block (track/return peaks post-fader; master =
+  the final output, gr = the limiter's). Telemetry `PEAK_L/R` is the final
+  output too.
+- **Mixer params** are a catalog (`engine/mixer_catalog.json`, golden-tested
+  like the rack catalog): `MIX_SET` (41) validates against it, `MIX_SET_KEY`
+  (42) sets a sidechain key, `MIX_RESET` (43) restores a channel's defaults.
+
 ## Adding an opcode
 
 1. Add `OP_*` to `engine/src/protocol.rs` and handle it (validated!) in

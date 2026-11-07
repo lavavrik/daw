@@ -129,8 +129,11 @@
     if (live) driver?.kick();
   });
   // Hold this sample's floats while shown; the last view to let go frees them.
+  // Depends on the key only: a peaksVersion bump makes a new `fine` object
+  // with the same key and must not release and re-decode.
+  const fineKey = $derived(fine?.key ?? null);
   $effect(() => {
-    if (fine) return fs.retain(fine.key);
+    if (fineKey) return fs.retain(fineKey);
   });
 
   function size(c: HTMLCanvasElement, w: number, h: number) {

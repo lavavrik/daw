@@ -9,7 +9,9 @@
   // MeterBus, which reads engine.meters() and fans it out to every strip. A
   // consumer with want 0 (the meters have their own SAB), watching the mixer
   // element: it stops while the mixer is off screen or the tab is hidden, and
-  // is removed when the view is destroyed (switching tabs).
+  // is removed when the view is destroyed (switching tabs). It is an idle
+  // driver too: stopped with every meter at rest, it leaves the loop after
+  // 0.5 s and the next Play / note / edit brings it back.
   //
   // The analyser (AnalyserPanel, right of the Master; plan 12 Task 3) shows
   // the Master or the strip whose ∿ toggle is on: the analyser bus
@@ -23,6 +25,7 @@
   import type { Project } from '../../state/project.svelte';
   import { createMeterBus } from './meterBus';
   import { frameLoop } from '../vis/frameLoop';
+  import { createIdleDriver } from '../vis/idleDriver';
   import Strip from './Strip.svelte';
   import AnalyserPanel from './AnalyserPanel.svelte';
   import { analyserBus } from '../vis/analyserBus';
@@ -31,7 +34,12 @@
 
   const bus = createMeterBus();
   let mixerEl: HTMLDivElement;
-  onMount(() => frameLoop().add({ want: 0, el: mixerEl, frame: (now) => bus.tick(engine.meters(), now) }));
+  // An idle driver: out of the loop once stopped with every meter at rest.
+  onMount(() => {
+    const d = createIdleDriver({ loop: frameLoop(), want: 0, el: mixerEl, frame: (now) => bus.tick(engine.meters(), now) });
+    d.kick();
+    return () => d.stop();
+  });
   $effect(() => analyserBus().sync([
     ...p.tracks.map((t) => ({ ch: t.slot, key: t.id })),
     { ch: MIX_REVERB, key: 'reverb' },

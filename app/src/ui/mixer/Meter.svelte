@@ -77,6 +77,8 @@
       if (root.dataset.peakDb !== pk) root.dataset.peakDb = pk;
       if (root.dataset.holdDb !== hd) root.dataset.holdDb = hd;
     }
+    // Moving while a bar is up or a peak hold still shows.
+    return peakDb > -200 || holds[0].db > -200 || holds[1].db > -200;
   }));
 </script>
 

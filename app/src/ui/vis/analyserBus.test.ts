@@ -274,4 +274,36 @@ describe('analyserBus', () => {
     r.bus.subscribe(view('panel'));
     expect(r.pendingRafs()).toBe(1);
   });
+
+  it('a -100 dBFS tail does not keep it awake; a -40 dBFS one does, and the bars end at the floor', () => {
+    const quiet = (amp: number) => {
+      const wake = createVisWake();
+      const r = rig(wake);
+      const { v, eng } = r.mkEngine();
+      r.loop.attach(eng);
+      r.bus.attach(eng);
+      const bars: number[] = [];
+      r.bus.subscribe(view('mini', () => bars.push(Math.max(...r.bus.mini.level))));
+      const L = v.masterL;
+      const R = v.masterR;
+      let head = 0;
+      const run = (frames: number) => {
+      for (let f = 0; f < frames; f++) {
+        // A steady sine at `amp` for the whole window.
+        for (let i = 0; i < 800; i++, head++) L[head & (VIS_TAP_RING - 1)] = R[head & (VIS_TAP_RING - 1)] = amp * Math.sin((2 * Math.PI * 1000 * head) / 48000);
+        Atomics.store(v.hdr, VIS_HDR.masterHead, head);
+        r.frame();
+      }
+      };
+      run(120);
+      // The tail keeps ringing at the same level for 1.5 s more.
+      run(90);
+      return { r, bars };
+    };
+    const hush = quiet(1e-5); // -100 dBFS
+    expect(hush.r.pendingRafs()).toBe(0);
+    expect(hush.bars[hush.bars.length - 1]).toBe(DB_FLOOR); // the last draw is the empty picture
+    const tail = quiet(1e-2); // -40 dBFS keeps going
+    expect(tail.r.pendingRafs()).toBe(1);
+  });
 });

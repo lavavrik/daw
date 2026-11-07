@@ -808,7 +808,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(0);
   const tStop = Date.now();
-  await expect.poll(() => page.evaluate(() => (window as unknown as VisWindow).__daw.vis.running()), { timeout: 30_000, intervals: [100] }).toBe(false);
+  await expect.poll(() => page.evaluate(() => (window as unknown as VisWindow).__daw.vis.running()), { timeout: 8_000, intervals: [100] }).toBe(false);
   console.log(`VIS paused ${((Date.now() - tStop) / 1000).toFixed(1)} s after Stop`);
   const d0 = await page.evaluate(() => (window as unknown as VisWindow).__daw.vis.drawn());
   await page.waitForTimeout(2000);

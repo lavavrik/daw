@@ -6,17 +6,23 @@
 // GR readouts). Subscribers update their DOM directly instead of through
 // reactive state, so 35 meters at 60 fps cost no Svelte re-renders.
 //
+// The consumer is an idle driver (idleDriver.ts): once the transport is
+// stopped and every subscriber has reported nothing moving (all bars at 0,
+// no peak hold, no GR) for 0.5 s it leaves the loop; Play, a note, an edit
+// or a new engine bring it back (visWake.ts).
+//
 // Caveat: the clip / LIMIT lights latch from what a tick sees. While the
 // loop is paused nothing is read, so an over that happens (and falls away
 // under the 60 dB/s ballistics) while the mixer is off screen or the tab is
 // hidden does not latch them.
-export type MeterFn = (meters: Float32Array, now: number) => void;
+/** Returns true while it still shows something moving (a lit bar, a peak hold, a GR readout). */
+export type MeterFn = (meters: Float32Array, now: number) => boolean | void;
 
 export interface MeterBus {
   /** Subscribe; returns the unsubscribe function. */
   on(fn: MeterFn): () => void;
-  /** Called once per frame-loop frame (MixerView's consumer). */
-  tick(meters: Float32Array, now: number): void;
+  /** Called once per frame-loop frame (MixerView's consumer); true while any subscriber is still busy. */
+  tick(meters: Float32Array, now: number): boolean;
 }
 
 export function createMeterBus(): MeterBus {
@@ -27,7 +33,9 @@ export function createMeterBus(): MeterBus {
       return () => subs.delete(fn);
     },
     tick(meters, now) {
-      for (const fn of subs) fn(meters, now);
+      let busy = false;
+      for (const fn of subs) if (fn(meters, now)) busy = true;
+      return busy;
     },
   };
 }

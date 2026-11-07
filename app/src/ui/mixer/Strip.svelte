@@ -101,13 +101,14 @@
   let grEl = $state<HTMLElement | null>(null);
   let shownGr = NaN;
   $effect(() => bus.on((m) => {
-    if (!grEl) return;
+    if (!grEl) return false;
     const gr = m[channel * MIX_METER_STRIDE + 2] ?? 0;
     const r = Math.round(gr * 10) / 10;
-    if (r === shownGr) return;
+    if (r === shownGr) return r > 0;
     shownGr = r;
     grEl.textContent = r > 0 ? `−${r.toFixed(1)} dB` : '0.0 dB';
     grEl.dataset.grDb = r.toFixed(1);
+    return r > 0;
   }));
 
   // ---- ∿: show this strip in the mixer analyser ----------------------------

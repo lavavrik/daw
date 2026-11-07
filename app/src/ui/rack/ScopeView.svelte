@@ -24,6 +24,7 @@
   import { SCOPE_FLAG, SCOPE_HDR, VIS_HDR, VIS_WANT, type VisViews } from '../../audio/visLayout';
   import { VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES } from '../../audio/protocol';
   import { frameLoop } from '../vis/frameLoop';
+  import { createIdleDriver, type IdleDriver } from '../vis/idleDriver';
   import { createSyncHold, findScope, readout, scopeWindow, windowFrames, windowLen } from '../vis/scopeMath';
 
   let { track, idx, params, sampleRate = 48000, tempo = 120 }: {
@@ -180,8 +181,9 @@
   const hold = createSyncHold();
   let holdSlot = -1;
 
-  function frame(now: number, v: VisViews) {
-    if (frozen) return;
+  /** Draws; true while the rings still move (keeps the driver in the loop). */
+  function frame(now: number, v: VisViews): boolean {
+    if (frozen) return false;
     bind(v);
     const s = findScope(hdrs, track, idx);
     if (s !== holdSlot) {
@@ -192,10 +194,11 @@
     const head = hdr ? Atomics.load(hdr, SCOPE_HDR.head) : 0;
     if (s !== last[1] || head !== last[0]) lastMove = now;
     const idle = s < 0 || now - lastMove > IDLE_MS;
-    if (!changed(head, s, idle)) return;
+    const busy = !idle;
+    if (!changed(head, s, idle)) return busy;
 
     const c = canvas.getContext('2d');
-    if (!c) return;
+    if (!c) return busy;
     const want = Math.max(1, Math.round(window.devicePixelRatio || 1));
     if (want !== dpr || canvas.width !== W * want) {
       dpr = want;
@@ -250,9 +253,26 @@
       const tw = c.measureText(tag).width;
       c.fillText(tag, W - tw - 4, 11);
     }
+    return busy;
   }
 
-  onMount(() => frameLoop().add({ want: VIS_WANT.scopes, el: canvas, frame }));
+  // An idle driver: once the transport is stopped and the rings' heads have
+  // not moved for IDLE_MS + 0.5 s (the "idle" tag is drawn first) the scope
+  // leaves the loop; Play, a note or an edit kicks it back. A param, rate or
+  // tempo change or an unfreeze kicks it too, so the last frame is redrawn.
+  let driver: IdleDriver | null = null;
+  onMount(() => {
+    driver = createIdleDriver({ loop: frameLoop(), want: VIS_WANT.scopes, el: canvas, frame });
+    driver.kick();
+    return () => {
+      driver?.stop();
+      driver = null;
+    };
+  });
+  $effect(() => {
+    void params.join(','); void sampleRate; void tempo; void frozen;
+    driver?.kick();
+  });
 </script>
 
 <button

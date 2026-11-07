@@ -73,7 +73,9 @@ and the untouched export hashes pin that the sound is bit-identical.
 **The want mask.** Header word 0, written by the UI's frame loop: the OR of
 the on-screen consumers' bits (1 master, 2 strip tap, 4 voices, 8 scopes).
 The worklet's step 4b (`copyVis`) copies only what is set; with 0 it writes
-nothing, so a hidden or idle UI costs the audio thread one `Atomics.load`.
+nothing to visSab, so the copy costs one `Atomics.load`. The engine's own
+side work is not gated by it: `Scope::process` (while a Scope module exists),
+`write_voices` and the strip tap (while a panel has one selected) still run.
 Voice levels get the meters' ballistics (instant attack, 60 dB/s fall) so a
 60 Hz reader never misses a short note; gates are copied as is.
 
@@ -133,7 +135,8 @@ for the FFT is the last resort (see `docs/followups/plan-12.md`).
 Consumers draw their canvas or DOM directly, never through Svelte state
 (the MeterBus rule). The mixer meters are one: `MixerView` registers its
 MeterBus tick with want 0 (the meters have their own SAB) and the mixer
-element, instead of running its own rAF. A paused loop reads nothing, so the
+element, as an idle driver (the tick returns true while any bar, peak hold or
+GR readout is still showing), instead of running its own rAF. A paused loop reads nothing, so the
 mixer's clip / LIMIT lights do not latch an over that happened (and fell
 away) while the mixer was off screen or the tab hidden.
 
@@ -466,16 +469,20 @@ without a MIDI In shows none and registers no consumer.
 With the app open, stopped and silent, the frame loop pauses entirely: the
 visuals that only show sound — the voice LEDs (`idleDriver.ts`) and the
 analyser bus (the top-bar spectrum, the stereo view, the panel) — leave it
-after 0.5 s of stopped silence, like the waveform view leaves when it has
-nothing to draw (`waveDriver.ts`). The scope and the mixer meters stay
-while on screen. `visWake.ts` brings the idle ones back: `setPlaying(true)`
+after 0.5 s of stopped quiet, like the waveform view leaves when it has
+nothing to draw (`waveDriver.ts`). The mixer meters (`MixerView`) and the
+Scope (`ScopeView`, once its ring heads have stood still 0.25 s and the
+"idle" tag is drawn) are idle drivers too. `visWake.ts` brings the idle ones back: `setPlaying(true)`
 on Play (App follows `project.playing`), and `wake()` on a played note-on
 (`noteInput.ts`, QWERTY and MIDI, also while stopped), on any edit
 (`project.version`: a patch that drones without a note) and on a new engine.
-A release tail after Stop keeps them awake while it is still visible: the
-analyser waits for digital silence (exact zeros) in the master ring, so with
-the spec-6 mix's reverb and delay returns the loop paused ~16 s after Stop
-(serial e2e); an app that has played nothing pauses within a second.
+A release tail after Stop keeps them awake only while it is audible: the
+analyser counts a frame as heard when the window's peak |x| reaches 1e-3
+(-60 dBFS, mono for the bars, L or R for the stereo view) and the bars must
+sit at or under -60 dB; on leaving it resets the bars and draws once, so the
+frozen picture is empty. With the spec-6 mix's reverb and delay returns
+that pauses the loop a few seconds after Stop (serial e2e limit 8 s); an app
+that has played nothing pauses within a second.
 Pinned by `idleDriver.test.ts` and `analyserBus.test.ts` (`the mini
 spectrum leaves the loop…`: with the bus and the LEDs on one real frame
 loop, no rAF is pending once both are idle).

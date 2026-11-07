@@ -60,6 +60,11 @@ export interface AnalyserView {
   draw(bus: AnalyserBus, now: number): void;
 }
 
+/** A window is "heard" when its peak |x| reaches this (-60 dBFS); quieter tails do not keep the bus awake. */
+const HEARD_PEAK = 1e-3;
+/** Bars at or under this (dB) count as dark for the idle check. */
+const QUIET_DB = -60;
+
 /** A mixer strip that can be shown: its channel and who it belongs to (track id, 'reverb', 'delay'). */
 export interface LiveStrip {
   ch: number;
@@ -260,13 +265,14 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
   }
 
   /**
-   * dB per bin of `mono`, or null for digital silence (all zeros: a stopped
-   * transport), which skips the FFT — the top bar keeps the analysis
+   * dB per bin of `mono`, or null for (near-)silence — a window whose peak
+   * stays under HEARD_PEAK (-60 dBFS; a stopped transport, a dying tail) —
+   * which skips the FFT — the top bar keeps the analysis
    * running whenever the app is visible.
    */
   function bins(): Float32Array | null {
     for (let i = 0; i < SPEC_N; i++) {
-      if (mono[i] !== 0) {
+      if (Math.abs(mono[i]) >= HEARD_PEAK) {
         heard = true;
         return analyser.analyse(mono);
       }
@@ -275,7 +281,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
   }
 
   const atFloor = (b: Ballistics) => {
-    for (let i = 0; i < b.level.length; i++) if (b.level[i] > DB_FLOOR || b.peak[i] > DB_FLOOR) return false;
+    for (let i = 0; i < b.level.length; i++) if (b.level[i] > QUIET_DB || b.peak[i] > QUIET_DB) return false;
     return true;
   };
 
@@ -286,6 +292,11 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
     if (!quiet) quietSince = NaN;
     else if (Number.isNaN(quietSince)) quietSince = now;
     else if (now - quietSince > IDLE_AFTER_MS) {
+      // The bars sit between -60 and -90 dB now: drop them to the floor and
+      // draw that once, so the frozen picture is the empty one.
+      mini.reset();
+      panel.reset();
+      for (const e of views) if (e.onScreen) e.v.draw(bus, now);
       asleep = true;
       refresh();
     }
@@ -340,7 +351,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
         if (panelMaster) panel.step(b ? panelBands.measure(b) : silentPanel, dt);
       }
       if (needStereo) {
-        if (!heard) for (let i = masterN - corrN; i < masterN; i++) if (bufL[i] !== 0 || bufR[i] !== 0) { heard = true; break; }
+        if (!heard) for (let i = masterN - corrN; i < masterN; i++) if (Math.abs(bufL[i]) >= HEARD_PEAK || Math.abs(bufR[i]) >= HEARD_PEAK) { heard = true; break; }
         corr.step(bufL, bufR, masterN - corrN, masterN, dt);
         gonN = goniometer(bufL, bufR, gonX, gonY, gonioN, masterN);
       }

@@ -1,20 +1,64 @@
 <script lang="ts">
-  // Transport + live engine readouts. Telemetry refreshes at 4 Hz. If the
-  // engine dies after start, a red "Audio engine stopped — reload" alert
-  // replaces the readouts (AudioEngine.onError / failure).
+  // Transport + record controls + live engine readouts. Telemetry refreshes
+  // at 4 Hz. If the engine dies after start, a red "Audio engine stopped —
+  // reload" alert replaces the readouts (AudioEngine.onError / failure).
+  //
+  // Record: "● Rec" arms (R key); it is red while armed, reads "Count-in…"
+  // during the count-in and "● REC" (pulsing) while notes are being recorded.
+  // Play/Stop and arm go through the App (onTogglePlay / onToggleArm) so the
+  // count-in and the recorder's stop tick are handled in one place. Count-in
+  // and Rec offset persist in localStorage (state/recorder.ts).
   import { onMount } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
-  import { liveInputTrack, setMetronome, setTempo, togglePlay } from '../state/actions';
+  import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
+  import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings } from '../state/recorder';
+  import type { Recorder, RecStatus } from '../state/recorder';
 
   let {
     p,
     engine,
     octave = 4,
     midi = { state: 'no-devices', devices: [] },
-  }: { p: Project; engine: AudioEngine; octave?: number; midi?: MidiStatus } = $props();
+    recorder,
+    rec,
+    onTogglePlay,
+    onToggleArm,
+  }: {
+    p: Project;
+    engine: AudioEngine;
+    octave?: number;
+    midi?: MidiStatus;
+    recorder: Recorder;
+    /** Recorder status, refreshed every frame by the App. */
+    rec: RecStatus;
+    onTogglePlay: () => void;
+    onToggleArm: () => void;
+  } = $props();
+
+  // Mirrors of the recorder's persisted settings (the Recorder is not reactive).
+  let countIn = $state(recorder.countIn);
+  let offsetMs = $state(recorder.offsetMs);
+  const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? '● REC' : '● Rec');
+
+  function persist() {
+    saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
+  }
+  function toggleCountIn() {
+    recorder.countIn = countIn = !countIn;
+    persist();
+  }
+  /** Commit on change/Enter (clamped), then release focus so Space / R / the piano work again. */
+  function commitOffset(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    recorder.offsetMs = input.valueAsNumber;
+    offsetMs = recorder.offsetMs;
+    input.value = String(offsetMs);
+    persist();
+    input.blur();
+  }
 
   // Reactive: follows track selection (project state is $state).
   const keysTrack = $derived(liveInputTrack(p));
@@ -70,9 +114,53 @@
 </script>
 
 <header class="bar">
-  <button class="play" class:on={p.playing} onclick={() => togglePlay(p, engine)} title="Play / Stop (Space)">
+  <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)">
     {p.playing ? '■ Stop' : '▶ Play'}
   </button>
+  <button
+    class="rec"
+    class:armed={rec.armed}
+    class:live={rec.state === 'recording'}
+    aria-pressed={rec.armed}
+    data-testid="rec-button"
+    data-state={rec.state}
+    onclick={onToggleArm}
+    title="Record arm (R). Records into the Keys → track while playing."
+  >{recLabel}</button>
+  <button
+    class="small"
+    class:on={countIn}
+    aria-pressed={countIn}
+    data-testid="count-in"
+    onclick={toggleCountIn}
+    title="One bar of metronome before recording starts (when armed)"
+  >Count-in</button>
+  <details class="pop">
+    <summary title="Recording timing offset">Offset {offsetMs} ms</summary>
+    <div class="panel">
+      <label>
+        <span class="lbl">REC OFFSET</span>
+        <input
+          type="number"
+          min={REC_OFFSET_MIN}
+          max={REC_OFFSET_MAX}
+          step="1"
+          value={offsetMs}
+          data-testid="rec-offset"
+          onchange={commitOffset}
+          onkeydown={(e) => e.key === 'Enter' && commitOffset(e)}
+        /> ms
+      </label>
+      <p>Recorded notes are placed where you heard the beat. If they still land late, raise this (positive = earlier). −200…200.</p>
+    </div>
+  </details>
+  <button
+    class="small"
+    disabled={rec.takeNotes === 0}
+    data-testid="undo-take"
+    onclick={() => recorder.undoLastTake()}
+    title="Remove the notes the last recording pass added"
+  >Undo take</button>
   <label class="bpm">
     <span class="lbl">BPM</span>
     <input
@@ -118,6 +206,19 @@
   button { cursor: pointer; }
   button:hover { background: #33353e; }
   button.on { background: #f0a23a; color: #111; border-color: #f0a23a; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .small { font-size: 11px; padding: 4px 8px; }
+  .rec { min-width: 84px; color: #e06666; }
+  .rec.armed { background: #c92a2a; border-color: #c92a2a; color: #fff; font-weight: 700; }
+  .rec.live { animation: rec-pulse 1s ease-in-out infinite; }
+  @keyframes rec-pulse { 50% { background: #8a1c1c; border-color: #8a1c1c; } }
+  .pop { position: relative; }
+  .pop summary { list-style: none; cursor: pointer; font-size: 11px; color: #9a9da8; padding: 4px 6px; border-radius: 4px; }
+  .pop summary::-webkit-details-marker { display: none; }
+  .pop summary:hover { background: #2a2c33; }
+  .pop .panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; width: 240px; padding: 8px 10px; background: #24262c; border: 1px solid #34363e; border-radius: 4px; box-shadow: 0 4px 14px #0008; }
+  .pop .panel label { display: flex; align-items: center; gap: 6px; }
+  .pop .panel p { margin: 6px 0 0; font-size: 11px; color: #9a9da8; }
   .bpm { display: flex; align-items: center; gap: 6px; }
   .lbl { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
   input { width: 64px; }

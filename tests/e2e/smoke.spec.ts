@@ -12,6 +12,7 @@ type DawWindow = {
       failure: string | null;
     } | null;
     Op: Record<string, number>;
+    recorder?: { lastTakeIds: string[]; armed: boolean } | null;
   };
 };
 
@@ -665,4 +666,61 @@ test('four synth tracks stay under budget', async ({ page }) => {
   // The drones must actually be rendering (a silent graph would be cheap).
   expect(await slot(page, 5)()).toBeGreaterThan(0); // peakL
   expect(await slot(page, 6)()).toBeGreaterThan(0); // peakR
+});
+
+// ---- Recording (plan 3, Task 4) ----
+
+/** Ids of the notes the last recording pass added. */
+const takeLen = (page: Page) => () =>
+  page.evaluate(() => (window as unknown as DawWindow).__daw!.recorder!.lastTakeIds.length);
+
+test('record: R arms, played notes land in the pattern, a note held through Stop is closed, undo removes the take', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  const rec = page.getByTestId('rec-button');
+  await expect(rec).toHaveAttribute('data-state', 'off');
+  await page.keyboard.press('KeyR'); // stopped: only arms
+  await expect(rec).toHaveAttribute('aria-pressed', 'true');
+  await expect(rec).toHaveAttribute('data-state', 'armed');
+  expect(await slot(page, 1)()).toBe(0); // arming did not start the transport
+  await page.keyboard.press('Space');
+  await expect(rec).toHaveAttribute('data-state', 'recording');
+  await expect(rec).toHaveText('● REC');
+  await page.keyboard.down('KeyA');
+  await page.waitForTimeout(150);
+  await page.keyboard.up('KeyA');
+  await page.keyboard.down('KeyD'); // held through Stop
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Space');
+  await expect.poll(takeLen(page)).toBe(2);
+  await page.keyboard.up('KeyD');
+  await expect(rec).toHaveAttribute('data-state', 'armed');
+  const undo = page.getByTestId('undo-take');
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await expect.poll(takeLen(page)).toBe(0);
+  await expect(undo).toBeDisabled();
+});
+
+test('count-in: Play while armed counts one bar in, then records; the setting persists', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  const countIn = page.getByTestId('count-in');
+  await countIn.click();
+  await expect(countIn).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('KeyR');
+  await page.keyboard.press('Space');
+  const rec = page.getByTestId('rec-button');
+  await expect(rec).toHaveText('Count-in…');
+  expect(await slot(page, 2)()).toBeLessThan(0); // engine started at -3840 ticks
+  // One bar at 124 bpm is ~1.9 s.
+  await expect(rec).toHaveAttribute('data-state', 'recording', { timeout: 5_000 });
+  await page.keyboard.press('Space');
+  await page.reload();
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await expect(page.getByTestId('count-in')).toHaveAttribute('aria-pressed', 'true');
+  // Not armed: Play has no count-in.
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1);
+  expect(await slot(page, 2)()).toBeGreaterThanOrEqual(0);
 });

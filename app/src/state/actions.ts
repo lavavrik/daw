@@ -1,5 +1,5 @@
 // Every user edit: mutate Project AND send the matching engine command.
-import { Op } from '../audio/protocol';
+import { BAR_TICKS, Op } from '../audio/protocol';
 import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 
@@ -135,9 +135,10 @@ export function setMetronome(p: Project, sink: CommandSink, on: boolean) {
   sink.send(Op.SET_METRONOME, on ? 1 : 0);
 }
 
-export function play(p: Project, sink: CommandSink) {
+/** `countIn`: ticks of count-in (BAR_TICKS = one bar; the engine accepts only 0 or BAR_TICKS). */
+export function play(p: Project, sink: CommandSink, countIn = 0) {
   p.playing = true;
-  sink.send(Op.PLAY);
+  sink.send(Op.PLAY, countIn === BAR_TICKS ? BAR_TICKS : 0);
 }
 
 export function stop(p: Project, sink: CommandSink) {
@@ -145,9 +146,9 @@ export function stop(p: Project, sink: CommandSink) {
   sink.send(Op.STOP);
 }
 
-export function togglePlay(p: Project, sink: CommandSink) {
+export function togglePlay(p: Project, sink: CommandSink, countIn = 0) {
   if (p.playing) stop(p, sink);
-  else play(p, sink);
+  else play(p, sink, countIn);
 }
 
 /** The synth that receives live keys: the selected synth, else the last-selected one. */

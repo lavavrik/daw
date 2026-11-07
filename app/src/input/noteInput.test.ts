@@ -1,0 +1,36 @@
+import { describe, expect, it } from 'vitest';
+import { Op } from '../audio/protocol';
+import { createNoteInput } from './noteInput';
+
+describe('noteInput', () => {
+  it('noteInput forwards to sink and recorder', () => {
+    const sent: number[][] = [];
+    const sink = { send: (...a: number[]) => (sent.push(a), true) };
+    const calls: unknown[][] = [];
+    const rec = {
+      noteOn: (...a: unknown[]) => void calls.push(['on', ...a]),
+      noteOff: (...a: unknown[]) => void calls.push(['off', ...a]),
+      closeSource: (...a: unknown[]) => void calls.push(['close', ...a]),
+    };
+    const input = createNoteInput(sink, rec);
+    input.on(60, 100, 12.5, 'qwerty');
+    input.off(60, 20, 'qwerty');
+    input.closeSource('midi:a');
+    expect(sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+    expect(calls).toEqual([['on', 60, 100, 12.5, 'qwerty'], ['off', 60, 20, 'qwerty'], ['close', 'midi:a']]);
+    // Without a recorder it is just the sink.
+    const bare = createNoteInput(sink, null);
+    bare.on(61, 90, 0, 'x');
+    expect(sent.at(-1)).toEqual([Op.NOTE_ON, 61, 90]);
+  });
+
+  it('a recorder that throws never blocks the note reaching the engine', () => {
+    const sent: number[][] = [];
+    const sink = { send: (...a: number[]) => (sent.push(a), true) };
+    const boom = () => { throw new Error('x'); };
+    const input = createNoteInput(sink, { noteOn: boom, noteOff: boom, closeSource: boom });
+    expect(() => input.on(60, 100, 0, 'q')).not.toThrow();
+    expect(() => input.off(60, 0, 'q')).not.toThrow();
+    expect(sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
 import { connectMidi, parseMidi } from './midi';
+import { createNoteInput } from './noteInput';
 import type { MidiStatus } from './midi';
 
 const u = (...b: number[]) => new Uint8Array(b);
@@ -34,17 +35,27 @@ describe('parseMidi', () => {
   it('accepts channel 10 (omni)', () => expect(parseMidi(u(0x99, 36, 90))).toEqual({ t: 'on', note: 36, vel: 90 }));
 });
 
-type Fake = { id: string; name: string; state: string; onmidimessage: ((e: { data: Uint8Array }) => void) | null };
+type Fake = { id: string; name: string; state: string; onmidimessage: ((e: { data: Uint8Array; timeStamp?: number }) => void) | null };
 function fakeAccess(inputs: Fake[]) {
   const map = new Map(inputs.map((i) => [i.id, i]));
   const acc = { inputs: map, onstatechange: null as null | (() => void) };
   return acc;
 }
 const mkInput = (id: string, name = id): Fake => ({ id, name, state: 'connected', onmidimessage: null });
+/** Sink + a note input whose recorder side logs to `heard`. */
 const mkSink = () => {
   const sent: number[][] = [];
-  return { sent, send: (...a: number[]) => (sent.push(a), true) };
+  const heard: unknown[][] = [];
+  const sink = { send: (...a: number[]) => (sent.push(a), true) };
+  const input = createNoteInput(sink, {
+    noteOn: (...a) => void heard.push(['on', ...a]),
+    noteOff: (...a) => void heard.push(['off', ...a]),
+    closeSource: (...a) => void heard.push(['close', ...a]),
+  });
+  return { sent, heard, input, send: sink.send };
 };
+/** connectMidi with the fake sink's own note input. */
+const connect = (s: ReturnType<typeof mkSink>, onStatus: (x: MidiStatus) => void) => connectMidi(s, s.input, onStatus);
 const setNav = (v: unknown) => Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true });
 function install(access: unknown) {
   setNav({ requestMIDIAccess: async () => access });
@@ -54,13 +65,13 @@ describe('connectMidi', () => {
   it('unsupported when the API is missing', async () => {
     setNav({});
     const s: MidiStatus[] = [];
-    await connectMidi(mkSink(), (x) => s.push(x));
+    await connect(mkSink(), (x) => s.push(x));
     expect(s.at(-1)).toEqual({ state: 'unsupported', devices: [] });
   });
   it('denied when the request rejects', async () => {
     setNav({ requestMIDIAccess: async () => { throw new Error('no'); } });
     const s: MidiStatus[] = [];
-    await connectMidi(mkSink(), (x) => s.push(x));
+    await connect(mkSink(), (x) => s.push(x));
     expect(s.at(-1)).toEqual({ state: 'denied', devices: [] });
   });
   it('reports devices and routes events to the sink', async () => {
@@ -69,16 +80,19 @@ describe('connectMidi', () => {
     install(acc);
     const sink = mkSink();
     const s: MidiStatus[] = [];
-    await connectMidi(sink, (x) => s.push(x));
+    await connect(sink, (x) => s.push(x));
     expect(s.at(-1)).toEqual({ state: 'connected', devices: ['Keystation'] });
-    a.onmidimessage!({ data: u(0x90, 60, 100) });
+    a.onmidimessage!({ data: u(0x90, 60, 100), timeStamp: 812.25 });
     a.onmidimessage!({ data: u(0xb0, 64, 127) });
-    expect(sink.sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.SUSTAIN, 1]]);
+    a.onmidimessage!({ data: u(0x80, 60, 0), timeStamp: 900 });
+    expect(sink.sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.SUSTAIN, 1], [Op.NOTE_OFF, 60]]);
+    // Notes (only) reach the recorder, with the event's timestamp and source.
+    expect(sink.heard).toEqual([['on', 60, 100, 812.25, 'midi:a'], ['off', 60, 900, 'midi:a']]);
   });
   it('no-devices when there are no inputs', async () => {
     install(fakeAccess([]));
     const s: MidiStatus[] = [];
-    await connectMidi(mkSink(), (x) => s.push(x));
+    await connect(mkSink(), (x) => s.push(x));
     expect(s.at(-1)).toEqual({ state: 'no-devices', devices: [] });
   });
   it('a panic CC releases that input\'s held notes and the pedal', async () => {
@@ -86,7 +100,7 @@ describe('connectMidi', () => {
     const b = mkInput('b');
     install(fakeAccess([a, b]));
     const sink = mkSink();
-    await connectMidi(sink, () => {});
+    await connect(sink, () => {});
     a.onmidimessage!({ data: u(0x90, 60, 100) });
     a.onmidimessage!({ data: u(0x90, 64, 100) });
     a.onmidimessage!({ data: u(0xb0, 64, 127) });
@@ -94,6 +108,7 @@ describe('connectMidi', () => {
     sink.sent.length = 0;
     a.onmidimessage!({ data: u(0xb0, 123, 0) });
     expect(sink.sent).toEqual([[Op.NOTE_OFF, 60], [Op.NOTE_OFF, 64], [Op.SUSTAIN, 0]]);
+    expect(sink.heard.at(-1)).toEqual(['close', 'midi:a']); // recorder closes a's notes only
     // Nothing left to release for `a` afterwards; `b`'s note is untouched.
     sink.sent.length = 0;
     a.onmidimessage!({ data: u(0xb0, 120, 0) });
@@ -105,7 +120,7 @@ describe('connectMidi', () => {
     const acc = fakeAccess([a, b]);
     install(acc);
     const sink = mkSink();
-    await connectMidi(sink, () => {});
+    await connect(sink, () => {});
     a.onmidimessage!({ data: u(0x90, 60, 100) });
     a.onmidimessage!({ data: u(0x90, 64, 100) });
     a.onmidimessage!({ data: u(0xb0, 64, 127) });
@@ -114,6 +129,7 @@ describe('connectMidi', () => {
     a.state = 'disconnected';
     acc.onstatechange!();
     expect(sink.sent).toEqual([[Op.NOTE_OFF, 60], [Op.NOTE_OFF, 64], [Op.SUSTAIN, 0]]);
+    expect(sink.heard.at(-1)).toEqual(['close', 'midi:a']);
     expect(a.onmidimessage).toBeNull();
   });
   it('hot-plugged inputs are bound; disposer releases everything', async () => {
@@ -121,7 +137,7 @@ describe('connectMidi', () => {
     install(acc);
     const sink = mkSink();
     const s: MidiStatus[] = [];
-    const dispose = await connectMidi(sink, (x) => s.push(x));
+    const dispose = await connect(sink, (x) => s.push(x));
     const c = mkInput('c', 'New');
     acc.inputs.set('c', c);
     acc.onstatechange!();

@@ -5,14 +5,18 @@
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
   import BottomPanel from './ui/BottomPanel.svelte';
-  import { Op } from './audio/protocol';
+  import { Op, TELEMETRY } from './audio/protocol';
   import { createAudioClock } from './audio/audioClock';
   import type { AudioClock } from './audio/audioClock';
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
-  import { addDrumTrack } from './state/actions';
+  import { addDrumTrack, play, stop } from './state/actions';
   import { installShortcuts } from './input/shortcuts';
   import { connectMidi } from './input/midi';
+  import { createNoteInput } from './input/noteInput';
+  import type { NoteInput } from './input/noteInput';
+  import { loadRecSettings, recorderFor, sameStatus } from './state/recorder';
+  import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners } from './state/banners.svelte';
   import { installSampleLoads } from './state/sampleLoads';
@@ -25,25 +29,96 @@
   let uninstallLoads: (() => void) | null = null;
   let octave = $state(4);
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
+  let recorder = $state.raw<Recorder | null>(null);
+  /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
+  let noteInput = $state.raw<NoteInput | null>(null);
+  let rec = $state<RecStatus>({ armed: false, state: 'off', takeNotes: 0 });
+  let stopWatch: (() => void) | null = null;
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op, clock: null };
+  window.__daw = { engine: null, Op, clock: null, recorder: null };
+
+  /**
+   * Play / Stop for the button and Space. Play while armed with Count-in on
+   * sends PLAY 3840. Stop first closes held recorded notes at the heard tick
+   * *now*: once STOP lands the engine resets its playhead to 0, so the clock
+   * can no longer tell where the user stopped.
+   */
+  function transportToggle() {
+    if (!engine || !recorder || !clock) return;
+    if (project.playing) {
+      recorder.onTransport(false, clock.heardTicks());
+      stop(project, engine);
+    } else {
+      play(project, engine, recorder.countInTicks());
+    }
+    refreshRec();
+  }
+
+  function toggleArm() {
+    recorder?.toggleArm();
+    refreshRec();
+  }
+
+  function refreshRec() {
+    const s = recorder?.status();
+    if (s && !sameStatus(s, rec)) rec = s;
+  }
+
+  /**
+   * 60 Hz: keeps the recorder's transport state in step with the engine
+   * (telemetry `playing`; 4 Hz would close notes up to 250 ms late) and the
+   * Rec button's status fresh (count-in -> recording). Start is taken when
+   * the engine confirms it; a stop the UI did not issue (console, engine
+   * failure) closes held notes at the last heard tick seen while playing.
+   */
+  function watchTransport(e: AudioEngine, c: AudioClock, r: Recorder) {
+    let raf = 0;
+    let lastHeard = 0;
+    const loop = () => {
+      const playing = e.telemetry()[TELEMETRY.playing] === 1;
+      if (playing) lastHeard = c.heardTicks();
+      // project.playing guards the frame between a UI Stop and the engine applying it.
+      if (playing && project.playing && !r.playing) r.onTransport(true, lastHeard);
+      else if (!playing && r.playing) r.onTransport(false, lastHeard);
+      refreshRec();
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }
 
   function onstarted(e: AudioEngine) {
     engine = e;
     window.__daw.engine = e;
     clock = createAudioClock(e, () => project.tempo);
     window.__daw.clock = clock;
+    const r = recorderFor(project, e, clock, () => {
+      banners.error = 'Pattern is full (1024 notes): some recorded notes were dropped';
+    });
+    const saved = loadRecSettings();
+    r.countIn = saved.countIn;
+    r.offsetMs = saved.offsetMs;
+    recorder = r;
+    window.__daw.recorder = r;
+    const input = createNoteInput(e, r);
+    noteInput = input;
+    stopWatch = watchTransport(e, clock, r);
     // Session-lifetime: deferred sample loads must land even while the step
     // grid is unmounted (a synth track selected).
     uninstallLoads = installSampleLoads(project, e);
     addDrumTrack(project, e); // default track so the UI has something to show
-    uninstall = installShortcuts(project, e, (o) => (octave = o));
+    uninstall = installShortcuts(project, e, input, {
+      onOctave: (o) => (octave = o),
+      onTogglePlay: transportToggle,
+      onToggleArm: toggleArm,
+    });
     // Not awaited: the permission prompt must never block startup/rendering.
-    void connectMidi(e, (s) => (midi = s)).then((d) => (uninstallMidi = d));
+    void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
   }
 
   onDestroy(() => {
+    stopWatch?.();
     uninstall?.();
     uninstallMidi?.();
     uninstallLoads?.();
@@ -75,7 +150,9 @@
 
 <div class="app">
   {#if engine}
-    <TopBar p={project} {engine} {octave} {midi} />
+    {#if recorder}
+      <TopBar p={project} {engine} {octave} {midi} {recorder} {rec} onTogglePlay={transportToggle} onToggleArm={toggleArm} />
+    {/if}
     <div class="main">
       <Browser />
       <div class="right">

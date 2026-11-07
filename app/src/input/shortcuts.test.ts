@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
 import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from './shortcuts';
+import { createNoteInput } from './noteInput';
+import type { NoteListener } from './noteInput';
 
-const mk = () => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void } = {}) => {
   const sent: number[][] = [];
   const octs: number[] = [];
-  const h = createShortcutHandlers({ playing: false } as any, { send: (...a: number[]) => (sent.push(a), true) }, (o) => octs.push(o));
-  return { sent, octs, h };
+  const heard: unknown[][] = []; // what the recorder side of the bus saw
+  const listener: NoteListener = {
+    noteOn: (...a) => void heard.push(['on', ...a]),
+    noteOff: (...a) => void heard.push(['off', ...a]),
+    closeSource: (...a) => void heard.push(['close', ...a]),
+  };
+  const sink = { send: (...a: number[]) => (sent.push(a), true) };
+  const h = createShortcutHandlers({ playing: false } as any, sink, createNoteInput(sink, listener), {
+    onOctave: (o) => octs.push(o),
+    ...opts,
+  });
+  return { sent, octs, heard, h };
 };
 const key = (code: string, extra: object = {}) => ({ code, target: null, repeat: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, ...extra }) as unknown as KeyboardEvent;
 
@@ -16,6 +28,34 @@ describe('shortcut handlers', () => {
     h.onKeyDown(key('KeyA'));
     h.onKeyUp(key('KeyA'));
     expect(sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+  });
+  it('piano notes go through the note input with the event timestamp', () => {
+    const { heard, h } = mk();
+    h.onKeyDown(key('KeyA', { timeStamp: 1234.5 }));
+    h.onKeyUp(key('KeyA', { timeStamp: 1500 }));
+    expect(heard).toEqual([['on', 60, 100, 1234.5, 'qwerty'], ['off', 60, 1500, 'qwerty']]);
+    // Releases without an event (blur, meta, dialogs) are stamped "now".
+    h.onKeyDown(key('KeyS', { timeStamp: 2000 }));
+    h.onBlur();
+    expect(heard.at(-1)![0]).toBe('off');
+    expect(Number.isFinite(heard.at(-1)![2])).toBe(true);
+  });
+  it('R toggles record arm (not on repeat, not while typing, not with modifiers)', () => {
+    let arms = 0;
+    const { sent, h } = mk({ onToggleArm: () => arms++ });
+    h.onKeyDown(key('KeyR'));
+    h.onKeyDown(key('KeyR', { repeat: true }));
+    h.onKeyDown(key('KeyR', { target: { tagName: 'INPUT', type: 'text' } }));
+    h.onKeyDown(key('KeyR', { metaKey: true })); // Cmd+R reloads; leave it alone
+    expect(arms).toBe(1);
+    expect(sent).toEqual([]); // R is not a piano key
+  });
+  it('Space calls onTogglePlay when given (count-in decided by the app)', () => {
+    let toggles = 0;
+    const { sent, h } = mk({ onTogglePlay: () => toggles++ });
+    h.onKeyDown(key('Space'));
+    expect(toggles).toBe(1);
+    expect(sent).toEqual([]);
   });
   it('meta key releases held piano notes', () => {
     const { sent, h } = mk();
@@ -72,7 +112,8 @@ describe('shortcut handlers', () => {
     g.document = { ...target, hidden: false };
     try {
       const sent: number[][] = [];
-      const uninstall = installShortcuts({ playing: false } as any, { send: (...a: number[]) => (sent.push(a), true) });
+      const sink = { send: (...a: number[]) => (sent.push(a), true) };
+      const uninstall = installShortcuts({ playing: false } as any, sink, createNoteInput(sink, null));
       listeners.get('keydown')!(key('KeyA'));
       let atDialog: number[][] = [];
       const ok = confirmReleasingKeys('Remove?', () => ((atDialog = [...sent]), false));

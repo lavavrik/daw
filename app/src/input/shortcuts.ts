@@ -1,12 +1,29 @@
-// Global keyboard shortcuts: Space = play/stop, Z/X = octave down/up,
-// home-row/top-row keys = piano (see qwertyPiano.ts).
-import { Op } from '../audio/protocol';
+// Global keyboard shortcuts: Space = play/stop, R = record arm, Z/X = octave
+// down/up, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
+// through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
+// timeStamp, so the recorder can place them at the heard time.
 import { togglePlay } from '../state/actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
 import { keyToNote } from './qwertyPiano';
+import type { NoteInput } from './noteInput';
 
 const PIANO_VELOCITY = 100;
+/** Recorder source id of the computer keyboard. */
+export const QWERTY_SOURCE = 'qwerty';
+
+export interface ShortcutOptions {
+  /** Fires (with the new octave) on Z/X. */
+  onOctave?: (o: number) => void;
+  /** Space. The app passes its own (count-in, recorder stop tick); default togglePlay(p, sink). */
+  onTogglePlay?: () => void;
+  /** R: toggle record arm. */
+  onToggleArm?: () => void;
+}
+
+/** Performance-time stamp of an event; "now" when absent (synthetic releases). */
+const stamp = (e?: { timeStamp?: number }) =>
+  e && Number.isFinite(e.timeStamp) ? (e.timeStamp as number) : performance.now();
 
 /** Input types that don't take typed text: shortcuts stay live while they have focus. */
 const NON_TEXT_INPUTS = new Set(['range', 'checkbox', 'radio', 'button', 'submit', 'reset', 'color', 'file', 'image']);
@@ -39,20 +56,24 @@ export interface ShortcutHandlers {
  * piano note is released on blur, on page hidden, and when a Meta key goes
  * down (macOS swallows the keyup of keys held during Cmd shortcuts).
  */
-export function createShortcutHandlers(p: Project, sink: CommandSink, onOctave?: (o: number) => void): ShortcutHandlers {
+export function createShortcutHandlers(
+  p: Project, sink: CommandSink, input: NoteInput, opts: ShortcutOptions = {},
+): ShortcutHandlers {
+  const { onOctave } = opts;
   let octave = 4;
   // KeyboardEvent.code -> note that was actually started, so changing the
   // octave while a key is held still releases the right note.
   const held = new Map<string, number>();
 
-  const release = (code: string) => {
+  const release = (code: string, perfMs: number) => {
     const note = held.get(code);
     if (note === undefined) return;
     held.delete(code);
-    sink.send(Op.NOTE_OFF, note);
+    input.off(note, perfMs, QWERTY_SOURCE);
   };
   const releaseAll = () => {
-    for (const code of [...held.keys()]) release(code);
+    const now = performance.now();
+    for (const code of [...held.keys()]) release(code, now);
   };
 
   return {
@@ -61,7 +82,11 @@ export function createShortcutHandlers(p: Project, sink: CommandSink, onOctave?:
       if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === 'Space') {
         e.preventDefault(); // no page scroll / focused-button activation
-        if (!e.repeat) togglePlay(p, sink);
+        if (!e.repeat) (opts.onTogglePlay ?? (() => togglePlay(p, sink)))();
+        return;
+      }
+      if (e.code === 'KeyR') {
+        if (!e.repeat) opts.onToggleArm?.();
         return;
       }
       if (e.code === 'KeyZ' || e.code === 'KeyX') {
@@ -78,9 +103,9 @@ export function createShortcutHandlers(p: Project, sink: CommandSink, onOctave?:
       const note = keyToNote(e.code, octave);
       if (note === null || held.has(e.code)) return;
       held.set(e.code, note);
-      sink.send(Op.NOTE_ON, note, PIANO_VELOCITY);
+      input.on(note, PIANO_VELOCITY, stamp(e), QWERTY_SOURCE);
     },
-    onKeyUp: (e) => release(e.code), // always, even if focus moved into an input
+    onKeyUp: (e) => release(e.code, stamp(e)), // always, even if focus moved into an input
     onBlur: releaseAll,
     onVisibility(hidden) {
       if (hidden) releaseAll();
@@ -107,9 +132,9 @@ export function confirmReleasingKeys(message: string, ask: (m: string) => boolea
   return ask(message);
 }
 
-/** Returns an uninstall function. `onOctave` fires (with the new octave) on Z/X. */
-export function installShortcuts(p: Project, sink: CommandSink, onOctave?: (o: number) => void): () => void {
-  const h = createShortcutHandlers(p, sink, onOctave);
+/** Returns an uninstall function. */
+export function installShortcuts(p: Project, sink: CommandSink, input: NoteInput, opts: ShortcutOptions = {}): () => void {
+  const h = createShortcutHandlers(p, sink, input, opts);
   installed = h;
   const onVis = () => h.onVisibility(document.hidden);
   window.addEventListener('keydown', h.onKeyDown);

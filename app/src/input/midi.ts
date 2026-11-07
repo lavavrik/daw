@@ -2,8 +2,14 @@
 // browser plumbing and, crucially, stuck-note safety: every input's held
 // notes and pedal are tracked so unplugging a keyboard (or disposing)
 // always sends the matching NOTE_OFF / SUSTAIN 0 to the engine.
+//
+// Notes go through the note input bus (noteInput.ts) stamped with the
+// MIDIMessageEvent's timeStamp (performance time) and source `midi:<input id>`;
+// bend / mod / sustain / panic go straight to the sink. A panic or an unplug
+// also tells the recorder to close that input's open notes.
 import { Op } from '../audio/protocol';
 import type { CommandSink } from '../state/actions';
+import type { NoteInput } from './noteInput';
 
 export type MidiEvent =
   | { t: 'on'; note: number; vel: number }
@@ -46,7 +52,7 @@ interface InputLike {
   id: string;
   name?: string | null;
   state?: string;
-  onmidimessage: ((e: { data: Uint8Array | null }) => void) | null;
+  onmidimessage: ((e: { data: Uint8Array | null; timeStamp?: number }) => void) | null;
 }
 interface AccessLike {
   inputs: Map<string, InputLike>;
@@ -58,7 +64,9 @@ interface AccessLike {
  * input to `sink`. Hot-plug aware. Resolves to a disposer that releases
  * anything still held. Never rejects: failures are reported via onStatus.
  */
-export async function connectMidi(sink: CommandSink, onStatus: (s: MidiStatus) => void): Promise<() => void> {
+export async function connectMidi(
+  sink: CommandSink, input: NoteInput, onStatus: (s: MidiStatus) => void,
+): Promise<() => void> {
   const nav = globalThis.navigator as Navigator & { requestMIDIAccess?: () => Promise<unknown> };
   if (typeof nav?.requestMIDIAccess !== 'function') {
     onStatus({ state: 'unsupported', devices: [] });
@@ -76,26 +84,30 @@ export async function connectMidi(sink: CommandSink, onStatus: (s: MidiStatus) =
   const held = new Map<string, { notes: Set<number>; pedal: boolean }>();
   const bound = new Map<string, InputLike>();
 
+  const source = (id: string) => `midi:${id}`;
+
   const releaseInput = (id: string) => {
     const h = held.get(id);
     if (!h) return;
     for (const n of h.notes) sink.send(Op.NOTE_OFF, n);
     if (h.pedal) sink.send(Op.SUSTAIN, 0);
     held.delete(id);
+    input.closeSource(source(id));
   };
 
-  const handle = (id: string, data: Uint8Array | null) => {
-    const ev = data && parseMidi(data);
+  const handle = (id: string, e: { data: Uint8Array | null; timeStamp?: number }) => {
+    const ev = e.data && parseMidi(e.data);
     if (!ev) return;
     const h = held.get(id)!;
+    const at = Number.isFinite(e.timeStamp) ? (e.timeStamp as number) : performance.now();
     switch (ev.t) {
       case 'on':
         h.notes.add(ev.note);
-        sink.send(Op.NOTE_ON, ev.note, ev.vel);
+        input.on(ev.note, ev.vel, at, source(id));
         break;
       case 'off':
         h.notes.delete(ev.note);
-        sink.send(Op.NOTE_OFF, ev.note);
+        input.off(ev.note, at, source(id));
         break;
       case 'bend':
         sink.send(Op.PITCH_BEND, ev.v);
@@ -115,6 +127,7 @@ export async function connectMidi(sink: CommandSink, onStatus: (s: MidiStatus) =
         h.notes.clear();
         h.pedal = false;
         sink.send(Op.SUSTAIN, 0);
+        input.closeSource(source(id));
         break;
     }
   };
@@ -133,7 +146,7 @@ export async function connectMidi(sink: CommandSink, onStatus: (s: MidiStatus) =
     for (const [id, inp] of live) {
       if (bound.has(id)) continue;
       held.set(id, { notes: new Set(), pedal: false });
-      inp.onmidimessage = (e) => handle(id, e.data);
+      inp.onmidimessage = (e) => handle(id, e);
       bound.set(id, inp);
     }
     const devices = [...live.values()].map((i) => i.name || i.id);

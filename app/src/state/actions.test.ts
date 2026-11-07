@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
 import { Project } from './project.svelte';
-import { addDrumTrack, addRow, setRowSample, setTempo, toggleStep } from './actions';
+import { addDrumTrack, addRow, play, setRowSample, setTempo, stop, togglePlay, toggleStep } from './actions';
 
 function fake() {
   const sent: number[][] = [];
@@ -79,5 +79,20 @@ describe('actions', () => {
     expect(sent).toEqual([[Op.SET_ROW_SAMPLE, 0, 2, 5, 0]]);
     expect(t.rows[2].sampleId).toBe(5);
     expect(t.rows[2].name).toBe('kick.wav');
+  });
+
+  it('play takes a count-in: 0 or one bar (anything else plays without)', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    play(p, sink, 3840);
+    stop(p, sink);
+    play(p, sink, 1234);
+    stop(p, sink);
+    togglePlay(p, sink, 3840);
+    togglePlay(p, sink);
+    play(p, sink);
+    expect(sent.map((s) => s.slice(0, 2))).toEqual([
+      [Op.PLAY, 3840], [Op.STOP, 0], [Op.PLAY, 0], [Op.STOP, 0], [Op.PLAY, 3840], [Op.STOP, 0], [Op.PLAY, 0],
+    ]);
   });
 });

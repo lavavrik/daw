@@ -80,6 +80,9 @@ use catalog::*;
 pub const TAIL_SECONDS: f32 = 0.25;
 /// Fader / pan / send / master-gain ramp time.
 const GAIN_SECONDS: f32 = 0.005;
+/// The legacy master gain's default: fixed headroom (−1.9 dB) before the
+/// limiter, restored by the engine reset.
+pub const MASTER_GAIN: f32 = 0.8;
 /// Mute / solo gate and sidechain-fallback ramp time.
 const GATE_SECONDS: f32 = 0.002;
 /// "No key slot" in [`Mixer::row_keys`].
@@ -396,6 +399,7 @@ struct Buses {
 
 /// The mixer (see the module docs).
 pub struct Mixer {
+    sr: f32,
     /// `MIX_CHANNELS` strips (tracks, Reverb return, Delay return, master).
     strips: Vec<Strip>,
     reverb: Reverb,
@@ -420,11 +424,12 @@ impl Mixer {
         let gain_len = (GAIN_SECONDS * sr).round().max(1.0) as u32;
         let gate_len = (GATE_SECONDS * sr).round().max(1.0) as u32;
         let mut m = Mixer {
+            sr,
             strips: (0..MIX_CHANNELS).map(|_| Strip::new(sr, gain_len, gate_len)).collect(),
             reverb: Reverb::new(sr),
             delay: Delay::new(sr),
             limiter: Limiter::with_lookahead(sr, lookahead),
-            master_gain: Ramp::new(0.8, gain_len),
+            master_gain: Ramp::new(MASTER_GAIN, gain_len),
             row_keys: vec![[NO_KEY; MAX_ROWS]; MAX_TRACKS],
             buses: Buses {
                 master: StereoBufs::new(1),
@@ -437,16 +442,42 @@ impl Mixer {
             gate_len: gate_len as usize,
             tail_len: (TAIL_SECONDS * sr) as usize,
         };
+        m.apply_defaults();
+        m
+    }
+
+    /// Every channel's params at their defaults and keys none, applied at
+    /// once (the gain ramps rest on their targets: nothing to glide from).
+    fn apply_defaults(&mut self) {
         for ch in 0..MIX_CHANNELS {
-            m.reset_channel(ch);
+            self.reset_channel(ch);
         }
-        // Defaults apply at once (nothing to glide from).
-        for s in m.strips.iter_mut() {
+        for s in self.strips.iter_mut() {
             for r in [&mut s.gl, &mut s.gr, &mut s.gate, &mut s.send_a, &mut s.send_b] {
                 *r = Ramp::new(r.target, r.len);
             }
         }
-        m
+    }
+
+    /// Engine reset (`OP_RESET_ALL`): back to exactly a new mixer's state,
+    /// without allocating. Strips (params, keys, EQ/compressor state, insert
+    /// crossfades, tails and holds), the reverb and delay returns (their
+    /// tails are zeroed), the limiter (delay line and envelope), the legacy
+    /// master gain ([`MASTER_GAIN`], not ramped) and the meters. Nothing glides: the
+    /// engine fades its master output over the reset instead.
+    pub fn reset_all(&mut self) {
+        let gain_len = self.master_gain.len;
+        let gate_len = self.gate_len as u32;
+        for s in self.strips.iter_mut() {
+            *s = Strip::new(self.sr, gain_len, gate_len);
+        }
+        self.master_gain = Ramp::new(MASTER_GAIN, gain_len);
+        self.apply_defaults();
+        // After the defaults: the DSP jumps to its (default) targets.
+        self.reverb.reset();
+        self.delay.reset();
+        self.limiter.reset();
+        self.meters.fill(0.0);
     }
 
     /// Latency of the master (the limiter lookahead), in samples.

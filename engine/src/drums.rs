@@ -54,7 +54,7 @@
 //! hits on one row from two clips at the same sample retrigger the row (the
 //! older voice fades over 2 ms).
 
-use crate::arena::{SampleArena, SampleSlice};
+use crate::arena::SampleArena;
 use crate::arrangement::{for_each_overlapping, Clip, Timeline};
 use crate::samples::SamplePool;
 use crate::transport::{events_in_window, tick_to_offset};
@@ -192,9 +192,10 @@ impl DrumPattern {
 pub struct Voice {
     live: bool,
     sample: u32,
-    /// Arena region captured at trigger; if the sample slot now points
-    /// elsewhere (re-allocated), the voice must not read it.
-    slice: Option<SampleSlice>,
+    /// Sample generation captured at trigger (`samples.rs`); if the slot now
+    /// holds another upload (replaced, or cleared by an engine reset), the
+    /// voice must not read it.
+    generation: u32,
     /// Hold-and-fade mode: no data reads; `gl`/`gr` hold the last output and
     /// the `level` ramp takes it to 0.
     hold: bool,
@@ -210,7 +211,7 @@ pub struct Voice {
 
 impl Voice {
     const OFF: Voice =
-        Voice { live: false, sample: 0, slice: None, hold: false, last_l: 0.0, last_r: 0.0, pos: 0, gl: 0.0, gr: 0.0, level: 0.0, step: 0.0, ramp_left: 0 };
+        Voice { live: false, sample: 0, generation: 0, hold: false, last_l: 0.0, last_r: 0.0, pos: 0, gl: 0.0, gr: 0.0, level: 0.0, step: 0.0, ramp_left: 0 };
 
     /// Add this voice into `l`/`r` (equal length). All reads are bounds-checked
     /// against the *current* playable data; running off the end frees the voice.
@@ -305,12 +306,12 @@ impl RowVoices {
 
     /// Start a hit. A still-sounding voice fades out (2 ms); the new one starts
     /// at full level (R11: no fade-in, the attack is the sample's own).
-    fn trigger(&mut self, sample: u32, slice: Option<SampleSlice>, gl: f32, gr: f32, fade: usize) {
+    fn trigger(&mut self, sample: u32, generation: u32, gl: f32, gr: f32, fade: usize) {
         self.fade_out(fade);
         self.active = Voice {
             live: true,
             sample,
-            slice,
+            generation,
             hold: false,
             last_l: 0.0,
             last_r: 0.0,
@@ -336,10 +337,8 @@ impl RowVoices {
                 continue;
             }
             if !v.hold {
-                let id = v.sample as usize;
-                let same = pool.get(id).map(|s| s.slice) == v.slice;
-                match pool.playable(arena, id) {
-                    Some((data, frames, ch)) if same => {
+                match pool.playable(arena, v.sample as usize) {
+                    Some((data, frames, ch, g)) if g == v.generation => {
                         v.render_add(data, frames, ch, l, r);
                         continue;
                     }
@@ -433,6 +432,17 @@ impl Drums {
         let fade = self.fade;
         for t in self.tracks.iter_mut() {
             t.fade_all(fade);
+        }
+    }
+
+    /// Engine reset (`OP_RESET_ALL`): every track inactive with default rows
+    /// and empty patterns, and every voice silenced at once (no fade: the
+    /// engine fades its master output instead). In place, allocation-free.
+    pub fn reset_all(&mut self) {
+        for t in self.tracks.iter_mut() {
+            t.reset_active();
+            t.active = false;
+            t.voices.fill(RowVoices::OFF);
         }
     }
 
@@ -661,15 +671,13 @@ fn render_row(
             continue;
         }
         let Some(id) = row.sample else { continue };
-        if pool.playable(arena, id as usize).is_none() {
-            continue;
-        }
+        let Some((.., generation)) = pool.playable(arena, id as usize) else { continue };
         let at = off.max(pos);
         rv.render_add(pool, arena, fade, &mut l[pos..at], &mut r[pos..at]);
         pos = at;
         let g = row.gain * vel as f32 / 127.0;
         let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-        rv.trigger(id, pool.get(id as usize).map(|s| s.slice), g * a.cos(), g * a.sin(), fade);
+        rv.trigger(id, generation, g * a.cos(), g * a.sin(), fade);
     }
     rv.render_add(pool, arena, fade, &mut l[pos..n], &mut r[pos..n]);
 }

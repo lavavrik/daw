@@ -76,6 +76,7 @@ use crate::rack::modules::{Ctx, NoteEvent};
 use crate::rack::catalog::ModuleKind;
 use crate::rack::fx_pool::FxPool;
 use crate::rack::Rack;
+use crate::samples::SampleView;
 use crate::sequencer::{EventBuf, NotePattern, SeqNote, Voicing};
 use crate::transport::tick_to_offset;
 use crate::{MAX_CLIPS, MAX_PATTERNS, MAX_TRACKS};
@@ -217,6 +218,27 @@ impl Synths {
             t.reset_patterns(); // the cleared rack drops its notes anyway
             *a = true;
         }
+    }
+
+    /// Engine reset (`OP_RESET_ALL`): every track inactive with an empty
+    /// patch and empty patterns, at once (no fade; the engine fades its
+    /// master output instead). Each rack is hard-cleared first, dropping its
+    /// fading modules, queued edits and pending releases, and only then is
+    /// the whole FX pool freed, so no stale release can later free a slot a
+    /// new module claimed. Allocation-free.
+    pub fn reset_all(&mut self) {
+        for (t, a) in self.tracks.iter_mut().zip(self.active.iter_mut()) {
+            t.rack.reset_hard();
+            t.reset_patterns();
+            *a = false;
+        }
+        self.fx.release_all();
+    }
+
+    /// Every rack empty, nothing queued (tests).
+    #[doc(hidden)]
+    pub fn racks_empty(&self) -> bool {
+        self.tracks.iter().all(|t| t.rack.is_empty())
     }
 
     /// Deactivate `slot`: the rack fades out over 2 ms, then clears, and the
@@ -423,10 +445,12 @@ impl Synths {
     /// `(t0, t1, samples_per_tick)` for this block (or block segment, split at
     /// a loop wrap) while playing, `None` while stopped; `timeline` says
     /// whether the current patterns or the clips play. `ctx.ticks` must equal
-    /// `t0`.
+    /// `t0`. Sample Players read the engine's samples through `smp`.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_add(
         &mut self,
         ctx: &Ctx,
+        smp: SampleView,
         window: Option<(f64, f64, f64)>,
         timeline: Timeline,
         tracks: &mut StereoBufs,
@@ -460,13 +484,13 @@ impl Synths {
             for &(offset, ev) in events.as_slice() {
                 let at = offset.min(n).max(pos); // pos <= n always
                 if at > pos {
-                    render_segment(&mut t.rack, fx, ctx, pos, &mut left[pos..at], &mut right[pos..at]);
+                    render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..at], &mut right[pos..at]);
                     pos = at;
                 }
                 t.rack.note(ev);
             }
             if pos < n {
-                render_segment(&mut t.rack, fx, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
+                render_segment(&mut t.rack, fx, smp, ctx, pos, &mut left[pos..n], &mut right[pos..n]);
             }
         }
         rendered
@@ -508,12 +532,20 @@ fn song_events(t: &mut SynthTrack, clips: &[Clip], (t0, t1, spt): (f64, f64, f64
 
 /// Render frames `from..` of the block (`left`/`right` are that sub-slice),
 /// with the `Ctx` playhead moved to the segment start while playing.
-fn render_segment(rack: &mut Rack, fx: &mut FxPool, ctx: &Ctx, from: usize, left: &mut [f32], right: &mut [f32]) {
+fn render_segment(
+    rack: &mut Rack,
+    fx: &mut FxPool,
+    smp: SampleView,
+    ctx: &Ctx,
+    from: usize,
+    left: &mut [f32],
+    right: &mut [f32],
+) {
     let mut seg = *ctx;
     if ctx.playing {
         seg.ticks = ctx.ticks + from as f64 * ctx.ticks_per_frame;
     }
-    rack.render_add(&seg, fx, left, right);
+    rack.render_add(&seg, fx, smp, left, right);
 }
 
 /// Send `Off` for every pitch in `mask` (bit = pitch).

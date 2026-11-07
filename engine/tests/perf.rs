@@ -44,6 +44,7 @@ use daw_engine::Engine;
 use daw_engine::rack::catalog::ModuleKind as K;
 use daw_engine::rack::modules::{Ctx, NoteEvent};
 use daw_engine::sequencer::SeqNote;
+use daw_engine::samples::SampleView;
 use daw_engine::synth::Synths;
 use std::time::Instant;
 
@@ -157,7 +158,7 @@ fn four_synth_tracks_render_under_budget() {
 fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, bufs: &mut StereoBufs) {
     let t1 = ctx.ticks + BLOCK as f64 * tpf;
     bufs.clear(BLOCK);
-    s.render_add(ctx, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK));
+    s.render_add(ctx, SampleView::NONE, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK));
     ctx.ticks = t1;
 }
 

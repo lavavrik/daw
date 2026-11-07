@@ -27,6 +27,9 @@ const MIX: usize = 4;
 #[derive(Clone)]
 pub struct Reverb {
     slot: u8,
+    /// Set by `reset`: the next `process` restarts the slot's zeroing
+    /// (`FxPool::reassign`), so stale ring content never plays.
+    rezero: bool,
     core: ReverbCore,
     mix: Smooth,
 }
@@ -34,15 +37,18 @@ pub struct Reverb {
 impl Reverb {
     /// A reverb on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Reverb {
-        Reverb { slot, core: ReverbCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
+        Reverb { slot, rezero: false, core: ReverbCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
     }
 
     pub fn slot(&self) -> u8 {
         self.slot
     }
 
+    /// Clear the DSP state; the ring (pool memory) is re-zeroed, in bounded
+    /// steps, from the next `process` on (silent wet signal meanwhile).
     pub fn reset(&mut self) {
         self.core.reset();
+        self.rezero = true;
     }
 
     pub fn process(&mut self, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
@@ -52,6 +58,9 @@ impl Reverb {
         self.core.set_damping(param(params, K, DAMPING));
         self.core.set_predelay_ms(param(params, K, PREDELAY));
         let (mut wl, mut wr) = (dry_l, dry_r);
+        if std::mem::take(&mut self.rezero) {
+            fx.reassign(FxKind::Reverb, self.slot);
+        }
         match fx.buffer(FxKind::Reverb, self.slot) {
             Some(buf) => self.core.process(buf, &mut wl, &mut wr),
             None => {

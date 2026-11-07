@@ -17,8 +17,8 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 /// Module kinds. The discriminants are **fixed wire ids** (commands and saved
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
 /// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
-/// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15
-/// (SamplePlayer=16 is reserved for plan 6 task 2).
+/// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15,
+/// SamplePlayer=16.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -38,6 +38,7 @@ pub enum ModuleKind {
     Compressor = 13,
     Saturator = 14,
     Attenuator = 15,
+    SamplePlayer = 16,
 }
 
 impl ModuleKind {
@@ -59,6 +60,7 @@ impl ModuleKind {
         ModuleKind::Compressor,
         ModuleKind::Saturator,
         ModuleKind::Attenuator,
+        ModuleKind::SamplePlayer,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
@@ -525,6 +527,27 @@ static ATTENUATOR: ModuleSpec = ModuleSpec {
     params: &[lin("amount", "Amount", -1.0, 1.0, 1.0, true), lin("offset", "Offset", -1.0, 1.0, 0.0, true)],
 };
 
+static SAMPLE_PLAYER: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::SamplePlayer,
+    id: "sample_player",
+    name: "Sample Player",
+    category: "source",
+    // One voice per `gate` channel (poly), mono out per voice; see
+    // `modules::sample_player`. `pitch` only matters with `pitchTrack` on.
+    inputs: &[port("pitch", Signal::Pitch), port("gate", Signal::Gate)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        // A sample-pool id (the project's samples); -1 = none.
+        int("sample", "Sample", -1.0, 255.0, -1.0, ""),
+        lin("gain", "Gain", 0.0, 2.0, 1.0, true),
+        // Where a voice starts, as a fraction of the sample (read at trigger).
+        lin("start", "Start", 0.0, 1.0, 0.0, false),
+        choice("pitchTrack", "Pitch track", &["Off", "On"], 1.0),
+        // The MIDI note at which the sample plays at its own speed.
+        int("root", "Root", 0.0, 127.0, 60.0, ""),
+    ],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -544,6 +567,7 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::Compressor => &COMPRESSOR,
         ModuleKind::Saturator => &SATURATOR,
         ModuleKind::Attenuator => &ATTENUATOR,
+        ModuleKind::SamplePlayer => &SAMPLE_PLAYER,
     }
 }
 
@@ -680,6 +704,32 @@ mod tests {
             }
         }
         assert_eq!(ModuleKind::from_id(99), None);
+    }
+
+    #[test]
+    fn catalog_id_16() {
+        let k = ModuleKind::SamplePlayer;
+        assert_eq!(k as u8, 16);
+        assert_eq!(ModuleKind::from_id(16), Some(k));
+        assert_eq!(ModuleKind::from_id(17), None);
+        assert_eq!(k.fx_kind(), None, "inline: reads the sample pool, owns no ring");
+        let s = spec(k);
+        assert_eq!((s.id, s.name, s.category), ("sample_player", "Sample Player", "source"));
+        let names = |ps: &[PortSpec]| ps.iter().map(|p| (p.name, p.signal)).collect::<Vec<_>>();
+        assert_eq!(names(s.inputs), [("pitch", Signal::Pitch), ("gate", Signal::Gate)]);
+        assert_eq!(names(s.outputs), [("out", Signal::Audio)]);
+        let ps: Vec<_> = s.params.iter().map(|p| (p.name, p.min, p.max, p.default, p.integer)).collect();
+        assert_eq!(
+            ps,
+            [
+                ("sample", -1.0, 255.0, -1.0, true),
+                ("gain", 0.0, 2.0, 1.0, false),
+                ("start", 0.0, 1.0, 0.0, false),
+                ("pitchTrack", 0.0, 1.0, 1.0, true),
+                ("root", 0.0, 127.0, 60.0, true),
+            ]
+        );
+        assert!(s.params[1].smooth, "gain is smoothed");
     }
 
     #[test]

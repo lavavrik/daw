@@ -10,6 +10,7 @@ use super::fx_pool::{FxKind, FxPool};
 use super::modules::{Ctx, Module};
 use super::port::PortBuf;
 use super::Rack;
+use crate::samples::SampleView;
 use crate::dsp::test_util::{tone_gain_db, Noise};
 use crate::dsp::Eq3;
 use crate::mixer::catalog::{DELAY_DIVISIONS, DELAY_DIVISION_BEATS};
@@ -74,7 +75,7 @@ impl Rig {
         let mut f = 0;
         while f < frames {
             feed(&mut self.ins, f);
-            self.m.process(&ctx(self.bpm), &self.params, &self.ins, &mut self.outs, &mut self.fx);
+            self.m.process(&ctx(self.bpm), &self.params, &self.ins, &mut self.outs, &mut self.fx, SampleView::NONE);
             for (o, port) in out.iter_mut().zip(&self.outs) {
                 o.extend_from_slice(&port.data[0]);
             }
@@ -134,7 +135,7 @@ fn catalog_ids_fixed() {
         assert_eq!(spec(k).id, name);
         assert_eq!(spec(k).category, category, "{name}");
     }
-    assert_eq!(ModuleKind::from_id(16), None, "SamplePlayer is task 2");
+    assert_eq!(ModuleKind::from_id(17), None);
     // The stereo effects: l, r (+ sc), 1-channel l/r outs.
     for k in [ModuleKind::Delay, ModuleKind::Reverb, ModuleKind::Chorus, ModuleKind::Eq, ModuleKind::Compressor] {
         let s = spec(k);
@@ -268,7 +269,7 @@ fn eq_module_matches_dsp_response() {
                 rig.ins[0].data[0].copy_from_slice(cl);
                 rig.ins[1].channels = 1;
                 rig.ins[1].data[0].copy_from_slice(cr);
-                rig.m.process(&ctx(120.0), &rig.params, &rig.ins, &mut rig.outs, &mut rig.fx);
+                rig.m.process(&ctx(120.0), &rig.params, &rig.ins, &mut rig.outs, &mut rig.fx, SampleView::NONE);
                 cl.copy_from_slice(&rig.outs[0].data[0]);
                 cr.copy_from_slice(&rig.outs[1].data[0]);
             }
@@ -329,7 +330,7 @@ fn saturator_bounded_and_monotone() {
                     r.ins[0].data[ch][i] = s * ramp(f + i);
                 }
             }
-            r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx);
+            r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx, SampleView::NONE);
             assert_eq!(r.outs[0].channels, 3);
             for (ch, o) in outs.iter_mut().enumerate() {
                 o.extend_from_slice(&r.outs[0].data[ch]);
@@ -370,7 +371,7 @@ fn attenuator_math() {
         for (ch, v) in vals.iter().enumerate() {
             r.ins[0].data[ch] = [*v; RACK_BLOCK];
         }
-        r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx);
+        r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx, SampleView::NONE);
         last = (0..3).map(|ch| r.outs[0].data[ch][RACK_BLOCK - 1]).collect();
     }
     assert_eq!(r.outs[0].channels, 3);
@@ -380,7 +381,7 @@ fn attenuator_math() {
     }
     // Unconnected in: the offset alone, 1 channel (a constant CV source).
     r.ins[0].channels = 0;
-    r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx);
+    r.m.process(&ctx(120.0), &r.params, &r.ins, &mut r.outs, &mut r.fx, SampleView::NONE);
     assert_eq!(r.outs[0].channels, 1);
     assert!((r.outs[0].data[0][0] - 0.25).abs() < 1e-5);
     // Defaults (amount 1, offset 0): identity.
@@ -429,7 +430,7 @@ fn render(rack: &mut Rack, fx: &mut FxPool, frames: usize) -> Vec<f32> {
     for _ in 0..frames.div_ceil(128) {
         l.fill(0.0);
         r.fill(0.0);
-        rack.render_add(&ctx(120.0), fx, &mut l, &mut r);
+        rack.render_add(&ctx(120.0), fx, SampleView::NONE, &mut l, &mut r);
         out.extend_from_slice(&l);
     }
     out
@@ -561,4 +562,89 @@ fn fx_slot_reused_after_remove_is_silent() {
     ok(rack.connect((0, 0), (5, 0)));
     let out = render(&mut rack, &mut fx, 3 * 48000);
     assert!(peak(&out[96000 + 4800..]) > 0.1, "the reused delay echoes");
+}
+
+/// A Delay (wet only) fed by noise into a 2 s ring, then fed nothing: the
+/// rack is sounding and the ring is full of signal.
+fn sounding_delay(fx: &mut FxPool) -> Rack {
+    let mut rack = Rack::new(SR);
+    let ok = |c: i32| assert_eq!(c, OK);
+    ok(rack.add_module(0, ModuleKind::Noise, fx));
+    ok(rack.add_module(1, ModuleKind::Delay, fx));
+    ok(rack.add_module(2, ModuleKind::Out, fx));
+    ok(rack.add_module(3, ModuleKind::Osc, fx)); // keeps the rack sounding
+    ok(rack.set_param(1, 0, division("1 bar"))); // 2 s at 120 BPM
+    ok(rack.set_param(1, 1, 0.9));
+    ok(rack.set_param(1, 3, 0.0));
+    ok(rack.set_param(1, 2, 1.0));
+    ok(rack.connect((0, 0), (1, 0)));
+    ok(rack.connect((1, 0), (2, 0)));
+    render(&mut rack, fx, 48000);
+    ok(rack.connect((3, 0), (2, 1)));
+    render(&mut rack, fx, 4800);
+    assert!(rack.is_sounding());
+    rack
+}
+
+#[test]
+fn replace_on_a_full_bank_hands_the_slot_over() {
+    // One delay slot, held by a sounding Delay. Removing it and adding a new
+    // one in the same batch (a patch load) must work: the old module keeps
+    // the slot through its fade, then the new one takes it over.
+    for clear in [false, true] {
+        let mut fx = FxPool::with_slots(SR, 1, 0, 0);
+        let mut rack = sounding_delay(&mut fx);
+        let ok = |c: i32| assert_eq!(c, OK);
+        if clear {
+            rack.clear();
+            ok(rack.add_module(0, ModuleKind::Noise, &mut fx));
+            ok(rack.add_module(2, ModuleKind::Out, &mut fx));
+        } else {
+            ok(rack.remove_module(1));
+            ok(rack.disconnect((2, 1)));
+        }
+        ok(rack.add_module(5, ModuleKind::Delay, &mut fx)); // was ERR_OUT_OF_MEMORY
+        assert_eq!(rack.add_module(6, ModuleKind::Delay, &mut fx), ERR_OUT_OF_MEMORY, "only one to take over");
+        ok(rack.set_param(5, 0, division("1 bar")));
+        ok(rack.set_param(5, 2, 1.0));
+        ok(rack.connect((5, 0), (2, 0)));
+        // Unfed, the new Delay is silent: none of the old ring replays (the
+        // old 1 s of noise would echo within the 2 s line).
+        let out = render(&mut rack, &mut fx, 3 * 48000);
+        let after_fade = 2 * (0.002 * SR) as usize + 2 * 128;
+        assert!(out[after_fade..].iter().all(|&x| x == 0.0), "clear={clear}: old echo, peak {}", peak(&out[after_fade..]));
+        assert_eq!(rack.kind(5), Some(ModuleKind::Delay));
+        assert_eq!(rack.fx_slot(5), Some((FxKind::Delay, 0)));
+        // No stale release later: the slot stays claimed by the new Delay.
+        render(&mut rack, &mut fx, 4800);
+        assert_eq!(fx.in_use(FxKind::Delay), 1, "clear={clear}");
+        assert_eq!(rack.add_module(7, ModuleKind::Delay, &mut fx), ERR_OUT_OF_MEMORY);
+        // Fed, it echoes as usual (2 s later).
+        ok(rack.connect((0, 0), (5, 0)));
+        let out = render(&mut rack, &mut fx, 3 * 48000);
+        assert!(peak(&out[96000 + 4800..]) > 0.1, "clear={clear}: the handed-over delay echoes");
+    }
+}
+
+#[test]
+fn reset_of_a_pooled_module_restarts_slot_zeroing() {
+    let mut fx = FxPool::with_slots(SR, 1, 0, 0);
+    let mut rack = sounding_delay(&mut fx);
+    assert_eq!(rack.disconnect((1, 0)), OK); // stop feeding it
+    render(&mut rack, &mut fx, 4800);
+    let mut m = Module::with_fx_slot(ModuleKind::Delay, SR, 0);
+    // Without a reset the slot (still claimed) would hand its ring over as is.
+    m.reset();
+    let s = spec(ModuleKind::Delay);
+    let mut params = [0.0; MAX_PARAMS];
+    for (p, d) in params.iter_mut().zip(s.params) {
+        *p = d.default;
+    }
+    params[2] = 1.0; // wet only
+    let ins = vec![PortBuf::new(); 2];
+    let mut outs = vec![PortBuf::new(); 2];
+    for _ in 0..3 * 48000 / RACK_BLOCK {
+        m.process(&ctx(120.0), &params, &ins, &mut outs, &mut fx, SampleView::NONE);
+        assert!(outs[0].data[0].iter().chain(&outs[1].data[0]).all(|&x| x == 0.0), "old ring replayed");
+    }
 }

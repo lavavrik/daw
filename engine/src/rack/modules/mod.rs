@@ -16,6 +16,8 @@
 //! * Delay, Reverb and Chorus hold an FX-pool slot index (`fx_pool.rs`), not
 //!   memory: `process` gets the shared [`FxPool`] and borrows the slot's
 //!   memory from it for the call. Other modules ignore the pool.
+//! * The Sample Player reads the engine's sample pool through the
+//!   [`SampleView`] `process` also gets (read-only; others ignore it).
 
 pub mod adsr;
 pub mod attenuator;
@@ -31,12 +33,14 @@ pub mod noise;
 pub mod osc;
 pub mod out;
 pub mod reverb;
+pub mod sample_player;
 pub mod saturator;
 pub mod vca;
 
 use super::catalog::{spec, ModuleKind};
 use super::fx_pool::{FxKind, FxPool, NO_SLOT};
 use super::port::PortBuf;
+use crate::samples::SampleView;
 use crate::RACK_BLOCK;
 
 /// Timing context for one sub-block.
@@ -87,6 +91,7 @@ pub enum Module {
     Compressor(compressor::Compressor),
     Saturator(saturator::Saturator),
     Attenuator(attenuator::Attenuator),
+    SamplePlayer(sample_player::SamplePlayer),
 }
 
 impl Module {
@@ -108,6 +113,7 @@ impl Module {
             ModuleKind::Compressor => Module::Compressor(compressor::Compressor::new(sr)),
             ModuleKind::Saturator => Module::Saturator(saturator::Saturator::new(sr)),
             ModuleKind::Attenuator => Module::Attenuator(attenuator::Attenuator::new(sr)),
+            ModuleKind::SamplePlayer => Module::SamplePlayer(sample_player::SamplePlayer::new(sr)),
             ModuleKind::MidiIn => Module::MidiIn(midi_in::MidiIn::new(sr)),
             ModuleKind::Osc => Module::Osc(osc::Osc::new(sr)),
             ModuleKind::Noise => Module::Noise(noise::Noise::new(sr)),
@@ -138,6 +144,7 @@ impl Module {
             Module::Compressor(_) => ModuleKind::Compressor,
             Module::Saturator(_) => ModuleKind::Saturator,
             Module::Attenuator(_) => ModuleKind::Attenuator,
+            Module::SamplePlayer(_) => ModuleKind::SamplePlayer,
         }
     }
 
@@ -153,7 +160,15 @@ impl Module {
     }
 
     /// Render one sub-block (see the module contract above).
-    pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
+    pub fn process(
+        &mut self,
+        ctx: &Ctx,
+        params: &[f32],
+        ins: &[PortBuf],
+        outs: &mut [PortBuf],
+        fx: &mut FxPool,
+        smp: SampleView,
+    ) {
         match self {
             Module::MidiIn(m) => m.process(params, outs),
             Module::Osc(m) => m.process(params, ins, outs),
@@ -171,6 +186,7 @@ impl Module {
             Module::Compressor(m) => m.process(params, ins, outs),
             Module::Saturator(m) => m.process(params, ins, outs),
             Module::Attenuator(m) => m.process(params, ins, outs),
+            Module::SamplePlayer(m) => m.process(params, ins, outs, smp),
         }
     }
 
@@ -183,9 +199,13 @@ impl Module {
         }
     }
 
-    /// Clear DSP state (phases, filter memories, held notes) without changing
-    /// params. (A pooled module's ring is the pool's: it is zeroed when the
-    /// slot is reused, not here.)
+    /// Clear DSP state (phases, filter memories, held notes, sample voices)
+    /// without changing params. A pooled module (Delay, Reverb, Chorus) cannot
+    /// zero its ring here (the memory is the pool's): it marks it, and its
+    /// next `process` restarts the slot's zeroing (`FxPool::reassign`), so its
+    /// wet signal is silent until the ring is clean and the old tail never
+    /// plays again. The rack resets a module that takes over a slot on
+    /// replace (`Rack::add_module`).
     pub fn reset(&mut self) {
         match self {
             Module::MidiIn(m) => m.reset(),
@@ -204,6 +224,7 @@ impl Module {
             Module::Compressor(m) => m.reset(),
             Module::Saturator(m) => m.reset(),
             Module::Attenuator(_) => {}
+            Module::SamplePlayer(m) => m.reset(),
         }
     }
 }

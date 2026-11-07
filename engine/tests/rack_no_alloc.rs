@@ -7,6 +7,7 @@ use daw_engine::rack::catalog::ModuleKind;
 use daw_engine::rack::modules::{Ctx, NoteEvent};
 use daw_engine::rack::fx_pool::{FxKind, FxPool};
 use daw_engine::rack::Rack;
+use daw_engine::samples::SampleView;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -61,7 +62,7 @@ fn rack_edits_and_render_do_not_allocate() {
     assert_eq!(r.set_param(3, 2, 1.0), OK); // synced
     let mut render = |r: &mut Rack, fx: &mut FxPool, blocks: usize, ctx: &mut Ctx| {
         for _ in 0..blocks {
-            r.render_add(ctx, fx, &mut l, &mut rr);
+            r.render_add(ctx, fx, SampleView::NONE, &mut l, &mut rr);
             ctx.ticks += 128.0 * ctx.ticks_per_frame;
         }
     };

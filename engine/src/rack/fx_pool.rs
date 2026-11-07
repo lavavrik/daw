@@ -20,6 +20,9 @@
 //! * [`claim`](FxPool::claim) (on `Rack::add_module`) takes the lowest free
 //!   slot of its kind, preferring a clean one; none free → `None`, which the
 //!   rack reports as `ERR_OUT_OF_MEMORY` (and adds nothing).
+//! * [`reassign`](FxPool::reassign) restarts the zeroing of a slot that
+//!   stays claimed but changes owner (handover on replace) or whose module
+//!   was reset.
 //! * [`release`](FxPool::release) returns it. The rack releases a module's
 //!   slot only once the module is really gone: after its declick fade
 //!   (`Remove`/`Clear` applied), and for an add still queued when a clear
@@ -120,6 +123,14 @@ impl Bank {
         Some(i as u8)
     }
 
+    fn reassign(&mut self, i: u8) {
+        let i = i as usize;
+        if i < self.slots && self.used & (1 << i) != 0 {
+            self.dirty |= 1 << i;
+            self.cleared[i] = 0;
+        }
+    }
+
     fn release(&mut self, i: u8) {
         if (i as usize) < self.slots {
             self.used &= !(1u32 << i);
@@ -184,6 +195,15 @@ impl FxPool {
         self.banks[kind as usize].release(slot);
     }
 
+    /// Restart the zeroing of claimed slot `slot` of `kind` (ignored if it is
+    /// not claimed): it is handed out again only once clean, as after a
+    /// claim of a dirty slot. For a slot that changes owner without being
+    /// released (the rack's handover on replace, see `Rack::add_module`) and
+    /// for a pooled module's `reset`, so neither ever replays an old ring.
+    pub fn reassign(&mut self, kind: FxKind, slot: u8) {
+        self.banks[kind as usize].reassign(slot);
+    }
+
     /// The memory of claimed slot `slot` of `kind`, or `None` if it is not
     /// claimed or still being zeroed (each call zeroes one more chunk).
     pub fn buffer(&mut self, kind: FxKind, slot: u8) -> Option<&mut [f32]> {
@@ -201,6 +221,9 @@ impl FxPool {
     }
 
     /// Release every slot (engine reset). Their memory is zeroed before reuse.
+    /// Only sound once nothing holds a slot any more: the engine hard-clears
+    /// every rack (`Rack::reset_hard`, which also forgets pending releases)
+    /// first, else a stale release could later free a re-claimed slot.
     pub fn release_all(&mut self) {
         for b in &mut self.banks {
             b.used = 0;
@@ -253,6 +276,15 @@ mod tests {
         p.release(FxKind::Delay, a);
         p.release(FxKind::Delay, b);
         assert_eq!(p.claim(FxKind::Delay), Some(b), "b was never handed out");
+        // Reassigning a claimed clean slot makes it zero again before reuse.
+        p.buffer(FxKind::Delay, b).unwrap().fill(2.0);
+        p.reassign(FxKind::Delay, b);
+        for _ in 0..calls - 1 {
+            assert!(p.buffer(FxKind::Delay, b).is_none());
+        }
+        assert!(p.buffer(FxKind::Delay, b).unwrap().iter().all(|&x| x == 0.0));
+        p.reassign(FxKind::Delay, a); // not claimed: ignored
+        p.reassign(FxKind::Delay, 200);
         p.release_all();
         assert_eq!(p.in_use(FxKind::Delay), 0);
         // Out-of-range indices never panic.

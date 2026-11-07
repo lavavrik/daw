@@ -30,6 +30,12 @@ impl Metronome {
         self.pos = 0;
     }
 
+    /// Stop a click in progress at once (engine reset; the engine fades its
+    /// master output over it).
+    pub fn silence(&mut self) {
+        self.pos = self.len;
+    }
+
     /// Add the click (if sounding) to both channels, starting at index 0.
     pub fn render_add(&mut self, left: &mut [f32], right: &mut [f32]) {
         let n = left.len().min(right.len());

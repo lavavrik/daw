@@ -133,14 +133,21 @@ impl Limiter {
         }
     }
 
-    /// Clear the state (delay line, windows, envelope) without allocating.
+    /// Clear the state (delay line, windows, envelope, positions) without
+    /// allocating: afterwards the limiter behaves exactly like a new one with
+    /// the same ceiling and release (the engine reset relies on this).
     pub fn reset(&mut self) {
         self.dl.fill(0.0);
+        self.dq_idx.fill(0);
+        self.dq_val.fill(1.0);
         self.boxr.fill(1.0);
         self.box_sum = self.boxr.len() as f64;
+        self.box_pos = 0;
+        self.dq_head = 0;
         self.dq_len = 0;
         self.env = 1.0;
         self.gain = 1.0;
+        self.n = 0;
         self.fresh = true;
     }
 

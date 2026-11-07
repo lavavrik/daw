@@ -1,7 +1,8 @@
 //! Sample arena: a bump allocator over zeroed `Vec<f32>` chunks.
 //! Chunks are only ever added (never reallocated), so earlier slices stay valid
 //! and the heap grows only when the caller allows it (transport stopped).
-//! Freed space is reclaimed only by `reset` (project load); removed samples leak.
+//! Freed space is reclaimed only by `reset` (engine reset on project load);
+//! removed samples leak until then.
 
 /// Handle to a region inside the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,12 +64,20 @@ impl SampleArena {
         &mut self.chunks[s.chunk as usize][st..st + s.len as usize]
     }
 
-    /// Free everything but the first chunk, which is re-zeroed and reused.
+    /// Free everything but the first chunk, which is reused from its start.
+    /// Allocation-free (grown chunks are only freed), and the first chunk is
+    /// **not** re-zeroed: that would be a 128 MB memset on the audio thread
+    /// (tens of ms, a dropout). Nothing needs it: the UI fills every
+    /// allocation completely before marking its sample ready, voices never
+    /// read a sample that is not ready, and a voice still holding an old
+    /// sample stops reading it when the pool's generation changes
+    /// (`samples.rs`).
     pub fn reset(&mut self) {
         self.chunks.truncate(1);
         self.used.truncate(1);
-        self.used[0] = 0;
-        self.chunks[0].fill(0.0);
+        if let Some(u) = self.used.first_mut() {
+            *u = 0;
+        }
     }
 }
 
@@ -159,7 +168,6 @@ mod tests {
         a.reset();
         let s = a.alloc(1000, false).unwrap(); // whole first chunk is free again
         assert_eq!((s.chunk, s.start), (0, 0));
-        assert!(a.slice(s).iter().all(|&x| x == 0.0)); // re-zeroed
         assert!(a.alloc(1, false).is_none()); // extra chunks were freed
     }
 }

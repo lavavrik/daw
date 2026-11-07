@@ -66,6 +66,23 @@
 //! only records the slot in `released`; [`Rack::reclaim`] hands those back
 //! to the pool, which `render_add` and `add_module` do on every call (and
 //! the synth tracks after edits that may apply at once).
+//!
+//! **Handover on replace.** Because a slot stays held through its module's
+//! removal fade, "remove (or clear) then add" in one batch on a sounding rack
+//! would find a full bank even though the UI counts the slot as free. So when
+//! `claim` fails, `add_module` takes over a slot that a *queued* `Remove` or
+//! `Clear` of this rack is about to give up: the queue applies in order, so
+//! the old module is gone before the new one first runs. The slot is marked
+//! in `handed` (the old module's release is then absorbed instead of freeing
+//! the slot under its new owner), and the new module is `reset` when its add
+//! applies, which restarts the slot's zeroing (`FxPool::reassign`): it starts
+//! silent and never replays the old ring. Each handover adds one owner and
+//! absorbs exactly one release, whichever of the two owners goes first.
+//!
+//! **Engine reset.** [`Rack::reset_hard`] drops everything at once (no
+//! fade) and forgets pending releases and handovers, so the engine can then
+//! free the whole pool (`FxPool::release_all`) without a stale release ever
+//! freeing a slot claimed afterwards.
 
 pub mod catalog;
 pub mod fx_pool;
@@ -81,6 +98,8 @@ use fx_pool::{FxKind, FxPool, NO_SLOT};
 use modules::{Ctx, Module, NoteEvent};
 use port::PortBuf;
 
+use crate::samples::SampleView;
+
 /// Capacity of the declick edit queue.
 pub const EDIT_QUEUE_LEN: usize = 64;
 /// Length of the declick fade-out and fade-in, in seconds (rounded to samples).
@@ -93,8 +112,10 @@ const SILENCE: f32 = 1e-6;
 /// A validated edit, as stored in the declick queue (indices fit in u8).
 #[derive(Clone, Copy, Debug)]
 enum Edit {
-    /// Module index, kind, FX-pool slot (`NO_SLOT` for inline kinds).
-    Add(u8, ModuleKind, u8),
+    /// Module index, kind, FX-pool slot (`NO_SLOT` for inline kinds), and
+    /// whether that slot was handed over from a queued Remove/Clear (the
+    /// module is then reset on apply, which re-zeroes the slot).
+    Add(u8, ModuleKind, u8, bool),
     Remove(u8),
     Connect { from: (u8, u8), to: (u8, u8) },
     Disconnect((u8, u8)),
@@ -158,6 +179,9 @@ pub struct Rack {
     /// FX-pool slots of removed modules not yet handed back (bit = slot, one
     /// mask per `FxKind`); see [`Rack::reclaim`].
     released: [u32; 3],
+    /// Slots taken over by a queued add from a queued Remove/Clear (see the
+    /// module docs): the next release of each is absorbed, not recorded.
+    handed: [u32; 3],
 }
 
 /// Is module `m` reachable from itself through modules in `within`?
@@ -203,7 +227,36 @@ impl Rack {
             blk_r: [0.0; RACK_BLOCK],
             blk_pos: RACK_BLOCK,
             released: [0; 3],
+            handed: [0; 3],
         }
+    }
+
+    /// Drop every module, cable and queued edit at once, without a fade, and
+    /// forget pending FX-pool releases and handovers (engine reset: the
+    /// engine fades its master output and then frees the whole pool). The
+    /// rack is left as `new` made it. Allocation-free.
+    pub fn reset_hard(&mut self) {
+        for slot in self.slots.iter_mut() {
+            *slot = Slot::EMPTY;
+        }
+        for o in self.outs.iter_mut() {
+            o.channels = 0;
+        }
+        self.order_len = 0;
+        self.pending = [None; MAX_MODULES];
+        self.queued = 0;
+        self.gain = 1.0;
+        self.silent_frames = self.sounding_frames;
+        self.blk_l = [0.0; RACK_BLOCK];
+        self.blk_r = [0.0; RACK_BLOCK];
+        self.blk_pos = RACK_BLOCK;
+        self.released = [0; 3];
+        self.handed = [0; 3];
+    }
+
+    /// No module, running or queued, and nothing queued.
+    pub fn is_empty(&self) -> bool {
+        self.queued == 0 && self.pending.iter().all(Option::is_none) && self.slots.iter().all(|s| s.module.is_none())
     }
 
     // ---- state -------------------------------------------------------------
@@ -230,6 +283,11 @@ impl Rack {
         Some((m as usize, p as usize))
     }
 
+    /// The FX-pool slot held by the running module at `idx`, if it holds one.
+    pub fn fx_slot(&self, idx: usize) -> Option<(FxKind, u8)> {
+        self.slots.get(idx)?.module.as_ref()?.fx_slot()
+    }
+
     /// Current target value of param `param` of running module `idx`.
     pub fn param(&self, idx: usize, param: usize) -> Option<f32> {
         let slot = self.slots.get(idx)?;
@@ -249,7 +307,7 @@ impl Rack {
     pub fn clear(&mut self) {
         self.pending = [None; MAX_MODULES];
         for k in 0..self.queued.min(EDIT_QUEUE_LEN) {
-            if let Edit::Add(_, kind, slot) = self.queue[k] {
+            if let Edit::Add(_, kind, slot, _) = self.queue[k] {
                 self.release(kind.fx_kind(), slot);
             }
         }
@@ -264,7 +322,8 @@ impl Rack {
     /// Add a module of `kind` at slot `idx` with default params and no cables.
     /// `ERR_BAD_INDEX` if `idx >= MAX_MODULES`; `ERR_BAD_VALUE` if occupied;
     /// `ERR_OUT_OF_MEMORY` if `kind` needs an FX-pool slot and `fx` has none
-    /// free (then nothing is added).
+    /// free and no queued Remove/Clear of this rack gives one up (then
+    /// nothing is added; see "Handover on replace" in the module docs).
     pub fn add_module(&mut self, idx: usize, kind: ModuleKind, fx: &mut FxPool) -> i32 {
         self.reclaim(fx);
         match self.pending.get(idx) {
@@ -272,16 +331,61 @@ impl Rack {
             Some(Some(_)) => return ERR_BAD_VALUE,
             Some(None) => {}
         }
-        let fx_slot = match kind.fx_kind() {
-            Some(k) => match fx.claim(k) {
+        let (fx_slot, handed) = match kind.fx_kind() {
+            Some(k) => match fx.claim(k).map(|s| (s, false)).or_else(|| self.take_over(k).map(|s| (s, true))) {
                 Some(s) => s,
                 None => return ERR_OUT_OF_MEMORY,
             },
-            None => NO_SLOT,
+            None => (NO_SLOT, false),
         };
         self.pending[idx] = Some(kind);
-        self.submit(Edit::Add(idx as u8, kind, fx_slot), EditClass::Add);
+        self.submit(Edit::Add(idx as u8, kind, fx_slot, handed), EditClass::Add);
         OK
+    }
+
+    /// A `kind` slot that a queued `Remove`/`Clear` gives up and that is not
+    /// already handed over, now marked handed; `None` if there is none.
+    /// Walks the queue tracking which slot each module index holds at that
+    /// point (the running graph first, then queued adds).
+    fn take_over(&mut self, kind: FxKind) -> Option<u8> {
+        let mut held = [NO_SLOT; MAX_MODULES];
+        for (h, slot) in held.iter_mut().zip(self.slots.iter()) {
+            if let Some((k, s)) = slot.module.as_ref().and_then(Module::fx_slot) {
+                if k == kind {
+                    *h = s;
+                }
+            }
+        }
+        let mut gives_up = 0u32;
+        let mut give_up = |h: &mut u8| {
+            if (*h as u32) < 32 {
+                gives_up |= 1 << *h;
+            }
+            *h = NO_SLOT;
+        };
+        for e in &self.queue[..self.queued.min(EDIT_QUEUE_LEN)] {
+            match *e {
+                Edit::Add(i, k, s, _) if k.fx_kind() == Some(kind) => {
+                    if let Some(h) = held.get_mut(i as usize) {
+                        *h = s;
+                    }
+                }
+                Edit::Remove(i) => {
+                    if let Some(h) = held.get_mut(i as usize) {
+                        give_up(h);
+                    }
+                }
+                Edit::Clear => held.iter_mut().for_each(&mut give_up),
+                _ => {}
+            }
+        }
+        let free = gives_up & !self.handed[kind as usize];
+        if free == 0 {
+            return None;
+        }
+        let s = free.trailing_zeros();
+        self.handed[kind as usize] |= 1 << s;
+        Some(s as u8)
     }
 
     /// Hand the FX-pool slots of modules that are gone back to `fx`.
@@ -296,11 +400,18 @@ impl Rack {
         }
     }
 
-    /// Record `slot` of `kind` (if any) for the next `reclaim`.
+    /// Record `slot` of `kind` (if any) for the next `reclaim`, unless it
+    /// was handed over: then this release is absorbed (the slot has another
+    /// owner) and the handover is done.
     fn release(&mut self, kind: Option<FxKind>, slot: u8) {
         if let Some(k) = kind {
             if (slot as u32) < 32 {
-                self.released[k as usize] |= 1 << slot;
+                let bit = 1u32 << slot;
+                if self.handed[k as usize] & bit != 0 {
+                    self.handed[k as usize] &= !bit;
+                } else {
+                    self.released[k as usize] |= bit;
+                }
             }
         }
     }
@@ -434,13 +545,17 @@ impl Rack {
     /// (everything is `get`-guarded), though validation makes that moot.
     fn apply(&mut self, e: Edit) {
         match e {
-            Edit::Add(i, kind, fx_slot) => {
+            Edit::Add(i, kind, fx_slot, handed) => {
                 let i = i as usize;
                 // Validation keeps an occupied index from being added to; if
                 // it ever were, the old module's slot must not leak.
                 self.release_module(i);
                 if let Some(slot) = self.slots.get_mut(i) {
-                    slot.module = Some(Module::with_fx_slot(kind, self.sr, fx_slot));
+                    let mut m = Module::with_fx_slot(kind, self.sr, fx_slot);
+                    if handed {
+                        m.reset(); // re-zero the slot it took over
+                    }
+                    slot.module = Some(m);
                     slot.params = [0.0; MAX_PARAMS];
                     for (dst, p) in slot.params.iter_mut().zip(spec(kind).params) {
                         *dst = p.default;
@@ -564,8 +679,8 @@ impl Rack {
     /// leftover frames are handed out on the next call), each with
     /// `ctx.ticks` advanced to that sub-block's start while playing. Pooled
     /// effects borrow their memory from `fx`; slots of modules removed
-    /// meanwhile are handed back to it at the end.
-    pub fn render_add(&mut self, ctx: &Ctx, fx: &mut FxPool, left: &mut [f32], right: &mut [f32]) {
+    /// meanwhile are handed back to it at the end. Sample Players read `smp`.
+    pub fn render_add(&mut self, ctx: &Ctx, fx: &mut FxPool, smp: SampleView, left: &mut [f32], right: &mut [f32]) {
         let n = left.len().min(right.len());
         let mut done = 0;
         while done < n {
@@ -574,7 +689,7 @@ impl Rack {
                 if ctx.playing {
                     sub.ticks = ctx.ticks + done as f64 * ctx.ticks_per_frame;
                 }
-                self.render_sub(&sub, fx);
+                self.render_sub(&sub, fx, smp);
                 self.blk_pos = 0;
             }
             let take = (RACK_BLOCK - self.blk_pos).min(n - done);
@@ -594,7 +709,7 @@ impl Rack {
     /// Run every module once (in order), mix the Out modules into
     /// `blk_l`/`blk_r`, apply the declick gain, and apply queued edits once
     /// the fade-out has reached 0.
-    fn render_sub(&mut self, ctx: &Ctx, fx: &mut FxPool) {
+    fn render_sub(&mut self, ctx: &Ctx, fx: &mut FxPool, smp: SampleView) {
         for k in 0..self.order_len {
             let m = self.order[k] as usize;
             let Some(slot) = self.slots.get_mut(m) else { continue };
@@ -610,7 +725,7 @@ impl Rack {
             }
             let base = m * MAX_PORTS;
             if let Some(outs) = self.outs.get_mut(base..base + n_out) {
-                module.process(ctx, &slot.params, &self.ins[..n_in], outs, fx);
+                module.process(ctx, &slot.params, &self.ins[..n_in], outs, fx, smp);
             }
         }
 
@@ -673,7 +788,7 @@ mod tests {
         for _ in 0..frames.div_ceil(128) {
             l.fill(0.0);
             rr.fill(0.0);
-            r.render_add(&ctx(), &mut FxPool::empty(), &mut l, &mut rr);
+            r.render_add(&ctx(), &mut FxPool::empty(), SampleView::NONE, &mut l, &mut rr);
             out.extend_from_slice(&l);
         }
         out
@@ -847,7 +962,7 @@ mod tests {
         }
         let mut outs = [PortBuf::new()];
         let params = [1.0f32; MAX_PARAMS];
-        vca.process(&ctx(), &params, &ins, &mut outs, &mut FxPool::empty());
+        vca.process(&ctx(), &params, &ins, &mut outs, &mut FxPool::empty(), SampleView::NONE);
         assert_eq!(outs[0].channels, 4);
         for ch in 0..4 {
             for i in 0..RACK_BLOCK {
@@ -1112,7 +1227,7 @@ mod tests {
         let mut out = vec![warm[warm.len() - 1]];
         for n in [1usize, 31, 100, 7, 128, 33, 200] {
             let (mut l, mut rr) = (vec![0.0f32; n], vec![0.0f32; n]);
-            r.render_add(&ctx(), &mut FxPool::empty(), &mut l, &mut rr);
+            r.render_add(&ctx(), &mut FxPool::empty(), SampleView::NONE, &mut l, &mut rr);
             assert_eq!(l, rr, "l feeds both sides when r is unconnected");
             out.extend_from_slice(&l);
         }

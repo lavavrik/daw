@@ -570,3 +570,54 @@ fn mixer_commands_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(e.meters().iter().all(|x| x.is_finite()));
 }
+
+/// `OP_RESET_ALL` (project load) on a busy engine allocates nothing: tracks,
+/// racks with pooled effects and a Sample Player, a grown sample arena (the
+/// reset only frees its extra chunk), the mixer and the output fade. A
+/// Sample Player playing a sample also renders allocation-free.
+#[test]
+fn reset_all_does_not_allocate() {
+    const SAMPLE_PLAYER: f64 = 16.0;
+    const DELAY: f64 = 9.0;
+    const REVERB: f64 = 10.0;
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+    // Outside the counted region: a sample, and one more that grows the arena.
+    let p = e.sample_alloc(0, 48000, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 48000) }.fill(0.5);
+    ok(e.sample_ready(0));
+    ok(e.sample_alloc(1, 20_000_000, 2).map(|_| OK).unwrap_or_else(|c| c));
+    ok(e.sample_ready(1));
+
+    arm();
+
+    ok(e.command(OP_ADD_DRUM_TRACK, 0., 0., 0., 0.));
+    ok(e.command(OP_SET_ROW_SAMPLE, 0., 0., 0., 0.));
+    ok(e.command(OP_SET_STEP, 0., 0., 0., 127.));
+    ok(e.command(OP_ADD_SYNTH_TRACK, 1., 0., 0., 0.));
+    for (m, kind) in [MIDI_IN, SAMPLE_PLAYER, DELAY, REVERB, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, 1., m as f64, *kind, 0.));
+    }
+    ok(e.command(OP_RACK_SET_PARAM, 1., 1., 0., 0.)); // sample 0
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (1, 1)), ((1, 0), (2, 0)), ((2, 0), (3, 0)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, 1., pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_SET_INPUT_TRACK, 1., 0., 0., 0.));
+    ok(e.command(OP_NOTE_ON, 60., 100., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+    let mut peak = 0.0f64;
+    for _ in 0..100 {
+        e.process(&mut l, &mut r);
+        peak = peak.max(e.telemetry()[5]);
+    }
+    ok(e.command(OP_STOP, 0., 0., 0., 0.));
+    ok(e.command(OP_RESET_ALL, 0., 0., 0., 0.));
+    for _ in 0..50 {
+        e.process(&mut l, &mut r);
+    }
+
+    assert_eq!(disarm(), 0, "reset allocated");
+    assert!(peak > 0.05, "sounded before the reset, peak {peak}");
+    assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0), "silent after the reset");
+}

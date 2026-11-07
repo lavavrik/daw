@@ -74,6 +74,8 @@ pub const OP_SEEK: u32 = 40; // a=song ticks (Song mode; ignored in Pattern mode
 pub const OP_MIX_SET: u32 = 41; // a=channel 0..34 b=param id c=value (catalog range; flags 0/1)
 pub const OP_MIX_SET_KEY: u32 = 42; // a=track channel 0..31 b=key: -1 none, slot*32 track, slot*32+row+1 drum row
 pub const OP_MIX_RESET: u32 = 43; // a=channel 0..34: every param to its default, key none
+// Engine reset (project load): stopped only (ERR_BAD_VALUE while playing).
+pub const OP_RESET_ALL: u32 = 44; // no args: every track, sample, mixer setting and FX slot back to a blank session
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -148,6 +150,8 @@ pub enum Command {
     MixSetKey { channel: usize, key: Key },
     /// Every param of `channel` to its default (and its key to none).
     MixReset { channel: usize },
+    /// Back to a blank session (see `Engine` docs, "Engine reset").
+    ResetAll,
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -439,6 +443,7 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_MIX_SET => mix_set(a, b, c)?,
         OP_MIX_SET_KEY => Command::MixSetKey { channel: index(a, MAX_TRACKS)?, key: key_code(b)? },
         OP_MIX_RESET => Command::MixReset { channel: index(a, MIX_CHANNELS)? },
+        OP_RESET_ALL => Command::ResetAll,
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -453,6 +458,11 @@ mod tests {
             decode(13, 1., 2., 3., 100.),
             Ok(Command::SetStep { slot: 1, row: 2, step: 3, velocity: 100 })
         );
+    }
+    #[test]
+    fn decode_reset_all() {
+        assert_eq!(OP_RESET_ALL, 44);
+        assert_eq!(decode(OP_RESET_ALL, 0., 0., 0., 0.), Ok(Command::ResetAll));
     }
     #[test]
     fn decode_rejects_unknown_op() {
@@ -512,7 +522,7 @@ mod tests {
             decode(OP_RACK_ADD_MODULE, 3., 31., 8., 0.),
             Ok(Command::RackAddModule { slot: 3, module: 31, kind: ModuleKind::Out })
         );
-        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 16., 0.), Err(ERR_BAD_INDEX), "unknown kind");
+        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 17., 0.), Err(ERR_BAD_INDEX), "unknown kind");
         assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 32., 1., 0.), Err(ERR_BAD_INDEX));
         assert_eq!(decode(OP_RACK_REMOVE_MODULE, 3., 4., 0., 0.), Ok(Command::RackRemoveModule { slot: 3, module: 4 }));
         // Ports are packed module*16 + port.

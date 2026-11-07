@@ -75,12 +75,37 @@
 //!   Song goes to the song start (playing or not); Song -> Pattern goes to
 //!   tick 0 when stopped and keeps the playhead while playing (patterns loop
 //!   on `ticks mod period`, like a pattern switch).
+//!
+//! # Engine reset
+//! `OP_RESET_ALL` returns the engine to a blank session, as `Engine::new`
+//! left it, so a project load can replay its commands onto it. It is
+//! accepted only while stopped (`ERR_BAD_VALUE` while playing; the UI stops
+//! first, `STOP` + `RESET_ALL` in one batch is fine). It applies at once, in
+//! the command phase, so the commands that follow it in the same batch land
+//! on the clean engine:
+//! * every track is removed **without** a fade: drum voices, racks (their
+//!   fading modules, queued edits and pending FX-pool releases), patterns,
+//!   clips; then every FX-pool slot is freed (`Synths::reset_all`);
+//! * the input track, cached controllers and live-key state are cleared;
+//! * the whole mixer is a new one: strips, sends, keys, return params, the
+//!   reverb and delay tails, the limiter and the legacy master gain (0.8)
+//!   (`Mixer::reset_all`);
+//! * the transport (tempo, mode, loop, playhead) and the metronome are at
+//!   their defaults, and the click delay line is empty;
+//! * the sample pool is emptied (its generation moves on, `samples.rs`) and
+//!   the arena rewinds to its first chunk (grown chunks are freed).
+//!
+//! It allocates nothing (the arena only frees). What was audible is not cut:
+//! the last output sample (L/R) is held and faded linearly to 0 over 5 ms,
+//! added to the (silent) output of the blank engine, like the drum voices'
+//! hold-and-fade. So a ringing reverb tail ends in a short fade, never a
+//! step, and the output is exactly 0 after 5 ms.
 
 use crate::arena::SampleArena;
 use crate::arrangement::{Arrangement, Clip, Timeline};
 use crate::drums::Drums;
 use crate::protocol::{self, Command};
-use crate::samples::{Sample, SamplePool};
+use crate::samples::{Sample, SamplePool, SampleView};
 use crate::metronome::Metronome;
 use crate::mixer::{ClickClip, Key, Mixer, StereoBufs};
 use crate::rack::modules::{Ctx, NoteEvent};
@@ -97,6 +122,32 @@ const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 
 /// Initial arena size in floats (128 MB).
 const ARENA_FLOATS: usize = 32 * 1024 * 1024;
+
+/// The output fade over an engine reset (seconds).
+const RESET_FADE_SECONDS: f32 = 0.005;
+
+/// The hold-and-fade of the last output sample over an engine reset.
+#[derive(Clone, Copy, Debug)]
+struct ResetFade {
+    l: f32,
+    r: f32,
+    /// Samples still to fade, and the fade length.
+    left: u32,
+    len: u32,
+}
+
+impl ResetFade {
+    /// Add the held sample at its current fade level to `(l, r)`.
+    #[inline]
+    fn add(&mut self, l: f32, r: f32) -> (f32, f32) {
+        if self.left == 0 {
+            return (l, r);
+        }
+        let g = self.left as f32 / self.len.max(1) as f32;
+        self.left -= 1;
+        (l + self.l * g, r + self.r * g)
+    }
+}
 
 /// `ERR_BAD_INDEX` unless `ok` (the target existed).
 fn found(ok: bool) -> Result<(), i32> {
@@ -158,6 +209,9 @@ pub struct Engine {
     click_clip: ClickClip,
     /// Slots the renderers wrote this block (bit = slot).
     rendered: u32,
+    /// The last output sample (L, R), and the fade over an engine reset.
+    last_out: (f32, f32),
+    reset_fade: ResetFade,
 }
 
 impl Engine {
@@ -199,7 +253,45 @@ impl Engine {
             click_pos: 0,
             click_clip: ClickClip::new(sample_rate, latency),
             rendered: 0,
+            last_out: (0.0, 0.0),
+            reset_fade: ResetFade {
+                l: 0.0,
+                r: 0.0,
+                left: 0,
+                len: ((RESET_FADE_SECONDS * sample_rate).round() as u32).max(1),
+            },
         }
+    }
+
+    /// `OP_RESET_ALL` (see "Engine reset" in the module docs).
+    fn reset_all(&mut self) -> Result<(), i32> {
+        if self.transport.playing {
+            return Err(protocol::ERR_BAD_VALUE);
+        }
+        // Fade from what is heard now (a fade still running from an earlier
+        // reset is part of that sample).
+        let (l, r) = self.last_out;
+        self.reset_fade = ResetFade { l, r, left: self.reset_fade.len, ..self.reset_fade };
+        self.drums.reset_all();
+        self.synths.reset_all(); // racks hard-cleared, then the FX pool freed
+        for a in self.arrangements.iter_mut() {
+            a.clear();
+        }
+        self.kinds = [SlotKind::Empty; MAX_TRACKS];
+        self.input = None;
+        (self.bend, self.mod_wheel, self.sustain) = (0.0, 0.0, false);
+        (self.live_down, self.live_sustained) = (0, 0);
+        self.mixer.reset_all();
+        self.transport = Transport::new();
+        self.metronome.on = false;
+        self.metronome.silence();
+        self.click_ring.fill(0.0);
+        self.click_pos = 0;
+        self.click_clip = ClickClip::new(self.sample_rate, self.mixer.latency());
+        self.samples.clear();
+        self.arena.reset();
+        self.sync_transport_telemetry();
+        Ok(())
     }
 
     /// Output latency in samples (the master limiter's lookahead).
@@ -664,6 +756,7 @@ impl Engine {
                 self.mixer.set_key(channel, key)?;
             }
             Command::MixReset { channel } => self.mixer.reset_channel(channel),
+            Command::ResetAll => self.reset_all()?,
             Command::Seek { ticks } => {
                 if self.transport.mode == Mode::Song {
                     self.transport.ticks = ticks as f64;
@@ -766,6 +859,7 @@ impl Engine {
                 // ±1 clamp is only a NaN-safe backstop.
                 let incoming = cl[i] != 0.0 || cr[i] != 0.0;
                 let (l, r) = self.click_clip.next(left[i], right[i], c_l * g, c_r * g, incoming, ceiling);
+                let (l, r) = self.reset_fade.add(l, r);
                 let l = if l.is_finite() { l.clamp(-1.0, 1.0) } else { 0.0 };
                 let r = if r.is_finite() { r.clamp(-1.0, 1.0) } else { 0.0 };
                 left[i] = l;
@@ -773,6 +867,9 @@ impl Engine {
                 pl = pl.max(l.abs());
                 pr = pr.max(r.abs());
             }
+        }
+        if n > 0 {
+            self.last_out = (left[n - 1], right[n - 1]);
         }
         self.telemetry[TELEMETRY_BLOCKS] += 1.0;
         self.sync_transport_telemetry();
@@ -829,7 +926,8 @@ impl Engine {
             ticks: t0,
             ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
         };
-        self.rendered |= self.synths.render_add(&ctx, window, timeline, &mut self.tracks, (from, to));
+        let smp = SampleView::new(&self.samples, &self.arena);
+        self.rendered |= self.synths.render_add(&ctx, smp, window, timeline, &mut self.tracks, (from, to));
     }
 
     fn fail(&mut self, code: i32) -> i32 {
@@ -918,6 +1016,9 @@ fn render_metronome(metronome: &mut Metronome, window: Option<(f64, f64, f64)>, 
     }
     metronome.render_add(&mut left[pos..], &mut right[pos..]);
 }
+
+#[cfg(test)]
+mod reset_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1688,7 +1789,7 @@ mod tests {
         assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), ERR_BAD_INDEX);
         assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), ERR_BAD_INDEX);
         // Bad kind ids / module indices / slots.
-        for kind in [99.0, 16.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
+        for kind in [99.0, 17.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
             assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, kind, 0.0), ERR_BAD_INDEX, "kind {kind}");
         }
         assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 32.0, K_OSC, 0.0), ERR_BAD_INDEX);

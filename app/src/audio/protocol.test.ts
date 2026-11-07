@@ -20,7 +20,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(49);
+    expect(Object.keys(rust).length).toBe(50);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);

@@ -29,6 +29,9 @@ const HICUT: usize = 4;
 #[derive(Clone)]
 pub struct Delay {
     slot: u8,
+    /// Set by `reset`: the next `process` restarts the slot's zeroing
+    /// (`FxPool::reassign`), so stale ring content never plays.
+    rezero: bool,
     core: DelayCore,
     mix: Smooth,
 }
@@ -36,15 +39,18 @@ pub struct Delay {
 impl Delay {
     /// A delay on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Delay {
-        Delay { slot, core: DelayCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
+        Delay { slot, rezero: false, core: DelayCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }
     }
 
     pub fn slot(&self) -> u8 {
         self.slot
     }
 
+    /// Clear the DSP state; the ring (pool memory) is re-zeroed, in bounded
+    /// steps, from the next `process` on (silent wet signal meanwhile).
     pub fn reset(&mut self) {
         self.core.reset();
+        self.rezero = true;
     }
 
     pub fn process(&mut self, ctx: &Ctx, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
@@ -57,6 +63,9 @@ impl Delay {
         self.core.set_ping_pong(param(params, K, PINGPONG) >= 0.5);
         self.core.set_high_cut(param(params, K, HICUT));
         let (mut wl, mut wr) = (dry_l, dry_r);
+        if std::mem::take(&mut self.rezero) {
+            fx.reassign(FxKind::Delay, self.slot);
+        }
         match fx.buffer(FxKind::Delay, self.slot) {
             Some(buf) => self.core.process(buf, &mut wl, &mut wr),
             None => {

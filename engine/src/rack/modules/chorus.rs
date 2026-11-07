@@ -22,21 +22,27 @@ const MIX: usize = 2;
 #[derive(Clone)]
 pub struct Chorus {
     slot: u8,
+    /// Set by `reset`: the next `process` restarts the slot's zeroing
+    /// (`FxPool::reassign`), so stale ring content never plays.
+    rezero: bool,
     core: ChorusCore,
 }
 
 impl Chorus {
     /// A chorus on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Chorus {
-        Chorus { slot, core: ChorusCore::new(sr) }
+        Chorus { slot, rezero: false, core: ChorusCore::new(sr) }
     }
 
     pub fn slot(&self) -> u8 {
         self.slot
     }
 
+    /// Clear the DSP state; the ring (pool memory) is re-zeroed, in bounded
+    /// steps, from the next `process` on (silent wet signal meanwhile).
     pub fn reset(&mut self) {
         self.core.reset();
+        self.rezero = true;
     }
 
     pub fn process(&mut self, params: &[f32], ins: &[PortBuf], outs: &mut [PortBuf], fx: &mut FxPool) {
@@ -44,6 +50,9 @@ impl Chorus {
         self.core.set_rate(param(params, K, RATE));
         self.core.set_depth(param(params, K, DEPTH));
         self.core.set_mix(param(params, K, MIX));
+        if std::mem::take(&mut self.rezero) {
+            fx.reassign(FxKind::Chorus, self.slot);
+        }
         match fx.buffer(FxKind::Chorus, self.slot) {
             Some(buf) => self.core.process(buf, &mut l, &mut r),
             None => self.core.reset(),

@@ -3,12 +3,23 @@ import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } fr
 import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists the modules in kind order (plan 6 effects are 9..15)', () => {
+  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16)', () => {
     expect(CATALOG.modules.map((m) => m.id)).toEqual([
       'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
       'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
+      'sample_player',
     ]);
-    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(16).keys()]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(17).keys()]);
+  });
+  it('the sample player is a pool-free source with a -1 (none) sample param', () => {
+    const sp = moduleDef('sample_player');
+    expect(sp.category).toBe('source');
+    expect(fxPoolSlots(sp)).toBeNull();
+    expect(sp.inputs.map((p) => p.name)).toEqual(['pitch', 'gate']);
+    expect(sp.params.map((p) => p.name)).toEqual(['sample', 'gain', 'start', 'pitchTrack', 'root']);
+    const sample = sp.params[paramIndex(sp, 'sample')];
+    expect([sample.min, sample.max, sample.default, sample.integer]).toEqual([-1, 255, -1, true]);
+    expect(sp.params[paramIndex(sp, 'root')].default).toBe(60);
   });
   it('puts the stereo effects under Effect, with the FX-pool slot counts', () => {
     const effects = CATALOG.modules.filter((m) => m.category === 'effect').map((m) => m.id);

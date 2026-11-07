@@ -89,6 +89,11 @@ export const Op = {
   MIX_SET_KEY: 42,
   /** a=channel: every param to its catalog default, key none. */
   MIX_RESET: 43,
+  /** No args. Back to a blank session (project load): every track, rack, clip,
+   *  sample (the arena rewinds), mixer setting, FX-pool slot, the transport and
+   *  the metronome. Stopped only (BAD_VALUE while playing: send STOP first, the
+   *  same batch is fine). Applies at once; the output fades over 5 ms. */
+  RESET_ALL: 44,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 

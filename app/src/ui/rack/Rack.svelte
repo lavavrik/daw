@@ -35,7 +35,8 @@
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
-  import { confirmReleasingKeys } from '../../input/shortcuts';
+  import { releaseHeldKeys } from '../../input/shortcuts';
+  import InlineConfirm from '../InlineConfirm.svelte';
   import { baseName } from '../../audio/samples';
   import { droppedFiles } from '../../library/drag';
   import { LibraryLostError, library } from '../../library/library.svelte';
@@ -283,8 +284,6 @@
    * file could not be read (the banner says why).
    */
   async function load(value: string): Promise<boolean> {
-    // confirmReleasingKeys: a piano key held during the dialog would hang.
-    if (isEdited && !confirmReleasingKeys(`Discard your edits to "${track.patchName}"?`)) return false;
     const tid = track.id;
     let patch: unknown;
     let name: string;
@@ -312,12 +311,21 @@
     patchNote = warnings.length ? warningsText(`Loaded "${name}" without what was invalid`, warnings) : null;
     return true;
   }
+  /** A patch load waiting on "Discard your edits?" (InlineConfirm under the control that asked). */
+  let discardAsk = $state<{ value: string; anchor: HTMLElement; track: string } | null>(null);
+  /** Load `value`, asking first when the rack has unsaved edits. */
+  async function requestLoad(value: string, anchor: HTMLElement): Promise<boolean> {
+    if (!isEdited) return load(value);
+    releaseHeldKeys(); // a held piano key must not sound while the user decides
+    discardAsk = { value, anchor, track: track.patchName };
+    return false; // not loaded (yet): a select shows the current patch again
+  }
   async function pickPatch(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
     sel.blur(); // give the keys back to the piano at once
-    if (!(await load(sel.value))) sel.value = selValue; // declined / failed: show the current patch again
+    if (!(await requestLoad(sel.value, sel))) sel.value = selValue; // declined / failed: show the current patch again
   }
-  const revert = () => void load(selValue);
+  const revert = (e: MouseEvent) => void requestLoad(selValue, e.currentTarget as HTMLElement);
 
   // ---- Save patch (to the library's patches/) ----------------------------------
   /** The inline save form; `exists`: that file is there, ask before replacing. */
@@ -539,6 +547,20 @@
     </span>
   </div>
 
+  {#if discardAsk}
+    {@const d = discardAsk}
+    <InlineConfirm
+      message={`Discard your edits to "${d.track}"?`}
+      anchor={d.anchor}
+      confirmLabel="Discard"
+      oncancel={() => (discardAsk = null)}
+      onconfirm={() => {
+        const value = d.value; // read before clearing: `d` follows `discardAsk`
+        discardAsk = null;
+        void load(value);
+      }}
+    />
+  {/if}
   {#if saving}
     {@const sv = saving}
     <div class="note save" role="group" aria-label="Save patch">

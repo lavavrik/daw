@@ -1,5 +1,5 @@
-// Texts of the destructive confirm() dialogs, kept pure so they are unit
-// tested. Patterns are shared by clips, so a dialog that changes a pattern
+// Texts of the destructive confirmations, kept pure so they are
+// tested. Patterns are shared by clips, so a confirmation that changes a pattern
 // says which pattern and that every clip using it changes too; removing a
 // track says that its patterns and clips go with it.
 import { currentPattern } from './project.svelte';

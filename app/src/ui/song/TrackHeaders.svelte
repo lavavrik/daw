@@ -4,20 +4,24 @@
   // accessible button per track (plan-2 testid `track-<slot>`). Selection is
   // shown by a lighter background + a "▶" marker + bold name (not colour
   // alone); the second line says what the track is. The × only appears on
-  // hover/focus and asks first (confirmReleasingKeys: a piano key held during
-  // the dialog would hang).
+  // hover/focus and asks first (InlineConfirm popover under the ×; held piano
+  // keys are released before it opens).
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
   import { removeTrack, selectTrack } from '../../state/actions';
-  import { confirmReleasingKeys } from '../../input/shortcuts';
+  import { releaseHeldKeys } from '../../input/shortcuts';
+  import InlineConfirm from '../InlineConfirm.svelte';
   import { LANE_H } from './tlMath';
 
   let { p, engine }: { p: Project; engine: CommandSink } = $props();
 
-  function remove(t: Track) {
-    // Says that the track's patterns and clips go with it (confirmText.ts).
-    if (confirmReleasingKeys(removeTrackText(t))) removeTrack(p, engine, t.id);
+  /** The open question: which track, and the × that asked. */
+  let asking = $state<{ track: Track; anchor: HTMLElement } | null>(null);
+
+  function remove(t: Track, anchor: HTMLElement) {
+    releaseHeldKeys();
+    asking = { track: t, anchor };
   }
 </script>
 
@@ -46,11 +50,27 @@
           {/if}
         </span>
       </button>
-      <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={() => remove(t)}>×</button>
+      <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={(e) => remove(t, e.currentTarget)}>×</button>
     </div>
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet</p>{/if}
 </div>
+
+{#if asking}
+  {@const a = asking}
+  <!-- Says that the track's patterns and clips go with it (confirmText.ts). -->
+  <InlineConfirm
+    message={removeTrackText(a.track)}
+    anchor={a.anchor}
+    confirmLabel="Remove"
+    oncancel={() => (asking = null)}
+    onconfirm={() => {
+      const id = a.track.id; // read before clearing: `a` follows `asking`
+      asking = null;
+      removeTrack(p, engine, id);
+    }}
+  />
+{/if}
 
 <style>
   .heads { display: flex; flex-direction: column; }

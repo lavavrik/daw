@@ -202,3 +202,25 @@ test('layout at 1280×720: C2..C5 at >= 9 px rows, top bar on one line', async (
   await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms/);
   await page.locator('header.bar').screenshot({ path: 'test-results/topbar.png' });
 });
+
+test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo step', async ({ page }) => {
+  await openRoll(page);
+  await draw(page, 0, C3);
+  await draw(page, BEAT, C3);
+  await page.keyboard.press('Escape'); // clears the selection: the readout counts the notes
+  await expect(readout(page)).toContainText('2 notes');
+  await page.getByTestId('pr-clear').click();
+  const ask = page.getByTestId('inline-confirm');
+  await expect(ask).toContainText('Clear all 2 notes');
+  await expect(page.getByTestId('inline-confirm-cancel')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId('pr-clear')).toBeFocused(); // focus returned to the trigger
+  await expect(readout(page)).toContainText('2 notes');
+  await page.getByTestId('pr-clear').click();
+  await page.getByTestId('inline-confirm-ok').click();
+  await expect(ask).toHaveCount(0);
+  await expect(readout(page)).not.toContainText('2 notes');
+  await page.keyboard.press('ControlOrMeta+z'); // one undo entry brings both back
+  await expect(readout(page)).toContainText('2 notes');
+});

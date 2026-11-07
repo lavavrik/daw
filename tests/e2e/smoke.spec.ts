@@ -405,12 +405,18 @@ test('selecting drums keeps keys on the last synth', async ({ page }) => {
 test('removing the synth track silences it and keys show no synth', async ({ page }) => {
   await startAudio(page);
   await page.getByTestId('add-synth-track').click();
-  let asked = '';
-  page.once('dialog', (d) => { asked = d.message(); void d.accept(); });
   await page.getByTestId('track-1').hover();
   await page.getByRole('button', { name: 'Remove track Synth' }).click();
+  // Inline popover (no native dialog); focus starts on the safe choice, Cancel.
+  const ask = page.getByTestId('inline-confirm');
+  await expect(ask).toContainText('Remove track "Synth" and its 1 pattern? This cannot be undone.');
+  await expect(page.getByTestId('inline-confirm-cancel')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(ask).toHaveCount(0);
+  await expect(page.getByTestId('track-1')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Remove track Synth' }).click();
+  await page.getByTestId('inline-confirm-ok').click();
   await expect(page.getByTestId('track-1')).toHaveCount(0);
-  expect(asked).toBe('Remove track "Synth" and its 1 pattern? This cannot be undone.');
   await expect(page.getByTestId('keys-target')).not.toContainText('Synth');
   await page.keyboard.down('KeyA');
   await page.waitForTimeout(300);
@@ -494,16 +500,16 @@ test('turning cutoff updates readout and engine accepts it', async ({ page }) =>
   expect(await slot(page, 7)()).toBe(err);
   // With edits, loading a patch asks first: declining keeps everything.
   const after = await knob.getAttribute('aria-valuetext');
-  let asked = '';
-  page.once('dialog', (d) => { asked = d.message(); void d.dismiss(); });
   await page.getByTestId('patch-select').selectOption('Pad');
-  await expect.poll(() => asked).toBe('Discard your edits to "Deep Bass"?');
+  await expect(page.getByTestId('inline-confirm')).toContainText('Discard your edits to "Deep Bass"?');
+  await page.getByTestId('inline-confirm-cancel').click();
+  await expect(page.getByTestId('inline-confirm')).toHaveCount(0);
   await expect(page.getByTestId('patch-select')).toHaveValue('Deep Bass');
   await expect(knob).toHaveAttribute('aria-valuetext', after!);
   await expect(page.getByTestId('patch-edited')).toBeVisible();
   // Accepting loads it and clears the marker.
-  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('patch-select').selectOption('Pad');
+  await page.getByTestId('inline-confirm-ok').click();
   await expect(page.getByTestId('patch-select')).toHaveValue('Pad');
   await expect(page.locator('[data-testid^="module-"]')).toHaveCount(7);
   await expect(page.getByTestId('patch-edited')).toBeHidden();

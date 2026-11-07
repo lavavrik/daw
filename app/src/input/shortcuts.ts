@@ -159,19 +159,13 @@ export function createShortcutHandlers(
 /** Handlers of the installed shortcuts (one per session), for releaseHeldKeys. */
 let installed: ShortcutHandlers | null = null;
 
-/** Release every held piano key now (no-op when shortcuts aren't installed). */
+/**
+ * Release every held piano key now (no-op when shortcuts aren't installed).
+ * Call before opening an inline confirmation: the keyup may land on the
+ * popover, and a note must not keep sounding while the user decides.
+ */
 export function releaseHeldKeys() {
   installed?.releaseAll();
-}
-
-/**
- * Native confirm() that can't strand a note: the dialog blocks the main
- * thread and swallows the keyup of a piano key held while it is open, so the
- * note would hang after Cancel. Release held keys first. `ask` is for tests.
- */
-export function confirmReleasingKeys(message: string, ask: (m: string) => boolean = (m) => window.confirm(m)): boolean {
-  releaseHeldKeys();
-  return ask(message);
 }
 
 /** Returns an uninstall function. */

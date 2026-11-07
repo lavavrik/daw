@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
-import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from './shortcuts';
+import { createShortcutHandlers, releaseHeldKeys, installShortcuts } from './shortcuts';
 import { createNoteInput } from './noteInput';
 import type { NoteListener } from './noteInput';
 
@@ -152,7 +152,7 @@ describe('shortcut handlers', () => {
     expect(octs.at(-1)).toBe(0);
   });
 
-  it('confirmReleasingKeys releases held keys before the (blocking) dialog', () => {
+  it('releaseHeldKeys releases held keys (called before an inline confirmation opens)', () => {
     // Minimal window/document so installShortcuts can register its listeners.
     const listeners = new Map<string, (e: unknown) => void>();
     const target = {
@@ -168,11 +168,9 @@ describe('shortcut handlers', () => {
       const sink = { send: (...a: number[]) => (sent.push(a), true) };
       const uninstall = installShortcuts({ playing: false } as any, sink, createNoteInput(sink, null));
       listeners.get('keydown')!(key('KeyA'));
-      let atDialog: number[][] = [];
-      const ok = confirmReleasingKeys('Remove?', () => ((atDialog = [...sent]), false));
-      expect(ok).toBe(false);
-      expect(atDialog).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
-      // The keyup the dialog swallowed never comes; nothing is left to release.
+      releaseHeldKeys();
+      expect([...sent]).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+      // The keyup that goes to the popover instead never reaches us; nothing is left to release.
       uninstall();
       expect(sent).toHaveLength(2);
     } finally {

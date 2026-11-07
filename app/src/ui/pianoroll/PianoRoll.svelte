@@ -43,7 +43,8 @@
   import type { AudioClock } from '../../audio/audioClock';
   import { mod } from '../../audio/audioClock';
   import type { NoteInput } from '../../input/noteInput';
-  import { confirmReleasingKeys, releaseHeldKeys } from '../../input/shortcuts';
+  import { releaseHeldKeys } from '../../input/shortcuts';
+  import InlineConfirm from '../InlineConfirm.svelte';
   import {
     GRID_TICKS, MAX_NOTE_LEN, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars, updateNotes,
   } from '../../state/pattern-actions';
@@ -750,13 +751,18 @@
     fitWidth();
     refocus();
   }
-  function clearAll() {
+  /** The Clear button while its confirmation is open (the popover's anchor). */
+  let clearAsk = $state<HTMLElement | null>(null);
+  function clearAll(e: MouseEvent) {
     if (!notes.length) return;
-    if (confirmReleasingKeys(clearPatternText(track, notes.length))) {
-      clearPattern(p, engine, track.id);
-      selected = new Set();
-    }
-    refocus(); // confirm() took focus away
+    releaseHeldKeys();
+    clearAsk = e.currentTarget as HTMLElement;
+  }
+  function clearConfirmed() {
+    clearAsk = null;
+    clearPattern(p, engine, track.id);
+    selected = new Set();
+    refocus(); // the popover had focus
   }
 
   onDestroy(() => {
@@ -782,6 +788,15 @@
       Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
     </button>
     <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}>Clear</button>
+    {#if clearAsk}
+      <InlineConfirm
+        message={clearPatternText(track, notes.length)}
+        anchor={clearAsk}
+        confirmLabel="Clear"
+        oncancel={() => (clearAsk = null)}
+        onconfirm={clearConfirmed}
+      />
+    {/if}
     <output class="readout" data-testid="pr-readout" class:hint={!!hint}>{readoutText}</output>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->

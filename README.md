@@ -162,3 +162,61 @@ bar), **Escape** cancels a drag / clears the selection, **Shift-drag** box
 selects. Wheel scrolls tracks, **Shift+wheel** scrolls time, **Cmd/Ctrl+wheel**
 zooms; the slider in the footer scrolls time too. Limits: 16 patterns and 256
 clips per track, 999 bars.
+
+## Save, open, autosave
+
+Design notes: `docs/architecture/projects.md`.
+
+A project is a folder. Click the project name at the top left (it starts as
+"Untitled") for the menu: **New**, **Open…**, **Save**, **Save As…**
+(**Cmd/Ctrl+S**, **Shift+Cmd/Ctrl+S**, **Cmd/Ctrl+O**). Chrome asks you to pick
+a folder:
+
+```
+My Song/
+  project.json      tracks, patterns, rack patches, mixer, tempo…
+  samples/          the original sample files, byte for byte
+```
+
+A **● unsaved** mark appears next to the name after any edit and goes away on
+Save (or when edits bring it back to the saved state). New and Open ask
+before discarding unsaved changes. Save As into a folder that already holds a
+project asks "Replace the project in …?" first.
+
+**Autosave** runs on its own a few seconds after you stop editing, into the
+browser's private storage (not your project folder). After a crash or a closed
+tab, the next start shows **Restore last session** / **Start fresh** above the
+editors. A restored session is still "● unsaved" and has no folder yet; Save
+asks for one. Autosave works in one tab at a time: a second tab shows
+"Autosave is off — this project is open in another tab".
+
+## Your sample library
+
+The **Browser** pane shows one library for every project. Click **Choose
+library folder…** once (any folder; sub-folders are browsed lazily) or **Use
+starter kit** for the bundled sounds. Click a sample to preview it; big files
+stream instead of loading into memory. **↻** rescans the folder.
+
+After a browser restart Chrome may withdraw access to the folder: the pane then
+shows **Reconnect folder**; one click grants it again. Same if the folder was
+moved or deleted (use **Change folder…**).
+
+Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample Player**
+module in the rack. It is copied into the project (the **Save** copies it into
+`samples/`), so projects stay self-contained. **Save patch** in the Instrument
+tab stores the rack as `patches/<name>.json` in the library; it then shows up
+in the **Patch** dropdown.
+
+## Effects in the rack
+
+**+ Add module** in the Instrument tab lists the effects (grouped by category): **Delay**
+(tempo-synced, up to 2 s), **Reverb**, **Chorus**; plus **EQ** and
+**Compressor** (sidechain input included), **Saturator** (*Shaping*) and
+**Attenuator** (*Utility*: level and offset, handy for scaling a CV), and the
+**Sample Player** (*Source*: plays a project sample, optionally pitched from the
+keys; follow it with an ADSR + VCA for gated notes).
+
+Delay, Reverb and Chorus use memory shared by the whole project: at most **8
+delays, 8 reverbs and 16 chorus** in total over all tracks. When a bank is full
+the menu greys the module ("All 8 delays in use"). Design notes:
+`docs/architecture/modular.md`.

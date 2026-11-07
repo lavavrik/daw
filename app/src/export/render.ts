@@ -8,7 +8,7 @@
 // and hash exactly -- change both together).
 import { MAX_BLOCK, TELEMETRY, TELEMETRY_LEN } from '../audio/protocol';
 import type { EngineCommand } from '../project/commands';
-import { encodeWav24 } from './wav';
+import { Wav24Writer } from './wav';
 
 /** The engine's C ABI (as in worklet.ts). Pointers are byte offsets into `memory`. */
 interface EngineExports {
@@ -74,12 +74,15 @@ export const ENGINE_QUANTUM = 128;
  * then `frames + latency` frames in MAX_BLOCK (1024-frame) blocks, each as
  * ENGINE_QUANTUM-frame engine_process calls (the last call shorter),
  * dropping the first `latency` frames (the master limiter's lookahead) so
- * the song's first beat is frame 0. `onProgress(done)` is called after every
- * block with the output frames rendered so far.
+ * the song's first beat is frame 0. After every block, `onBlock(left,
+ * right, done)` gets that block's output frames (views of two reused
+ * MAX_BLOCK scratch buffers, valid only during the call; the first block is
+ * shorter by the trim) and the output frames rendered so far. Nothing
+ * song-sized is held here.
  */
-export function renderSong(
-  wasm: BufferSource, job: RenderJob, onProgress?: (done: number) => void,
-): { left: Float32Array; right: Float32Array } {
+export function renderBlocks(
+  wasm: BufferSource, job: RenderJob, onBlock: (left: Float32Array, right: Float32Array, done: number) => void,
+): void {
   // Synchronous compile: fine off the main thread (Worker, Node tests).
   const ex = new WebAssembly.Instance(new WebAssembly.Module(wasm), {}).exports as unknown as EngineExports;
   const h = ex.engine_new(job.sampleRate);
@@ -100,11 +103,12 @@ export function renderSong(
 
   const latency = ex.engine_latency(h) >>> 0;
   const total = job.frames + latency;
-  const left = new Float32Array(job.frames);
-  const right = new Float32Array(job.frames);
+  const left = new Float32Array(MAX_BLOCK);
+  const right = new Float32Array(MAX_BLOCK);
   let done = 0; // frames rendered, latency included
   while (done < total) {
     const blockEnd = Math.min(done + MAX_BLOCK, total);
+    let k = 0; // output frames in this block
     while (done < blockEnd) {
       const n = Math.min(ENGINE_QUANTUM, blockEnd - done);
       ex.engine_process(h, n);
@@ -112,37 +116,49 @@ export function renderSong(
       const skip = Math.max(0, latency - done);
       if (skip < n) {
         const b = ex.memory.buffer;
-        const at = done + skip - latency;
-        left.set(new Float32Array(b, (ex.engine_out_left(h) >>> 0) + skip * 4, n - skip), at);
-        right.set(new Float32Array(b, (ex.engine_out_right(h) >>> 0) + skip * 4, n - skip), at);
+        left.set(new Float32Array(b, (ex.engine_out_left(h) >>> 0) + skip * 4, n - skip), k);
+        right.set(new Float32Array(b, (ex.engine_out_right(h) >>> 0) + skip * 4, n - skip), k);
+        k += n - skip;
       }
       done += n;
     }
-    onProgress?.(Math.max(0, done - latency));
+    if (k > 0) onBlock(left.subarray(0, k), right.subarray(0, k), done - latency);
   }
+}
+
+/** The whole render as two float arrays (tests; the Worker streams with renderBlocks). */
+export function renderSong(wasm: BufferSource, job: RenderJob): { left: Float32Array; right: Float32Array } {
+  const left = new Float32Array(job.frames);
+  const right = new Float32Array(job.frames);
+  renderBlocks(wasm, job, (l, r, done) => {
+    left.set(l, done - l.length);
+    right.set(r, done - r.length);
+  });
   return { left, right };
 }
 
 /**
- * The Worker's whole job: render, encode, reply. Progress goes out every
- * 0.25 s of rendered audio and once at the end (fraction 1); then exactly
- * one 'done' or 'error'.
+ * The Worker's whole job: render, encode each block as it comes
+ * (Wav24Writer), reply. Progress goes out every 0.25 s of rendered audio and
+ * once at the end (fraction 1); then exactly one 'done' or 'error'.
  */
 export function handleRenderMessage(msg: unknown, post: (reply: WorkerReply) => void): void {
   const m = msg as RenderRequest;
   if (m?.type !== 'render') return;
   try {
     const { job } = m;
+    const wav = new Wav24Writer(job.frames, job.sampleRate);
     const every = Math.max(1, Math.round(job.sampleRate / 4));
     let next = every;
-    const { left, right } = renderSong(m.wasm, job, (done) => {
+    renderBlocks(m.wasm, job, (left, right, done) => {
+      wav.write(left, right);
       if (done >= next && done < job.frames) {
         post({ type: 'progress', fraction: done / job.frames });
         while (next <= done) next += every;
       }
     });
     post({ type: 'progress', fraction: 1 });
-    post({ type: 'done', wav: encodeWav24(left, right, job.sampleRate) });
+    post({ type: 'done', wav: wav.finish() });
   } catch (e) {
     post({ type: 'error', message: e instanceof Error ? e.message : String(e) });
   }

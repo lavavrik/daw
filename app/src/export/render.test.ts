@@ -4,7 +4,9 @@
 // builds it first (npm run build:engine).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { fnv1a32, parseJob, renderSong, sampleData } from './render';
+import { fnv1a32, handleRenderMessage, parseJob, renderSong, sampleData } from './render';
+import type { WorkerReply } from './render';
+import { encodeWav24 } from './wav';
 import { engineWasmBytes as wasmBytes } from './testWasm';
 
 const fixture = (f: string) => readFileSync(new URL(`../../../engine/tests/fixtures/${f}`, import.meta.url), 'utf8');
@@ -36,5 +38,19 @@ describe('export render core', () => {
     const a = renderSong(bytes, j);
     const b = renderSong(bytes, j);
     expect(fnv1a32(a.left, a.right)).toBe(fnv1a32(b.left, b.right));
+  });
+
+  it('the Worker streams the WAV block by block: same bytes as encoding the whole render', async () => {
+    const j = job();
+    const bytes = wasmBytes();
+    const { left, right } = renderSong(bytes, j);
+    const want = new Uint8Array(await encodeWav24(left, right, j.sampleRate).arrayBuffer());
+    const replies: WorkerReply[] = [];
+    handleRenderMessage({ type: 'render', wasm: bytes, job: j }, (r) => replies.push(r));
+    const done = replies.at(-1)!;
+    expect(done.type).toBe('done');
+    const got = new Uint8Array(await (done as { wav: Blob }).wav.arrayBuffer());
+    expect(got.length).toBe(want.length);
+    expect(got).toEqual(want);
   });
 });

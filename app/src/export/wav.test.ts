@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeWav24 } from './wav';
+import { encodeWav24, Wav24Writer } from './wav';
 
 const bytesOf = async (b: Blob) => new DataView(await b.arrayBuffer());
 const str = (v: DataView, at: number, n: number) =>
@@ -41,5 +41,23 @@ describe('encodeWav24', () => {
 
   it('refuses channels of different lengths', () => {
     expect(() => encodeWav24(new Float32Array(2), new Float32Array(3), 48000)).toThrow();
+  });
+
+  it('the streaming writer gives the same bytes as encodeWav24, in any block sizes', async () => {
+    const n = 5000;
+    const l = new Float32Array(n).map((_, i) => Math.sin(i / 7) * 1.2);
+    const r = new Float32Array(n).map((_, i) => Math.cos(i / 5) * 0.5);
+    const w = new Wav24Writer(n, 44100, 1000); // small chunks: several parts
+    for (const [a, b] of [[0, 1], [1, 1024], [1024, 1100], [1100, 4999], [4999, 5000]]) w.write(l.subarray(a, b), r.subarray(a, b));
+    const streamed = new Uint8Array(await w.finish().arrayBuffer());
+    const whole = new Uint8Array(await encodeWav24(l, r, 44100).arrayBuffer());
+    expect(streamed).toEqual(whole);
+  });
+
+  it('the streaming writer refuses a length other than announced', () => {
+    const w = new Wav24Writer(3, 48000);
+    w.write(new Float32Array(2), new Float32Array(2));
+    expect(() => w.finish()).toThrow();
+    expect(() => w.write(new Float32Array(2), new Float32Array(2))).toThrow();
   });
 });

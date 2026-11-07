@@ -9,31 +9,26 @@
 //   3. STOP, blank the UI state, RESET_ALL, and wait for the worklet's ack:
 //      sample uploads go by postMessage and must not overtake the reset.
 //   4. upload the samples with compact ids 0..n-1 (old -> new id map).
-//   5. replay, synchronously: tracks (patterns, steps/notes, current pattern,
-//      rows with their samples, rack via loadPatch, clips) -> MIX_SET by
-//      name -> MIX_SET_KEY last (keys need their source tracks and rows) ->
-//      tempo, metronome, mode, loop and the live input track. RESET_ALL put
-//      the transport back to 124 BPM / Pattern / loop off / metronome off /
-//      no input track, so these are always sent to match the UI.
-// The replay goes through the same code as the UI where one exists
-// (loadPatch, setMix, setSidechain), so a load can never send a command an
-// edit could not.
+//   5. replay, synchronously: projectCommands (project/commands.ts, the one
+//      replay-order builder shared with undo, export and the audio restart)
+//      gives the commands -- tracks (patterns, steps/notes, current pattern,
+//      rows with their samples, rack, clips) -> MIX_SET by name ->
+//      MIX_SET_KEY last -> tempo, metronome, mode, loop and the live input
+//      track (RESET_ALL put the transport back to 124 BPM / Pattern / loop
+//      off / metronome off / no input track, so these are always sent) --
+//      and the normalized project the UI state (projectState) is built from.
+// The rack goes through patchRack, the same builder loadPatch uses.
 import { Err, Op } from '../audio/protocol';
 import { decodeBytes, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
 import { mixParam } from '../audio/mixerCatalog';
-import { liveInputTrack } from '../state/actions';
 import type { CommandSink } from '../state/actions';
-import { setMix, setSidechain } from '../state/mixer-actions';
-import type { MixChannelTarget } from '../state/mixer-actions';
-import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-actions';
-import { sendClip } from '../state/song-actions';
-import { loadPatch } from '../state/rack-actions';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
-import type { DrumTrack, Project, SampleFile, SynthTrack, Track } from '../state/project.svelte';
+import type { ChannelState, Project, SampleFile, Track } from '../state/project.svelte';
 import { sampleFile } from '../state/sampleFiles';
+import { projectCommands, trackState } from './commands';
 import { validate } from './schema';
-import type { ClipJson, MixParamsJson, ProjectJson } from './schema';
+import type { MixParamsJson, ProjectJson } from './schema';
 
 export type { SampleDecoder };
 
@@ -150,136 +145,48 @@ export function blankState(p: Project) {
   p.sampleFiles.clear();
 }
 
-/** Rebuild the state of a validated project and send its commands (step 5 above). */
+/**
+ * Step 5 above: the commands come from projectCommands (the one replay-order
+ * builder, project/commands.ts); the UI state is built from the normalized
+ * project it returns, so the two always agree.
+ */
 function replay(p: Project, sink: CommandSink, proj: ProjectJson, ids: Map<number, number>, warnings: string[]) {
-  const sampleId = (old: number | null) => (old === null ? null : (ids.get(old) ?? null));
+  const pc = projectCommands(proj, ids);
+  warnings.push(...pc.warnings);
+  projectState(p, pc.project);
+  for (const c of pc.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
+}
+
+/**
+ * Fill a blank `p` (blankState) with the UI state of a normalized project:
+ * tracks, mixer, transport, selection and name. Sends nothing.
+ */
+export function projectState(p: Project, proj: ProjectJson) {
   const bySlot = new Map<number, Track>();
-
   for (const tj of proj.tracks) {
-    let track: Track;
-    if (tj.kind === 'drum') {
-      const patterns = tj.patterns.map((pj) => {
-        const pat = makeDrumPattern(pj.engineIdx, pj.name, pj.stepCount, pj.swing);
-        for (const [r, s, vel] of pj.hits) pat.steps[r][s] = vel;
-        return pat;
-      });
-      p.tracks.push({
-        kind: 'drum',
-        id: crypto.randomUUID(),
-        slot: tj.slot,
-        name: tj.name,
-        color: tj.color,
-        rows: tj.rows.map((r) => ({
-          id: crypto.randomUUID(), name: r.name, sampleId: sampleId(r.sample), gain: r.gain, pan: r.pan, mute: r.mute,
-        })),
-        patterns,
-        currentPatternId: patterns.find((x) => x.engineIdx === tj.currentPattern)!.id,
-        clips: [],
-      });
-      const t = p.tracks[p.tracks.length - 1] as DrumTrack; // reactive proxy
-      track = t;
-      p.mixer.channels[t.id] = newChannel();
-      sink.send(Op.ADD_DRUM_TRACK, t.slot);
-      // Step edits act on the engine's current pattern: select each in turn.
-      for (const pat of t.patterns) {
-        sink.send(Op.SET_CURRENT_PATTERN, t.slot, pat.engineIdx);
-        sink.send(Op.SET_STEP_COUNT, t.slot, pat.stepCount);
-        sink.send(Op.SET_SWING, t.slot, pat.swing);
-        pat.steps.forEach((row, r) => row.forEach((vel, s) => vel > 0 && sink.send(Op.SET_STEP, t.slot, r, s, vel)));
-      }
-      sink.send(Op.SET_CURRENT_PATTERN, t.slot, tj.currentPattern);
-      t.rows.forEach((r, i) => {
-        if (r.sampleId !== null) sink.send(Op.SET_ROW_SAMPLE, t.slot, i, r.sampleId);
-        if (r.gain !== 1) sink.send(Op.SET_ROW_GAIN, t.slot, i, r.gain);
-        if (r.pan !== 0) sink.send(Op.SET_ROW_PAN, t.slot, i, r.pan);
-        if (r.mute) sink.send(Op.SET_ROW_MUTE, t.slot, i, 1);
-      });
-    } else {
-      const patterns = tj.patterns.map((pj) => ({
-        ...makeNotePattern(pj.engineIdx, pj.name, pj.bars),
-        notes: pj.notes.map((n) => ({ id: crypto.randomUUID(), ...n })),
-      }));
-      p.tracks.push({
-        kind: 'synth',
-        id: crypto.randomUUID(),
-        slot: tj.slot,
-        name: tj.name,
-        color: tj.color,
-        patchName: '',
-        modules: [],
-        cables: [],
-        patterns,
-        currentPatternId: patterns.find((x) => x.engineIdx === tj.currentPattern)!.id,
-        clips: [],
-      });
-      const t = p.tracks[p.tracks.length - 1] as SynthTrack;
-      track = t;
-      p.mixer.channels[t.id] = newChannel();
-      sink.send(Op.ADD_SYNTH_TRACK, t.slot);
-      for (const pat of t.patterns) {
-        sink.send(Op.SET_CURRENT_PATTERN, t.slot, pat.engineIdx);
-        sink.send(Op.SET_PATTERN_BARS, t.slot, pat.bars);
-        for (const n of pat.notes) sendNote(sink, t, n);
-      }
-      sink.send(Op.SET_CURRENT_PATTERN, t.slot, tj.currentPattern);
-      // SamplePlayer `sample` params follow the compact sample ids (a sample
-      // that did not load: none; its own warning says why).
-      const patch = {
-        ...tj.patch,
-        modules: tj.patch.modules.map((m) =>
-          m.id === 'sample_player' && m.params?.sample !== undefined
-            ? { ...m, params: { ...m.params, sample: sampleId(m.params.sample < 0 ? null : m.params.sample) ?? -1 } }
-            : m,
-        ),
-      };
-      for (const w of loadPatch(p, sink, t.id, patch)) warnings.push(`Track "${t.name}": ${w}`);
-    }
-    addClips(sink, track, tj.clips);
-    bySlot.set(track.slot, track);
+    p.tracks.push(trackState(tj));
+    const t = p.tracks[p.tracks.length - 1]; // reactive proxy
+    p.mixer.channels[t.id] = newChannel();
+    bySlot.set(t.slot, t);
   }
-
-  // Mixer: params by name (only non-defaults: RESET_ALL set the defaults),
-  // then every sidechain key last.
-  const setParams = (target: MixChannelTarget, params: MixParamsJson) => {
-    for (const [name, value] of Object.entries(params)) {
-      if (value !== mixParam(name).default) setMix(p, sink, target, name, value);
-    }
+  const setParams = (ch: ChannelState, params: MixParamsJson) => {
+    for (const [name, value] of Object.entries(params)) ch.params[mixParam(name).id] = value;
   };
-  for (const s of proj.mixer.tracks) setParams(bySlot.get(s.slot)!.id, s.params);
-  setParams('reverb', proj.mixer.reverb);
-  setParams('delay', proj.mixer.delay);
-  setParams('master', proj.mixer.master);
   for (const s of proj.mixer.tracks) {
-    if (!s.key) continue;
-    const t = bySlot.get(s.slot)!;
-    const src = bySlot.get(s.key.track)!;
-    if (!setSidechain(p, sink, t.id, { trackId: src.id, row: s.key.row })) {
-      warnings.push(`Mixer "${t.name}": sidechain key ${src.name}${s.key.row === null ? '' : ` row ${s.key.row + 1}`} could not be set (dropped)`);
-    }
+    const ch = p.mixer.channels[bySlot.get(s.slot)!.id];
+    setParams(ch, s.params);
+    ch.key = s.key ? { trackId: bySlot.get(s.key.track)!.id, row: s.key.row } : null;
   }
-
-  // Transport and live input (RESET_ALL reset them in the engine).
+  setParams(p.mixer.reverb, proj.mixer.reverb);
+  setParams(p.mixer.delay, proj.mixer.delay);
+  setParams(p.mixer.master, proj.mixer.master);
   p.tempo = proj.tempo;
-  sink.send(Op.SET_TEMPO, p.tempo);
   p.metronome = proj.metronome;
-  sink.send(Op.SET_METRONOME, p.metronome ? 1 : 0);
   p.mode = proj.mode;
-  sink.send(Op.SET_MODE, p.mode === 'song' ? 1 : 0);
   p.loop = { ...proj.loop };
-  sink.send(Op.SET_LOOP, p.loop.on ? p.loop.start : 0, p.loop.on ? p.loop.end : 0);
   const sel = proj.selection.track !== null ? bySlot.get(proj.selection.track) : p.tracks[0];
   const synth = proj.selection.synth !== null ? bySlot.get(proj.selection.synth) : p.tracks.find((t) => t.kind === 'synth');
   p.selectedTrackId = sel?.id ?? null;
   p.lastSynthTrackId = sel?.kind === 'synth' ? sel.id : (synth?.id ?? null);
-  sink.send(Op.SET_INPUT_TRACK, liveInputTrack(p)?.slot ?? -1);
   p.name = proj.name;
-}
-
-function addClips(sink: CommandSink, t: Track, clips: ClipJson[]) {
-  const ps: { id: string; engineIdx: number }[] = t.patterns;
-  for (const cj of clips) {
-    const pat = ps.find((x) => x.engineIdx === cj.pattern)!;
-    t.clips.push({ id: crypto.randomUUID(), idx: cj.idx, patternId: pat.id, start: cj.start, len: cj.len, offset: cj.offset });
-    sendClip(sink, t, t.clips[t.clips.length - 1]);
-  }
 }

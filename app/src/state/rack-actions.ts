@@ -60,34 +60,50 @@ export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch:
   if (!t) return [];
   const own = (id: string) => t.modules.filter((m) => moduleDef(m.kind).id === id).length;
   const { patch: v, warnings } = validatePatch(patch, { fxFree: (id) => fxSlotsFree(p, id) + own(id) });
-  sink.send(Op.RACK_CLEAR, t.slot);
+  const rack = patchRack(t.slot, v);
+  for (const c of rack.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
+  t.modules = rack.modules;
+  t.cables = rack.cables;
+  t.patchName = v.name;
+  return warnings;
+}
+
+/** One engine command: [op, a, b, c, d] (missing args are 0). */
+export type EngineCommand = [op: number, a?: number, b?: number, c?: number, d?: number];
+
+/**
+ * A validated patch (validatePatch) as rack state plus the commands that
+ * build it on track `slot`: RACK_CLEAR, RACK_ADD_MODULE per module,
+ * RACK_SET_PARAM per non-default param, RACK_CONNECT per cable. Pure: the
+ * one place that turns a Patch into rack commands (loadPatch, a project
+ * load, undo's whole-track restore and the export Worker all use it).
+ */
+export function patchRack(slot: number, v: Patch): { modules: RackModule[]; cables: RackCable[]; commands: EngineCommand[] } {
+  const commands: EngineCommand[] = [[Op.RACK_CLEAR, slot]];
   const modules: RackModule[] = [];
   const cables: RackCable[] = [];
-  const sets: [number, number, number][] = [];
+  const sets: EngineCommand[] = [];
   for (const pm of v.modules) {
     const def = moduleDef(pm.id);
-    sink.send(Op.RACK_ADD_MODULE, t.slot, pm.idx, def.kind);
+    commands.push([Op.RACK_ADD_MODULE, slot, pm.idx, def.kind]);
     const params = def.params.map((pd) => pd.default);
     for (const [name, value] of Object.entries(pm.params ?? {})) {
       const i = def.params.findIndex((pd) => pd.name === name);
       params[i] = value; // validated: known and in range
-      if (value !== def.params[i].default) sets.push([pm.idx, i, value]);
+      if (value !== def.params[i].default) sets.push([Op.RACK_SET_PARAM, slot, pm.idx, i, value]);
     }
     modules.push({ idx: pm.idx, kind: def.kind, params });
   }
-  for (const [m, i, value] of sets) sink.send(Op.RACK_SET_PARAM, t.slot, m, i, value);
+  commands.push(...sets);
   for (const c of v.cables) {
     const from = modules.find((m) => m.idx === c.from[0])!;
     const to = modules.find((m) => m.idx === c.to[0])!;
     const fp = portIndex(moduleDef(from.kind), 'out', c.from[1]);
     const tp = portIndex(moduleDef(to.kind), 'in', c.to[1]);
     cables.push({ from: { m: from.idx, port: fp }, to: { m: to.idx, port: tp } });
-    sink.send(Op.RACK_CONNECT, t.slot, packPort(from.idx, fp), packPort(to.idx, tp));
+    commands.push([Op.RACK_CONNECT, slot, packPort(from.idx, fp), packPort(to.idx, tp)]);
   }
-  t.modules = modules;
-  t.cables = cables;
-  t.patchName = v.name;
-  return warnings;
+  return { modules, cables, commands };
 }
 
 /**

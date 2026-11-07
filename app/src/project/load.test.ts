@@ -5,6 +5,7 @@ import { liveInputTrack } from '../state/actions';
 import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
 import { loadProject, ProjectLoadError } from './load';
+import { projectCommands } from './commands';
 import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
 import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from './testFixture';
@@ -43,6 +44,19 @@ describe('loadProject', () => {
     expect(p.name).toBe('Fixture');
     expect(p.nextSampleId).toBe(3);
     expect([...p.sampleFiles.keys()]).toEqual([0, 1, 2]);
+  });
+
+  it('projectCommands is the replay a load sends, without a Project (plan-7 one builder)', async () => {
+    const { p: src } = await buildFixture();
+    const json = roundJson(serialize(src));
+    const e = fakeEngine();
+    await loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
+    const afterSamples = e.log.slice(e.log.findLastIndex((x) => 'sample' in x) + 1);
+    const pc = projectCommands(json, new Map(json.samples.map((s) => [s.id, s.id])));
+    expect(pc.commands.map(([op, a = 0, b = 0, c = 0, d = 0]) => ({ op, args: [a, b, c, d] }))).toEqual(afterSamples);
+    expect(pc.samples.map((s) => s.id)).toEqual([0, 1, 2]);
+    expect(pc.project).toEqual(json);
+    expect(pc.warnings).toEqual([]);
   });
 
   it('after a load the engine matches the UI tempo/metronome/mode/loop/input track', async () => {

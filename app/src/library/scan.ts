@@ -3,20 +3,25 @@
 //   <library>/…/*.wav|aif|aiff|mp3|flac|ogg|m4a   samples, in any sub-folder
 //   <library>/patches/*.json                       saved rack patches
 //
-// The tree holds names and '/'-joined paths relative to the library root,
-// never handles: the Browser renders it, and reads go back through the
-// library (library.svelte.ts), which resolves a path from the root handle
-// each time (so a folder that vanished is noticed on the next read).
+// Lazily, one folder level at a time (plan 6 Task 5 review item 2): the root
+// when the library opens, a sub-folder when the user expands it. A sample
+// library can hold hundreds of thousands of files (and an Ableton .asd beside
+// each sample); a whole-tree walk would be slow on every rescan and, capped,
+// would cut the listing at an arbitrary point. Per level:
+//   - hidden entries (".DS_Store", ".git/") and non-audio files are skipped
+//     and never count toward the cap;
+//   - folders and samples are each sorted by name (case-insensitive,
+//     numeric) and each capped at `maxEntries` (2000), in that order; `more`
+//     says how many were not shown;
+//   - the root's patches/ is not a sample folder: listPatches() lists its
+//     *.json files (not nested ones) for "Patches", eagerly.
+// A folder is shown whether or not it holds audio (that would need a walk).
 //
-// Hidden entries (".DS_Store", ".git/") are skipped; folders with no audio
-// anywhere below are pruned, so the tree only shows what can be used. The
-// patches/ folder is not a sample folder: its *.json files (not nested ones)
-// are listed under "Patches". The scan stops after `maxEntries` entries
-// (`truncated` says so): pointing the library at a home folder by mistake
-// must not hang the UI.
-//
-// Access errors (permission revoked, folder deleted) propagate to the
-// caller, which turns them into "Reconnect folder" (library.svelte.ts).
+// Results hold names and '/'-joined paths relative to the library root,
+// never handles: reads go back through the library (library.svelte.ts),
+// which resolves a path from the root handle each time. Access errors
+// (permission revoked, folder deleted) propagate to the caller, which turns
+// them into "Reconnect folder".
 import { AUDIO_EXT } from '../audio/samples';
 
 export const PATCHES_DIR = 'patches';
@@ -28,12 +33,17 @@ export interface LibSample {
   path: string;
 }
 
-export interface LibFolder {
+export interface LibFolderRef {
   name: string;
-  /** '' for the root. */
   path: string;
-  folders: LibFolder[];
+}
+
+/** One folder level. */
+export interface LibListing {
+  folders: LibFolderRef[];
   samples: LibSample[];
+  /** Entries (folders + samples) beyond the cap, not shown. */
+  more: number;
 }
 
 export interface LibPatch {
@@ -42,82 +52,73 @@ export interface LibPatch {
   path: string;
 }
 
-export interface LibraryTree {
-  root: LibFolder;
-  patches: LibPatch[];
-  /** The scan stopped at the entry cap: some files are not listed. */
-  truncated: boolean;
-}
+/** The directory-handle surface a listing needs (OPFS, a picked folder, tests' FakeDir). */
+type DirLike = {
+  name: string;
+  entries(): AsyncIterable<[string, { kind: string }]>;
+  getDirectoryHandle(name: string): Promise<DirLike>;
+};
 
-/** The directory-handle surface a scan needs (OPFS, a picked folder, tests' FakeDir). */
-type DirLike = { name: string; entries(): AsyncIterable<[string, { kind: string }]> };
+export const MAX_LISTED = 2000;
 
 export const isAudioName = (name: string): boolean => AUDIO_EXT.test(name);
 
-const byName = (a: { name: string }, b: { name: string }) =>
-  a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+const byName = (a: string, b: string) => collator.compare(a, b);
 
 const join = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
-export async function scanLibrary(
-  root: FileSystemDirectoryHandle,
-  opts: { maxEntries?: number; maxDepth?: number } = {},
-): Promise<LibraryTree> {
-  const maxEntries = opts.maxEntries ?? 5000;
-  const maxDepth = opts.maxDepth ?? 8;
-  let seen = 0;
-  let truncated = false;
-  const patches: LibPatch[] = [];
-
-  async function walk(dir: DirLike, path: string, depth: number): Promise<LibFolder> {
-    const folder: LibFolder = { name: dir.name, path, folders: [], samples: [] };
-    for await (const [name, h] of dir.entries()) {
-      if (++seen > maxEntries) {
-        truncated = true;
-        break;
-      }
-      if (name.startsWith('.')) continue;
-      if (h.kind === 'directory') {
-        if (depth === 0 && name === PATCHES_DIR) {
-          await listPatches(h as unknown as DirLike);
-          continue;
-        }
-        if (depth + 1 > maxDepth) {
-          truncated = true;
-          continue;
-        }
-        const sub = await walk(h as unknown as DirLike, join(path, name), depth + 1);
-        if (sub.samples.length || sub.folders.length) folder.folders.push(sub);
-      } else if (isAudioName(name)) {
-        folder.samples.push({ name, path: join(path, name) });
-      }
-    }
-    folder.folders.sort(byName);
-    folder.samples.sort(byName);
-    return folder;
-  }
-
-  async function listPatches(dir: DirLike) {
-    for await (const [name, h] of dir.entries()) {
-      if (++seen > maxEntries) {
-        truncated = true;
-        break;
-      }
-      if (h.kind === 'file' && !name.startsWith('.') && /\.json$/i.test(name)) {
-        patches.push({ name: name.replace(/\.json$/i, ''), path: `${PATCHES_DIR}/${name}` });
-      }
-    }
-  }
-
-  const tree = await walk(root as unknown as DirLike, '', 0);
-  patches.sort(byName);
-  return { root: tree, patches, truncated };
+/** The folder at `path` ('' = the root). Throws NotFoundError if it is gone. */
+export async function folderAt(root: FileSystemDirectoryHandle, path: string): Promise<FileSystemDirectoryHandle> {
+  let dir = root as unknown as DirLike;
+  for (const p of path ? path.split('/') : []) dir = await dir.getDirectoryHandle(p);
+  return dir as unknown as FileSystemDirectoryHandle;
 }
 
-/** A tree for a fixed list of root-level files (the bundled starter kit). */
-export function treeFromPaths(name: string, paths: string[]): LibraryTree {
-  const samples = paths.filter(isAudioName).map((p) => ({ name: p, path: p })).sort(byName);
-  return { root: { name, path: '', folders: [], samples }, patches: [], truncated: false };
+export async function listFolder(
+  root: FileSystemDirectoryHandle, path: string, opts: { maxEntries?: number } = {},
+): Promise<LibListing> {
+  const max = opts.maxEntries ?? MAX_LISTED;
+  const dir = (await folderAt(root, path)) as unknown as DirLike;
+  const folders: string[] = [];
+  const samples: string[] = [];
+  for await (const [name, h] of dir.entries()) {
+    if (name.startsWith('.')) continue;
+    if (h.kind === 'directory') {
+      if (!(path === '' && name === PATCHES_DIR)) folders.push(name);
+    } else if (isAudioName(name)) samples.push(name);
+  }
+  folders.sort(byName);
+  samples.sort(byName);
+  return {
+    folders: folders.slice(0, max).map((name) => ({ name, path: join(path, name) })),
+    samples: samples.slice(0, max).map((name) => ({ name, path: join(path, name) })),
+    more: Math.max(0, folders.length - max) + Math.max(0, samples.length - max),
+  };
+}
+
+/** patches/*.json at the library root, by name ([] when there is no patches/). */
+export async function listPatches(root: FileSystemDirectoryHandle): Promise<LibPatch[]> {
+  let dir: DirLike;
+  try {
+    dir = await (root as unknown as DirLike).getDirectoryHandle(PATCHES_DIR);
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'NotFoundError' || (e as { name?: string })?.name === 'TypeMismatchError') return [];
+    throw e;
+  }
+  const out: LibPatch[] = [];
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === 'file' && !name.startsWith('.') && /\.json$/i.test(name)) {
+      out.push({ name: name.replace(/\.json$/i, ''), path: `${PATCHES_DIR}/${name}` });
+    }
+  }
+  return out.sort((a, b) => byName(a.name, b.name));
+}
+
+/** A root listing for a fixed list of root-level files (the bundled starter kit). */
+export function listingFromPaths(paths: string[]): LibListing {
+  const samples = paths.filter(isAudioName).sort(byName).map((p) => ({ name: p, path: p }));
+  return { folders: [], samples, more: 0 };
 }
 
 /**

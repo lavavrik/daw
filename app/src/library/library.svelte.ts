@@ -9,8 +9,10 @@
 //
 // Status:
 //   none     nothing chosen yet;
-//   loading  scanning;
-//   ready    `tree` is the current listing;
+//   loading  listing the root;
+//   ready    `listings` holds the root ('') and every expanded folder, one
+//            level each (scan.ts: lazy, per-folder cap); `patches` the
+//            patches/*.json files. A refresh re-lists only those;
 //   lost     the folder is out of reach: permission not granted (the usual
 //            state after a browser restart: queryPermission says 'prompt'),
 //            revoked, or the folder was moved/deleted. The Browser shows
@@ -23,13 +25,14 @@
 //
 // Reads go back to the root handle by path each time (no stale per-file
 // handles). A read that fails while the root is still fine (one file was
-// deleted or renamed) rescans and throws an ordinary error instead.
+// deleted or renamed) re-lists and throws an ordinary error instead; an
+// expanded folder that is gone is simply dropped from `listings`.
 import { writeFile } from '../project/fsFolder';
 import type { Patch } from '../state/patches';
 import { idbLibraryStore, isAccessLost, pickLibraryFolder, queryAccess, requestAccess } from './handles';
 import type { StoredLibrary } from './handles';
-import { PATCHES_DIR, patchFileName, scanLibrary, treeFromPaths } from './scan';
-import type { LibraryTree } from './scan';
+import { PATCHES_DIR, listFolder, listPatches, listingFromPaths, patchFileName } from './scan';
+import type { LibListing, LibPatch } from './scan';
 import { STARTER_KIT, fetchBytes } from './starter';
 import type { StarterKit } from './starter';
 
@@ -40,7 +43,12 @@ export interface LibraryState {
   source: 'folder' | 'starter' | null;
   /** Folder name (or "Starter kit"), also while lost. */
   name: string;
-  tree: LibraryTree | null;
+  /** Listed folders by path: '' (the root) and every expanded folder. Empty unless ready. */
+  listings: Record<string, LibListing>;
+  /** patches/*.json (folder libraries only). */
+  patches: LibPatch[];
+  /** Bumped by every (re)listing: files at the same paths may have changed. */
+  stamp: number;
   /** Why the library is lost (shown in the Browser), else null. */
   message: string | null;
   /** Patches can be saved (a reachable folder; never the starter kit). */
@@ -73,9 +81,19 @@ export interface Library {
   attach(handle: FileSystemDirectoryHandle, persist?: boolean): Promise<void>;
   /** "Reconnect folder" (user gesture): ask for permission again, then rescan. */
   reconnect(): Promise<void>;
-  /** Rescan (Browser ↻, and when the tab becomes visible again: a revoked permission shows then). */
+  /**
+   * Re-list the root, the expanded folders and patches/ (Browser ↻, and when
+   * the tab becomes visible again: a revoked permission shows then).
+   */
   refresh(): Promise<void>;
+  /** List one more folder level (the Browser expanded it). */
+  expand(path: string): Promise<void>;
+  /** Forget `path`'s listing and those of the folders open inside it. */
+  collapse(path: string): void;
+  /** The file's bytes, copied into memory (to import into the project). */
   readSample(path: string): Promise<File>;
+  /** The file itself, not read (a preview decides by size whether to read or stream it). */
+  sampleBlob(path: string): Promise<Blob>;
   /** Parsed JSON of a patch file (validate it before use). */
   readPatch(path: string): Promise<unknown>;
   /**
@@ -115,10 +133,15 @@ async function reachable(root: FileSystemDirectoryHandle): Promise<boolean> {
 }
 
 export function createLibrary(deps: LibraryDeps): Library {
-  const state = $state<LibraryState>({ status: 'none', source: null, name: '', tree: null, message: null, writable: false });
+  const state = $state<LibraryState>({
+    status: 'none', source: null, name: '', listings: {}, patches: [], stamp: 0, message: null, writable: false,
+  });
   let handle: FileSystemDirectoryHandle | null = null;
-  /** Bumped by every change of library: a scan for an older one is dropped. */
+  /** Bumped by every change of library: a listing for an older one is dropped. */
   let gen = 0;
+  /** Expanded folder paths (what a refresh re-lists besides the root). */
+  const open = new Set<string>();
+  const inside = (path: string, p: string) => p === path || p.startsWith(`${path}/`);
 
   function set(s: Partial<LibraryState>) {
     Object.assign(state, s);
@@ -126,18 +149,34 @@ export function createLibrary(deps: LibraryDeps): Library {
   }
 
   function lose(why: keyof typeof lostText) {
-    set({ status: 'lost', tree: null, message: lostText[why](state.name) });
+    open.clear();
+    set({ status: 'lost', listings: {}, patches: [], message: lostText[why](state.name) });
   }
 
-  async function scan(g: number) {
+  /**
+   * List the root, patches/ and every expanded folder. The root failing
+   * means the library is lost; an expanded folder failing (moved, deleted)
+   * just closes it.
+   */
+  async function relist(g: number) {
     if (!handle) return;
     const h = handle;
     try {
-      const tree = await scanLibrary(h);
-      if (g === gen) set({ status: 'ready', tree, message: null });
+      const [root, patches] = await Promise.all([listFolder(h, ''), listPatches(h)]);
+      const listings: Record<string, LibListing> = { '': root };
+      for (const path of [...open]) {
+        try {
+          listings[path] = await listFolder(h, path);
+        } catch (e) {
+          if (!isAccessLost(e)) console.warn(`Library: could not list "${path}"`, e);
+          for (const p of [...open]) if (inside(path, p)) open.delete(p);
+        }
+      }
+      for (const p of Object.keys(listings)) if (p && !open.has(p)) delete listings[p];
+      if (g === gen) set({ status: 'ready', listings, patches, stamp: state.stamp + 1, message: null });
     } catch (e) {
       if (g !== gen) return;
-      if (!isAccessLost(e)) console.warn('Library scan failed', e);
+      if (!isAccessLost(e)) console.warn('Library listing failed', e);
       lose('missing');
     }
   }
@@ -145,28 +184,30 @@ export function createLibrary(deps: LibraryDeps): Library {
   async function attach(h: FileSystemDirectoryHandle, persist = false) {
     const g = ++gen;
     handle = h;
-    set({ source: 'folder', name: h.name, status: 'loading', tree: null, message: null });
+    open.clear();
+    set({ source: 'folder', name: h.name, status: 'loading', listings: {}, patches: [], message: null });
     if (persist) await deps.store.save({ kind: 'folder', handle: h }).catch((e) => console.warn('Could not remember the library folder', e));
     if ((await queryAccess(h)) !== 'granted') {
       if (g === gen) lose('permission');
       return;
     }
-    await scan(g);
+    await relist(g);
   }
 
   async function useStarter() {
     ++gen;
     handle = null;
+    open.clear();
     set({
-      source: 'starter', name: deps.starter.name, status: 'ready', message: null,
-      tree: treeFromPaths(deps.starter.name, deps.starter.files.map((f) => f.path)),
+      source: 'starter', name: deps.starter.name, status: 'ready', message: null, patches: [], stamp: state.stamp + 1,
+      listings: { '': listingFromPaths(deps.starter.files.map((f) => f.path)) },
     });
     await deps.store.save({ kind: 'starter' }).catch((e) => console.warn('Could not remember the library choice', e));
   }
 
   /**
    * Run a folder operation; an access failure turns into `lost` +
-   * LibraryLostError (or, if only that file is gone, a rescan + `missing`).
+   * LibraryLostError (or, if only that file is gone, a re-list + `missing`).
    */
   async function guarded<T>(fn: (root: FileSystemDirectoryHandle) => Promise<T>, missing?: () => Error): Promise<T> {
     const h = handle;
@@ -179,12 +220,19 @@ export function createLibrary(deps: LibraryDeps): Library {
     } catch (e) {
       if (!isAccessLost(e)) throw e;
       if (missing && (await reachable(h))) {
-        void scan(g);
+        void relist(g);
         throw missing();
       }
       if (g === gen) lose('missing');
       throw new LibraryLostError(state.message ?? 'The library folder is out of reach');
     }
+  }
+
+  /** A starter-kit sample, fetched (small files, read-only). */
+  async function starterFile(path: string): Promise<File> {
+    const f = deps.starter.files.find((x) => x.path === path);
+    if (!f) throw new Error(`"${path}" is not in the starter kit`);
+    return new File([await deps.fetchBytes(f.url)], path, { type: mimeOf(path) });
   }
 
   return {
@@ -215,7 +263,7 @@ export function createLibrary(deps: LibraryDeps): Library {
         return;
       }
       set({ status: 'loading', message: null });
-      await scan(g);
+      await relist(g);
     },
     async refresh() {
       if (state.source !== 'folder' || !handle) return;
@@ -224,15 +272,37 @@ export function createLibrary(deps: LibraryDeps): Library {
         if (g === gen) lose('permission');
         return;
       }
-      await scan(g);
+      await relist(g);
+    },
+    async expand(path) {
+      if (state.source !== 'folder' || state.status !== 'ready' || open.has(path)) return;
+      open.add(path);
+      const g = gen;
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      let l: LibListing;
+      try {
+        l = await guarded((root) => listFolder(root, path), () => new Error(`"${name}" is no longer in the library folder`));
+      } catch (e) {
+        open.delete(path);
+        throw e;
+      }
+      if (g === gen && open.has(path)) state.listings = { ...state.listings, [path]: l };
+    },
+    collapse(path) {
+      for (const p of [...open]) if (inside(path, p)) open.delete(p);
+      state.listings = Object.fromEntries(Object.entries(state.listings).filter(([p]) => !p || !inside(path, p)));
+    },
+    async sampleBlob(path) {
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      if (state.source === 'starter') return starterFile(path);
+      return guarded(
+        async (root) => (await resolveFile(root, path)).getFile(),
+        () => new Error(`"${name}" is no longer in the library folder`),
+      );
     },
     async readSample(path) {
       const name = path.slice(path.lastIndexOf('/') + 1);
-      if (state.source === 'starter') {
-        const f = deps.starter.files.find((x) => x.path === path);
-        if (!f) throw new Error(`"${name}" is not in the starter kit`);
-        return new File([await deps.fetchBytes(f.url)], name, { type: mimeOf(name) });
-      }
+      if (state.source === 'starter') return starterFile(path);
       return guarded(
         async (root) => {
           const file = await (await resolveFile(root, path)).getFile();
@@ -268,7 +338,12 @@ export function createLibrary(deps: LibraryDeps): Library {
         await writeFile(dir, file, `${JSON.stringify(patch, null, 2)}\n`);
         return 'saved' as const;
       });
-      if (r === 'saved') await scan(g);
+      if (r === 'saved' && handle) {
+        try {
+          const patches = await listPatches(handle);
+          if (g === gen) state.patches = patches;
+        } catch { /* the next refresh shows it (or the loss) */ }
+      }
       return r;
     },
   };

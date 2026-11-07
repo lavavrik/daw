@@ -8,9 +8,9 @@ import { buildFixture, nullSink } from './testFixture';
 describe('dirty check (fix 5)', () => {
   afterEach(() => vi.useRealTimers());
 
-  it('after edits settle, dirty follows the fingerprint (back to the saved state = clean)', () => {
+  it('after edits settle, dirty follows the fingerprint (back to the saved state = clean)', async () => {
     vi.useFakeTimers();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     markSaved(p);
     const check = createDirtyCheck(p, { delayMs: 500, idle: (fn) => fn() });
     setTempo(p, nullSink, 140);
@@ -27,9 +27,9 @@ describe('dirty check (fix 5)', () => {
     check.dispose();
   });
 
-  it('a real difference stays dirty', () => {
+  it('a real difference stays dirty', async () => {
     vi.useFakeTimers();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     markSaved(p);
     const check = createDirtyCheck(p, { delayMs: 500, idle: (fn) => fn() });
     setTempo(p, nullSink, 90);

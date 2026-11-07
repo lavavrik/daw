@@ -4,7 +4,8 @@
 // Decode first (a failed drop leaves state unchanged), then check the drop
 // target still exists (`stillThere`: the track or module may have been
 // removed during the decode, or a project load started), then load it into
-// the next sample id. The file's original bytes are kept in p.sampleFiles so
+// the next sample id; a session replaced during that upload (Project.generation)
+// drops the result. The file's original bytes are kept in p.sampleFiles so
 // a project save writes them unchanged (decoding gets a copy:
 // decodeAudioData detaches its input). The caller attaches the id: at once,
 // or for `deferred` (dropped while playing, Err.DEFERRED) through
@@ -41,14 +42,20 @@ export async function importSample(
   } catch {
     return unreadable;
   }
+  const kept = await sampleFile(file.name, file.type, bytes); // hashed async, before the id is taken
   // A project load started meanwhile: this drop belonged to the old session.
   if (p.loading || !stillThere()) return { ok: false, error: null };
   if (p.nextSampleId >= MAX_SAMPLES) return { ok: false, error: `Sample limit reached (${MAX_SAMPLES} loads per session)` };
+  const gen = p.generation;
   const id = p.nextSampleId++;
   const code = await engine.loadSample(id, channels);
+  // A New / Open / Restore started (or finished) during the upload: the id
+  // belonged to the old session (RESET_ALL dropped the sample); the new
+  // session's id `id` is someone else's. Drop it silently.
+  if (p.loading || p.generation !== gen) return { ok: false, error: null };
   if (code !== Err.OK && code !== Err.DEFERRED) {
     return { ok: false, error: `Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}` };
   }
-  p.sampleFiles.set(id, sampleFile(file.name, file.type, bytes));
+  p.sampleFiles.set(id, kept);
   return { ok: true, id, name: baseName(file.name), deferred: code === Err.DEFERRED };
 }

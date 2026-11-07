@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Err, HostErr } from '../audio/protocol';
 import { Project } from './project.svelte';
 import { importSample } from './sampleImport';
+import { blankState } from '../project/load';
 
 function engine(code: number) {
   const loads: number[] = [];
@@ -53,5 +54,27 @@ describe('importSample (Finder drop and library drag share it)', () => {
     p.loading = true;
     expect(await importSample(p, engine(Err.OK).e, wav(), () => true)).toEqual({ ok: false, error: null });
     expect(p.sampleFiles.size).toBe(0);
+  });
+
+  it('a project load that started (or even finished) during the upload: the result never touches the new session (M5)', async () => {
+    for (const finished of [false, true]) {
+      const p = new Project();
+      let answer!: (code: number) => void;
+      const e = { ...engine(Err.OK).e, loadSample: () => new Promise<number>((r) => (answer = r)) };
+      const importing = importSample(p, e, wav(), () => true);
+      await expect.poll(() => answer).toBeDefined(); // the upload is in flight
+      // New / Open / Restore: loadProject blanks the session (blankState).
+      p.loading = true;
+      blankState(p);
+      if (finished) {
+        p.loading = false;
+        p.sampleFiles.set(0, { name: 'new.wav', type: 'audio/wav', bytes: new ArrayBuffer(1), hash: 'aaaaaaaa' });
+        p.nextSampleId = 1;
+      }
+      answer(Err.OK); // the old session's upload landed before the reset
+      expect(await importing).toEqual({ ok: false, error: null });
+      expect(p.sampleFiles.get(0)?.name ?? null).toBe(finished ? 'new.wav' : null);
+      expect(p.nextSampleId).toBe(finished ? 1 : 0);
+    }
   });
 });

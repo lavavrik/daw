@@ -16,7 +16,7 @@ describe('project session', () => {
   });
 
   it('Save As into a folder that holds a project asks inline first (fix 2)', async () => {
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const dir = new FakeDir('Library');
     dir.put('project.json', '{"schemaVersion":1}');
     const s = createProjectSession(p, engine(), { pick: async () => asDir(dir) });
@@ -34,7 +34,7 @@ describe('project session', () => {
   });
 
   it('Save As into an empty folder, or the current one, saves at once', async () => {
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const empty = new FakeDir('New Song');
     const s = createProjectSession(p, engine(), { pick: async () => asDir(empty) });
     await s.saveAs();
@@ -45,7 +45,7 @@ describe('project session', () => {
   });
 
   it('a non-empty samples/ also counts as in use; Cancel writes nothing', async () => {
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const dir = new FakeDir('Kits');
     (await dir.getDirectoryHandle('samples', { create: true })).put('kick.wav', [1]);
     const s = createProjectSession(p, engine(), { pick: async () => asDir(dir) });
@@ -56,7 +56,7 @@ describe('project session', () => {
   });
 
   it('load warnings get their own banner; beforeLoad / afterLoad run (fixes 8, 10)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const dir = new FakeDir('Song');
     await createProjectSession(src, engine()).saveTo(asDir(dir));
     // Remove one sample file so the load warns.
@@ -75,7 +75,7 @@ describe('project session', () => {
   });
 
   it('a load that fails after the reset still runs afterLoad and leaves no folder', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const dir = new FakeDir('Song');
     await createProjectSession(src, engine()).saveTo(asDir(dir));
     const p = new Project();
@@ -89,7 +89,7 @@ describe('project session', () => {
   });
 
   it('restore loads as an unsaved project without a folder; Save calls onSaved (autosave)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     src.name = 'Late Night';
     const p = new Project();
     p.folder = asDir(new FakeDir('Old'));
@@ -114,7 +114,7 @@ describe('project session', () => {
   });
 
   it('an edit during a slow save stays unsaved; onSaved gets the version and time from before serialize (fix 3)', async () => {
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     markEdited(p);
     const dir = new FakeDir('Song');
     const got: { version: number; t: number }[] = [];
@@ -136,7 +136,7 @@ describe('project session', () => {
   });
 
   it('restore is one operation: Open / New wait while the autosave is read, and the read shows Loading (M1)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const p = new Project();
     let picks = 0;
     const s = createProjectSession(p, engine(), { pick: async () => (picks++, null) });

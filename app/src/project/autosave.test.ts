@@ -24,7 +24,7 @@ describe('autosave', () => {
 
   it('debounces to one write', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 5000 });
     for (let i = 0; i < 5; i++) {
       a.markDirty();
@@ -42,7 +42,7 @@ describe('autosave', () => {
 
   it('heavy editing still writes after maxWaitMs', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 5000, maxWaitMs: 30_000 });
     for (let i = 0; i < 40; i++) {
       a.markDirty();
@@ -53,7 +53,7 @@ describe('autosave', () => {
 
   it('flush writes now; nothing pending writes nothing', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r) });
     await a.flush();
     expect(r.log).toEqual([]);
@@ -66,13 +66,13 @@ describe('autosave', () => {
 
   it('autosave is atomic', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const first = serialize(p);
     await writeAutosave(asDir(r), first, new Map([...p.sampleFiles].map(([id, f]) => [`samples/${id}-${f.hash}-${f.name}`, f.bytes])), 1000);
     const files1 = (await readAutosave(asDir(r)))!.files;
 
     // A new sample (the second write's first step) fails: the previous autosave is untouched.
-    p.sampleFiles.set(5, sampleFile('new.wav', 'audio/wav', new Uint8Array([9, 9, 9, 9]).buffer));
+    p.sampleFiles.set(5, await sampleFile('new.wav', 'audio/wav', new Uint8Array([9, 9, 9, 9]).buffer));
     const newFile = `5-${p.sampleFiles.get(5)!.hash}-new.wav`;
     const second = { ...serialize(p), name: 'Second', samples: [{ id: 5, name: 'new.wav', type: 'audio/wav', file: `samples/${newFile}` }] };
     const files2 = new Map([[`samples/${newFile}`, p.sampleFiles.get(5)!.bytes]]);
@@ -112,7 +112,7 @@ describe('autosave', () => {
   it('without move, the marker is replaced by a whole-file write (atomic on close)', async () => {
     const r = root();
     r.noMove = true;
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     await writeAutosave(asDir(r), serialize(p), new Map(), 1);
     expect(r.log).toEqual([`write ${AUTOSAVE_TMP}/${MARKER}`, `write ${AUTOSAVE_DIR}/${MARKER}`, `remove ${AUTOSAVE_TMP}/${MARKER}`]);
     expect((await readAutosave(asDir(r)))!.savedAt).toBe(1);
@@ -120,7 +120,7 @@ describe('autosave', () => {
 
   it('samples already written are reused by content hash', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r) });
     a.markDirty();
     await a.flush();
@@ -140,7 +140,7 @@ describe('autosave', () => {
     const r = root();
     const p = new Project();
     const big = new Uint8Array(3 * 1024 * 1024 + 5).buffer;
-    p.sampleFiles.set(0, sampleFile('big.wav', 'audio/wav', big));
+    p.sampleFiles.set(0, await sampleFile('big.wav', 'audio/wav', big));
     const json = serialize(p);
     const file = `samples/0-${p.sampleFiles.get(0)!.hash}-big.wav`;
     r.chunks = 0;
@@ -152,7 +152,7 @@ describe('autosave', () => {
 
   it('a held autosave writes nothing until released; cancel drops a pending write', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 100 });
     a.hold(true);
     a.markDirty();
@@ -170,7 +170,7 @@ describe('autosave', () => {
 
   it('never writes while a project loads (it retries after)', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 100 });
     p.loading = true;
     a.markDirty();
@@ -183,7 +183,7 @@ describe('autosave', () => {
 
   it('a failed write is reported once and retried', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const errors: (string | null)[] = [];
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 100, onError: (m) => errors.push(m) });
     r.failOn = MARKER;
@@ -202,7 +202,7 @@ describe('autosave', () => {
   it('peek / discard / offersRestore', async () => {
     const r = root();
     expect(await peekAutosave(asDir(r))).toBeNull();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     await writeAutosave(asDir(r), serialize(p), new Map(), 5000);
     expect(await peekAutosave(asDir(r))).toEqual({ savedAt: 5000, name: 'Fixture' });
     expect(offersRestore({ savedAt: 5000, name: 'x' }, null)).toBe(true);
@@ -226,7 +226,7 @@ describe('autosave', () => {
 
   it('failed writes back off (doubling up to 60 s) instead of rewriting on every edit (fix 2)', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     let attempts = 0;
     const errors: (string | null)[] = [];
     const a = createAutosave({
@@ -260,7 +260,7 @@ describe('autosave', () => {
 
   it('an explicit save that missed later edits keeps them pending (fix 3)', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 100 });
     a.markDirty();
     a.savedExplicitly(1234, false); // an edit landed while the save was writing
@@ -275,7 +275,7 @@ describe('autosave', () => {
 
   it('commit failure (the target marker write) and a failing sweep (fix 5)', async () => {
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const first = serialize(p);
     const files = new Map([...p.sampleFiles].map(([id, f]) => [`samples/${id}-${f.hash}-${f.name}`, f.bytes]));
     await writeAutosave(asDir(r), first, files, 1);
@@ -298,9 +298,9 @@ describe('autosave', () => {
   it('two tabs: writes, reads and discards are serialized by the daw-autosave lock (fix 1)', async () => {
     const r = root();
     const locks = new FakeLocks();
-    const { p: pa } = buildFixture();
-    const { p: pb } = buildFixture();
-    pb.sampleFiles.set(0, sampleFile('other.wav', 'audio/wav', new Uint8Array([7, 7, 7, 7]).buffer));
+    const { p: pa } = await buildFixture();
+    const { p: pb } = await buildFixture();
+    pb.sampleFiles.set(0, await sampleFile('other.wav', 'audio/wav', new Uint8Array([7, 7, 7, 7]).buffer));
     const a = createAutosave({ getProject: () => pa, root: async () => asDir(r), locks });
     const b = createAutosave({ getProject: () => pb, root: async () => asDir(r), locks });
     a.markDirty();
@@ -327,7 +327,7 @@ describe('autosave', () => {
     expect(await claimAutosaveOwner(broken)).toBe(true);
     // A disabled autosave (not the owner) never writes, even on flush.
     const r = root();
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 10 });
     a.disable();
     a.hold(false);
@@ -337,7 +337,7 @@ describe('autosave', () => {
     expect(r.log).toEqual([]);
   });
 
-  it('serialize + stringify of a maximal project stays well inside a frame budget (fix 7)', () => {
+  it('serialize + stringify of a maximal project stays well inside a frame budget (fix 7)', async () => {
     vi.useRealTimers();
     const p = new Project();
     for (let t = 0; t < MAX_TRACKS; t++) {

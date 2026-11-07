@@ -19,7 +19,7 @@ function filesOf(json: ProjectJson, p: Project): Map<string, ArrayBuffer> {
 
 describe('loadProject', () => {
   it('load replays commands in a valid order', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const p = new Project();
     p.playing = true; // loading while playing: STOP goes first
@@ -46,7 +46,7 @@ describe('loadProject', () => {
   });
 
   it('after a load the engine matches the UI tempo/metronome/mode/loop/input track', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const p = new Project();
     const e = fakeEngine();
@@ -68,7 +68,7 @@ describe('loadProject', () => {
   });
 
   it('uploads samples only after the reset ack', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
@@ -84,7 +84,7 @@ describe('loadProject', () => {
   });
 
   it('a refused or missing reset ack fails the load with an error', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
@@ -95,7 +95,7 @@ describe('loadProject', () => {
   });
 
   it('an invalid project changes nothing', async () => {
-    const { p } = buildFixture();
+    const { p } = await buildFixture();
     const before = serialize(p);
     const e = fakeEngine();
     await expect(loadProject(p, e, { schemaVersion: 99 }, new Map(), fakeDecoder)).rejects.toThrow(/newer/);
@@ -104,7 +104,7 @@ describe('loadProject', () => {
   });
 
   it('load tolerates missing samples', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const files = filesOf(json, src);
     files.delete(json.samples[0].file); // gone from the folder
@@ -129,10 +129,10 @@ describe('loadProject', () => {
   });
 
   it('reassigns sample ids compactly and remaps SamplePlayer params', async () => {
-    const { p: src, drums, synth } = buildFixture();
+    const { p: src, drums, synth } = await buildFixture();
     // Burned ids: 7 on the kick row, 12 on the SamplePlayer, 40 not in the folder.
-    src.sampleFiles.set(7, sampleFile('kick.wav', 'audio/wav', fakeAudio(9)));
-    src.sampleFiles.set(12, sampleFile('vox.wav', 'audio/wav', fakeAudio(9)));
+    src.sampleFiles.set(7, await sampleFile('kick.wav', 'audio/wav', fakeAudio(9)));
+    src.sampleFiles.set(12, await sampleFile('vox.wav', 'audio/wav', fakeAudio(9)));
     drums.rows[0].sampleId = 7;
     const spIdx = synth.modules.find((m) => m.kind === moduleDef('sample_player').kind)!.idx;
     synth.modules.find((m) => m.idx === spIdx)!.params[paramIndex(moduleDef('sample_player'), 'sample')] = 12;
@@ -154,7 +154,7 @@ describe('loadProject', () => {
   });
 
   it('pooled effects beyond the FX pool are dropped with a warning', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const synth = json.tracks[2];
     if (synth.kind !== 'synth') throw new Error('kind');
@@ -170,7 +170,7 @@ describe('loadProject', () => {
   });
 
   it('a sidechain key the engine cannot take is dropped with a warning', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     // A drum row that does not exist (the drums have 5 rows): dropped.
     json.mixer.tracks[2].key = { track: json.tracks[0].slot, row: 9 };
@@ -181,7 +181,7 @@ describe('loadProject', () => {
   });
 
   it('a failed load leaves no folder to save over (fix 1)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const p = new Project();
     p.folder = { name: 'Old Song' } as FileSystemDirectoryHandle;
@@ -200,7 +200,7 @@ describe('loadProject', () => {
   });
 
   it('p.loading is set while the session is being replaced (fix 3)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const p = new Project();
     const e = fakeEngine({ holdReset: true });
@@ -213,7 +213,7 @@ describe('loadProject', () => {
   });
 
   it('beforeLoad runs after validation and decoding, right before STOP (fix 4)', async () => {
-    const { p: src } = buildFixture();
+    const { p: src } = await buildFixture();
     const json = roundJson(serialize(src));
     const order: string[] = [];
     const decoder = {

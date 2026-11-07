@@ -57,7 +57,15 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   everything back in the same engine slot. UUIDs are not stored.
 - **Samples:** only those used by a drum row or a SamplePlayer `sample` param
   whose original file the session holds (`Project.sampleFiles`, filled on
-  drop and load); any other use is written as none.
+  drop and load); any other use is written as none. The content hash in the
+  file name is the first 8 hex digits of SHA-256 (`crypto.subtle`, async,
+  computed once per drop / load — never a synchronous loop over the bytes).
+  Older projects named their files with FNV-1a of the same width: they still
+  load (a load reads the listed path and never checks the hash).
+- **Drops racing a load:** a sample import re-checks `p.loading` and
+  `Project.generation` (bumped by `blankState`) after its engine upload, so
+  an upload from a session that New / Open / Restore replaced never lands
+  in the new one.
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is

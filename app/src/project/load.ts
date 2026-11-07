@@ -83,7 +83,7 @@ export async function loadProject(
       try {
         // decodeAudioData detaches its input: decode a copy, keep the original.
         const channels = await decodeBytes(bytes.slice(0), s.name, ctx);
-        decoded.push({ oldId: s.id, file: sampleFile(s.name, s.type, bytes), channels });
+        decoded.push({ oldId: s.id, file: await sampleFile(s.name, s.type, bytes), channels }); // hash: async
       } catch {
         warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
       }
@@ -123,6 +123,7 @@ export async function loadProject(
 
 /** The UI state of a blank engine session (what RESET_ALL leaves). */
 export function blankState(p: Project) {
+  p.generation++; // a new session: older async results are dropped (sampleImport)
   p.playing = false;
   p.tracks = [];
   p.selectedTrackId = null;

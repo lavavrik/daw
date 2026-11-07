@@ -14,8 +14,8 @@ function ok(r: ReturnType<typeof validate>) {
 }
 
 describe('project schema', () => {
-  it('round-trip serialize → validate → equals', () => {
-    const { p, drums, synth } = buildFixture();
+  it('round-trip serialize → validate → equals', async () => {
+    const { p, drums, synth } = await buildFixture();
     const json = serialize(p);
     expect(json.schemaVersion).toBe(SCHEMA_VERSION);
     expect(json.name).toBe('Fixture');
@@ -61,29 +61,29 @@ describe('project schema', () => {
     expect(r.project).toEqual(json);
   });
 
-  it('sample file names carry a content hash (fix 7)', () => {
-    const { p } = buildFixture();
+  it('sample file names carry a content hash (fix 7)', async () => {
+    const { p } = await buildFixture();
     const before = serialize(p).samples[0].file;
-    p.sampleFiles.set(0, sampleFile('kick.wav', 'audio/wav', new Uint8Array([99, 1, 2]).buffer));
+    p.sampleFiles.set(0, await sampleFile('kick.wav', 'audio/wav', new Uint8Array([99, 1, 2]).buffer));
     const after = serialize(p).samples[0].file;
     expect(after).not.toBe(before);
     expect(after.startsWith('samples/0-')).toBe(true);
     expect(sampleFilePath(3, 'a/b:c.wav', 'deadbeef')).toBe('samples/3-deadbeef-a_b_c.wav');
   });
 
-  it('serialize is pure (same project, same output; the project is untouched)', () => {
-    const { p } = buildFixture();
+  it('serialize is pure (same project, same output; the project is untouched)', async () => {
+    const { p } = await buildFixture();
     const before = projectFingerprint(p);
     expect(serialize(p)).toEqual(serialize(p));
     expect(projectFingerprint(p)).toBe(before);
   });
 
-  it('an empty project round-trips', () => {
+  it('an empty project round-trips', async () => {
     const json = serialize(new Project());
     expect(ok(validate(roundJson(json)))).toEqual({ project: json, warnings: [] });
   });
 
-  it('rejects newer schema', () => {
+  it('rejects newer schema', async () => {
     const json = { ...serialize(new Project()), schemaVersion: 2 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
@@ -92,15 +92,15 @@ describe('project schema', () => {
     expect('error' in validate('{}')).toBe(true);
   });
 
-  it('ignores unknown fields', () => {
-    const json = serialize(buildFixture().p) as ProjectJson & Record<string, unknown>;
+  it('ignores unknown fields', async () => {
+    const json = serialize((await buildFixture()).p) as ProjectJson & Record<string, unknown>;
     const r = ok(validate({ ...roundJson(json), futureThing: { a: 1 }, tracks: json.tracks.map((t) => ({ ...t, extra: 1 })) }));
     expect(r.warnings).toEqual([]);
     expect(r.project).toEqual(roundJson(json));
   });
 
-  it('clamps out-of-range values with warnings', () => {
-    const json = roundJson(serialize(buildFixture().p)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  it('clamps out-of-range values with warnings', async () => {
+    const json = roundJson(serialize((await buildFixture()).p)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
     json.tempo = 999;
     json.tracks[0].rows[1].gain = 7;
     json.tracks[0].patterns[0].hits.push([0, 99, 100]); // step out of range: dropped
@@ -146,7 +146,7 @@ describe('project schema', () => {
     expect(r.warnings.length).toBeGreaterThanOrEqual(15);
   });
 
-  it('missing optional values fall back to defaults', () => {
+  it('missing optional values fall back to defaults', async () => {
     const r = ok(validate({ schemaVersion: 1, tracks: [{ kind: 'drum', slot: 3 }] }));
     expect(r.project.tempo).toBe(124);
     expect(r.project.name).toBe('Untitled');

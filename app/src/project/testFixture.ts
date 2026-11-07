@@ -30,14 +30,14 @@ export const fakeAudio = (frames: number): ArrayBuffer => new Uint8Array([frames
  * patch (+ a Reverb and a SamplePlayer), notes in 2 patterns, clips, mixer
  * params on strips and returns, two sidechain keys, loop + Song mode.
  */
-export function buildFixture(): { p: Project; drums: DrumTrack; synth: SynthTrack; synth2: SynthTrack } {
+export async function buildFixture(): Promise<{ p: Project; drums: DrumTrack; synth: SynthTrack; synth2: SynthTrack }> {
   const p = new Project();
   const s = nullSink;
   p.name = 'Fixture';
   const drums = addDrumTrack(p, s)!;
   // Samples 0 and 1 on rows 0/1; id 2 is used only by the SamplePlayer.
   for (const [id, name] of [[0, 'kick'], [1, 'snare'], [2, 'vox']] as const) {
-    p.sampleFiles.set(id, sampleFile(`${name}.wav`, 'audio/wav', fakeAudio(10 + id)));
+    p.sampleFiles.set(id, await sampleFile(`${name}.wav`, 'audio/wav', fakeAudio(10 + id)));
   }
   p.nextSampleId = 3;
   setRowSample(p, s, drums.id, drums.rows[0].id, 0, 'kick');

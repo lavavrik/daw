@@ -192,6 +192,12 @@ export class Project {
    * shortcuts and the transport are ignored and App shows "Loading…".
    */
   loading = $state(false);
+  /**
+   * Bumped whenever the session is replaced (project/load.ts blankState):
+   * async work started in an older session (a sample upload) checks it
+   * before touching the project. Not reactive.
+   */
+  generation = 0;
   /** Where Save writes (null: Save does a Save As). Not reactive. */
   folder: FileSystemDirectoryHandle | null = null;
   /**

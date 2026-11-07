@@ -8,6 +8,7 @@ import { blankModel, run, view } from '../history/engineModel';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
+import { fromPos } from '../ui/rack/knobMath';
 import { addDrumTrack, removeTrack } from './actions';
 import { addAudioTrack } from './audio-actions';
 import {
@@ -189,6 +190,41 @@ describe('automation actions', () => {
     expect(l.points.map((x) => x.value)).toEqual([-60, -60, before[2], 6]);
     movePoints(p, sink, l.id, [l.points[2].id], 0, 6 / 66); // the travel is 66 dB: -6 dB + 6 dB
     expect(l.points[2].value).toBeCloseTo(0, 9);
+    agrees();
+  });
+
+  it('movePoints from a gesture origin loses no movement', () => {
+    const { p, sink, agrees } = rig();
+    const d = addDrumTrack(p, sink)!;
+    const l = addLane(p, sink, d.id, { kind: 'mix', param: 'fader' })!;
+    for (const [tick, value] of [[0, -60], [960, -12], [1920, 0], [2880, -30]]) addPoint(p, sink, l.id, { tick, value });
+    const group = [l.points[1].id, l.points[2].id];
+    const origin = new Map(l.points.map((x) => [x.id, { tick: x.tick, value: x.value }]));
+    const shape = pts(l);
+    // A drag past the top edge (cumulative deltas, as each pointermove sends them) squashes the group there ...
+    for (const dv of [0.05, 0.1, 0.2, 0.4]) movePoints(p, sink, l.id, group, 0, dv, origin);
+    expect(l.points[1].value).toBe(6);
+    expect(l.points[2].value).toBe(6);
+    // ... and back to the start restores its shape exactly (the squash is not baked in).
+    for (const dv of [0.2, 0.05, 0]) movePoints(p, sink, l.id, group, 0, dv, origin);
+    expect(pts(l)).toEqual(shape);
+    // Ticks likewise: cumulative from the origin, clamped against the unmoved neighbours.
+    movePoints(p, sink, l.id, group, 5000, 0, origin);
+    expect(l.points.map((x) => x.tick)).toEqual([0, 1919, 2879, 2880]);
+    movePoints(p, sink, l.id, group, 100, 0, origin);
+    expect(l.points.map((x) => x.tick)).toEqual([0, 1060, 2020, 2880]);
+    invariants(l);
+    agrees();
+
+    // An exp param with min 0 (glide): a point at 0 dragged up in steps smaller than the zero zone leaves 0.
+    const s = addSynthTrack(p, sink, 'Bass', STARTER_PATCHES[0])!;
+    const midi = s.modules.find((x) => x.kind === moduleDef('midi_in').kind)!;
+    const g = addLane(p, sink, s.id, { kind: 'rack', module: midi.idx, param: 'glide' })!;
+    addPoint(p, sink, g.id, { tick: 0, value: 0 });
+    const o2 = new Map(g.points.map((x) => [x.id, { tick: x.tick, value: x.value }]));
+    for (let k = 1; k <= 20; k++) movePoints(p, sink, g.id, [g.points[0].id], 0, k * 0.005, o2);
+    expect(g.points[0].value).toBeGreaterThan(0);
+    expect(g.points[0].value).toBeCloseTo(fromPos(moduleDef('midi_in').params[paramIndex(moduleDef('midi_in'), 'glide')], 0.1), 9);
     agrees();
   });
 

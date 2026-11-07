@@ -158,27 +158,42 @@ export function addPoint(
  * logarithmically). The order never changes: dTick is clamped so no moved
  * point reaches an unmoved neighbour (ticks stay unique) or leaves the song;
  * each value is clamped to the range. False when nothing moved.
+ *
+ * `origin` (a drag): the moved points' positions when the gesture started,
+ * by point id. The deltas are then the gesture's CUMULATIVE ones and apply
+ * to the origin, not to the current positions, so nothing is lost to the
+ * clamping on the way: a group dragged past the top edge and back gets its
+ * shape back, and a point in an exp param's zero zone (glide at 0) leaves
+ * it however small each step is. Without it (a key nudge) the deltas apply
+ * to the current positions. The tick clamp is against the unmoved points
+ * either way (they are the same during a drag).
  */
-export function movePoints(p: Project, sink: CommandSink, laneId: string, ids: string[], dTick: number, dValue: number): boolean {
+export function movePoints(
+  p: Project, sink: CommandSink, laneId: string, ids: string[], dTick: number, dValue: number,
+  origin?: ReadonlyMap<string, { tick: number; value: number }>,
+): boolean {
   const f = findLane(p, laneId);
   if (!f || !Number.isFinite(dTick) || !Number.isFinite(dValue)) return false;
   const { lane, def } = f;
   const sel = new Set(ids);
   const pts = lane.points;
+  const from = (x: AutoPoint) => origin?.get(x.id) ?? x;
   let lo = -Infinity;
   let hi = Infinity;
   pts.forEach((x, k) => {
     if (!sel.has(x.id)) return;
-    lo = Math.max(lo, -x.tick, k > 0 && !sel.has(pts[k - 1].id) ? pts[k - 1].tick + 1 - x.tick : -Infinity);
-    hi = Math.min(hi, MAX_SONG_TICKS - x.tick, k + 1 < pts.length && !sel.has(pts[k + 1].id) ? pts[k + 1].tick - 1 - x.tick : Infinity);
+    const t = from(x).tick;
+    lo = Math.max(lo, -t, k > 0 && !sel.has(pts[k - 1].id) ? pts[k - 1].tick + 1 - t : -Infinity);
+    hi = Math.min(hi, MAX_SONG_TICKS - t, k + 1 < pts.length && !sel.has(pts[k + 1].id) ? pts[k + 1].tick - 1 - t : Infinity);
   });
   if (lo === -Infinity) return false; // no point selected
   const dt = Math.min(hi, Math.max(lo, Math.round(dTick)));
   const want = pts.map((x): Want => {
     if (!sel.has(x.id)) return keep(x);
+    const o = from(x);
     // dValue 0 keeps the value exactly (a position round trip could nudge it).
-    const value = dValue === 0 ? x.value : fromPos(def, toPos(def, x.value) + dValue);
-    return { old: x, tick: x.tick + dt, value, hold: x.hold };
+    const value = dValue === 0 ? o.value : fromPos(def, toPos(def, o.value) + dValue);
+    return { old: x, tick: o.tick + dt, value, hold: x.hold };
   });
   if (want.every((w) => w.tick === w.old!.tick && w.value === w.old!.value)) return false;
   return edit(p, 'Move automation points', () => {

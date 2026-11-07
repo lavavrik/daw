@@ -183,6 +183,22 @@ export class AudioEngine {
     return typeof u === 'number' ? u : this.tele[TELEMETRY.dropouts];
   }
 
+  /** Context time <-> performance time pair; zeros when unavailable (see audioClock). */
+  outputTimestamp(): { contextTime: number; performanceTime: number } {
+    const c = this.ctx as AudioContext;
+    if (typeof c.getOutputTimestamp !== 'function') return { contextTime: 0, performanceTime: 0 };
+    const t = c.getOutputTimestamp();
+    return { contextTime: t.contextTime ?? 0, performanceTime: t.performanceTime ?? 0 };
+  }
+
+  fallbackTimes(): { currentTime: number; baseLatency: number; outputLatency: number } {
+    return {
+      currentTime: this.ctx.currentTime,
+      baseLatency: this.ctx.baseLatency || 0,
+      outputLatency: this.ctx.outputLatency || 0,
+    };
+  }
+
   latencyMs(): number {
     return (this.ctx.baseLatency + (this.ctx.outputLatency || 0)) * 1000;
   }

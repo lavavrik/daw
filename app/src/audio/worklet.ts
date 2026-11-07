@@ -17,6 +17,7 @@ import { Err, HostErr, MAX_BLOCK, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from 
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
 declare const sampleRate: number;
+declare const currentFrame: number;
 declare class AudioWorkletProcessor {
   readonly port: MessagePort;
   constructor(options?: unknown);
@@ -183,6 +184,8 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       const et = this.engTele;
       const tele = this.tele;
       for (let k = 0; k < ENGINE_SLOTS.length; k++) tele[ENGINE_SLOTS[k]] = et[ENGINE_SLOTS[k]];
+      // The context frame at which the published ticks apply (start of next block).
+      tele[TELEMETRY.frame] = currentFrame + n;
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

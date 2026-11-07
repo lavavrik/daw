@@ -9,13 +9,16 @@
   import {
     addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
+  import { mod } from '../audio/audioClock';
+  import type { AudioClock } from '../audio/audioClock';
   import { MAX_ROWS, MAX_SAMPLES } from '../state/project.svelte';
   import { deferSampleLoad } from '../state/sampleLoads';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
-  let { p, engine, track, onerror }: {
+  let { p, engine, clock, track, onerror }: {
     p: Project;
     engine: AudioEngine;
+    clock: AudioClock | null;
     track: DrumTrack;
     onerror: (msg: string | null) => void;
   } = $props();
@@ -44,8 +47,10 @@
     let raf = 0;
     const loop = () => {
       const t = engine.telemetry();
-      const next = t[TELEMETRY.playing] === 1
-        ? Math.floor((t[TELEMETRY.ticks] % (track.stepCount * 240)) / 240)
+      // Heard position (latency-compensated). Negative = count-in: no column.
+      const ticks = clock !== null ? clock.heardTicks() : t[TELEMETRY.ticks];
+      const next = t[TELEMETRY.playing] === 1 && ticks >= 0
+        ? Math.floor(mod(ticks, track.stepCount * 240) / 240)
         : -1;
       if (next !== playStep) playStep = next;
       raf = requestAnimationFrame(loop);

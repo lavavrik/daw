@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
+  import type { AudioClock } from '../audio/audioClock';
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
   import { banners } from '../state/banners.svelte';
 
-  let { p, engine }: { p: Project; engine: AudioEngine } = $props();
+  let { p, engine, clock }: { p: Project; engine: AudioEngine; clock: AudioClock | null } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
   // Which tab is shown follows the selected track's kind: drum -> Step grid,
@@ -42,7 +43,7 @@
       </div>
     {/if}
     {#if track && track.kind === 'drum'}
-      <StepGrid {p} {engine} {track} onerror={(m) => (banners.error = m)} />
+      <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} />{/key}
     {/if}

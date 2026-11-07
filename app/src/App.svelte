@@ -6,6 +6,8 @@
   import SongArea from './ui/SongArea.svelte';
   import BottomPanel from './ui/BottomPanel.svelte';
   import { Op } from './audio/protocol';
+  import { createAudioClock } from './audio/audioClock';
+  import type { AudioClock } from './audio/audioClock';
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
   import { addDrumTrack } from './state/actions';
@@ -17,6 +19,7 @@
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
+  let clock = $state.raw<AudioClock | null>(null);
   let uninstall: (() => void) | null = null;
   let uninstallMidi: (() => void) | null = null;
   let uninstallLoads: (() => void) | null = null;
@@ -24,11 +27,13 @@
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op };
+  window.__daw = { engine: null, Op, clock: null };
 
   function onstarted(e: AudioEngine) {
     engine = e;
     window.__daw.engine = e;
+    clock = createAudioClock(e, () => project.tempo);
+    window.__daw.clock = clock;
     // Session-lifetime: deferred sample loads must land even while the step
     // grid is unmounted (a synth track selected).
     uninstallLoads = installSampleLoads(project, e);
@@ -75,7 +80,7 @@
       <Browser />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} /></div>
-        <div class="bottom"><BottomPanel p={project} {engine} /></div>
+        <div class="bottom"><BottomPanel p={project} {engine} {clock} /></div>
       </div>
     </div>
   {/if}

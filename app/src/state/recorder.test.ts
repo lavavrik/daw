@@ -4,7 +4,7 @@ import { Project } from './project.svelte';
 import type { SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
 import { selectTrack } from './actions';
-import { Recorder, loadRecSettings, recorderFor, saveRecSettings } from './recorder';
+import { Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync } from './recorder';
 
 /**
  * Fake clock: 1 ms of performance time = 1 tick, and the offset is
@@ -363,6 +363,39 @@ describe('Recorder', () => {
     expect(s.rec.offsetMs).toBe(200);
     s.rec.offsetMs = NaN;
     expect(s.rec.offsetMs).toBe(0);
+  });
+});
+
+describe('transportSync (App\'s per-frame telemetry watcher)', () => {
+  it('UI Play starts the pass at once; frames before the engine confirms do not end it', () => {
+    const s = setup(4);
+    s.rec.toggleArm();
+    const sync = transportSync(s.rec);
+    // transportToggle: Play sent, recorder told directly (no frame of lag).
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(60, 100, 5); // played right on Play
+    sync(false, true, () => -3); // engine has not applied PLAY yet
+    sync(false, true, () => -3);
+    expect(s.rec.playing).toBe(true);
+    sync(true, true, () => 50); // confirmed (idempotent)
+    s.rec.noteOff(60, 100);
+    expect(s.notes()).toEqual([{ pitch: 60, start: 5, len: 95, vel: 100 }]);
+  });
+
+  it('the engine starting on its own starts a pass; stopping on its own ends it at the last heard tick', () => {
+    const s = setup(4);
+    s.rec.toggleArm();
+    const sync = transportSync(s.rec);
+    sync(true, true, () => 10);
+    expect(s.rec.playing).toBe(true);
+    s.rec.noteOn(62, 100, 100);
+    sync(true, true, () => 400);
+    sync(false, true, () => 0); // console STOP / engine failure: playhead reset to 0
+    expect(s.rec.playing).toBe(false);
+    expect(s.notes()).toEqual([{ pitch: 62, start: 100, len: 300, vel: 100 }]);
+    // Engine says playing but the UI already stopped (Stop not applied yet): no restart.
+    sync(true, false, () => 500);
+    expect(s.rec.playing).toBe(false);
   });
 });
 

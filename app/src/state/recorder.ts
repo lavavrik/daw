@@ -273,6 +273,30 @@ export class Recorder implements NoteListener {
   }
 }
 
+/**
+ * App's per-frame (60 Hz) sync of the recorder with the engine's telemetry
+ * `playing` flag; returns the step to call each frame. A UI Play/Stop tells the
+ * recorder directly (no frame of lag); this is the safety net for transport
+ * changes the UI did not make (console, engine failure), and is idempotent
+ * with the direct calls.
+ * - Start: taken when the engine plays and the UI agrees (`uiPlaying` guards
+ *   the frames between a UI Stop and the engine applying it).
+ * - Stop: closes held notes at the last heard tick seen while playing (STOP
+ *   resets the playhead to 0). Only once the engine has confirmed this pass:
+ *   right after a UI Play the engine may not have applied PLAY yet, and that
+ *   must not end the pass the UI just started.
+ */
+export function transportSync(r: Recorder) {
+  let lastHeard = 0;
+  let confirmed = false; // engine reported playing during the recorder's current pass
+  return (enginePlaying: boolean, uiPlaying: boolean, heardTicks: () => number) => {
+    if (enginePlaying) lastHeard = heardTicks();
+    if (enginePlaying && uiPlaying && !r.playing) r.onTransport(true, lastHeard);
+    else if (!enginePlaying && r.playing && (confirmed || !uiPlaying)) r.onTransport(false, lastHeard);
+    confirmed = r.playing && (confirmed || enginePlaying);
+  };
+}
+
 /** A Recorder wired to the real project, engine sink and clock. */
 export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock, onFull?: () => void): Recorder {
   return new Recorder({

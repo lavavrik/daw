@@ -15,7 +15,7 @@
   import { connectMidi } from './input/midi';
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
-  import { loadRecSettings, recorderFor, sameStatus } from './state/recorder';
+  import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners } from './state/banners.svelte';
@@ -40,9 +40,11 @@
 
   /**
    * Play / Stop for the button and Space. Play while armed with Count-in on
-   * sends PLAY 3840. Stop first closes held recorded notes at the heard tick
-   * *now*: once STOP lands the engine resets its playhead to 0, so the clock
-   * can no longer tell where the user stopped.
+   * sends PLAY 3840, and starts the recording pass at once (not a telemetry
+   * frame later, which could miss a note played right on Play). Stop first
+   * closes held recorded notes at the heard tick *now*: once STOP lands the
+   * engine resets its playhead to 0, so the clock can no longer tell where
+   * the user stopped.
    */
   function transportToggle() {
     if (!engine || !recorder || !clock) return;
@@ -51,6 +53,7 @@
       stop(project, engine);
     } else {
       play(project, engine, recorder.countInTicks());
+      recorder.onTransport(true, clock.heardTicks());
     }
     refreshRec();
   }
@@ -81,20 +84,16 @@
 
   /**
    * 60 Hz: keeps the recorder's transport state in step with the engine
-   * (telemetry `playing`; 4 Hz would close notes up to 250 ms late) and the
-   * Rec button's status fresh (count-in -> recording). Start is taken when
-   * the engine confirms it; a stop the UI did not issue (console, engine
-   * failure) closes held notes at the last heard tick seen while playing.
+   * (transportSync: the safety net for starts/stops the UI did not make; 4 Hz
+   * would close notes up to 250 ms late) and the Rec button's status fresh
+   * (count-in -> recording).
    */
   function watchTransport(e: AudioEngine, c: AudioClock, r: Recorder) {
+    const sync = transportSync(r);
+    const heard = () => c.heardTicks();
     let raf = 0;
-    let lastHeard = 0;
     const loop = () => {
-      const playing = e.telemetry()[TELEMETRY.playing] === 1;
-      if (playing) lastHeard = c.heardTicks();
-      // project.playing guards the frame between a UI Stop and the engine applying it.
-      if (playing && project.playing && !r.playing) r.onTransport(true, lastHeard);
-      else if (!playing && r.playing) r.onTransport(false, lastHeard);
+      sync(e.telemetry()[TELEMETRY.playing] === 1, project.playing, heard);
       refreshRec();
       raf = requestAnimationFrame(loop);
     };

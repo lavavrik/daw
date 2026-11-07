@@ -28,7 +28,10 @@
 //     settles); a drag still running when the hold is released continues as
 //     a gesture of its own. A gesture already open when the hold starts gets
 //     the key, so its entry becomes the held one. `undoAbsorbed` counts the
-//     absorbed edits (a gesture or a same-task group counts once).
+//     absorbed edits (a gesture or a same-task group counts once). It counts
+//     edits when they merge, before settle() knows whether they changed
+//     anything, so an edit that turns out to be a no-op still counts: the
+//     Undo take tooltip may say "1 edit" for one that changed nothing.
 // An entry whose before and after only differ in the track selection is
 // dropped (selecting is not an edit; projectFingerprint ignores it too).
 // A new entry clears the redo stack; at most `cap` entries are kept.

@@ -445,7 +445,7 @@ describe('restartAudio', () => {
         const before = sets();
         const afterRestart = l.p.arenaFloats;
         expect(pendingSampleLoads()).toBe(1);
-        made.onSampleLoaded!(3, outcome); // Stop settles it
+        (made as unknown as { onSampleLoaded(id: number, code: number): void }).onSampleLoaded(3, outcome); // Stop settles it
         if (outcome === Err.OK) {
           expect(l.p.arenaFloats).toBe(afterRestart);
           expect(sets()).toBe(before + 1); // bound now (never before)

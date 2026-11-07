@@ -559,6 +559,9 @@
               r.onTransport(false, liveClock.heardTicks());
               stop(project, live);
             }
+            // Whatever stopped it, a recording pass's undo hold ends with the
+            // restart (a pass cannot outlive its engine); harmless if none.
+            project.history?.release();
             releaseHeldKeys();
             refreshRec();
           },

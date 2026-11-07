@@ -583,6 +583,7 @@ describe('recorderFor (real project + actions)', () => {
     expect(st.canUndoTake).toBe(true);
     expect(st.takeEdits).toBe(1);
     expect(undoTakeTitle(st.takeEdits)).toBe('Undo take (also undoes 1 edit made during it)');
+    expect(undoTakeTitle(2)).toBe('Undo take (also undoes 2 edits made during it)');
     expect(undoTakeTitle(3)).toBe('Undo take (also undoes 3 edits made during it)');
     expect(undoTakeTitle(0)).toMatch(/^Undo take: /);
     expect(h.labels.undo).toBe(RECORD_LABEL);

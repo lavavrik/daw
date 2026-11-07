@@ -17,7 +17,9 @@
   // which opens the menu through `request` — ask inline in the menu (no
   // confirm()) when something would be lost: unsaved changes, or an open
   // "Restore last session" offer (project/discard.ts). Results and errors are
-  // banners (project/session.ts).
+  // banners (project/session.ts). Export WAV… (export/exportFlow.ts) opens
+  // the save dialog inside the click, then renders in a Worker; its progress
+  // and Cancel are a banner in the bottom panel.
   //
   // Layout: one row that never wraps at 1280 px (tight since the Project menu:
   // 4 px gaps, "Metro", narrow BPM field, compact ↶ ↷ and "↶ Take"). Every control is nowrap;
@@ -34,6 +36,8 @@
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
   import { discardWarning } from '../project/discard';
+  import { runExport } from '../export/exportFlow';
+  import { banners } from '../state/banners.svelte';
 
   let {
     p,
@@ -79,7 +83,7 @@
     confirming = null;
     if (menu) menu.open = false;
   }
-  function run(cmd: 'new' | 'open' | 'save' | 'saveAs') {
+  function run(cmd: 'new' | 'open' | 'save' | 'saveAs' | 'export') {
     if ((cmd === 'new' || cmd === 'open') && discardWarning(p, restoreOffer) !== null && confirming !== cmd) {
       confirming = cmd;
       return;
@@ -88,6 +92,7 @@
     if (cmd === 'new') void session.newProject();
     else if (cmd === 'open') void session.open();
     else if (cmd === 'save') void session.save();
+    else if (cmd === 'export') void runExport(p, engine.context);
     else void session.saveAs();
   }
 
@@ -199,6 +204,11 @@
         <button role="menuitem" data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
         <button role="menuitem" data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
         <button role="menuitem" data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
+        <button
+          role="menuitem" data-testid="project-export" disabled={banners.exporting !== null || p.loading}
+          title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
+          onclick={() => run('export')}
+        >Export WAV…</button>
       {/if}
     </div>
   </details>
@@ -348,6 +358,7 @@
   .proj .menu { width: 230px; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
   .proj .menu > button { display: flex; justify-content: space-between; text-align: left; background: transparent; border-color: transparent; }
   .proj .menu > button:hover { background: #33353e; }
+  .proj .menu > button:disabled { background: transparent; }
   .proj kbd { font: inherit; font-size: 10px; color: #7d808c; }
   .proj .warn { margin: 2px 2px 6px; color: #f0a23a; white-space: normal; }
   .proj .row { display: flex; gap: 6px; }

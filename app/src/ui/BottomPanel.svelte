@@ -17,6 +17,7 @@
   import MixerView from './mixer/MixerView.svelte';
   import type { NoteInput } from '../input/noteInput';
   import { banners } from '../state/banners.svelte';
+  import { clearDownload } from '../export/exportFlow';
 
   let { p, engine, clock, noteInput = null }: {
     p: Project;
@@ -110,6 +111,21 @@
         <span>{banners.load}</span><button aria-label="Dismiss" onclick={() => (banners.load = null)}>×</button>
       </div>
     {/if}
+    {#if banners.exporting}
+      {@const ex = banners.exporting}
+      <div class="banner note" data-testid="export-progress" role="status">
+        <span>Exporting WAV… {Math.floor(ex.fraction * 100)}%</span>
+        <progress max="1" value={ex.fraction}></progress>
+        <button class="cancel" data-testid="export-cancel" onclick={() => ex.cancel()}>Cancel</button>
+      </div>
+    {/if}
+    {#if banners.download}
+      {@const dl = banners.download}
+      <div class="banner note" data-testid="export-download">
+        <span>Export ready: <a href={dl.href} download={dl.name} data-testid="export-download-link">Download “{dl.name}”</a></span>
+        <button aria-label="Dismiss" onclick={clearDownload}>×</button>
+      </div>
+    {/if}
     {#if banners.notice}
       <div class="banner note" data-testid="notice">
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
@@ -147,6 +163,9 @@
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
   .banner[data-testid='ask'] span { flex: 1; }
   .banner[data-testid='ask'] button { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; }
+  .banner progress { flex: 1; height: 8px; accent-color: #f0a23a; }
+  .banner .cancel { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; }
+  .banner a { color: inherit; font-weight: 600; }
   .banner .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
   .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
   .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }

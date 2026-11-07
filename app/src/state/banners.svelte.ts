@@ -12,6 +12,10 @@
 // deferred-sample notice clearing `notice` never hides it).
 // `ask`: an inline yes/no question (e.g. "Replace the project in …?") with
 // its action; Cancel just clears it. Never confirm().
+// `exporting`: a WAV export in progress (export/exportFlow.ts) -- its
+// progress (0..1) and Cancel. `download`: a finished export when the browser
+// has no save picker, as a download link (the object URL is revoked when it
+// is replaced or dismissed).
 export interface Ask {
   text: string;
   /** Label of the confirming button. */
@@ -21,12 +25,16 @@ export interface Ask {
 
 export const banners = $state<{
   error: string | null; notice: string | null; hint: string | null; load: string | null; ask: Ask | null;
+  exporting: { fraction: number; cancel: () => void } | null;
+  download: { href: string; name: string } | null;
 }>({
   error: null,
   notice: null,
   hint: null,
   load: null,
   ask: null,
+  exporting: null,
+  download: null,
 });
 
 let hintTimer: ReturnType<typeof setTimeout> | undefined;

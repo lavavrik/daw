@@ -1,20 +1,21 @@
 <script lang="ts">
   // Step grid for one drum track: one line per row (name, mute, gain, pan,
   // step cells), plus add-row / step-count / swing controls. Rows accept
-  // dropped audio files. All edits go through actions.ts (state + engine).
+  // dropped audio files (Finder) and library samples (Browser pane). All
+  // edits go through actions.ts (state + engine).
   import { onMount } from 'svelte';
-  import { Err, TELEMETRY } from '../audio/protocol';
+  import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
-  import { baseName, decodeBytes, isProbablyAudio, loadErrorText } from '../audio/samples';
+  import { droppedFiles } from '../library/drag';
   import {
     addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
   import { mod } from '../audio/audioClock';
   import type { AudioClock } from '../audio/audioClock';
-  import { MAX_ROWS, MAX_SAMPLES, currentPattern } from '../state/project.svelte';
+  import { MAX_ROWS, currentPattern } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
   import { deferSampleLoad } from '../state/sampleLoads';
-  import { sampleFile } from '../state/sampleFiles';
+  import { importSample } from '../state/sampleImport';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
   let { p, engine, clock, track, onerror }: {
@@ -84,56 +85,53 @@
   let dragOver = $state<string | null>(null); // row id, or 'add'
 
   /**
-   * Decode first; only then resolve the target row (for "+ Add row" this
-   * creates it), so a failed drop leaves state unchanged. Track id is captured
-   * at drop time for both the immediate and the deferred attach. The file's
-   * original bytes are kept (p.sampleFiles) so a project save writes them
-   * unchanged; decoding gets a copy (decodeAudioData detaches its input).
+   * Import (state/sampleImport.ts: decode, keep the original bytes for Save,
+   * load into the engine); only then resolve the target row (for "+ Add row"
+   * this creates it), so a failed drop leaves state unchanged. Track id is
+   * captured at drop time for both the immediate and the deferred attach.
    */
   async function loadInto(file: File, target: () => string | null) {
     const tid = track.id;
-    const fail = () => onerror(`Couldn't load "${file.name}" — not a readable audio file`);
-    if (!isProbablyAudio(file)) return fail();
-    let bytes: ArrayBuffer;
-    let channels: Float32Array[];
-    try {
-      bytes = await file.arrayBuffer();
-      channels = await decodeBytes(bytes.slice(0), file.name, engine.context);
-    } catch {
-      return fail();
+    const r = await importSample(p, engine, file, () => p.tracks.some((t) => t.id === tid));
+    if (!r.ok) {
+      if (r.error) onerror(r.error);
+      return;
     }
-    // A project load started meanwhile: this drop belonged to the old session.
-    if (p.loading || !p.tracks.some((t) => t.id === tid)) return;
-    const name = baseName(file.name);
-    if (p.nextSampleId >= MAX_SAMPLES) return onerror(`Sample limit reached (${MAX_SAMPLES} loads per session)`);
-    const id = p.nextSampleId++;
-    const code = await engine.loadSample(id, channels);
-    if (code !== Err.OK && code !== Err.DEFERRED) {
-      return onerror(`Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}`);
-    }
-    p.sampleFiles.set(id, sampleFile(file.name, file.type, bytes));
     const rowId = target();
     if (!rowId) return onerror(`Row limit reached (${MAX_ROWS})`);
-    if (code === Err.OK) {
-      setRowSample(p, engine, tid, rowId, id, name);
+    if (r.deferred) deferSampleLoad(r.id, tid, rowId, r.name);
+    else {
+      setRowSample(p, engine, tid, rowId, r.id, r.name);
       onerror(null);
-    } else {
-      deferSampleLoad(id, tid, rowId, name);
+    }
+  }
+
+  /**
+   * Finder files or a library sample (library/drag.ts; same import path).
+   * A library folder that became unreachable gives no files and no banner:
+   * the Browser pane shows "Reconnect folder".
+   */
+  async function dropped(e: DragEvent): Promise<File[]> {
+    try {
+      return await droppedFiles(e);
+    } catch (err) {
+      onerror(err instanceof Error ? err.message : String(err));
+      return [];
     }
   }
 
   function dropOnRow(e: DragEvent, rowId: string) {
     e.preventDefault();
     dragOver = null;
-    const file = e.dataTransfer?.files[0];
-    if (file) void loadInto(file, () => rowId);
+    void dropped(e).then((files) => {
+      if (files[0]) void loadInto(files[0], () => rowId);
+    });
   }
   /** Every dropped file gets its own new row, in drop order (one at a time). */
   async function dropOnAdd(e: DragEvent) {
     e.preventDefault();
     dragOver = null;
-    const files = [...(e.dataTransfer?.files ?? [])];
-    for (const file of files) await loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
+    for (const file of await dropped(e)) await loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
   }
   const allow = (e: DragEvent) => e.preventDefault();
 

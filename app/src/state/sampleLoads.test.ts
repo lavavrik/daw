@@ -4,7 +4,7 @@ import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { banners } from './banners.svelte';
 import { Project } from './project.svelte';
-import { deferSampleLoad, installSampleLoads, pendingSampleLoads } from './sampleLoads';
+import { deferSampleAssign, deferSampleLoad, installSampleLoads, pendingSampleLoads } from './sampleLoads';
 
 function fakeEngine() {
   const sent: number[][] = [];
@@ -68,6 +68,26 @@ describe('deferred sample loads (session lifetime)', () => {
     expect(banners.notice).toBeNull();
     expect(pendingSampleLoads()).toBe(0);
     expect(t.rows[0].sampleId).toBeNull();
+    undo();
+  });
+});
+
+describe('deferred sample assign (any target)', () => {
+  it('runs the attach callback on settle (e.g. a SamplePlayer param)', () => {
+    const p = new Project();
+    const { e } = fakeEngine();
+    const undo = installSampleLoads(p, e);
+    const got: number[] = [];
+    deferSampleAssign(9, 'kick', (id) => got.push(id));
+    expect(banners.notice).toBe('"kick" will load when playback stops');
+    e.onSampleLoaded!(9, Err.OK);
+    expect(got).toEqual([9]);
+    expect(banners.notice).toBeNull();
+    deferSampleAssign(10, 'bad', (id) => got.push(id));
+    e.onSampleLoaded!(10, Err.OUT_OF_MEMORY);
+    expect(got).toEqual([9]);
+    expect(banners.error).toMatch(/Couldn't load "bad"/);
+    banners.error = null;
     undo();
   });
 });

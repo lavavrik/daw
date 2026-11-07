@@ -21,13 +21,16 @@ export interface SampleLoadEngine extends CommandSink {
 }
 
 interface Waiting {
-  tid: string;
-  rowId: string;
   name: string;
+  /** Put the loaded sample where it was dropped (a row, a SamplePlayer); a no-op if that is gone. */
+  attach: (id: number) => void;
 }
 
 /** Deferred loads: sample id -> where to attach it once the worklet has it. */
 const pending = new Map<number, Waiting>();
+/** The session installSampleLoads was given (row attaches go through it). */
+let project: Project | null = null;
+let sink: SampleLoadEngine | null = null;
 
 /**
  * Install the engine's onSampleLoaded handler for the whole session. Returns
@@ -35,25 +38,39 @@ const pending = new Map<number, Waiting>();
  */
 export function installSampleLoads(p: Project, engine: SampleLoadEngine): () => void {
   pending.clear();
+  project = p;
+  sink = engine;
   engine.onSampleLoaded = (id, code) => {
     const w = pending.get(id);
     if (!w) return;
     pending.delete(id);
     // The track or row may have been removed meanwhile; setRowSample is a no-op then.
     // RESET: dropped by an engine reset (project load); its session is gone.
-    if (code === Err.OK) setRowSample(p, engine, w.tid, w.rowId, id, w.name);
+    if (code === Err.OK) w.attach(id);
     else if (code !== HostErr.RESET) banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`;
     if (pending.size === 0) banners.notice = null;
   };
   return () => {
     engine.onSampleLoaded = undefined;
     pending.clear();
+    project = null;
+    sink = null;
   };
 }
 
-/** Remember a DEFERRED load and show the "will load when playback stops" notice. */
+/**
+ * Remember a DEFERRED load for drum row `rowId` and show the "will load when
+ * playback stops" notice.
+ */
 export function deferSampleLoad(id: number, tid: string, rowId: string, name: string) {
-  pending.set(id, { tid, rowId, name });
+  deferSampleAssign(id, name, (sid) => {
+    if (project && sink) setRowSample(project, sink, tid, rowId, sid, name);
+  });
+}
+
+/** Same, for any target: `attach(id)` runs once the load succeeded. */
+export function deferSampleAssign(id: number, name: string, attach: (id: number) => void) {
+  pending.set(id, { name, attach });
   banners.notice = `"${name}" will load when playback stops`;
 }
 

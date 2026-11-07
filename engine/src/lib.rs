@@ -1,6 +1,7 @@
 //! DAW audio engine (compiled to WASM, hosted in an AudioWorklet).
 
 pub mod arena;
+pub mod arrangement;
 pub mod drums;
 pub mod engine;
 pub mod ffi;
@@ -46,6 +47,11 @@ pub const MAX_PATTERN_BARS: usize = 16;
 /// Patterns per track (drum and synth alike), all preallocated. Pattern 0
 /// always exists and is the current one of a new track.
 pub const MAX_PATTERNS: usize = 16;
+/// Clip slots per track on the song timeline (`arrangement::Arrangement`).
+pub const MAX_CLIPS: usize = 256;
+/// Song length limit in ticks (999 bars): clips end at or before it, and the
+/// loop range and seek positions lie within `0..=MAX_SONG_TICKS`.
+pub const MAX_SONG_TICKS: usize = 999 * 3840;
 
 // Telemetry slots (indices into `Engine::telemetry()`, an `[f64; TELEMETRY_LEN]`
 // the worklet copies into the shared telemetry buffer every block). Mirrored

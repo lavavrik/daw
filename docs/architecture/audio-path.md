@@ -127,13 +127,25 @@ overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
   stopped. An odd step always sits inside its pair, so a swing change can
   never make it fire twice or be skipped. Swing is per pattern; only the
   pattern that is playing latches, and copying into it keeps its latched
-  swing until the next pair boundary.
+  swing until the next pair boundary. In Song mode each clip has its own
+  latch (two overlapping clips of one pattern cannot move each other's
+  steps); a clip latches at once at its start, when edited, and on any jump
+  of song time (Play, seek, loop wrap, mode switch).
 - **Patterns:** a drum track has 16 patterns (steps of every row, step count,
   swing); rows (sample, gain, pan, mute) and voices are per track. Switching
   the current pattern needs no release: hits ring out, and the new pattern's
   steps are placed from the same playhead (`ticks mod newPeriod`).
 - **Tempo:** changes apply from the next block; the playhead position is
-  integrated, never recomputed, so it never jumps.
+  integrated, never recomputed, so it never jumps. Within one tempo it is
+  `anchor + frames / samplesPerTick` from the last jump or tempo change, so
+  it does not drift (tick 11520 at 120 bpm / 48 kHz is exactly frame 288000).
+- **Loop wrap (Song mode):** `Engine::process` renders a block in pieces split
+  at the loop end (`Transport::split`); each piece gets its own song-time
+  window and synth `Ctx`, so metronome, steps, notes and synced LFOs follow
+  song time across the wrap. The wrap is the first frame whose tick reaches
+  the loop end and that frame plays exactly the loop start, so a pass is
+  `ceil(loopTicks * samplesPerTick)` frames and nothing double-fires or
+  skips. See `docs/architecture/sequencer.md` (Song timeline).
 
 ## Adding an opcode
 

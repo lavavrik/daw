@@ -3,7 +3,12 @@
 //! * Free mode: the phase advances at `rate` Hz.
 //! * Sync mode while the transport plays: the phase is locked to the song
 //!   position, `phase = (ticks / division_ticks) mod 1`, so the LFO lines up
-//!   with bars and beats however playback started.
+//!   with bars and beats however playback started. In Song mode `ctx.ticks`
+//!   is song time with the loop wrap applied (the engine renders the pieces
+//!   before and after a wrap with their own `Ctx`), so at a wrap the phase
+//!   jumps back with the playhead to exactly its phase at the loop start, i.e.
+//!   it stays continuous with song time across every pass. The jump lands at
+//!   the next `RACK_BLOCK` sub-block, like notes, and the slew smooths it.
 //! * Sync mode while stopped: free-runs at the tempo-derived rate of the
 //!   chosen division (so it keeps moving at the right speed).
 //!

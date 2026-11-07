@@ -20,8 +20,12 @@
 //!   its On and Off land together and never open the gate.
 //!
 //! # Sounding set (per pitch)
-//! The pattern tracks which pitches it has switched on (a 128-bit set) and
-//! which note slot last switched each one on (its "holder").
+//! Whoever plays a pattern tracks which pitches it has switched on (a 128-bit
+//! set) and which note slot last switched each one on (its "holder"): a
+//! [`Voicing`]. In Pattern mode that is the pattern's own voicing; in Song
+//! mode every clip has its own (see `synth.rs`), so a sounding note always
+//! knows which clip owns it, and two clips playing the same pattern never
+//! confuse each other's notes.
 //! * An Off is only emitted for a pitch in the set, so an Off whose On never
 //!   played (e.g. the wrapped tail of a note in the very first loop) is
 //!   dropped.
@@ -43,7 +47,12 @@
 //! buffer holds `EVENT_CAP` events. Ons are only accepted while there is still
 //! room for an Off for every sounding pitch afterwards
 //! (`len + 1 + sounding <= EVENT_CAP`), so on overflow extra Ons are dropped
-//! and Offs are never dropped.
+//! and Offs are never dropped. Several voicings may append to one buffer (Song
+//! mode: one per playing clip); an Off that still finds the buffer full is
+//! recorded in [`EventBuf::take_overflow`] instead, and the caller sends it
+//! straight away (at the start of the block, i.e. early). That can only hit a
+//! pitch that was already sounding before the block and is not switched on
+//! again by the same voicing in it, so it can never leave a note hanging.
 
 use crate::rack::modules::NoteEvent;
 use crate::transport::tick_to_offset;
@@ -96,22 +105,105 @@ pub struct EventBuf {
     events: [(usize, NoteEvent); EVENT_CAP],
     len: usize,
     scratch: [u64; SCRATCH],
+    /// Pitches whose Off found the buffer full (see the module docs).
+    overflow: u128,
 }
 
 impl EventBuf {
     /// An empty buffer (about 20 KB: keep it on the heap).
     pub fn new() -> EventBuf {
-        EventBuf { events: [(0, NoteEvent::AllOff); EVENT_CAP], len: 0, scratch: [0; SCRATCH] }
+        EventBuf { events: [(0, NoteEvent::AllOff); EVENT_CAP], len: 0, scratch: [0; SCRATCH], overflow: 0 }
     }
 
-    /// Drop all events.
+    /// Drop all events (and the overflow set).
     pub fn clear(&mut self) {
         self.len = 0;
+        self.overflow = 0;
     }
 
-    /// The events, in offset order.
+    /// The events, in offset order (after [`EventBuf::sort`] when several
+    /// voicings appended).
     pub fn as_slice(&self) -> &[(usize, NoteEvent)] {
         &self.events[..self.len]
+    }
+
+    /// Number of events.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// No events?
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Pitches whose Off did not fit; the caller must send them now. Clears
+    /// the set.
+    pub fn take_overflow(&mut self) -> u128 {
+        core::mem::take(&mut self.overflow)
+    }
+
+    /// Append an Off at `offset` for every pitch in `mask` (overflowing ones
+    /// go to the overflow set).
+    pub fn push_offs(&mut self, mut mask: u128, offset: usize) {
+        while mask != 0 {
+            let pitch = mask.trailing_zeros() as u8;
+            mask &= mask - 1;
+            match self.events.get_mut(self.len) {
+                Some(slot) => {
+                    *slot = (offset, NoteEvent::Off { note: pitch });
+                    self.len += 1;
+                }
+                None => self.overflow |= bit(pitch),
+            }
+        }
+    }
+
+    /// Sort by offset, Offs before Ons at equal offsets (in place, no
+    /// allocation). Needed when several voicings appended to the buffer.
+    pub fn sort(&mut self) {
+        if let Some(evs) = self.events.get_mut(..self.len) {
+            evs.sort_unstable_by_key(|&(offset, ev)| (offset, matches!(ev, NoteEvent::On { .. })));
+        }
+    }
+}
+
+/// The notes one player of a pattern has switched on: a per-pitch sounding
+/// set and, per pitch, the note slot that switched it on (see the module
+/// docs). 272 bytes, `Copy`, allocation-free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Voicing {
+    sounding: u128,
+    holder: [u16; 128],
+}
+
+impl Voicing {
+    /// Nothing sounding.
+    pub const NEW: Voicing = Voicing { sounding: 0, holder: [0; 128] };
+
+    /// Pitches switched on and not yet off (bit = pitch).
+    pub fn sounding(&self) -> u128 {
+        self.sounding
+    }
+
+    /// Is `pitch` sounding, switched on by note slot `idx`?
+    pub fn holds(&self, pitch: u8, idx: usize) -> bool {
+        self.sounding & bit(pitch) != 0 && self.holder.get(pitch as usize & 127).is_some_and(|&h| h as usize == idx)
+    }
+
+    /// If note slot `idx` holds `pitch`, forget it and return `true` (the
+    /// caller sends the Off).
+    pub fn release_held(&mut self, pitch: u8, idx: usize) -> bool {
+        let held = self.holds(pitch, idx);
+        if held {
+            self.sounding &= !bit(pitch);
+        }
+        held
+    }
+
+    /// Forget every sounding pitch and return them.
+    pub fn release_all(&mut self) -> u128 {
+        core::mem::take(&mut self.sounding)
     }
 }
 
@@ -127,16 +219,14 @@ pub struct NotePattern {
     bars: u8,
     /// High-water mark: every active note has an index below this.
     used: usize,
-    /// Pitches this pattern has switched on and not yet off (bit = pitch).
-    sounding: u128,
-    /// Note slot whose On last switched each pitch on.
-    holder: [u16; 128],
+    /// What the pattern has switched on while playing in Pattern mode.
+    voicing: Voicing,
 }
 
 impl NotePattern {
     /// Empty, `DEFAULT_BARS` long.
     pub fn new() -> NotePattern {
-        NotePattern { notes: [SeqNote::OFF; MAX_NOTES], bars: DEFAULT_BARS, used: 0, sounding: 0, holder: [0; 128] }
+        NotePattern { notes: [SeqNote::OFF; MAX_NOTES], bars: DEFAULT_BARS, used: 0, voicing: Voicing::NEW }
     }
 
     /// Back to [`NotePattern::new`] (no allocation). Returns the pitches that
@@ -167,14 +257,16 @@ impl NotePattern {
         self.notes.get(idx).copied()
     }
 
-    /// Pitches currently switched on by the pattern (bit = pitch).
+    /// Pitches currently switched on by the pattern in Pattern mode (bit =
+    /// pitch).
     pub fn sounding(&self) -> u128 {
-        self.sounding
+        self.voicing.sounding
     }
 
     /// Store `note` in slot `idx` (an out-of-range `idx` is ignored). Returns
     /// the pitch to release if the slot's previous note was the one holding a
-    /// sounding pitch. An identical note changes nothing.
+    /// sounding pitch (of the pattern's own voicing; Song-mode voicings are
+    /// checked by the caller). An identical note changes nothing.
     pub fn set(&mut self, idx: usize, note: SeqNote) -> Option<u8> {
         let note = sanitize(note);
         let slot = self.notes.get_mut(idx)?;
@@ -186,16 +278,10 @@ impl NotePattern {
         if note.active && idx >= self.used {
             self.used = idx + 1;
         }
-        if old.active && self.holds(old.pitch, idx) {
-            self.sounding &= !bit(old.pitch);
+        if old.active && self.voicing.release_held(old.pitch, idx) {
             return Some(old.pitch);
         }
         None
-    }
-
-    /// Is `pitch` sounding, switched on by note slot `idx`?
-    fn holds(&self, pitch: u8, idx: usize) -> bool {
-        self.sounding & bit(pitch) != 0 && self.holder.get(pitch as usize).is_some_and(|&h| h as usize == idx)
     }
 
     /// Empty slot `idx`; returns the pitch to release if it was sounding.
@@ -239,34 +325,50 @@ impl NotePattern {
         self.release_all()
     }
 
-    /// Forget every sounding pitch and return them (Stop).
+    /// Forget every sounding pitch of the Pattern-mode voicing and return
+    /// them (Stop).
     pub fn release_all(&mut self) -> u128 {
-        core::mem::take(&mut self.sounding)
+        self.voicing.release_all()
     }
 
-    /// Clear `out` and fill it with this block's events: the window is the
-    /// transport's `[t0, t1)` in ticks, `spt` samples per tick and `frames` the
-    /// block length (offsets are clamped to `frames - 1`). See the module docs
-    /// for ordering, the count-in and overflow.
+    /// Clear `out` and fill it with this block's Pattern-mode events (the
+    /// pattern's own voicing): the window is the transport's `[t0, t1)` in
+    /// ticks, `spt` samples per tick and `frames` the block length (offsets
+    /// are clamped to `frames - 1`). See the module docs for ordering, the
+    /// count-in and overflow.
     pub fn events(&mut self, t0: f64, t1: f64, spt: f64, frames: usize, out: &mut EventBuf) {
         out.clear();
-        let valid = t0.is_finite() && t1.is_finite() && t1 > t0 && spt.is_finite() && spt > 0.0;
-        if !valid || t1 <= 0.0 {
+        let mut v = self.voicing;
+        self.scan(&mut v, t0, t1, t0, spt, frames, out);
+        self.voicing = v;
+    }
+
+    /// Append the events of the pattern-time window `[lo, hi)` to `out`,
+    /// deciding Ons/Offs with the voicing `v`. Pattern time is unwrapped
+    /// (position = time mod the pattern length); `origin` is the pattern time
+    /// of frame 0 of the block (`lo` in Pattern mode, earlier when a clip
+    /// starts mid-block), so an event at pattern time `p` lands at sample
+    /// `round((p - origin) * spt)`, clamped to `frames - 1`. Pattern times
+    /// below 0 (the count-in) yield nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn scan(&self, v: &mut Voicing, lo: f64, hi: f64, origin: f64, spt: f64, frames: usize, out: &mut EventBuf) {
+        let valid = lo.is_finite() && hi.is_finite() && origin.is_finite() && hi > lo && spt.is_finite() && spt > 0.0;
+        if !valid || hi <= 0.0 {
             return; // garbage, or entirely inside the count-in
         }
         let period = self.period();
-        let from = t0.max(0.0); // the count-in part of the window plays nothing
+        let from = lo.max(0.0); // the count-in part of the window plays nothing
         // One segment per loop instance the window touches, in time order.
         let mut k = (from / period).floor();
         for _ in 0..MAX_SEGMENTS {
             let base = k * period;
-            if base >= t1 {
+            if base >= hi {
                 break;
             }
             let lo = (from - base).max(0.0);
-            let hi = (t1 - base).min(period);
-            let w = Window { base, lo, hi, t0, spt, frames };
-            self.segment(&w, out);
+            let hi = (hi - base).min(period);
+            let w = Window { base, lo, hi, t0: origin, spt, frames };
+            self.segment(v, &w, out);
             k += 1.0;
         }
     }
@@ -274,13 +376,13 @@ impl NotePattern {
     /// Events of one loop instance: collect every On/Off whose tick (relative
     /// to the loop start `w.base`) is in `[w.lo, w.hi)`, sort them by
     /// (offset, Off first, tick, slot), then apply the sounding-set and
-    /// capacity rules while appending to `out`.
-    fn segment(&mut self, w: &Window, out: &mut EventBuf) {
+    /// capacity rules of `v` while appending to `out`.
+    fn segment(&self, v: &mut Voicing, w: &Window, out: &mut EventBuf) {
         let period = self.bars as u32 * BAR_TICKS as u32;
         if period == 0 {
             return;
         }
-        let EventBuf { events, len, scratch } = out;
+        let EventBuf { events, len, scratch, overflow } = out;
         let mut n = 0;
         for (i, note) in self.notes.iter().enumerate().take(self.used) {
             if !note.active || note.start >= period {
@@ -314,26 +416,32 @@ impl NotePattern {
             let offset = (key >> KEY_OFFSET_SHIFT) as usize;
             let ev = if (key >> KEY_ON_SHIFT) & 1 == 1 {
                 // Keep room for an Off for every pitch sounding afterwards.
-                let sounding_after = (self.sounding | b).count_ones() as usize;
+                let sounding_after = (v.sounding | b).count_ones() as usize;
                 if *len + 1 + sounding_after > EVENT_CAP {
                     continue; // overflow: drop the On
                 }
                 NoteEvent::On { note: pitch, vel: note.vel }
-            } else if self.sounding & b != 0 {
+            } else if v.sounding & b != 0 {
                 NoteEvent::Off { note: pitch }
             } else {
                 continue; // nothing to release
             };
-            let Some(slot) = events.get_mut(*len) else { continue };
+            let Some(slot) = events.get_mut(*len) else {
+                // Only an Off can get here (an On reserved its room): never
+                // drop it, the caller sends it at once.
+                *overflow |= b;
+                v.sounding &= !b;
+                continue;
+            };
             *slot = (offset, ev);
             *len += 1;
             if let NoteEvent::On { .. } = ev {
-                self.sounding |= b;
-                if let Some(h) = self.holder.get_mut(pitch as usize) {
+                v.sounding |= b;
+                if let Some(h) = v.holder.get_mut(pitch as usize) {
                     *h = idx as u16;
                 }
             } else {
-                self.sounding &= !b;
+                v.sounding &= !b;
             }
         }
     }
@@ -346,7 +454,8 @@ struct Window {
     /// Relative tick range `[lo, hi)` inside the loop.
     lo: f64,
     hi: f64,
-    /// Block start tick, samples per tick and block length (for offsets).
+    /// Tick of frame 0 (in the same time as `base`), samples per tick and
+    /// block length (for offsets).
     t0: f64,
     spt: f64,
     frames: usize,
@@ -599,6 +708,55 @@ mod tests {
             assert_eq!(b.note(i), Some(SeqNote::OFF), "slot {i} cleared");
         }
         assert_eq!(run(&mut b, 0.0, 7680.0), vec![(100.0, on(60)), (150.0, off(60))]);
+    }
+
+    #[test]
+    fn scan_uses_the_given_voicing_and_origin() {
+        // Two players of one pattern, at different phases, never share notes.
+        let mut p = NotePattern::new();
+        p.set_bars(1);
+        p.set(0, note(60, 0, 100));
+        let (mut a, mut b) = (Voicing::NEW, Voicing::NEW);
+        let mut buf = Box::new(EventBuf::new());
+        // A at pattern 0..10 (frame 0 = pattern 0); B enters mid-block: its
+        // window starts at pattern 3840 (= 0) but frame 0 is pattern 3830.
+        p.scan(&mut a, 0.0, 10.0, 0.0, SPT, 250, &mut buf);
+        p.scan(&mut b, 3840.0, 3850.0, 3830.0, SPT, 250, &mut buf);
+        assert_eq!(buf.as_slice(), &[(0, on(60)), (250 - 1, on(60))]);
+        assert_eq!((a.sounding(), b.sounding(), p.sounding()), (1 << 60, 1 << 60, 0));
+        assert!(a.holds(60, 0) && !a.holds(60, 1));
+        assert!(a.release_held(60, 0) && !a.release_held(60, 0));
+        assert_eq!(b.release_all(), 1 << 60);
+    }
+
+    #[test]
+    fn offs_that_find_the_buffer_full_overflow_instead_of_vanishing() {
+        let mut p = NotePattern::new();
+        p.set_bars(1);
+        for i in 0..128 {
+            p.set(i, note(i as u8, 0, 10)); // On at 0, Off at 10
+        }
+        let mut v = Voicing::NEW;
+        let mut buf = Box::new(EventBuf::new());
+        p.scan(&mut v, 0.0, 1.0, 0.0, SPT, 25, &mut buf);
+        assert_eq!(v.sounding().count_ones(), 128);
+        // Another player filled the buffer this block: the 128 Offs cannot
+        // all fit, and the ones that do not are reported, not lost.
+        buf.clear();
+        buf.push_offs(u128::MAX, 0); // 128 Offs of another voicing
+        buf.push_offs(u128::MAX, 0); // 256: full
+        assert_eq!(buf.len(), EVENT_CAP);
+        assert_eq!(buf.take_overflow(), 0);
+        p.scan(&mut v, 1.0, 20.0, 0.0, SPT, 500, &mut buf);
+        assert_eq!(v.sounding(), 0);
+        assert_eq!(buf.take_overflow(), u128::MAX, "every Off accounted for");
+        // Sorting puts Offs before Ons at equal offsets.
+        buf.clear();
+        p.scan(&mut v, 0.0, 1.0, 0.0, SPT, 25, &mut buf);
+        buf.push_offs(1 << 5, 0);
+        buf.sort();
+        assert_eq!(buf.as_slice()[0], (0, off(5)));
+        assert!(buf.as_slice()[1..].iter().all(|(o, e)| *o == 0 && matches!(e, NoteEvent::On { .. })));
     }
 
     #[test]

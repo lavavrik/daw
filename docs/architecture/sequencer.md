@@ -13,9 +13,10 @@ in TS; the parity test enforces them). All storage is created in
 (4/4); pattern length is 1..16 bars (default 4).
 
 Memory: a note pattern is ~12.3 KB, so 32 tracks x 16 patterns ~6.3 MB (drum
-patterns add ~0.6 MB). `Engine::new` holds ~152 MB of heap in all (128 MB
-sample arena, ~18 MB racks, the patterns), inside the 256 MB initial WASM
-memory.
+patterns add ~0.6 MB). Song mode adds a 272-byte note voicing per clip slot of
+each synth track (~2.2 MB) plus the clips (~128 KB). `Engine::new` holds
+~155 MB of heap in all (128 MB sample arena, ~18 MB racks, the patterns and
+clips), inside the 256 MB initial WASM memory.
 
 ### Current pattern
 Every drum and synth track has a *current* pattern (0 for a new track). In
@@ -63,6 +64,66 @@ repeated pitch retriggers). A per-pitch sounding set tracks what is held.
 Sequenced and live notes share the track's MIDI In voices. Stop releases
 *sequenced* notes only; switching the input track releases only live-held
 pitches. Editing, moving or removing a sounding note releases it.
+
+## Song timeline (arrangement)
+Code: `engine/src/arrangement.rs` (clips), `transport.rs` (mode, loop,
+split), `engine.rs` (commands, pieces), `synth.rs` / `drums.rs` (playback).
+
+Every track slot has `MAX_CLIPS = 256` clip slots (preallocated, ~4 KB per
+track) and the UI keeps the authoritative clip list, writing slots by index
+like notes. `MAX_SONG_TICKS = 999 * 3840` (999 bars). Both are mirrored in TS.
+
+| Op | # | Fields |
+|---|---|---|
+| `OP_CLIP_SET` | 35 | `a = slot*256 + idx`, `b = offset*16 + pattern`, `c = start`, `d = len` |
+| `OP_CLIP_REMOVE` | 36 | `a = slot*256 + idx` |
+| `OP_CLIP_CLEAR` | 37 | `a = slot` |
+| `OP_SET_MODE` | 38 | `a` = 0 pattern / 1 song |
+| `OP_SET_LOOP` | 39 | `a = start`, `b = end` (`b <= a`: loop off) |
+| `OP_SEEK` | 40 | `a` = song ticks (Song mode only; ignored in Pattern mode) |
+
+Validation: integral ticks, `len >= 1`, `start + len <= MAX_SONG_TICKS`,
+offset `0..61439` (`ERR_BAD_VALUE`); a bad address is `ERR_BAD_INDEX`, and so
+is a clip op on an empty slot. Loop and seek values lie in
+`0..=MAX_SONG_TICKS`. Adding or removing a track clears its clips.
+
+**Playback.** A clip `{pattern, start, len, offset}` plays its pattern at song
+tick `t` for `start <= t < start + len`, at pattern position
+`(offset + t - start) mod patternLength`: the pattern repeats inside the clip
+and is cut at the clip end. `Clip::pattern_window` maps a block window to
+*unwrapped* pattern time (one piece; the pattern scanners already take it mod
+the length, so the repeat wrap needs no split). Overlapping clips on a track
+all play; a drum track merges their hits, a synth track merges their note
+events into one offset-sorted buffer (Offs first at equal offsets).
+
+**Note ownership.** Each clip slot of a synth track has its own voicing
+(sounding set + holders), so every sounding sequenced note belongs to one clip
+(or, in Pattern mode, to its pattern). A clip's notes get an `Off` at the
+clip end (at its sample offset), whenever the clip is not playing in a block,
+when the clip is edited / removed / cleared, when song time jumps (loop wrap,
+seek, mode switch, Stop), and when its pattern is edited (length, copy, clear:
+all; a moved or removed note: that note if this clip holds it). Overlapping
+clips share the rack, whose MIDI In is per pitch: an `Off` from one clip can
+cut the same pitch from another (accepted, FL-like) but never strands one.
+Drums have nothing to release: hits stop retriggering and ring out.
+
+**Transport.** In Song mode the playhead is the song position (telemetry
+`TICKS`, the timeline playhead).
+- Play remembers the position as the song start. The count-in is
+  Pattern-mode only: Song mode ignores it (and recording is Pattern-mode only).
+- Stop: Song mode returns to the loop start with the loop on, else to the song
+  start (where playback last started, or the last seek). Pattern mode: tick 0.
+- Seek sets the playhead and the song start; while playing it releases the
+  clip notes.
+- Loop: with `start < end`, playback wraps from end to start. The block is
+  split at the wrap and each piece rendered with its own window (see
+  `audio-path.md`); the wrap frame plays exactly the loop start, so every pass
+  has the same whole number of frames. A playhead at or after the loop end
+  (seeked there) plays on. Synced LFOs follow song time, so after a wrap they
+  are back at their loop-start phase.
+- Mode switch releases every sequenced note. Pattern -> Song jumps to the song
+  start; Song -> Pattern goes to 0 when stopped and keeps the playhead while
+  playing (patterns continue at `ticks mod period`).
 
 ## Count-in
 `OP_PLAY` with `a = 3840` starts the transport at tick -3840. Until tick 0 no

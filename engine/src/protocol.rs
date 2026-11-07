@@ -7,11 +7,12 @@
 //! A later TS parity test regex-parses the constants below, so each is on its
 //! own line in the form `pub const NAME: u32|i32 = N;`.
 
+use crate::arrangement::Clip;
 use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
-    BAR_TICKS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
-    MAX_TRACKS,
+    BAR_TICKS, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
+    MAX_SONG_TICKS, MAX_TRACKS,
 };
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
@@ -58,6 +59,14 @@ pub const OP_SET_PATTERN_BARS: u32 = 31; // a=slot b=1..16
 pub const OP_SET_CURRENT_PATTERN: u32 = 32; // a=slot b=pattern 0..MAX_PATTERNS-1
 pub const OP_COPY_PATTERN: u32 = 33; // a=slot b=from c=to (pattern data within one track)
 pub const OP_CLEAR_PATTERN_DATA: u32 = 34; // a=slot b=pattern (steps/notes; keeps lengths and swing)
+// Song timeline (arrangement.rs). A clip is addressed as `slot * MAX_CLIPS +
+// idx`; its pattern and offset are packed as `offset * 16 + pattern`.
+pub const OP_CLIP_SET: u32 = 35; // a=slot*MAX_CLIPS+idx b=offset*16+pattern c=start ticks d=length ticks
+pub const OP_CLIP_REMOVE: u32 = 36; // a=slot*MAX_CLIPS+idx
+pub const OP_CLIP_CLEAR: u32 = 37; // a=slot
+pub const OP_SET_MODE: u32 = 38; // a=0 pattern / 1 song
+pub const OP_SET_LOOP: u32 = 39; // a=start ticks b=end ticks (b <= a disables the loop)
+pub const OP_SEEK: u32 = 40; // a=song ticks (Song mode; ignored in Pattern mode)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -114,6 +123,16 @@ pub enum Command {
     CopyPattern { slot: usize, from: usize, to: usize },
     /// Clear the steps / notes of `pattern`, keeping its length and swing.
     ClearPatternData { slot: usize, pattern: usize },
+    /// Store `clip` (always `active`) in clip slot `idx` of track `slot`.
+    ClipSet { slot: usize, idx: usize, clip: Clip },
+    ClipRemove { slot: usize, idx: usize },
+    ClipClear { slot: usize },
+    /// `true` = Song mode (the arrangement plays), `false` = Pattern mode.
+    SetMode { song: bool },
+    /// Loop range in song ticks; on only while `start < end`.
+    SetLoop { start: u32, end: u32 },
+    /// Move the song playhead (Song mode only).
+    Seek { ticks: u32 },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -229,6 +248,30 @@ fn seq_note(pv: f64, start: f64, len: f64) -> Result<SeqNote, i32> {
     })
 }
 
+/// Packed clip address `slot * MAX_CLIPS + idx` -> `(slot, idx)`; anything
+/// non-integral or out of range is `ERR_BAD_INDEX`.
+fn clip_addr(v: f64) -> Result<(usize, usize), i32> {
+    let i = index(v, MAX_TRACKS * MAX_CLIPS)?;
+    Ok((i / MAX_CLIPS, i % MAX_CLIPS))
+}
+
+/// A clip from packed `offset * 16 + pattern` (offset `0..MAX_NOTE_TICKS`),
+/// start and length (integral, `len >= 1`, `start + len <= MAX_SONG_TICKS`);
+/// else `ERR_BAD_VALUE`.
+fn clip(op: f64, start: f64, len: f64) -> Result<Clip, i32> {
+    let op = int_in(op, 0, MAX_NOTE_TICKS * MAX_PATTERNS as u32 - 1)?;
+    let song = MAX_SONG_TICKS as u32;
+    let start = int_in(start, 0, song - 1)?;
+    let len = int_in(len, 1, song - start)?;
+    Ok(Clip {
+        active: true,
+        pattern: (op % MAX_PATTERNS as u32) as u8,
+        start,
+        len,
+        offset: op / MAX_PATTERNS as u32,
+    })
+}
+
 /// Decode and range-check one record. Never panics.
 pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
     Ok(match op {
@@ -333,6 +376,21 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_CLEAR_PATTERN_DATA => {
             Command::ClearPatternData { slot: index(a, MAX_TRACKS)?, pattern: index(b, MAX_PATTERNS)? }
         }
+        OP_CLIP_SET => {
+            let (slot, idx) = clip_addr(a)?;
+            Command::ClipSet { slot, idx, clip: clip(b, c, d)? }
+        }
+        OP_CLIP_REMOVE => {
+            let (slot, idx) = clip_addr(a)?;
+            Command::ClipRemove { slot, idx }
+        }
+        OP_CLIP_CLEAR => Command::ClipClear { slot: index(a, MAX_TRACKS)? },
+        OP_SET_MODE => Command::SetMode { song: flag(a)? },
+        OP_SET_LOOP => {
+            let song = MAX_SONG_TICKS as u32;
+            Command::SetLoop { start: int_in(a, 0, song)?, end: int_in(b, 0, song)? }
+        }
+        OP_SEEK => Command::Seek { ticks: int_in(a, 0, MAX_SONG_TICKS as u32)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -391,7 +449,7 @@ mod tests {
     #[test]
     fn decode_never_panics_on_garbage() {
         let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -3e9];
-        for op in 0..40u32 {
+        for op in 0..48u32 {
             for &v in &vals {
                 let _ = decode(op, v, v, v, v);
             }
@@ -501,6 +559,59 @@ mod tests {
                 let slot = if bad == 16. { 32. } else { bad };
                 assert_eq!(decode(op, slot, 0., 0., 0.), Err(ERR_BAD_INDEX), "op {op} slot {slot}");
             }
+        }
+    }
+    #[test]
+    fn decode_song_commands() {
+        let c = |pattern, start, len, offset| Clip { active: true, pattern, start, len, offset };
+        let song = MAX_SONG_TICKS as f64;
+        let a = 3. * 256. + 255.;
+        assert_eq!(
+            decode(OP_CLIP_SET, a, 1920. * 16. + 15., 7680., 9600.),
+            Ok(Command::ClipSet { slot: 3, idx: 255, clip: c(15, 7680, 9600, 1920) })
+        );
+        assert_eq!(
+            decode(OP_CLIP_SET, 0., 61439. * 16., song - 1., 1.),
+            Ok(Command::ClipSet { slot: 0, idx: 0, clip: c(0, MAX_SONG_TICKS as u32 - 1, 1, 61439) })
+        );
+        assert_eq!(
+            decode(OP_CLIP_SET, 0., 0., 0., song),
+            Ok(Command::ClipSet { slot: 0, idx: 0, clip: c(0, 0, MAX_SONG_TICKS as u32, 0) })
+        );
+        for bad_a in [-1., 32. * 256., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_CLIP_SET, bad_a, 0., 0., 1.), Err(ERR_BAD_INDEX), "a {bad_a}");
+            assert_eq!(decode(OP_CLIP_REMOVE, bad_a, 0., 0., 0.), Err(ERR_BAD_INDEX), "a {bad_a}");
+        }
+        for (b, cc, d) in [
+            (61440. * 16., 0., 1.),  // offset 61440
+            (-1., 0., 1.),
+            (0.5, 0., 1.),
+            (f64::NAN, 0., 1.),
+            (0., -1., 1.),
+            (0., 0.5, 1.),
+            (0., song, 1.),          // starts at the song end
+            (0., 0., 0.),            // length 0
+            (0., 0., 1.5),
+            (0., 1., song),          // start + len past the song end
+            (0., song - 10., 11.),
+            (0., 0., f64::INFINITY),
+        ] {
+            assert_eq!(decode(OP_CLIP_SET, 0., b, cc, d), Err(ERR_BAD_VALUE), "{b} {cc} {d}");
+        }
+        assert_eq!(decode(OP_CLIP_REMOVE, 257., 0., 0., 0.), Ok(Command::ClipRemove { slot: 1, idx: 1 }));
+        assert_eq!(decode(OP_CLIP_CLEAR, 31., 0., 0., 0.), Ok(Command::ClipClear { slot: 31 }));
+        assert_eq!(decode(OP_CLIP_CLEAR, 32., 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_SET_MODE, 1., 0., 0., 0.), Ok(Command::SetMode { song: true }));
+        assert_eq!(decode(OP_SET_MODE, 0., 0., 0., 0.), Ok(Command::SetMode { song: false }));
+        assert_eq!(decode(OP_SET_MODE, 2., 0., 0., 0.), Err(ERR_BAD_VALUE));
+        assert_eq!(decode(OP_SET_LOOP, 3840., 11520., 0., 0.), Ok(Command::SetLoop { start: 3840, end: 11520 }));
+        assert_eq!(decode(OP_SET_LOOP, 5., 0., 0., 0.), Ok(Command::SetLoop { start: 5, end: 0 }), "off");
+        assert_eq!(decode(OP_SET_LOOP, 0., song, 0., 0.), Ok(Command::SetLoop { start: 0, end: song as u32 }));
+        assert_eq!(decode(OP_SEEK, song, 0., 0., 0.), Ok(Command::Seek { ticks: song as u32 }));
+        for bad in [-1., song + 1., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_SET_LOOP, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
+            assert_eq!(decode(OP_SET_LOOP, 0., bad, 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
+            assert_eq!(decode(OP_SEEK, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
         }
     }
     #[test]

@@ -30,20 +30,79 @@
 //! step-pair boundary (a multiple of `2 * STEP_TICKS`), or immediately while
 //! stopped. An odd step always lies strictly inside its pair (at most
 //! `0.5 * STEP_TICKS` late), so it can never move across the playhead: a
-//! swing change never double-fires or skips a step. Swing is per pattern, and
-//! only the *current* pattern latches while playing; a pattern switched away
-//! from keeps its pending `swing_next` until it plays again and crosses a
-//! pair boundary (so switching A -> B -> A inside one pair cannot move an A
-//! step across the playhead either).
+//! swing change never double-fires or skips a step. The latch belongs to
+//! whoever plays the pattern:
+//! * Pattern mode: the pattern's own `swing`, and only the pattern that is
+//!   playing (the current one) latches; a pattern switched away from keeps its
+//!   pending `swing_next` until it plays again and crosses a pair boundary (so
+//!   switching A -> B -> A inside one pair cannot move an A step across the
+//!   playhead either).
+//! * Song mode: every clip has its own latch (`DrumTrack::clip_swing`),
+//!   latched at pair boundaries of the clip's own pattern time, so two
+//!   overlapping clips of one pattern at different phases cannot move each
+//!   other's steps. A clip also latches at once where nothing of it has
+//!   played yet: at its start, when it is edited, and on every jump of song
+//!   time (Play, seek, loop wrap, mode switch: `Drums::latch_clips`).
+//!
+//! # Song mode
+//! A clip plays its pattern's steps mapped through `Clip::pattern_window`;
+//! a hit simply stops retriggering at the clip end (its voice rings out, as
+//! for a pattern switch: nothing to release). Overlapping clips all play;
+//! hits on one row from two clips at the same sample retrigger the row (the
+//! older voice fades over 2 ms).
 
 use crate::arena::{SampleArena, SampleSlice};
+use crate::arrangement::{for_each_overlapping, Clip, Timeline};
 use crate::samples::SamplePool;
 use crate::transport::{events_in_window, tick_to_offset};
-use crate::{MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
+use crate::{MAX_CLIPS, MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
 
 /// Max step events handled per track per block (a block spans at most a
-/// couple of steps at any sane tempo/block size; extras are dropped, not UB).
-const MAX_EVENTS: usize = 8;
+/// couple of steps at any sane tempo/block size, per playing clip; extras are
+/// dropped, not UB: drums have nothing to release).
+const MAX_EVENTS: usize = 32;
+
+/// A step to trigger: sample offset in the block, step index and pattern.
+#[derive(Clone, Copy)]
+struct Hit {
+    offset: usize,
+    step: u8,
+    pattern: u8,
+}
+
+impl Hit {
+    const NONE: Hit = Hit { offset: 0, step: 0, pattern: 0 };
+}
+
+/// Fixed-capacity, offset-ordered list of one track's hits in a block.
+struct Hits {
+    ev: [Hit; MAX_EVENTS],
+    len: usize,
+}
+
+impl Hits {
+    fn new() -> Hits {
+        Hits { ev: [Hit::NONE; MAX_EVENTS], len: 0 }
+    }
+
+    /// Insert keeping offset order (stable: equal offsets keep arrival order).
+    fn push(&mut self, h: Hit) {
+        if self.len >= MAX_EVENTS {
+            return;
+        }
+        let mut i = self.len;
+        while i > 0 && self.ev[i - 1].offset > h.offset {
+            self.ev[i] = self.ev[i - 1];
+            i -= 1;
+        }
+        self.ev[i] = h;
+        self.len += 1;
+    }
+
+    fn as_slice(&self) -> &[Hit] {
+        &self.ev[..self.len]
+    }
+}
 
 /// Per-track row settings (shared by all of the track's patterns).
 #[derive(Clone, Copy)]
@@ -81,11 +140,44 @@ impl DrumPattern {
         DrumPattern { steps: [[0; MAX_STEPS]; MAX_ROWS], step_count: 16, swing: 0.0, swing_next: 0.0 }
     }
 
-    /// Tick of step `k` within the pattern: odd steps are pushed late by
-    /// `swing * 0.5 * STEP_TICKS` (uses the latched `swing`).
-    fn step_tick(&self, k: usize) -> f64 {
-        let late = if k % 2 == 1 { self.swing as f64 * 0.5 * STEP_TICKS } else { 0.0 };
+    /// Tick of step `k` within the pattern with the latched swing `swing`:
+    /// odd steps are pushed late by `swing * 0.5 * STEP_TICKS`.
+    fn step_tick(k: usize, swing: f32) -> f64 {
+        let late = if k % 2 == 1 { swing as f64 * 0.5 * STEP_TICKS } else { 0.0 };
         k as f64 * STEP_TICKS + late
+    }
+
+    /// Add this pattern's steps in the pattern-time window `[lo, hi)` to
+    /// `hits` (`origin` = pattern time of frame 0, `spt` samples per tick,
+    /// `n` frames), placing them with the latch `swing`, which takes
+    /// `swing_next` at every pair boundary the window reaches (R12). Pattern
+    /// time is unwrapped (step positions repeat every `step_count` steps);
+    /// negative pattern time (the count-in) plays nothing.
+    #[allow(clippy::too_many_arguments)]
+    fn collect(&self, swing: &mut f32, lo: f64, hi: f64, origin: f64, spt: f64, n: usize, idx: u8, hits: &mut Hits) {
+        let count = self.step_count.clamp(1, MAX_STEPS);
+        let period = count as f64 * STEP_TICKS; // a multiple of PAIR_TICKS
+        let mut offs = [0.0f64; MAX_STEPS];
+        // Split the window at step-pair boundaries; each segment uses the
+        // swing latched for its pair (R12).
+        let mut a = lo;
+        while a < hi {
+            let next = ((a / PAIR_TICKS).floor() + 1.0) * PAIR_TICKS;
+            let b = if next < hi { next } else { hi };
+            for (k, o) in offs.iter_mut().enumerate().take(count) {
+                *o = Self::step_tick(k, *swing);
+            }
+            events_in_window(a, b, period, &offs[..count], |step, tick| {
+                hits.push(Hit { offset: tick_to_offset(tick, origin, spt, n), step: step as u8, pattern: idx });
+            });
+            if next <= hi {
+                *swing = self.swing_next; // reached a pair boundary
+            }
+            if next >= hi {
+                break;
+            }
+            a = b;
+        }
     }
 }
 
@@ -271,6 +363,8 @@ pub struct DrumTrack {
     pub patterns: [DrumPattern; MAX_PATTERNS],
     pub rows: [DrumRow; MAX_ROWS],
     pub voices: [RowVoices; MAX_ROWS],
+    /// Song mode: the swing latched by clip `i` (see the module docs).
+    pub clip_swing: [f32; MAX_CLIPS],
 }
 
 impl DrumTrack {
@@ -281,6 +375,7 @@ impl DrumTrack {
             patterns: [DrumPattern::new(); MAX_PATTERNS],
             rows: [DrumRow::new(); MAX_ROWS],
             voices: [RowVoices::OFF; MAX_ROWS],
+            clip_swing: [0.0; MAX_CLIPS],
         }
     }
 
@@ -291,6 +386,7 @@ impl DrumTrack {
     pub fn reset_active(&mut self) {
         self.patterns.fill(DrumPattern::new());
         self.rows.fill(DrumRow::new());
+        self.clip_swing.fill(0.0);
         self.current = 0;
         self.active = true;
     }
@@ -428,13 +524,37 @@ impl Drums {
         }
     }
 
-    /// Add all drum output for one block into `l`/`r`. `window` is
-    /// `(t0, t1, samples_per_tick)` while playing (new hits are scheduled
-    /// sample-accurately); `None` when stopped, in which case only tails
-    /// (fading voices) are rendered.
+    /// Every clip of track `slot` latches its pattern's pending swing now
+    /// (a jump of song time: nothing of the new position has played yet).
+    pub fn latch_clips(&mut self, slot: usize, clips: &[Clip]) {
+        if let Some(t) = self.tracks.get_mut(slot) {
+            for (c, s) in clips.iter().zip(t.clip_swing.iter_mut()) {
+                if let Some(p) = t.patterns.get(c.pattern as usize) {
+                    *s = p.swing_next;
+                }
+            }
+        }
+    }
+
+    /// Clip `idx` of track `slot` was set to `clip`: it latches its
+    /// pattern's pending swing at once (nothing of the edited clip has played).
+    pub fn latch_clip(&mut self, slot: usize, idx: usize, clip: Clip) {
+        if let Some(t) = self.tracks.get_mut(slot) {
+            if let (Some(s), Some(p)) = (t.clip_swing.get_mut(idx), t.patterns.get(clip.pattern as usize)) {
+                *s = p.swing_next;
+            }
+        }
+    }
+
+    /// Add all drum output for one block (or block segment) into `l`/`r`.
+    /// `window` is `(t0, t1, samples_per_tick)` while playing (new hits are
+    /// scheduled sample-accurately from the current patterns or the clips,
+    /// per `timeline`); `None` when stopped, in which case only tails (fading
+    /// voices) are rendered.
     pub fn render_add(
         &mut self,
         window: Option<(f64, f64, f64)>,
+        timeline: Timeline,
         pool: &SamplePool,
         arena: &SampleArena,
         l: &mut [f32],
@@ -442,49 +562,47 @@ impl Drums {
     ) {
         let n = l.len().min(r.len());
         let fade = self.fade;
-        for track in self.tracks.iter_mut() {
-            // (sample offset, step index) in time order.
-            let mut ev = [(0usize, 0usize); MAX_EVENTS];
-            let mut cnt = 0;
+        for (slot, track) in self.tracks.iter_mut().enumerate() {
+            let mut hits = Hits::new();
             let current = if track.current < MAX_PATTERNS { track.current } else { 0 };
-            let pat = &mut track.patterns[current];
-            match (track.active, window) {
-                (true, Some((t0, t1, spt))) => {
-                    let count = pat.step_count.clamp(1, MAX_STEPS);
-                    let period = count as f64 * STEP_TICKS; // a multiple of PAIR_TICKS
-                    let mut offs = [0.0f64; MAX_STEPS];
-                    // Split the window at step-pair boundaries; each segment
-                    // uses the swing latched for its pair (R12).
-                    let mut a = t0;
-                    while a < t1 {
-                        let next = ((a / PAIR_TICKS).floor() + 1.0) * PAIR_TICKS;
-                        let b = if next < t1 { next } else { t1 };
-                        for (k, o) in offs.iter_mut().enumerate().take(count) {
-                            *o = pat.step_tick(k);
+            match (track.active, window, timeline) {
+                (true, Some((t0, t1, spt)), Timeline::Pattern) => {
+                    let pat = &mut track.patterns[current];
+                    let mut swing = pat.swing;
+                    pat.collect(&mut swing, t0, t1, t0, spt, n, current as u8, &mut hits);
+                    pat.swing = swing;
+                }
+                (true, Some((t0, t1, spt)), Timeline::Song(_)) => {
+                    let DrumTrack { patterns, clip_swing, .. } = track;
+                    for_each_overlapping(timeline.clips(slot), t0, t1, |i, c| {
+                        let (Some((lo, hi, origin)), Some(pat), Some(swing)) =
+                            (c.pattern_window(t0, t1), patterns.get(c.pattern as usize), clip_swing.get_mut(i))
+                        else {
+                            return;
+                        };
+                        if (c.start as f64) >= t0 {
+                            *swing = pat.swing_next; // starts here: nothing of it played yet
                         }
-                        events_in_window(a, b, period, &offs[..count], |step, tick| {
-                            if cnt < MAX_EVENTS {
-                                ev[cnt] = (tick_to_offset(tick, t0, spt, n), step);
-                                cnt += 1;
-                            }
-                        });
-                        if next <= t1 {
-                            pat.swing = pat.swing_next; // reached a pair boundary
-                        }
-                        if next >= t1 {
-                            break;
-                        }
-                        a = b;
-                    }
+                        pat.collect(swing, lo, hi, origin, spt, n, c.pattern, &mut hits);
+                    });
                 }
                 // Stopped or inactive: nothing can be scheduled, latch at once.
-                _ => pat.swing = pat.swing_next,
+                _ => {
+                    let pat = &mut track.patterns[current];
+                    pat.swing = pat.swing_next;
+                }
             }
-            let pat = &track.patterns[current];
-            for ((row, steps), rv) in track.rows.iter().zip(pat.steps.iter()).zip(track.voices.iter_mut()) {
+            let DrumTrack { patterns, rows, voices, .. } = track;
+            for (ri, (row, rv)) in rows.iter().zip(voices.iter_mut()).enumerate() {
                 let mut pos = 0;
-                for &(off, step) in &ev[..cnt] {
-                    let vel = steps.get(step).copied().unwrap_or(0);
+                for h in hits.as_slice() {
+                    let off = h.offset;
+                    let vel = patterns
+                        .get(h.pattern as usize)
+                        .and_then(|p| p.steps.get(ri))
+                        .and_then(|steps| steps.get(h.step as usize))
+                        .copied()
+                        .unwrap_or(0);
                     if vel == 0 || row.mute {
                         continue;
                     }

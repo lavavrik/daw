@@ -49,15 +49,42 @@
 //! −3840. While the playhead is below 0, drum steps and pattern notes do not
 //! fire, and the metronome clicks even when it is off (the count-in bar
 //! starts with the accent). From tick 0 on, everything plays as usual.
+//! The count-in is a Pattern-mode feature: Song mode ignores it (Play starts
+//! at the song position; recording is Pattern-mode only).
+//!
+//! # Song mode (arrangement)
+//! Every slot has an [`Arrangement`] of `MAX_CLIPS` clips (`CLIP_SET`,
+//! `CLIP_REMOVE`, `CLIP_CLEAR`; drum or synth slots, `ERR_BAD_INDEX` on an
+//! empty one; adding or removing a track clears them). `SET_MODE` picks what
+//! plays: Pattern mode (each track loops its current pattern, unchanged from
+//! plans 1-3) or Song mode (each track plays its clips at song time; see
+//! `arrangement.rs`, `drums.rs`, `synth.rs`).
+//! * The transport playhead is the song position in Song mode; telemetry
+//!   `TICKS` reports it (the UI's timeline playhead).
+//! * `SET_LOOP` sets the loop range (on while start < end). While playing in
+//!   Song mode a block is split at the loop end and each piece is rendered
+//!   with its own song-time window (`Transport::split`), so the metronome,
+//!   drum steps, notes and the synth `Ctx` (synced LFOs) all follow song time
+//!   across the wrap; the wrap releases every clip-owned note.
+//! * `SEEK` (Song mode only; ignored in Pattern mode) moves the playhead and
+//!   the song start marker; while playing it releases the clip-owned notes.
+//! * Play in Song mode remembers the position as the song start; Stop returns
+//!   to the loop start with the loop on, else to the song start. Pattern-mode
+//!   Stop returns to tick 0 as before.
+//! * `SET_MODE` to the other mode releases every sequenced note. Pattern ->
+//!   Song goes to the song start (playing or not); Song -> Pattern goes to
+//!   tick 0 when stopped and keeps the playhead while playing (patterns loop
+//!   on `ticks mod period`, like a pattern switch).
 
 use crate::arena::SampleArena;
+use crate::arrangement::{Arrangement, Clip, Timeline};
 use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
-use crate::transport::{events_in_window, tick_to_offset, Transport};
+use crate::transport::{events_in_window, tick_to_offset, Mode, Transport};
 use crate::{
     BAR_TICKS, MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR,
     TELEMETRY_LEN, TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
@@ -76,6 +103,11 @@ fn found(ok: bool) -> Result<(), i32> {
     } else {
         Err(protocol::ERR_BAD_INDEX)
     }
+}
+
+/// The clips of `slot` (none for an out-of-range slot).
+fn clips_of(arrangements: &[Arrangement], slot: usize) -> &[Clip] {
+    arrangements.get(slot).map_or(&[], |a| a.clips())
 }
 
 /// What a track slot currently holds.
@@ -97,6 +129,8 @@ pub struct Engine {
     samples: SamplePool,
     drums: Drums,
     synths: Synths,
+    /// One per slot (`MAX_TRACKS`, heap).
+    arrangements: Vec<Arrangement>,
     kinds: [SlotKind; MAX_TRACKS],
     /// Slot that receives live notes, if any.
     input: Option<usize>,
@@ -124,6 +158,7 @@ impl Engine {
             samples: SamplePool::new(),
             drums: Drums::new(sample_rate),
             synths: Synths::new(sample_rate),
+            arrangements: (0..MAX_TRACKS).map(|_| Arrangement::new()).collect(),
             kinds: [SlotKind::Empty; MAX_TRACKS],
             input: None,
             bend: 0.0,
@@ -219,7 +254,7 @@ impl Engine {
         if self.kind(slot) != SlotKind::Synth {
             return;
         }
-        let seq = self.synths.pattern(slot).map_or(0, |p| p.sounding());
+        let seq = self.synths.sequenced_sounding(slot);
         self.synths.note(slot, NoteEvent::Sustain(false));
         let mut mask = held & !seq;
         while mask != 0 {
@@ -256,6 +291,22 @@ impl Engine {
             SlotKind::Empty => {}
         }
         self.set_kind(slot, SlotKind::Empty);
+    }
+
+    /// Drop every clip of `slot` (its track was added, removed or swapped;
+    /// the track reset releases or clears whatever its clips held).
+    fn clear_clips(&mut self, slot: usize) {
+        if let Some(a) = self.arrangements.get_mut(slot) {
+            a.clear();
+        }
+    }
+
+    /// A jump of song time while playing (Play, seek, loop wrap, mode
+    /// switch): every drum clip latches its pending swing at once.
+    fn latch_all_clips(&mut self) {
+        for (slot, a) in self.arrangements.iter().enumerate() {
+            self.drums.latch_clips(slot, a.clips());
+        }
     }
 
     /// Record `slot`'s kind (`get_mut`-guarded: never panics).
@@ -312,17 +363,31 @@ impl Engine {
             }
             Command::SetMasterGain { gain } => self.master_gain = gain,
             // Already playing: no-op (does not restart, count-in ignored).
-            // Otherwise starts at -count_in (the playhead is 0 after Stop).
+            // Pattern mode starts at -count_in (the playhead is 0 after
+            // Stop); Song mode ignores the count-in and starts at the song
+            // position, which becomes the song start.
             Command::Play { count_in } => {
                 if !self.transport.playing {
-                    self.transport.ticks = -count_in;
+                    match self.transport.mode {
+                        Mode::Pattern => self.transport.ticks = -count_in,
+                        Mode::Song => {
+                            self.transport.song_start = self.transport.ticks;
+                            self.latch_all_clips();
+                        }
+                    }
                     self.transport.playing = true;
                 }
                 self.sync_transport_telemetry();
             }
             Command::Stop => {
                 self.transport.playing = false;
-                self.transport.ticks = 0.0;
+                self.transport.ticks = match self.transport.mode {
+                    Mode::Pattern => 0.0,
+                    Mode::Song => self.transport.song_home(),
+                };
+                if self.transport.mode == Mode::Song {
+                    self.transport.song_start = self.transport.ticks;
+                }
                 self.drums.fade_all(); // no hard cuts: 2 ms fade-out
                 self.synths.release_sequenced(); // releases, never AllOff
                 self.sync_transport_telemetry();
@@ -338,6 +403,7 @@ impl Engine {
                 }
                 self.drums.add_track(slot);
                 self.set_kind(slot, SlotKind::Drum);
+                self.clear_clips(slot);
             }
             // Empty patch (a drum track there fades out first; a synth patch
             // there is cleared with a fade).
@@ -347,12 +413,14 @@ impl Engine {
                 }
                 self.synths.add_track(slot);
                 self.set_kind(slot, SlotKind::Synth);
+                self.clear_clips(slot);
             }
             // Works for both kinds (and is a no-op on an empty slot, except
             // that drum state is marked inactive as before).
             Command::RemoveTrack { slot } => {
                 self.clear_slot(slot);
                 self.drums.remove_track(slot);
+                self.clear_clips(slot);
             }
             // Row/step edits on an inactive slot succeed and just store state.
             // Steps are stored for any step < MAX_STEPS (decode checks that),
@@ -406,21 +474,22 @@ impl Engine {
             // Note pattern edits act on the current pattern (synth slots only;
             // `Synths` returns false for an inactive track, which a synth slot
             // never is).
+            // Clip-owned notes are released like Pattern-mode ones.
             Command::NoteSet { slot, idx, note } => {
                 self.synth_slot(slot)?;
-                found(self.synths.set_note(slot, idx, note))?
+                found(self.synths.set_note(slot, idx, note, clips_of(&self.arrangements, slot)))?
             }
             Command::NoteRemove { slot, idx } => {
                 self.synth_slot(slot)?;
-                found(self.synths.remove_note(slot, idx))?
+                found(self.synths.remove_note(slot, idx, clips_of(&self.arrangements, slot)))?
             }
             Command::NoteClear { slot } => {
                 self.synth_slot(slot)?;
-                found(self.synths.clear_notes(slot))?
+                found(self.synths.clear_notes(slot, clips_of(&self.arrangements, slot)))?
             }
             Command::SetPatternBars { slot, bars } => {
                 self.synth_slot(slot)?;
-                found(self.synths.set_pattern_bars(slot, bars))?
+                found(self.synths.set_pattern_bars(slot, bars, clips_of(&self.arrangements, slot)))?
             }
             // Pattern table ops: drum or synth slots (empty: ERR_BAD_INDEX).
             // Synth: switching releases the old pattern's sounding notes;
@@ -433,14 +502,78 @@ impl Engine {
             },
             Command::CopyPattern { slot, from, to } => match self.kind(slot) {
                 SlotKind::Drum => self.drums.copy_pattern(slot, from, to, self.transport.playing),
-                SlotKind::Synth => found(self.synths.copy_pattern(slot, from, to))?,
+                SlotKind::Synth => {
+                    found(self.synths.copy_pattern(slot, from, to, clips_of(&self.arrangements, slot)))?
+                }
                 SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
             Command::ClearPatternData { slot, pattern } => match self.kind(slot) {
                 SlotKind::Drum => self.drums.clear_pattern(slot, pattern),
-                SlotKind::Synth => found(self.synths.clear_pattern(slot, pattern))?,
+                SlotKind::Synth => {
+                    found(self.synths.clear_pattern(slot, pattern, clips_of(&self.arrangements, slot)))?
+                }
                 SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
+            // Clips: drum or synth slots. A real edit (or removal) releases
+            // the notes the clip owns; a drum clip latches its swing afresh.
+            Command::ClipSet { slot, idx, clip } => {
+                let kind = self.kind(slot);
+                if kind == SlotKind::Empty {
+                    return Err(protocol::ERR_BAD_INDEX);
+                }
+                let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
+                if a.set(idx, clip) {
+                    self.synths.release_clip(slot, idx);
+                    self.drums.latch_clip(slot, idx, clip);
+                }
+            }
+            Command::ClipRemove { slot, idx } => {
+                if self.kind(slot) == SlotKind::Empty {
+                    return Err(protocol::ERR_BAD_INDEX);
+                }
+                let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
+                if a.remove(idx) {
+                    self.synths.release_clip(slot, idx);
+                }
+            }
+            Command::ClipClear { slot } => {
+                if self.kind(slot) == SlotKind::Empty {
+                    return Err(protocol::ERR_BAD_INDEX);
+                }
+                self.synths.release_clips(slot);
+                self.clear_clips(slot);
+            }
+            Command::SetMode { song } => {
+                let mode = if song { Mode::Song } else { Mode::Pattern };
+                if mode != self.transport.mode {
+                    self.synths.release_sequenced();
+                    self.transport.mode = mode;
+                    match mode {
+                        Mode::Song => {
+                            self.transport.ticks = self.transport.song_start;
+                            self.latch_all_clips();
+                        }
+                        Mode::Pattern if !self.transport.playing => self.transport.ticks = 0.0,
+                        Mode::Pattern => {} // patterns continue at ticks mod period
+                    }
+                    self.sync_transport_telemetry();
+                }
+            }
+            Command::SetLoop { start, end } => {
+                self.transport.loop_start = start as f64;
+                self.transport.loop_end = end as f64;
+            }
+            Command::Seek { ticks } => {
+                if self.transport.mode == Mode::Song {
+                    self.transport.ticks = ticks as f64;
+                    self.transport.song_start = ticks as f64;
+                    if self.transport.playing {
+                        self.synths.release_song();
+                        self.latch_all_clips();
+                    }
+                    self.sync_transport_telemetry();
+                }
+            }
         }
         Ok(())
     }
@@ -451,9 +584,40 @@ impl Engine {
         left.fill(0.0);
         right.fill(0.0);
         let n = left.len().min(right.len()).min(MAX_BLOCK);
-        self.render_metronome(&mut left[..n], &mut right[..n]);
-        self.render_drums(&mut left[..n], &mut right[..n]);
-        self.render_synths(&mut left[..n], &mut right[..n]);
+        // Render in pieces split at a Song-mode loop wrap (usually one piece).
+        let spt = self.transport.samples_per_tick(self.sample_rate);
+        // A wrap piece may be empty (see `Transport::split`); the cap only
+        // guards against a degenerate loop, never hit in practice.
+        let (mut tick, mut frames) = self.transport.anchored(spt);
+        let (mut from, mut t) = (0, self.transport.ticks);
+        for _ in 0..n + 2 {
+            let (len, end, wraps) = self.transport.split(t, n - from, spt);
+            let to = (from + len).min(n);
+            // Without a wrap, the window ends at the anchored (drift-free) tick.
+            let end = if wraps { end } else { tick + (frames + len as f64) / spt };
+            if let (Some(l), Some(r)) = (left.get_mut(from..to), right.get_mut(from..to)) {
+                if !l.is_empty() {
+                    self.render_piece(t, end, spt, l, r);
+                }
+            }
+            from = to;
+            if wraps {
+                // Song time jumps back: release clip notes, re-latch swings.
+                self.synths.release_song();
+                self.latch_all_clips();
+                (tick, frames) = (self.transport.loop_start, 0.0);
+                t = tick;
+            } else {
+                frames += len as f64;
+                t = end;
+            }
+            if from >= n {
+                break;
+            }
+        }
+        if self.transport.playing {
+            self.transport.set_anchored(tick, frames, spt);
+        }
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             let l = (left[i] * self.master_gain).clamp(-1.0, 1.0);
@@ -463,7 +627,6 @@ impl Engine {
             pl = pl.max(l.abs());
             pr = pr.max(r.abs());
         }
-        self.transport.advance(n, self.sample_rate);
         self.telemetry[TELEMETRY_BLOCKS] += 1.0;
         self.sync_transport_telemetry();
         self.telemetry[TELEMETRY_PEAK_L] = pl as f64;
@@ -476,18 +639,44 @@ impl Engine {
         self.telemetry[TELEMETRY_TICKS] = self.transport.ticks;
     }
 
+    /// Render one piece of a block (`left`/`right` are its frames) whose
+    /// window is `[t0, t1)` in transport ticks (song time in Song mode) at
+    /// `spt` samples per tick. While stopped there is no window (tails only)
+    /// and `t0` is the parked playhead.
+    fn render_piece(&mut self, t0: f64, t1: f64, spt: f64, left: &mut [f32], right: &mut [f32]) {
+        let window = if self.transport.playing && !left.is_empty() { Some((t0, t1, spt)) } else { None };
+        self.render_metronome(window, left, right);
+        let timeline = match self.transport.mode {
+            Mode::Pattern => Timeline::Pattern,
+            Mode::Song => Timeline::Song(&self.arrangements),
+        };
+        // Drums: new hits at their exact sample offsets while playing; tails
+        // keep rendering after Stop. Steps before tick 0 (count-in) never
+        // fire: `events_in_window` skips negative ticks.
+        self.drums.render_add(window, timeline, &self.samples, &self.arena, left, right);
+        // Synths: a `Ctx` at the piece start (negative during the count-in,
+        // song time with the wrap applied in Song mode; synced LFOs follow
+        // it). Every active track renders, playing or not (see `synth.rs`).
+        let ctx = Ctx {
+            sr: self.sample_rate,
+            bpm: self.transport.bpm,
+            playing: self.transport.playing,
+            ticks: t0,
+            ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
+        };
+        self.synths.render_add(&ctx, window, timeline, left, right);
+    }
+
     /// Metronome: trigger clicks at their exact sample offsets, rendering the
     /// segments between them so a click spilling past the block end continues
-    /// next block. Does not advance the transport. During the count-in
-    /// (ticks < 0) it clicks even when off; when off, the window is cut at
-    /// tick 0 so the first downbeat does not click.
-    fn render_metronome(&mut self, left: &mut [f32], right: &mut [f32]) {
+    /// next block. `window` is the piece's `(t0, t1, spt)` while playing.
+    /// During the count-in (ticks < 0) it clicks even when off; when off, the
+    /// window is cut at tick 0 so the first downbeat does not click.
+    fn render_metronome(&mut self, window: Option<(f64, f64, f64)>, left: &mut [f32], right: &mut [f32]) {
         let n = left.len();
         let mut starts = [(0usize, false); 4];
         let mut count = 0;
-        let (t0, t1) = self.transport.block_window(n, self.sample_rate);
-        if self.transport.playing && (self.metronome.on || t0 < 0.0) && n > 0 {
-            let spt = self.transport.samples_per_tick(self.sample_rate);
+        if let Some((t0, t1, spt)) = window.filter(|&(t0, ..)| (self.metronome.on || t0 < 0.0) && n > 0) {
             let end = if self.metronome.on { t1 } else { t1.min(0.0) };
             // `events_in_window` ignores negative ticks; shift by whole bars
             // (beats and accents are unchanged) and shift the ticks back.
@@ -507,44 +696,6 @@ impl Engine {
             self.metronome.trigger(accent);
         }
         self.metronome.render_add(&mut left[pos..], &mut right[pos..]);
-    }
-
-    /// Drums: new hits are placed at their exact sample offsets while playing
-    /// (same pattern as the metronome); tails keep rendering after Stop.
-    /// Steps before tick 0 (count-in) never fire: `events_in_window` skips
-    /// negative ticks.
-    fn render_drums(&mut self, left: &mut [f32], right: &mut [f32]) {
-        let n = left.len();
-        let window = if self.transport.playing && n > 0 {
-            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
-            Some((t0, t1, self.transport.samples_per_tick(self.sample_rate)))
-        } else {
-            None
-        };
-        self.drums.render_add(window, &self.samples, &self.arena, left, right);
-    }
-
-    /// Synth tracks, with a `Ctx` from the transport at the block start (its
-    /// ticks are negative during the count-in; synced LFOs handle that) and,
-    /// while playing, the block's tick window for the patterns. Every active
-    /// track renders, playing or not (see `synth.rs`).
-    fn render_synths(&mut self, left: &mut [f32], right: &mut [f32]) {
-        let n = left.len().min(right.len());
-        let spt = self.transport.samples_per_tick(self.sample_rate);
-        let ctx = Ctx {
-            sr: self.sample_rate,
-            bpm: self.transport.bpm,
-            playing: self.transport.playing,
-            ticks: self.transport.ticks,
-            ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
-        };
-        let window = if self.transport.playing && n > 0 {
-            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
-            Some((t0, t1, spt))
-        } else {
-            None
-        };
-        self.synths.render_add(&ctx, window, left, right);
     }
 
     fn fail(&mut self, code: i32) -> i32 {
@@ -2000,7 +2151,8 @@ mod tests {
         select(&mut e, 0.0, 0.0);
         play(&mut e, 0.0);
         let s = render(&mut e, 100096); // tick 4003.84: pattern 0's 2nd loop
-        assert!((s[96000] - HIT).abs() < 1e-4 + 0.2, "pattern 0 loops");
+        assert!(all_near(&s[95900..96000], 0.2), "note held to the loop end");
+        assert!((s[96000] - HIT - 0.2).abs() < 1e-4, "pattern 0 loops: step 0 over the re-struck note: {}", s[96000]);
         assert!(all_near(&s[96096..100096], 0.2), "note held");
         // Switch both tracks: the held note is released at once; playback
         // continues at tick 4003.84 of the new patterns (not from their start).
@@ -2122,5 +2274,481 @@ mod tests {
             }
         }
         assert!(render(&mut e, 12800).iter().all(|x| x.is_finite()));
+    }
+
+    // ---- song timeline: clips, Song mode, loop, seek ------------------------
+
+    use crate::protocol::{OP_CLIP_CLEAR, OP_CLIP_REMOVE, OP_CLIP_SET, OP_SEEK, OP_SET_LOOP, OP_SET_MODE};
+    use crate::MAX_CLIPS;
+
+    /// Clip `idx` of track `slot`: `pattern` from song tick `start` for `len`
+    /// ticks, entering the pattern at tick `offset`. Returns the command code.
+    fn clip_cmd(e: &mut Engine, slot: usize, idx: usize, pattern: u32, start: u32, len: u32, offset: u32) -> i32 {
+        let a = (slot * MAX_CLIPS + idx) as f64;
+        e.command(OP_CLIP_SET, a, (offset * 16 + pattern) as f64, start as f64, len as f64)
+    }
+
+    fn set_clip(e: &mut Engine, slot: usize, idx: usize, pattern: u32, start: u32, len: u32, offset: u32) {
+        assert_eq!(clip_cmd(e, slot, idx, pattern, start, len, offset), OK);
+    }
+
+    fn mode(e: &mut Engine, song: bool) {
+        assert_eq!(e.command(OP_SET_MODE, if song { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0), OK);
+    }
+
+    fn seek(e: &mut Engine, ticks: f64) {
+        assert_eq!(e.command(OP_SEEK, ticks, 0.0, 0.0, 0.0), OK);
+    }
+
+    fn set_loop(e: &mut Engine, start: f64, end: f64) {
+        assert_eq!(e.command(OP_SET_LOOP, start, end, 0.0, 0.0), OK);
+    }
+
+    /// `gate_patch`, then let its Out level settle (it smooths from the
+    /// default), so a note at tick 0 reads exactly `0.2` from frame 32.
+    fn settled_gate(e: &mut Engine, slot: f64) {
+        gate_patch(e, slot, 0.25);
+        render(e, 4800);
+    }
+
+    fn ticks(e: &Engine) -> f64 {
+        e.telemetry()[TELEMETRY_TICKS]
+    }
+
+    /// Indices where the output jumps up by more than `by` (drum onsets
+    /// stand out from 0.2 gate steps with `by = 0.3`).
+    fn jumps(s: &[f32], by: f32) -> Vec<usize> {
+        (0..s.len()).filter(|&i| s[i] - if i == 0 { 0.0 } else { s[i - 1] } > by).collect()
+    }
+
+    fn silent(s: &[f32]) -> bool {
+        s.iter().all(|&x| x == 0.0)
+    }
+
+    #[test]
+    fn clip_repeats_and_cuts() {
+        // A 1-bar pattern (hit / note at step 0) in a 2.5-bar clip from bar 2:
+        // it plays at bars 2, 3 and 4 and is cut at bar 4.5 (120 bpm: a bar
+        // is 96000 frames).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        set_clip(&mut e, 1, 0, 0, 7680, 9600, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 512000);
+        assert_eq!(rising(&s), vec![192000, 288000, 384000], "drum hits, sample-exact");
+        assert!(silent(&s[432000..]), "nothing after the clip end (no hit at bar 5)");
+
+        // Synth: a 0.625-bar note per bar; the third one is cut at bar 4.5.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 2400);
+        set_clip(&mut e, 0, 0, 0, 7680, 9600, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 512000);
+        let (r, f) = (rising(&s), falling(&s));
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(f.len(), 3, "{f:?}");
+        for (got, want) in r.iter().zip([192000, 288000, 384000]) {
+            assert!(near(*got, want, 32), "on {got} vs {want}");
+        }
+        for (got, want) in f.iter().zip([252000, 348000, 432000]) {
+            assert!(near(*got, want, 32), "off {got} vs {want}");
+        }
+        assert!(all_near(&s[192032..252000], 0.2) && all_near(&s[384032..432000], 0.2));
+        assert!(silent(&s[432032..]));
+    }
+
+    #[test]
+    fn clip_offset() {
+        // Offset 2 beats: the clip at bar 1 enters its 1-bar pattern at
+        // step 8, so step 8 plays at bar 1 and step 0 at bar 1.5.
+        let mut e = drum_engine();
+        load_const(&mut e, 1, 10, 0.5);
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 1.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 1.0, 8.0, 127.0), OK);
+        set_clip(&mut e, 1, 0, 0, 3840, 3840, 1920);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 256000);
+        assert_eq!(rising(&s), vec![96000, 144000]);
+        assert!((s[96000] - HIT * 0.5).abs() < 1e-4, "step 8 (row 1): {}", s[96000]);
+        assert!((s[144000] - HIT).abs() < 1e-4, "step 0 (row 0): {}", s[144000]);
+
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        set_note(&mut e, 0, 1, 62, 1920, 480);
+        set_clip(&mut e, 0, 0, 0, 3840, 3840, 1920);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 256000);
+        assert!(silent(&s[..96000]));
+        assert!(all_near(&s[96032..108000], 0.2), "pattern tick 1920 at bar 1");
+        assert!(silent(&s[108032..144000]));
+        assert!(all_near(&s[144032..156000], 0.2), "pattern tick 0 at bar 1.5");
+        assert!(silent(&s[156032..]));
+    }
+
+    #[test]
+    fn notes_released_at_clip_end() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000); // 4-bar pattern, a 2-bar note
+        set_clip(&mut e, 0, 0, 0, 0, 3840, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 128000);
+        assert!(all_near(&s[32..96000], 0.2));
+        assert!(silent(&s[96032..]), "released at the clip end");
+        assert_eq!(falling(&s).len(), 1);
+    }
+
+    #[test]
+    fn overlapping_clips_both_play() {
+        let mut e = drum_engine();
+        load_const(&mut e, 1, 10, 0.5);
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]); // pattern 0: row 0, step 0
+        select(&mut e, 1.0, 1.0);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 1.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 1.0, 4.0, 127.0), OK); // pattern 1: row 1, step 4
+        set_clip(&mut e, 1, 0, 0, 0, 7680, 0);
+        set_clip(&mut e, 1, 1, 1, 0, 3840, 0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 1920);
+        select(&mut e, 0.0, 1.0);
+        set_note(&mut e, 0, 0, 64, 960, 1920);
+        set_clip(&mut e, 0, 0, 0, 0, 3840, 0);
+        set_clip(&mut e, 0, 1, 1, 0, 3840, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 192000);
+        assert_eq!(jumps(&s, 0.25), vec![0, 24000, 96000], "both drum clips' hits");
+        assert!((s[24000] - s[23999] - HIT * 0.5 - 0.2).abs() < 1e-3, "pattern 1's hit and note at tick 960");
+        assert!(all_near(&s[24032..48000], 0.4), "two notes held at once");
+        assert!(all_near(&s[48032..72000], 0.2) && silent(&s[72032..96000]));
+    }
+
+    #[test]
+    fn loop_wrap_is_exact_and_releases() {
+        // Loop bars 1-3 (ticks 0..11520) at 124 bpm: a pass is
+        // ceil(11520 * 24.19...) = 278710 frames, rendered in 100-frame
+        // blocks so the wrap falls mid-block.
+        let mut e = drum_engine();
+        e.command(OP_SET_TEMPO, 124.0, 0.0, 0.0, 0.0);
+        let spt: f64 = 48000.0 * 60.0 / (124.0 * 960.0);
+        let pass = (11520.0 * spt).ceil() as usize;
+        assert_eq!(pass, 278710);
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        set_clip(&mut e, 1, 0, 0, 0, 3840, 0); // one hit, at song tick 0
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000); // sounds at the loop end ...
+        set_clip(&mut e, 0, 0, 0, 7680, 3840, 0); // ... where its clip ends
+        set_loop(&mut e, 0.0, 11520.0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let s = render_blocks(&mut e, 3 * pass + 1000, 100);
+        assert_eq!(jumps(&s, 0.3), vec![0, pass, 2 * pass, 3 * pass], "one hit per pass, sample-exact");
+        let note_on = (7680.0 * spt).ceil() as usize;
+        for k in 0..3 {
+            let p = k * pass;
+            if k > 0 {
+                assert!(all_near(&s[p - 5000..p], 0.2), "pass {k}: note sounding at the loop end");
+                assert!(silent(&s[p + 32..p + 5000]), "pass {k}: released at the wrap");
+            }
+            assert!(silent(&s[p + 32..p + note_on]), "pass {k}");
+            assert!(all_near(&s[p + note_on + 32..p + note_on + 5000], 0.2), "pass {k}: note again");
+        }
+        let t = ticks(&e);
+        assert!((0.0..11520.0).contains(&t), "telemetry is the song position: {t}");
+    }
+
+    #[test]
+    fn seek_releases_and_jumps() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        set_clip(&mut e, 1, 0, 0, 9600, 3840, 0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        set_clip(&mut e, 0, 0, 0, 0, 15360, 0);
+        // Pattern mode ignores seeks.
+        seek(&mut e, 9600.0);
+        assert_eq!(ticks(&e), 0.0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 12800)[32..], 0.2));
+        // Inside the same clip, past the note: the note must not hang.
+        seek(&mut e, 9600.0);
+        assert_eq!(ticks(&e), 9600.0, "telemetry jumps at once");
+        let s = render(&mut e, 12800);
+        assert_eq!(rising(&s), vec![0], "the drum clip at 9600 plays at once");
+        assert!(silent(&s[32..]), "released");
+        assert!((ticks(&e) - (9600.0 + 512.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clip_edit_while_playing_releases() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        mode(&mut e, true);
+        // Each edit of clip 0 while its note sounds releases it.
+        let edits: [&dyn Fn(&mut Engine) -> i32; 5] = [
+            &|e| clip_cmd(e, 0, 0, 0, 0, 7680, 0),  // shorten (still under the playhead)
+            &|e| clip_cmd(e, 0, 0, 0, 3840, 15360, 0), // move
+            &|e| clip_cmd(e, 0, 0, 1, 0, 15360, 0), // another pattern
+            &|e| e.command(OP_CLIP_REMOVE, 0.0, 0.0, 0.0, 0.0),
+            &|e| e.command(OP_CLIP_CLEAR, 0.0, 0.0, 0.0, 0.0),
+        ];
+        for (k, edit) in edits.iter().enumerate() {
+            e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+            seek(&mut e, 0.0);
+            set_clip(&mut e, 0, 0, 0, 0, 15360, 0);
+            set_clip(&mut e, 0, 7, 1, 0, 15360, 0); // another clip (empty pattern)
+            play(&mut e, 0.0);
+            assert!(all_near(&render(&mut e, 12800)[32..], 0.2), "edit {k}: sounding");
+            // Editing another clip, or re-sending the same clip, changes nothing.
+            set_clip(&mut e, 0, 7, 1, 0, 7680, 0);
+            set_clip(&mut e, 0, 0, 0, 0, 15360, 0);
+            assert!(all_near(&render(&mut e, 1280), 0.2), "edit {k}: still sounding");
+            assert_eq!(edit(&mut e), OK);
+            let s = render(&mut e, 12800);
+            assert!(silent(&s[32..]), "edit {k}: released");
+        }
+    }
+
+    #[test]
+    fn editing_a_clip_owned_note_releases_it() {
+        // A clip of pattern 0 holding note slot 0 (pitch 60, from tick 0) and
+        // slot 1 (pitch 64, from tick 400 = frame 10000).
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        set_note(&mut e, 0, 1, 64, 400, 8000);
+        set_clip(&mut e, 0, 0, 0, 0, 15360, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 9600)[32..], 0.2), "pitch 60");
+        assert!(all_near(&render(&mut e, 12800)[432..], 0.4), "60 and 64");
+        // Moving a note that is not sounding (slot 2) changes nothing; moving
+        // slot 1 releases 64; changing the length releases the rest.
+        set_note(&mut e, 0, 2, 70, 9000, 100);
+        assert!(all_near(&render(&mut e, 1280), 0.4));
+        set_note(&mut e, 0, 1, 64, 9000, 100);
+        assert!(all_near(&render(&mut e, 1280)[32..], 0.2), "slot 1's clip note released");
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 2.0, 0.0, 0.0), OK);
+        assert!(silent(&render(&mut e, 1280)[32..]), "length change released the clip's notes");
+        assert_eq!(e.synths.sequenced_sounding(0), 0);
+    }
+
+    #[test]
+    fn mode_switch_while_playing_releases_sequenced() {
+        // Pattern 0 (current): a note from 0; pattern 1: a note from 0 in a
+        // clip at bar 2.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        select(&mut e, 0.0, 1.0);
+        set_note(&mut e, 0, 0, 62, 0, 8000);
+        select(&mut e, 0.0, 0.0);
+        set_clip(&mut e, 0, 0, 1, 7680, 7680, 0);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 12800)[32..], 0.2), "pattern mode: pattern 0's note");
+        mode(&mut e, true);
+        assert_eq!(ticks(&e), 0.0, "Song mode starts at the song position");
+        assert!(silent(&render(&mut e, 12800)[32..]), "released; nothing at song tick 0");
+        seek(&mut e, 7600.0);
+        assert!(all_near(&render(&mut e, 12800)[2032..], 0.2), "song: the clip's note");
+        mode(&mut e, false);
+        assert!(silent(&render(&mut e, 12800)[32..]), "released (pattern 0's note is over)");
+        assert!(ticks(&e) > 8112.0, "Pattern mode continues from the playhead");
+    }
+
+    #[test]
+    fn stop_in_song_mode_returns_to_start() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        mode(&mut e, true);
+        seek(&mut e, 7680.0);
+        assert_eq!(ticks(&e), 7680.0);
+        play(&mut e, 3840.0); // Song mode ignores the count-in
+        assert_eq!(ticks(&e), 7680.0);
+        render(&mut e, 12800);
+        assert!((ticks(&e) - (7680.0 + 512.0)).abs() < 1e-6);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(ticks(&e), 7680.0, "back to where playback started");
+        // With the loop on: back to the loop start.
+        set_loop(&mut e, 3840.0, 11520.0);
+        play(&mut e, 0.0);
+        render(&mut e, 12800);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(ticks(&e), 3840.0);
+        // Loop off (end <= start): back to where playback started (3840).
+        set_loop(&mut e, 3840.0, 0.0);
+        play(&mut e, 0.0);
+        render(&mut e, 12800);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(ticks(&e), 3840.0);
+        // Pattern mode: tick 0, and the song position comes back with Song mode.
+        mode(&mut e, false);
+        assert_eq!(ticks(&e), 0.0);
+        play(&mut e, 0.0);
+        render(&mut e, 12800);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(ticks(&e), 0.0);
+        mode(&mut e, true);
+        assert_eq!(ticks(&e), 3840.0);
+    }
+
+    #[test]
+    fn synced_lfo_continuous_across_song_loop() {
+        // Sine LFO synced to 1 bar straight into Out. Loop ticks 3840..8640
+        // (1.25 bars: not a whole number of LFO cycles), 120 bpm: a pass is
+        // 120000 frames. After the wrap the LFO is back at its loop-start
+        // phase, so pass 2 repeats pass 1.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        e.command(OP_ADD_SYNTH_TRACK, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 0.0, K_LFO, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 1.0, K_OUT, 0.0);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 0.0, 0.0), OK); // sine
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 2.0, 1.0), OK); // sync
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 3.0, 5.0), OK); // 1 bar
+        e.command(OP_RACK_CONNECT, 0.0, pk(0, 0), pk(1, 0), 0.0);
+        mode(&mut e, true);
+        set_loop(&mut e, 3840.0, 8640.0);
+        seek(&mut e, 3840.0);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 2 * 120000 + 12800);
+        // Phase 0 at tick 3840 (a bar line): peak a quarter cycle later
+        // (tick 4800, frame 24000), trough at tick 6720.
+        // Sanity: locked to song ticks (0.64 = Out 0.8 * master 0.8).
+        assert!((s[24000] - 0.64).abs() < 1e-3 && (s[72000] + 0.64).abs() < 1e-3, "{} {}", s[24000], s[72000]);
+        for k in (2000..120000).step_by(97) {
+            assert!((s[120000 + k] - s[k]).abs() < 1e-3, "frame {k}: {} vs {}", s[120000 + k], s[k]);
+        }
+    }
+
+    #[test]
+    fn song_mode_swing_change_never_double_fires() {
+        // Odd steps 1 and 3 in a clip; swing 0 -> 1 set right after step 1
+        // fired (tick ~256): step 1 must not fire again at 360; step 3 takes
+        // the new swing (pair 1 starts at 480): 720 + 120 = 840.
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[1.0, 3.0]);
+        set_clip(&mut e, 1, 0, 0, 0, 3840, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let mut s = render(&mut e, 6400); // to tick 256
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK);
+        s.extend(render(&mut e, 96000 - 6400));
+        assert_eq!(rising(&s), vec![6000, 21000]);
+    }
+
+    #[test]
+    fn clip_commands_validate() {
+        let mut e = Engine::new(SR);
+        e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 2.0, 0.25);
+        // Empty slot.
+        assert_eq!(clip_cmd(&mut e, 5, 0, 0, 0, 10, 0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_CLIP_REMOVE, (5 * MAX_CLIPS) as f64, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_CLIP_CLEAR, 5.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+        for slot in [1, 2] {
+            assert_eq!(clip_cmd(&mut e, slot, MAX_CLIPS - 1, 15, 0, crate::MAX_SONG_TICKS as u32, 61439), OK);
+            assert_eq!(clip_cmd(&mut e, slot, 0, 0, crate::MAX_SONG_TICKS as u32 - 1, 2, 0), ERR_BAD_VALUE);
+            assert_eq!(clip_cmd(&mut e, slot, 0, 0, 0, 0, 0), ERR_BAD_VALUE);
+            let a = (slot * MAX_CLIPS) as f64;
+            assert_eq!(e.command(OP_CLIP_REMOVE, a, 0.0, 0.0, 0.0), OK, "empty clip slot: no-op");
+            assert_eq!(e.command(OP_CLIP_REMOVE, a + 255.0, 0.0, 0.0, 0.0), OK);
+            assert_eq!(e.command(OP_CLIP_CLEAR, slot as f64, 0.0, 0.0, 0.0), OK);
+        }
+        assert_eq!(e.command(OP_CLIP_SET, (32 * MAX_CLIPS) as f64, 0.0, 0.0, 1.0), ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_SET_MODE, 0.5, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_SET_LOOP, -1.0, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.command(OP_SEEK, f64::NAN, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.telemetry()[TELEMETRY_LAST_ERROR], ERR_BAD_VALUE as f64);
+        // Garbage while playing in Song mode never panics; audio stays finite.
+        mode(&mut e, true);
+        set_clip(&mut e, 2, 0, 0, 0, 3840, 0);
+        play(&mut e, 0.0);
+        let ops = [OP_CLIP_SET, OP_CLIP_REMOVE, OP_CLIP_CLEAR, OP_SET_MODE, OP_SET_LOOP, OP_SEEK];
+        let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -1.0, 1.0, 16.0, 512.0];
+        for op in ops {
+            for &v in &vals {
+                for &w in &vals {
+                    let _ = e.command(op, v, w, v, w);
+                    let _ = e.command(op, 2.0 * MAX_CLIPS as f64, w, v, w);
+                }
+            }
+            assert!(render(&mut e, 1280).iter().all(|x| x.is_finite()));
+        }
+    }
+
+    // ---- Task 1 review follow-ups: audio-level pattern tests ---------------
+
+    #[test]
+    fn copy_over_a_sounding_synth_pattern_releases_its_notes() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        settled_gate(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 8000);
+        select(&mut e, 0.0, 1.0);
+        set_note(&mut e, 0, 0, 62, 0, 8000); // the copy's note starts at 0: silent now
+        select(&mut e, 0.0, 0.0);
+        play(&mut e, 0.0);
+        assert!(all_near(&render(&mut e, 12800)[32..], 0.2));
+        assert_eq!(e.command(OP_COPY_PATTERN, 0.0, 1.0, 0.0, 0.0), OK);
+        assert!(silent(&render(&mut e, 12800)[32..]), "copy over the playing pattern released its note");
+    }
+
+    #[test]
+    fn drum_swing_latch_across_a_pattern_switch() {
+        // Pattern 0: odd steps 1 and 3. Swing 1.0 is set at tick ~128
+        // (pending until the pair boundary at 480), step 1 fires at 240,
+        // pattern 1 (empty) plays from ~256, pattern 0 again from ~384: its
+        // step 1 must not move to 360 and fire again; step 3 is swung (840).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[1.0, 3.0]);
+        play(&mut e, 0.0);
+        let mut s = render(&mut e, 3200); // tick 128
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK);
+        s.extend(render(&mut e, 3200)); // tick 256
+        select(&mut e, 1.0, 1.0);
+        s.extend(render(&mut e, 3200)); // tick 384
+        select(&mut e, 1.0, 0.0);
+        s.extend(render(&mut e, 96000 - 9600));
+        assert_eq!(rising(&s), vec![6000, 21000]);
+    }
+
+    #[test]
+    fn copy_into_the_playing_drum_pattern_keeps_its_latched_swing() {
+        // Pattern 0 (playing, swing 0): odd steps 1 and 3. Pattern 1: the
+        // same steps with swing 1.0. Copying 1 over 0 at tick ~128 keeps the
+        // latched swing 0 for pair 0 (step 1 at 240, not 360) and latches 1.0
+        // at the pair boundary (step 3 at 840).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[1.0, 3.0]);
+        select(&mut e, 1.0, 1.0);
+        for st in [1.0, 3.0] {
+            assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, st, 127.0), OK);
+        }
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK);
+        select(&mut e, 1.0, 0.0);
+        play(&mut e, 0.0);
+        let mut s = render(&mut e, 3200);
+        assert_eq!(e.command(OP_COPY_PATTERN, 1.0, 1.0, 0.0, 0.0), OK);
+        s.extend(render(&mut e, 96000 - 3200));
+        assert_eq!(rising(&s), vec![6000, 21000]);
     }
 }

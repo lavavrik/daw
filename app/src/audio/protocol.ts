@@ -61,6 +61,22 @@ export const Op = {
   COPY_PATTERN: 33,
   /** a=slot b=pattern: clear its steps/notes, keeping step count, swing and bars. */
   CLEAR_PATTERN_DATA: 34,
+  // Song timeline: clips per track (drum or synth slot; empty slot is BAD_INDEX).
+  /** a=slot*MAX_CLIPS+idx b=offset*16+pattern (offset 0..61439 ticks into the
+   *  pattern) c=start ticks d=length ticks (len >= 1, start+len <= MAX_SONG_TICKS).
+   *  Editing a clip releases the notes it is sounding. */
+  CLIP_SET: 35,
+  /** a=slot*MAX_CLIPS+idx (releases its notes). */
+  CLIP_REMOVE: 36,
+  /** a=slot: remove every clip of the track. */
+  CLIP_CLEAR: 37,
+  /** a=0 pattern / 1 song. Switching releases sequenced notes; Pattern->Song
+   *  goes to the song start. */
+  SET_MODE: 38,
+  /** a=start ticks b=end ticks (b <= a disables the loop). */
+  SET_LOOP: 39,
+  /** a=song ticks 0..MAX_SONG_TICKS (Song mode only; ignored in Pattern mode). */
+  SEEK: 40,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -102,6 +118,10 @@ export const MAX_NOTES = 1024;
 export const MAX_PATTERN_BARS = 16;
 /** Patterns per track, drum and synth (lib.rs MAX_PATTERNS). */
 export const MAX_PATTERNS = 16;
+/** Clip slots per track on the song timeline (lib.rs MAX_CLIPS). */
+export const MAX_CLIPS = 256;
+/** Song length limit in ticks, 999 bars (lib.rs MAX_SONG_TICKS). */
+export const MAX_SONG_TICKS = 999 * 3840;
 /** Ticks per bar, 4/4 at 960 PPQ (lib.rs BAR_TICKS); also the count-in length. */
 export const BAR_TICKS = 3840;
 
@@ -114,6 +134,7 @@ export const packPort = (module: number, port: number): number => module * PORT_
 export const TELEMETRY = {
   blocks: 0,
   playing: 1,
+  /** Playhead at the start of the next block: the song position in Song mode. */
   ticks: 2,
   cpu: 3,
   dropouts: 4,

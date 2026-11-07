@@ -356,3 +356,104 @@ fn pattern_switches_and_copies_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.05, "patterns should be audible, peak {peak}");
 }
+
+/// Song mode: clips (overlapping, offset, many per track) on a drum and a
+/// synth track, loop wraps (including a tiny loop that wraps several times
+/// per block), seeks, clip edits / removals / clears while their notes sound,
+/// edits of clip-owned notes, mode switches, Stop / Play and track re-adds,
+/// all with the counter ARMED.
+#[test]
+fn song_mode_loops_and_clip_edits_do_not_allocate() {
+    let mut e = Engine::new(48000.0);
+    let p = e.sample_alloc(0, 4800, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 4800) }
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, x)| *x = ((i as f32) * 0.05).sin());
+    assert_eq!(e.sample_ready(0), 0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let (d, s) = (0.0, 1.0); // drum slot, synth slot
+    let ok = |code: i32| assert_eq!(code, OK);
+    let max_notes = daw_engine::MAX_NOTES as f64;
+    let max_clips = daw_engine::MAX_CLIPS as f64;
+    let addr = |idx: f64| s * max_notes + idx;
+    let pv = |pitch: f64, vel: f64| pitch * 128.0 + vel;
+    let clip = |slot: f64, idx: f64| slot * max_clips + idx;
+    let po = |pattern: f64, offset: f64| offset * 16.0 + pattern;
+
+    arm();
+
+    ok(e.command(OP_ADD_DRUM_TRACK, d, 0., 0., 0.));
+    ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+    for row in 0..4u32 {
+        ok(e.command(OP_SET_ROW_SAMPLE, d, row as f64, 0., 0.));
+    }
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, LFO, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (5, 0))] {
+        ok(e.command(OP_RACK_CONNECT, s, pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_RACK_SET_PARAM, s, 4., 2., 1.)); // synced LFO (not wired: still runs)
+    for pat in 0..3u32 {
+        ok(e.command(OP_SET_CURRENT_PATTERN, d, pat as f64, 0., 0.));
+        ok(e.command(OP_SET_CURRENT_PATTERN, s, pat as f64, 0., 0.));
+        ok(e.command(OP_SET_SWING, d, 0.3 * pat as f64, 0., 0.));
+        for step in (pat..16).step_by(2) {
+            ok(e.command(OP_SET_STEP, d, (step % 4) as f64, step as f64, 100.));
+        }
+        ok(e.command(OP_SET_PATTERN_BARS, s, (pat + 1) as f64, 0., 0.));
+        for i in 0..48u32 {
+            let start = (i * 320 * (pat + 1)) as f64;
+            ok(e.command(OP_NOTE_SET, addr(i as f64), pv(40.0 + ((i + pat) % 36) as f64, 100.), start, 2000.));
+        }
+    }
+    // 40 clips per track over 20 bars: 2-bar clips every half bar (four
+    // overlap at any time), cycling patterns and offsets.
+    for i in 0..40u32 {
+        let (start, pat, off) = (i as f64 * 1920.0, (i % 3) as f64, (i % 5) as f64 * 480.0);
+        ok(e.command(OP_CLIP_SET, clip(d, i as f64), po(pat, off), start, 7680.));
+        ok(e.command(OP_CLIP_SET, clip(s, i as f64), po(pat, off), start, 7680.));
+    }
+    ok(e.command(OP_SET_TEMPO, 170., 0., 0., 0.));
+    ok(e.command(OP_SET_LOOP, 3840., 11520., 0., 0.)); // 2 bars: ~1060 blocks a pass
+    ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
+    ok(e.command(OP_SEEK, 1920., 0., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    let mut peak = 0.0f64;
+    for b in 0..4000u32 {
+        match b {
+            100 => ok(e.command(OP_CLIP_SET, clip(s, 2.), po(1., 0.), 3840., 3840.)), // edit a playing clip
+            110 => ok(e.command(OP_CLIP_SET, clip(d, 2.), po(1., 0.), 3840., 3840.)),
+            120 => ok(e.command(OP_CLIP_REMOVE, clip(s, 3.), 0., 0., 0.)),
+            130 => ok(e.command(OP_NOTE_SET, addr(5.), pv(70., 90.), 100., 2000.)), // clip-owned notes
+            140 => ok(e.command(OP_NOTE_REMOVE, addr(6.), 0., 0., 0.)),
+            150 => ok(e.command(OP_SET_SWING, d, 0.8, 0., 0.)),
+            160 => ok(e.command(OP_COPY_PATTERN, s, 1., 2., 0.)),
+            170 => ok(e.command(OP_SET_PATTERN_BARS, s, 4., 0., 0.)),
+            1500 => ok(e.command(OP_SEEK, 9000., 0., 0., 0.)),
+            1700 => ok(e.command(OP_SET_MODE, 0., 0., 0., 0.)), // pattern mode, playing
+            1800 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)),
+            2000 => ok(e.command(OP_SET_LOOP, 4000., 4001., 0., 0.)), // 1 tick: wraps every ~18 frames
+            2100 => ok(e.command(OP_SET_LOOP, 0., 3840., 0., 0.)),
+            2200 => ok(e.command(OP_SET_TEMPO, 97., 0., 0., 0.)),
+            2600 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            2610 => ok(e.command(OP_CLIP_CLEAR, d, 0., 0., 0.)),
+            2620 => ok(e.command(OP_PLAY, 3840., 0., 0., 0.)),
+            3000 => ok(e.command(OP_CLIP_CLEAR, s, 0., 0., 0.)), // while sounding
+            3100 => ok(e.command(OP_CLIP_SET, clip(s, 255.), po(0., 61439.), 0., 3840.)),
+            3500 => ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.)), // clears its clips
+            3501 => ok(e.command(OP_ADD_DRUM_TRACK, d, 0., 0., 0.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        if b < 1500 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "song mode allocated");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(peak > 0.05, "song should be audible, peak {peak}");
+}

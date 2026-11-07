@@ -16,12 +16,14 @@ storage is created in `Engine::new`; no command allocates. Ticks are 960 PPQ,
 | `OP_NOTE_SET` | 28 | `a = slot*1024 + idx`, `b = pitch*128 + vel`, `c = start`, `d = len` |
 | `OP_NOTE_REMOVE` | 29 | `a = slot*1024 + idx` |
 | `OP_NOTE_CLEAR` | 30 | `a = slot` |
-| `OP_SET_PATTERN_BARS` | 31 | bars 1..16 |
-| `OP_PLAY` | | `a` = count-in ticks, 0 or 3840 |
+| `OP_SET_PATTERN_BARS` | 31 | `a = slot`, `b` = bars 1..16 |
+| `OP_PLAY` | 3 | `a` = count-in ticks, 0 or 3840 |
 
-Every command is validated (pitch 0..127, vel 1..127, start < length, len
-1..61440). The UI keeps the authoritative note list and writes slots by index.
-Notes starting at or after the pattern length are kept but silent.
+Every command is validated (pitch 0..127, vel 1..127, start 0..61439, len
+1..61440; 61440 = 16 bars, the longest pattern). Start is *not* checked
+against the current pattern length: notes starting at or after it are kept
+(stored and shown) but silent, and play again if the pattern grows. The UI
+keeps the authoritative note list and writes slots by index.
 
 ## Event generation and wrapping
 Each block, the engine finds the pattern events whose tick falls in the block's

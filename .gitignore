@@ -5,3 +5,4 @@ app/public/engine.wasm
 test-results/
 playwright-report/
 dist/
+.DS_Store

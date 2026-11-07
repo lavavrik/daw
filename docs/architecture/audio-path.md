@@ -125,7 +125,13 @@ overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
 - **Swing latching:** a swing change is stored and only takes effect when the
   playhead crosses a step-pair boundary (every 2 steps), or at once while
   stopped. An odd step always sits inside its pair, so a swing change can
-  never make it fire twice or be skipped.
+  never make it fire twice or be skipped. Swing is per pattern; only the
+  pattern that is playing latches, and copying into it keeps its latched
+  swing until the next pair boundary.
+- **Patterns:** a drum track has 16 patterns (steps of every row, step count,
+  swing); rows (sample, gain, pan, mute) and voices are per track. Switching
+  the current pattern needs no release: hits ring out, and the new pattern's
+  steps are placed from the same playhead (`ticks mod newPeriod`).
 - **Tempo:** changes apply from the next block; the playhead position is
   integrated, never recomputed, so it never jumps.
 

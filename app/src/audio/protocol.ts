@@ -51,6 +51,16 @@ export const Op = {
   NOTE_CLEAR: 30,
   /** a=slot b=pattern length in bars, 1..MAX_PATTERN_BARS. */
   SET_PATTERN_BARS: 31,
+  // Patterns: SET_STEP, SET_STEP_COUNT, SET_SWING, NOTE_SET, NOTE_REMOVE,
+  // NOTE_CLEAR and SET_PATTERN_BARS act on the track's current pattern.
+  // These three take a drum or synth slot (an empty slot is BAD_INDEX).
+  /** a=slot b=pattern 0..MAX_PATTERNS-1: play/edit it (synth: releases the
+   *  old pattern's sounding notes; playback continues at ticks mod newPeriod). */
+  SET_CURRENT_PATTERN: 32,
+  /** a=slot b=from c=to: copy pattern data within one track (from == to: no-op). */
+  COPY_PATTERN: 33,
+  /** a=slot b=pattern: clear its steps/notes, keeping step count, swing and bars. */
+  CLEAR_PATTERN_DATA: 34,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -90,6 +100,8 @@ export const MAX_PARAMS = 12;
 export const MAX_NOTES = 1024;
 /** Longest synth pattern in bars (lib.rs MAX_PATTERN_BARS). */
 export const MAX_PATTERN_BARS = 16;
+/** Patterns per track, drum and synth (lib.rs MAX_PATTERNS). */
+export const MAX_PATTERNS = 16;
 /** Ticks per bar, 4/4 at 960 PPQ (lib.rs BAR_TICKS); also the count-in length. */
 export const BAR_TICKS = 3840;
 

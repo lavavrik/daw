@@ -25,8 +25,19 @@
 //! stops being a synth track (`REMOVE_TRACK`, or `ADD_DRUM_TRACK` over it) the
 //! input track is unset, so a track added there later does not inherit it.
 //!
+//! # Patterns
+//! Every drum and synth track holds `MAX_PATTERNS` patterns (preallocated) and
+//! a *current* one, which plays (Pattern mode: it loops from tick 0) and which
+//! `SET_STEP`, `SET_STEP_COUNT`, `SET_SWING`, `NOTE_SET`, `NOTE_REMOVE`,
+//! `NOTE_CLEAR` and `SET_PATTERN_BARS` edit. `SET_CURRENT_PATTERN`,
+//! `COPY_PATTERN` and `CLEAR_PATTERN_DATA` work on drum and synth slots and
+//! return `ERR_BAD_INDEX` on an empty slot. Switching releases the old
+//! pattern's sounding sequenced notes and continues at `ticks mod newPeriod`;
+//! see `drums.rs` / `synth.rs`. `ADD_DRUM_TRACK` / `ADD_SYNTH_TRACK` reset all
+//! patterns and select pattern 0.
+//!
 //! # Note patterns
-//! Each synth track plays its own [`NotePattern`](crate::sequencer::NotePattern)
+//! Each synth track plays its current [`NotePattern`](crate::sequencer::NotePattern)
 //! while the transport runs (see `sequencer.rs` for the rules). Editing,
 //! removing or moving a sounding note releases it; `STOP` sends `Off` for
 //! every sounding *sequenced* pitch on every synth track (not `AllOff`, so
@@ -368,19 +379,16 @@ impl Engine {
                 self.drum_slot(slot)?;
                 self.drums.set_row_mute(slot, row, mute)
             }
+            // Steps, step count and swing belong to the current pattern.
             Command::SetStep { slot, row, step, velocity } => {
                 self.drum_slot(slot)?;
-                if let Some(r) = self.drums.row_mut(slot, row) {
-                    if let Some(s) = r.steps.get_mut(step) {
-                        *s = velocity;
-                    }
+                if let Some(s) = self.drums.step_mut(slot, row, step) {
+                    *s = velocity;
                 }
             }
             Command::SetStepCount { slot, count } => {
                 self.drum_slot(slot)?;
-                if let Some(t) = self.drums.tracks.get_mut(slot) {
-                    t.step_count = count;
-                }
+                self.drums.set_step_count(slot, count)
             }
             // Latched at the next step-pair boundary while playing (R12).
             Command::SetSwing { slot, swing } => {
@@ -395,8 +403,9 @@ impl Engine {
                 rack_code(self.rack(slot)?.set_param(module, param, value))?
             }
             Command::RackClear { slot } => self.rack(slot)?.clear(),
-            // Pattern edits (synth slots only; `Synths` returns false for an
-            // inactive track, which a synth slot never is).
+            // Note pattern edits act on the current pattern (synth slots only;
+            // `Synths` returns false for an inactive track, which a synth slot
+            // never is).
             Command::NoteSet { slot, idx, note } => {
                 self.synth_slot(slot)?;
                 found(self.synths.set_note(slot, idx, note))?
@@ -413,6 +422,25 @@ impl Engine {
                 self.synth_slot(slot)?;
                 found(self.synths.set_pattern_bars(slot, bars))?
             }
+            // Pattern table ops: drum or synth slots (empty: ERR_BAD_INDEX).
+            // Synth: switching releases the old pattern's sounding notes;
+            // copying over / clearing a sounding pattern releases it first.
+            // Drums: nothing to release (hits ring out on the row voices).
+            Command::SetCurrentPattern { slot, pattern } => match self.kind(slot) {
+                SlotKind::Drum => self.drums.set_current(slot, pattern),
+                SlotKind::Synth => found(self.synths.set_current(slot, pattern))?,
+                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+            },
+            Command::CopyPattern { slot, from, to } => match self.kind(slot) {
+                SlotKind::Drum => self.drums.copy_pattern(slot, from, to, self.transport.playing),
+                SlotKind::Synth => found(self.synths.copy_pattern(slot, from, to))?,
+                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+            },
+            Command::ClearPatternData { slot, pattern } => match self.kind(slot) {
+                SlotKind::Drum => self.drums.clear_pattern(slot, pattern),
+                SlotKind::Synth => found(self.synths.clear_pattern(slot, pattern))?,
+                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+            },
         }
         Ok(())
     }
@@ -1060,9 +1088,9 @@ mod tests {
         // re-adding resets everything (no sample, no steps, no pan)
         e.command(OP_ADD_DRUM_TRACK, 0.0, 0.0, 0.0, 0.0);
         let t = &e.drums.tracks[0];
-        assert!(t.active && t.rows[0].sample.is_none() && t.rows[0].steps[0] == 0);
+        assert!(t.active && t.rows[0].sample.is_none() && t.patterns[0].steps[0][0] == 0);
         assert_eq!(t.rows[0].pan, 0.0);
-        assert_eq!(t.step_count, 16);
+        assert_eq!(t.patterns[0].step_count, 16);
     }
 
     #[test]
@@ -1854,5 +1882,245 @@ mod tests {
         play(&mut e, 0.0);
         assert!(render(&mut e, 12800).iter().all(|&x| x == 0.0));
         assert_eq!(e.synths.pattern(0).map(|p| p.bars()), Some(4));
+    }
+
+    // ---- multiple patterns per track ---------------------------------------
+
+    use crate::protocol::{OP_CLEAR_PATTERN_DATA, OP_COPY_PATTERN, OP_SET_CURRENT_PATTERN};
+
+    /// Make pattern `pat` current on track `slot`; asserts OK.
+    fn select(e: &mut Engine, slot: f64, pat: f64) {
+        assert_eq!(e.command(OP_SET_CURRENT_PATTERN, slot, pat, 0.0, 0.0), OK);
+    }
+
+    /// Is every sample of `s` within 1e-3 of `v`?
+    fn all_near(s: &[f32], v: f32) -> bool {
+        s.iter().all(|&x| (x - v).abs() < 1e-3)
+    }
+
+    /// Drum level of the 10-frame `load_const` hit (vel 127, centre pan).
+    const HIT: f32 = 0.565_685_4; // sqrt(0.5) * 0.8 master
+
+    #[test]
+    fn patterns_are_independent() {
+        // Slot 1: drums (pattern 0: step 0). Slot 0: gate synth (pattern 0:
+        // 1 bar, note at 0). Pattern 1 of each is edited after selecting it.
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        select(&mut e, 1.0, 1.0);
+        select(&mut e, 0.0, 1.0);
+        // Pattern 1: fresh (16 steps, 4 bars). Step 8 = sample 48000; note
+        // slot 0 (the same index as pattern 0's note) at 960 = 24000..36000.
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 8.0, 127.0), OK);
+        set_note(&mut e, 0, 0, 60, 960, 480);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 96000 + 25600);
+        assert!(s[..24000].iter().all(|&x| x == 0.0), "pattern 0's hit and note do not play");
+        assert!(all_near(&s[24032..36000], 0.2), "pattern 1's note");
+        assert!(s[36032..48000].iter().all(|&x| x == 0.0));
+        assert!((s[48000] - HIT).abs() < 1e-4, "pattern 1's step 8: {}", s[48000]);
+        assert!(s[48010..].iter().all(|&x| x == 0.0), "pattern 1 is 4 bars: no note at 96000; 16 steps: no hit");
+        // Back to pattern 0: it kept its step, note and 1-bar length.
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        select(&mut e, 1.0, 0.0);
+        select(&mut e, 0.0, 0.0);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 96000 + 12800);
+        assert!(s[0] >= HIT - 1e-4, "pattern 0's step 0 (and maybe the gate): {}", s[0]);
+        assert!(all_near(&s[32..12000], 0.2) && s[12032..48000].iter().all(|&x| x == 0.0));
+        assert!(s[48000] == 0.0, "pattern 1's step 8 does not play");
+        assert!(all_near(&s[96032..108000], 0.2), "1-bar loop");
+    }
+
+    #[test]
+    fn copy_pattern_copies_steps_and_notes_and_lengths() {
+        // Pattern 0: 32 steps, swing 0.5, hits on steps 1 and 17 (step 1 at
+        // tick 240 + 0.5 * 120 = 300 -> 7500; step 17 at 4140 -> 103500).
+        // Synth: 2 bars, a note at 4800 (120000..132000).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[1.0, 17.0]);
+        assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), OK);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 2.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 3, 60, 4800, 480);
+        // Pattern 2 holds junk that the copy must replace entirely.
+        select(&mut e, 1.0, 2.0);
+        select(&mut e, 0.0, 2.0);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 5.0, 127.0), OK);
+        for idx in 0..10 {
+            set_note(&mut e, 0, idx, 72, 0, 240);
+        }
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 3.0, 0.0, 0.0), OK);
+        for slot in [0.0, 1.0] {
+            assert_eq!(e.command(OP_COPY_PATTERN, slot, 0.0, 2.0, 0.0), OK);
+            assert_eq!(e.command(OP_COPY_PATTERN, slot, 2.0, 2.0, 0.0), OK, "from == to: no-op");
+        }
+        play(&mut e, 0.0);
+        let s = render(&mut e, 192000 + 12800);
+        assert!(s[..7500].iter().all(|&x| x == 0.0), "junk note / step 5 gone");
+        assert!((s[7500] - HIT).abs() < 1e-4, "swung step 1: {}", s[7500]);
+        assert!(s[7510..103500].iter().all(|&x| x == 0.0), "no step 5 at 30000");
+        assert!((s[103500] - HIT).abs() < 1e-4, "step 17 (32 steps copied)");
+        assert!(all_near(&s[120032..132000], 0.2), "the note (2 bars copied)");
+        assert!(s[132032..192000].iter().all(|&x| x == 0.0));
+        assert!((s[199500] - HIT).abs() < 1e-4, "32-step loop");
+        // A copy, not an alias: editing pattern 2 leaves pattern 0 alone.
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 1.0, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_CLEAR, 0.0, 0.0, 0.0, 0.0), OK);
+        select(&mut e, 1.0, 0.0);
+        select(&mut e, 0.0, 0.0);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 132000 + 128);
+        assert!((s[7500] - HIT).abs() < 1e-4);
+        assert!(all_near(&s[120032..132000], 0.2));
+    }
+
+    #[test]
+    fn switching_current_pattern_releases_and_continues() {
+        // Pattern 0: drum step 0 (16 steps); a 1-bar synth note held all bar.
+        // Pattern 1: drum step 20 of 32 (tick 4800 -> 120000); a 2-bar synth
+        // pattern with a note at 5760 (144000..156000).
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 3840);
+        select(&mut e, 1.0, 1.0);
+        select(&mut e, 0.0, 1.0);
+        assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 20.0, 127.0), OK);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 2.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 5760, 480);
+        select(&mut e, 1.0, 0.0);
+        select(&mut e, 0.0, 0.0);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 100096); // tick 4003.84: pattern 0's 2nd loop
+        assert!((s[96000] - HIT).abs() < 1e-4 + 0.2, "pattern 0 loops");
+        assert!(all_near(&s[96096..100096], 0.2), "note held");
+        // Switch both tracks: the held note is released at once; playback
+        // continues at tick 4003.84 of the new patterns (not from their start).
+        select(&mut e, 1.0, 1.0);
+        select(&mut e, 0.0, 1.0);
+        let s = render(&mut e, 48000); // 100096 .. 148096
+        let at = |sample: usize| sample - 100096;
+        assert!(s[32..at(120000)].iter().all(|&x| x == 0.0), "released, silent until the next event");
+        assert!((s[at(120000)] - HIT).abs() < 1e-4, "step 20 at tick 4800: {}", s[at(120000)]);
+        assert!(s[at(120010)..at(144000)].iter().all(|&x| x == 0.0));
+        assert!(all_near(&s[at(144032)..], 0.2), "note at tick 5760");
+        // Selecting the current pattern again is a no-op (nothing released).
+        select(&mut e, 0.0, 1.0);
+        select(&mut e, 1.0, 1.0);
+        let s = render(&mut e, 9600); // 148096 .. 157696
+        assert!(all_near(&s[..156000 - 148096], 0.2), "still held until its own Off");
+        assert!(s[156032 - 148096..].iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn clear_pattern_data_keeps_lengths_and_releases() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[0.0, 4.0]);
+        assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), OK);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 3840);
+        play(&mut e, 0.0);
+        render(&mut e, 12800);
+        // Clearing another pattern changes nothing audible.
+        assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, 0.0, 5.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, 1.0, 5.0, 0.0, 0.0), OK);
+        assert!(all_near(&render(&mut e, 1280), 0.2), "still held");
+        // Clearing the playing pattern releases its note and silences the step.
+        assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, 0.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, 1.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 96000 - 14080 + 12800); // to 108800
+        assert!(s[32..].iter().all(|&x| x == 0.0), "released; step 4 (24000) gone");
+        // Lengths and swing were kept: 32 swung steps, 1 bar.
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 17.0, 127.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 108800);
+        assert!(all_near(&s[32..12000], 0.2), "the note");
+        assert!(s[12032..96000].iter().all(|&x| x == 0.0), "steps 0 and 4 stay cleared");
+        assert!(all_near(&s[96032..103500], 0.2) && all_near(&s[103510..108000], 0.2), "1-bar loop");
+        assert!((s[103500] - HIT - 0.2).abs() < 1e-4, "swung step 17: {}", s[103500]);
+    }
+
+    #[test]
+    fn re_adding_a_track_resets_all_patterns() {
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[]);
+        gate_patch(&mut e, 0.0, 0.25);
+        select(&mut e, 1.0, 3.0);
+        select(&mut e, 0.0, 3.0);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 0.0, 127.0), OK);
+        assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 64.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        drum_setup(&mut e, 1.0, 0.0, &[]);
+        gate_patch(&mut e, 0.0, 0.25);
+        // Pattern 0 is current again (empty); pattern 3 was reset too.
+        play(&mut e, 0.0);
+        assert!(render(&mut e, 12800).iter().all(|&x| x == 0.0));
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        select(&mut e, 1.0, 3.0);
+        select(&mut e, 0.0, 3.0);
+        assert_eq!(e.synths.pattern(0).map(|p| p.bars()), Some(4));
+        assert_eq!(e.synths.pattern(0).map(|p| p.used()), Some(0));
+        // Step 16 only plays if pattern 3 kept 64 steps; it must be 16 again.
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 16.0, 127.0), OK);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 128000);
+        assert!(s.iter().all(|&x| x == 0.0), "pattern 3: empty, 16 steps");
+    }
+
+    #[test]
+    fn pattern_commands_validate() {
+        let mut e = Engine::new(SR);
+        e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 2.0, 0.25);
+        let ops = [OP_SET_CURRENT_PATTERN, OP_COPY_PATTERN, OP_CLEAR_PATTERN_DATA];
+        // Bad and empty slots.
+        for slot in [32.0, -1.0, 0.5, f64::NAN, f64::INFINITY, 5.0] {
+            for op in ops {
+                assert_eq!(e.command(op, slot, 0.0, 1.0, 0.0), ERR_BAD_INDEX, "op {op} slot {slot}");
+            }
+        }
+        for slot in [1.0, 2.0] {
+            for bad in [16.0, -1.0, 0.5, f64::NAN, f64::NEG_INFINITY] {
+                assert_eq!(e.command(OP_SET_CURRENT_PATTERN, slot, bad, 0.0, 0.0), ERR_BAD_INDEX, "{bad}");
+                assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, slot, bad, 0.0, 0.0), ERR_BAD_INDEX, "{bad}");
+                assert_eq!(e.command(OP_COPY_PATTERN, slot, bad, 0.0, 0.0), ERR_BAD_INDEX, "from {bad}");
+                assert_eq!(e.command(OP_COPY_PATTERN, slot, 0.0, bad, 0.0), ERR_BAD_INDEX, "to {bad}");
+            }
+            assert_eq!(e.telemetry()[TELEMETRY_LAST_ERROR], ERR_BAD_INDEX as f64);
+            // Valid edges.
+            assert_eq!(e.command(OP_SET_CURRENT_PATTERN, slot, 15.0, 0.0, 0.0), OK);
+            assert_eq!(e.command(OP_SET_CURRENT_PATTERN, slot, 15.0, 0.0, 0.0), OK, "same: no-op");
+            assert_eq!(e.command(OP_COPY_PATTERN, slot, 3.0, 3.0, 0.0), OK, "from == to");
+            assert_eq!(e.command(OP_COPY_PATTERN, slot, 0.0, 15.0, 0.0), OK);
+            assert_eq!(e.command(OP_COPY_PATTERN, slot, 15.0, 0.0, 0.0), OK);
+            assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, slot, 15.0, 0.0, 0.0), OK);
+            assert_eq!(e.command(OP_CLEAR_PATTERN_DATA, slot, 0.0, 0.0, 0.0), OK);
+        }
+        // Garbage on the new ops never panics, and audio keeps rendering.
+        play(&mut e, 0.0);
+        let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -1.0, 1.0, 15.0, 16.0];
+        for op in ops {
+            for &v in &vals {
+                for &w in &vals {
+                    let _ = e.command(op, 2.0, v, w, v);
+                    let _ = e.command(op, 1.0, w, v, w);
+                    let _ = e.command(op, v, w, v, w);
+                }
+            }
+        }
+        assert!(render(&mut e, 12800).iter().all(|x| x.is_finite()));
     }
 }

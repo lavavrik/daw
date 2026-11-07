@@ -1,4 +1,14 @@
-//! Drum tracks: per-track step grids with swing, and declicked sample voices.
+//! Drum tracks: per-track step patterns with swing, and declicked sample voices.
+//!
+//! # Patterns
+//! A track holds `MAX_PATTERNS` [`DrumPattern`]s (steps of every row, step
+//! count, swing), all preallocated inline. Rows (sample, gain, pan, mute) and
+//! voices belong to the track, so every pattern plays through the same rows.
+//! The track plays and edits its *current* pattern (`DrumTrack::current`).
+//! Switching patterns needs no release: a sounding hit just rings out (its
+//! voice is per row), and the new pattern's steps are placed from the same
+//! absolute playhead, i.e. at `ticks mod newPeriod`. Adding a track resets all
+//! its patterns and selects pattern 0.
 //!
 //! Everything is fixed-size and preallocated (`Drums::new` is the only place
 //! that allocates). Rendering never allocates, blocks or panics.
@@ -20,31 +30,62 @@
 //! step-pair boundary (a multiple of `2 * STEP_TICKS`), or immediately while
 //! stopped. An odd step always lies strictly inside its pair (at most
 //! `0.5 * STEP_TICKS` late), so it can never move across the playhead: a
-//! swing change never double-fires or skips a step.
+//! swing change never double-fires or skips a step. Swing is per pattern, and
+//! only the *current* pattern latches while playing; a pattern switched away
+//! from keeps its pending `swing_next` until it plays again and crosses a
+//! pair boundary (so switching A -> B -> A inside one pair cannot move an A
+//! step across the playhead either).
 
 use crate::arena::{SampleArena, SampleSlice};
 use crate::samples::SamplePool;
 use crate::transport::{events_in_window, tick_to_offset};
-use crate::{MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
+use crate::{MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
 
 /// Max step events handled per track per block (a block spans at most a
 /// couple of steps at any sane tempo/block size; extras are dropped, not UB).
 const MAX_EVENTS: usize = 8;
 
+/// Per-track row settings (shared by all of the track's patterns).
 #[derive(Clone, Copy)]
 pub struct DrumRow {
     pub sample: Option<u32>,
     pub gain: f32,
     pub pan: f32,
     pub mute: bool,
-    /// Velocity 0..=127 per step; 0 = off. Stored for every step < MAX_STEPS,
-    /// even beyond `step_count` (they become audible if the count grows).
-    pub steps: [u8; MAX_STEPS],
 }
 
 impl DrumRow {
     pub const fn new() -> DrumRow {
-        DrumRow { sample: None, gain: 1.0, pan: 0.0, mute: false, steps: [0; MAX_STEPS] }
+        DrumRow { sample: None, gain: 1.0, pan: 0.0, mute: false }
+    }
+}
+
+/// One drum pattern: the steps of every row, the step count and the swing
+/// (about 1 KB; `MAX_PATTERNS` of them live inline in each track).
+#[derive(Clone, Copy)]
+pub struct DrumPattern {
+    /// `steps[row][step]`: velocity 0..=127; 0 = off. Stored for every step
+    /// < MAX_STEPS, even beyond `step_count` (they become audible if the
+    /// count grows).
+    pub steps: [[u8; MAX_STEPS]; MAX_ROWS],
+    pub step_count: usize,
+    /// Swing currently placing steps (latched; see module docs).
+    pub swing: f32,
+    /// Most recent `SetSwing`; becomes `swing` at the next pair boundary.
+    pub swing_next: f32,
+}
+
+impl DrumPattern {
+    /// Empty, 16 steps, no swing.
+    pub const fn new() -> DrumPattern {
+        DrumPattern { steps: [[0; MAX_STEPS]; MAX_ROWS], step_count: 16, swing: 0.0, swing_next: 0.0 }
+    }
+
+    /// Tick of step `k` within the pattern: odd steps are pushed late by
+    /// `swing * 0.5 * STEP_TICKS` (uses the latched `swing`).
+    fn step_tick(&self, k: usize) -> f64 {
+        let late = if k % 2 == 1 { self.swing as f64 * 0.5 * STEP_TICKS } else { 0.0 };
+        k as f64 * STEP_TICKS + late
     }
 }
 
@@ -224,11 +265,10 @@ const PAIR_TICKS: f64 = 2.0 * STEP_TICKS;
 
 pub struct DrumTrack {
     pub active: bool,
-    pub step_count: usize,
-    /// Swing currently placing steps (latched; see module docs).
-    pub swing: f32,
-    /// Most recent `SetSwing`; becomes `swing` at the next pair boundary.
-    pub swing_next: f32,
+    /// Index of the pattern that plays and that step / count / swing edits
+    /// target (always < MAX_PATTERNS).
+    pub current: usize,
+    pub patterns: [DrumPattern; MAX_PATTERNS],
     pub rows: [DrumRow; MAX_ROWS],
     pub voices: [RowVoices; MAX_ROWS],
 }
@@ -237,21 +277,21 @@ impl DrumTrack {
     pub const fn new() -> DrumTrack {
         DrumTrack {
             active: false,
-            step_count: 16,
-            swing: 0.0,
-            swing_next: 0.0,
+            current: 0,
+            patterns: [DrumPattern::new(); MAX_PATTERNS],
             rows: [DrumRow::new(); MAX_ROWS],
             voices: [RowVoices::OFF; MAX_ROWS],
         }
     }
 
-    /// Fresh active track: default rows, 16 steps, no swing, silent voices.
-    /// Voices are kept (the caller fades them) so a still-sounding tail is
-    /// never hard-cut.
+    /// Fresh active track: default rows, every pattern empty (16 steps, no
+    /// swing), pattern 0 current. Reset in place (no ~17 KB temporary on the
+    /// audio thread's stack). Voices are kept (the caller fades them) so a
+    /// still-sounding tail is never hard-cut.
     pub fn reset_active(&mut self) {
-        let voices = self.voices;
-        *self = DrumTrack::new();
-        self.voices = voices;
+        self.patterns.fill(DrumPattern::new());
+        self.rows.fill(DrumRow::new());
+        self.current = 0;
         self.active = true;
     }
 
@@ -261,11 +301,11 @@ impl DrumTrack {
         }
     }
 
-    /// Tick of step `k` within the pattern: odd steps are pushed late by
-    /// `swing * 0.5 * STEP_TICKS` (uses the latched `swing`).
-    fn step_tick(&self, k: usize) -> f64 {
-        let late = if k % 2 == 1 { self.swing as f64 * 0.5 * STEP_TICKS } else { 0.0 };
-        k as f64 * STEP_TICKS + late
+    /// The current pattern, mutably.
+    pub fn pattern_mut(&mut self) -> &mut DrumPattern {
+        // `current` is always < MAX_PATTERNS; fall back to 0 rather than panic.
+        let i = if self.current < MAX_PATTERNS { self.current } else { 0 };
+        &mut self.patterns[i]
     }
 }
 
@@ -326,19 +366,66 @@ impl Drums {
         }
     }
 
-    /// Store a new swing. While playing it latches at the next step-pair
-    /// boundary (R12); while stopped it applies at once.
+    /// Store a new swing in the current pattern. While playing it latches at
+    /// the next step-pair boundary (R12); while stopped it applies at once.
     pub fn set_swing(&mut self, slot: usize, swing: f32, playing: bool) {
         if let Some(t) = self.tracks.get_mut(slot) {
-            t.swing_next = swing;
+            let p = t.pattern_mut();
+            p.swing_next = swing;
             if !playing {
-                t.swing = swing;
+                p.swing = swing;
             }
         }
     }
 
     pub fn row_mut(&mut self, slot: usize, row: usize) -> Option<&mut DrumRow> {
         self.tracks.get_mut(slot)?.rows.get_mut(row)
+    }
+
+    /// Velocity of `step` of `row` in the current pattern of track `slot`.
+    pub fn step_mut(&mut self, slot: usize, row: usize, step: usize) -> Option<&mut u8> {
+        self.tracks.get_mut(slot)?.pattern_mut().steps.get_mut(row)?.get_mut(step)
+    }
+
+    /// Step count of the current pattern of track `slot`.
+    pub fn set_step_count(&mut self, slot: usize, count: usize) {
+        if let Some(t) = self.tracks.get_mut(slot) {
+            t.pattern_mut().step_count = count;
+        }
+    }
+
+    /// Make `pattern` current. Nothing is released (hits ring out on the
+    /// row voices) and the swing latch state of both patterns is kept (see
+    /// module docs). Out-of-range indices are ignored.
+    pub fn set_current(&mut self, slot: usize, pattern: usize) {
+        if let Some(t) = self.tracks.get_mut(slot) {
+            if pattern < MAX_PATTERNS {
+                t.current = pattern;
+            }
+        }
+    }
+
+    /// Copy pattern `from` over pattern `to` (steps, step count, swing).
+    /// Copying into the pattern that is playing keeps its latched swing, so
+    /// the copied swing latches at the next pair boundary (R12). `from ==
+    /// to` and out-of-range indices are no-ops.
+    pub fn copy_pattern(&mut self, slot: usize, from: usize, to: usize, playing: bool) {
+        let Some(t) = self.tracks.get_mut(slot) else { return };
+        if from == to || from >= MAX_PATTERNS || to >= MAX_PATTERNS {
+            return;
+        }
+        let latched = t.patterns[to].swing;
+        t.patterns[to] = t.patterns[from]; // ~1 KB memcpy, no allocation
+        if playing && to == t.current {
+            t.patterns[to].swing = latched;
+        }
+    }
+
+    /// Turn every step of `pattern` off; its step count and swing stay.
+    pub fn clear_pattern(&mut self, slot: usize, pattern: usize) {
+        if let Some(p) = self.tracks.get_mut(slot).and_then(|t| t.patterns.get_mut(pattern)) {
+            p.steps = [[0; MAX_STEPS]; MAX_ROWS];
+        }
     }
 
     /// Add all drum output for one block into `l`/`r`. `window` is
@@ -359,9 +446,11 @@ impl Drums {
             // (sample offset, step index) in time order.
             let mut ev = [(0usize, 0usize); MAX_EVENTS];
             let mut cnt = 0;
+            let current = if track.current < MAX_PATTERNS { track.current } else { 0 };
+            let pat = &mut track.patterns[current];
             match (track.active, window) {
                 (true, Some((t0, t1, spt))) => {
-                    let count = track.step_count.clamp(1, MAX_STEPS);
+                    let count = pat.step_count.clamp(1, MAX_STEPS);
                     let period = count as f64 * STEP_TICKS; // a multiple of PAIR_TICKS
                     let mut offs = [0.0f64; MAX_STEPS];
                     // Split the window at step-pair boundaries; each segment
@@ -371,7 +460,7 @@ impl Drums {
                         let next = ((a / PAIR_TICKS).floor() + 1.0) * PAIR_TICKS;
                         let b = if next < t1 { next } else { t1 };
                         for (k, o) in offs.iter_mut().enumerate().take(count) {
-                            *o = track.step_tick(k);
+                            *o = pat.step_tick(k);
                         }
                         events_in_window(a, b, period, &offs[..count], |step, tick| {
                             if cnt < MAX_EVENTS {
@@ -380,7 +469,7 @@ impl Drums {
                             }
                         });
                         if next <= t1 {
-                            track.swing = track.swing_next; // reached a pair boundary
+                            pat.swing = pat.swing_next; // reached a pair boundary
                         }
                         if next >= t1 {
                             break;
@@ -389,12 +478,13 @@ impl Drums {
                     }
                 }
                 // Stopped or inactive: nothing can be scheduled, latch at once.
-                _ => track.swing = track.swing_next,
+                _ => pat.swing = pat.swing_next,
             }
-            for (row, rv) in track.rows.iter().zip(track.voices.iter_mut()) {
+            let pat = &track.patterns[current];
+            for ((row, steps), rv) in track.rows.iter().zip(pat.steps.iter()).zip(track.voices.iter_mut()) {
                 let mut pos = 0;
                 for &(off, step) in &ev[..cnt] {
-                    let vel = row.steps.get(step).copied().unwrap_or(0);
+                    let vel = steps.get(step).copied().unwrap_or(0);
                     if vel == 0 || row.mute {
                         continue;
                     }

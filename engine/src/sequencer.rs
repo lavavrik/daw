@@ -1,6 +1,7 @@
 //! Note patterns: the piano-roll sequencer of a synth track.
 //!
-//! Each synth track owns one [`NotePattern`]: up to `MAX_NOTES` note slots
+//! Each synth track owns `MAX_PATTERNS` [`NotePattern`]s (one of them current,
+//! see `synth.rs`), each with up to `MAX_NOTES` note slots
 //! (fixed storage, preallocated with the track, so editing and playback never
 //! allocate) and a length of 1..=`MAX_PATTERN_BARS` bars.
 //!
@@ -208,6 +209,22 @@ impl NotePattern {
             notes.fill(SeqNote::OFF);
         }
         self.used = 0;
+        self.release_all()
+    }
+
+    /// Become a copy of `src` (notes and length; no allocation, copies only
+    /// the slots either pattern uses). Returns the pitches *this* pattern was
+    /// sounding, for the caller to release; the copy starts silent.
+    pub fn copy_from(&mut self, src: &NotePattern) -> u128 {
+        let (n, old) = (src.used.min(MAX_NOTES), self.used.min(MAX_NOTES));
+        if let (Some(dst), Some(from)) = (self.notes.get_mut(..n), src.notes.get(..n)) {
+            dst.copy_from_slice(from);
+        }
+        if let Some(stale) = self.notes.get_mut(n..old.max(n)) {
+            stale.fill(SeqNote::OFF);
+        }
+        self.used = n;
+        self.bars = src.bars;
         self.release_all()
     }
 
@@ -562,6 +579,26 @@ mod tests {
         assert_eq!(p.release_all(), 1 << 70);
         assert_eq!(p.reset(), 0);
         assert_eq!((p.bars(), p.used()), (DEFAULT_BARS, 0));
+    }
+
+    #[test]
+    fn copy_from_replaces_notes_and_length_and_releases() {
+        let mut a = NotePattern::new();
+        a.set_bars(2);
+        a.set(1, note(60, 100, 50));
+        let mut b = NotePattern::new();
+        for i in 0..5 {
+            b.set(i, note(70, 0, 2000));
+        }
+        run(&mut b, 0.0, 10.0);
+        assert_eq!(b.sounding(), 1 << 70);
+        assert_eq!(b.copy_from(&a), 1 << 70, "returns what was sounding");
+        assert_eq!((b.bars(), b.used(), b.sounding()), (2, 2, 0));
+        assert_eq!(b.note(1), Some(note(60, 100, 50)));
+        for i in [0, 2, 3, 4] {
+            assert_eq!(b.note(i), Some(SeqNote::OFF), "slot {i} cleared");
+        }
+        assert_eq!(run(&mut b, 0.0, 7680.0), vec![(100.0, on(60)), (150.0, off(60))]);
     }
 
     #[test]

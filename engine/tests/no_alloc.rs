@@ -266,3 +266,93 @@ fn note_patterns_and_count_in_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.05, "pattern should be audible, peak {peak}");
 }
+
+/// Multiple patterns per track: switching the current pattern (drums and a
+/// synth with sounding notes), copying into the playing pattern, clearing,
+/// editing the current pattern and re-adding tracks, all while playing with
+/// the counter ARMED.
+#[test]
+fn pattern_switches_and_copies_do_not_allocate() {
+    let mut e = Engine::new(48000.0);
+    let p = e.sample_alloc(0, 4800, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 4800) }
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, x)| *x = ((i as f32) * 0.05).sin());
+    assert_eq!(e.sample_ready(0), 0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let (d, s) = (0.0, 1.0); // drum slot, synth slot
+    let ok = |code: i32| assert_eq!(code, OK);
+    let max_notes = daw_engine::MAX_NOTES as f64;
+    let addr = |idx: f64| s * max_notes + idx;
+    let pv = |pitch: f64, vel: f64| pitch * 128.0 + vel;
+
+    arm();
+
+    ok(e.command(OP_ADD_DRUM_TRACK, d, 0., 0., 0.));
+    ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+    for row in 0..4u32 {
+        ok(e.command(OP_SET_ROW_SAMPLE, d, row as f64, 0., 0.));
+    }
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, s, pk(fm, fp), pk(tm, tp), 0.));
+    }
+    // Patterns 0..4 with different contents and lengths.
+    for pat in 0..4u32 {
+        ok(e.command(OP_SET_CURRENT_PATTERN, d, pat as f64, 0., 0.));
+        ok(e.command(OP_SET_CURRENT_PATTERN, s, pat as f64, 0., 0.));
+        ok(e.command(OP_SET_STEP_COUNT, d, [16., 32., 64., 16.][pat as usize], 0., 0.));
+        ok(e.command(OP_SET_SWING, d, 0.2 * pat as f64, 0., 0.));
+        for step in (pat..32).step_by(3) {
+            ok(e.command(OP_SET_STEP, d, (step % 4) as f64, step as f64, 100.));
+        }
+        ok(e.command(OP_SET_PATTERN_BARS, s, (pat + 1) as f64, 0., 0.));
+        for i in 0..64u32 {
+            let start = (i * 240 * (pat + 1)) as f64;
+            ok(e.command(OP_NOTE_SET, addr(i as f64), pv(40.0 + ((i + pat) % 36) as f64, 100.), start, 900.));
+        }
+    }
+    ok(e.command(OP_SET_TEMPO, 170., 0., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    let mut peak = 0.0f64;
+    for b in 0..1200u32 {
+        match b {
+            40 => ok(e.command(OP_SET_CURRENT_PATTERN, s, 1., 0., 0.)),
+            41 => ok(e.command(OP_SET_CURRENT_PATTERN, d, 1., 0., 0.)),
+            90 => ok(e.command(OP_SET_SWING, d, 0.7, 0., 0.)), // latches on the playing pattern
+            100 => ok(e.command(OP_COPY_PATTERN, s, 2., 1., 0.)), // into the sounding pattern
+            101 => ok(e.command(OP_COPY_PATTERN, d, 2., 1., 0.)),
+            150 => ok(e.command(OP_SET_CURRENT_PATTERN, s, 3., 0., 0.)),
+            151 => ok(e.command(OP_SET_CURRENT_PATTERN, d, 2., 0., 0.)),
+            152 => ok(e.command(OP_SET_CURRENT_PATTERN, d, 2., 0., 0.)), // same: no-op
+            200 => ok(e.command(OP_COPY_PATTERN, s, 3., 9., 0.)),
+            201 => ok(e.command(OP_COPY_PATTERN, d, 0., 15., 0.)),
+            202 => ok(e.command(OP_COPY_PATTERN, d, 15., 15., 0.)),
+            250 => ok(e.command(OP_NOTE_SET, addr(5.), pv(70., 90.), 100., 2000.)),
+            260 => ok(e.command(OP_SET_STEP, d, 0., 3., 127.)),
+            300 => ok(e.command(OP_CLEAR_PATTERN_DATA, s, 3., 0., 0.)), // the playing one
+            301 => ok(e.command(OP_CLEAR_PATTERN_DATA, d, 2., 0., 0.)),
+            302 => ok(e.command(OP_CLEAR_PATTERN_DATA, s, 0., 0., 0.)),
+            350 => ok(e.command(OP_SET_CURRENT_PATTERN, s, 9., 0., 0.)),
+            351 => ok(e.command(OP_SET_CURRENT_PATTERN, d, 15., 0., 0.)),
+            600 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            610 => ok(e.command(OP_SET_CURRENT_PATTERN, s, 1., 0., 0.)),
+            611 => ok(e.command(OP_PLAY, 3840., 0., 0., 0.)),
+            900 => ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.)), // resets all 16 patterns
+            901 => ok(e.command(OP_ADD_DRUM_TRACK, d, 0., 0., 0.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        if b < 600 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "pattern switching / copying allocated");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(peak > 0.05, "patterns should be audible, peak {peak}");
+}

@@ -43,6 +43,9 @@ pub const BAR_TICKS: f64 = 3840.0;
 pub const MAX_NOTES: usize = 1024;
 /// Longest synth pattern, in bars (lengths are 1..=16; a new track gets 4).
 pub const MAX_PATTERN_BARS: usize = 16;
+/// Patterns per track (drum and synth alike), all preallocated. Pattern 0
+/// always exists and is the current one of a new track.
+pub const MAX_PATTERNS: usize = 16;
 
 // Telemetry slots (indices into `Engine::telemetry()`, an `[f64; TELEMETRY_LEN]`
 // the worklet copies into the shared telemetry buffer every block). Mirrored

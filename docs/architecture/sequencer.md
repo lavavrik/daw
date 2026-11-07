@@ -6,10 +6,39 @@ Code: `engine/src/` (pattern + transport), `app/src/state/recorder.ts`,
 `app/src/audio/audioClock.ts`.
 
 ## Pattern storage and opcodes
-Each synth track owns a preallocated note table of `MAX_NOTES = 1024` entries
-(`pub const` in `lib.rs`, mirrored in TS; the parity test enforces it). All
-storage is created in `Engine::new`; no command allocates. Ticks are 960 PPQ,
-1 bar = 3840 ticks (4/4); pattern length is 1..16 bars (default 4).
+Each synth track owns `MAX_PATTERNS = 16` note patterns, each a preallocated
+note table of `MAX_NOTES = 1024` entries (`pub const`s in `lib.rs`, mirrored
+in TS; the parity test enforces them). All storage is created in
+`Engine::new`; no command allocates. Ticks are 960 PPQ, 1 bar = 3840 ticks
+(4/4); pattern length is 1..16 bars (default 4).
+
+Memory: a note pattern is ~12.3 KB, so 32 tracks x 16 patterns ~6.3 MB (drum
+patterns add ~0.6 MB). `Engine::new` holds ~152 MB of heap in all (128 MB
+sample arena, ~18 MB racks, the patterns), inside the 256 MB initial WASM
+memory.
+
+### Current pattern
+Every drum and synth track has a *current* pattern (0 for a new track). In
+Pattern mode it is the one that loops from tick 0, and the step / swing /
+step-count / note / bars opcodes edit it. The UI selects it before editing.
+
+| Op | # | Fields |
+|---|---|---|
+| `OP_SET_CURRENT_PATTERN` | 32 | `a = slot`, `b` = pattern 0..15 |
+| `OP_COPY_PATTERN` | 33 | `a = slot`, `b = from`, `c = to` |
+| `OP_CLEAR_PATTERN_DATA` | 34 | `a = slot`, `b` = pattern |
+
+- They take a drum or synth slot; an empty slot, a bad slot or a pattern
+  outside 0..15 is `ERR_BAD_INDEX`.
+- Switching (synth) sends `Off` for the old pattern's sounding notes; the new
+  pattern continues at `ticks mod newPeriod` (a note that started before the
+  switch point does not sound). Selecting the current pattern is a no-op.
+- Copy replaces everything in `to` (steps or notes, step count / swing or
+  bars); copying into a sounding pattern releases its notes first. `from ==
+  to` is a no-op that returns OK.
+- Clear empties the steps / notes and keeps step count, swing and bars; it
+  releases the notes if that pattern is sounding.
+- `ADD_DRUM_TRACK` / `ADD_SYNTH_TRACK` reset all 16 patterns and select 0.
 
 | Op | # | Fields |
 |---|---|---|

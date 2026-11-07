@@ -10,7 +10,7 @@
 use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
-    BAR_TICKS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
+    BAR_TICKS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
     MAX_TRACKS,
 };
 
@@ -53,6 +53,11 @@ pub const OP_NOTE_SET: u32 = 28; // a=slot*MAX_NOTES+idx b=pitch*128+vel c=start
 pub const OP_NOTE_REMOVE: u32 = 29; // a=slot*MAX_NOTES+idx
 pub const OP_NOTE_CLEAR: u32 = 30; // a=slot
 pub const OP_SET_PATTERN_BARS: u32 = 31; // a=slot b=1..16
+// Patterns: every drum/synth track holds MAX_PATTERNS patterns; step, swing,
+// step-count, note and bars edits act on the track's *current* pattern.
+pub const OP_SET_CURRENT_PATTERN: u32 = 32; // a=slot b=pattern 0..MAX_PATTERNS-1
+pub const OP_COPY_PATTERN: u32 = 33; // a=slot b=from c=to (pattern data within one track)
+pub const OP_CLEAR_PATTERN_DATA: u32 = 34; // a=slot b=pattern (steps/notes; keeps lengths and swing)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -103,6 +108,12 @@ pub enum Command {
     NoteClear { slot: usize },
     /// Pattern length, 1..=`MAX_PATTERN_BARS` bars.
     SetPatternBars { slot: usize, bars: u8 },
+    /// Make `pattern` the one the track plays and edits.
+    SetCurrentPattern { slot: usize, pattern: usize },
+    /// Copy pattern `from` over pattern `to` within one track (`from == to`: no-op).
+    CopyPattern { slot: usize, from: usize, to: usize },
+    /// Clear the steps / notes of `pattern`, keeping its length and swing.
+    ClearPatternData { slot: usize, pattern: usize },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -310,6 +321,18 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
             slot: index(a, MAX_TRACKS)?,
             bars: int_in(b, 1, MAX_PATTERN_BARS as u32)? as u8,
         },
+        // A pattern number indexes the track's pattern table: ERR_BAD_INDEX.
+        OP_SET_CURRENT_PATTERN => {
+            Command::SetCurrentPattern { slot: index(a, MAX_TRACKS)?, pattern: index(b, MAX_PATTERNS)? }
+        }
+        OP_COPY_PATTERN => Command::CopyPattern {
+            slot: index(a, MAX_TRACKS)?,
+            from: index(b, MAX_PATTERNS)?,
+            to: index(c, MAX_PATTERNS)?,
+        },
+        OP_CLEAR_PATTERN_DATA => {
+            Command::ClearPatternData { slot: index(a, MAX_TRACKS)?, pattern: index(b, MAX_PATTERNS)? }
+        }
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -459,6 +482,26 @@ mod tests {
             assert_eq!(decode(OP_SET_PATTERN_BARS, 2., bad, 0., 0.), Err(ERR_BAD_VALUE), "bars {bad}");
         }
         assert_eq!(decode(OP_SET_PATTERN_BARS, 32., 4., 0., 0.), Err(ERR_BAD_INDEX));
+    }
+    #[test]
+    fn decode_pattern_commands() {
+        assert_eq!(
+            decode(OP_SET_CURRENT_PATTERN, 31., 15., 0., 0.),
+            Ok(Command::SetCurrentPattern { slot: 31, pattern: 15 })
+        );
+        assert_eq!(decode(OP_COPY_PATTERN, 2., 0., 15., 0.), Ok(Command::CopyPattern { slot: 2, from: 0, to: 15 }));
+        assert_eq!(decode(OP_COPY_PATTERN, 2., 4., 4., 0.), Ok(Command::CopyPattern { slot: 2, from: 4, to: 4 }));
+        assert_eq!(decode(OP_CLEAR_PATTERN_DATA, 0., 7., 0., 0.), Ok(Command::ClearPatternData { slot: 0, pattern: 7 }));
+        for bad in [16., -1., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_SET_CURRENT_PATTERN, 0., bad, 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+            assert_eq!(decode(OP_CLEAR_PATTERN_DATA, 0., bad, 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+            assert_eq!(decode(OP_COPY_PATTERN, 0., bad, 0., 0.), Err(ERR_BAD_INDEX), "from {bad}");
+            assert_eq!(decode(OP_COPY_PATTERN, 0., 0., bad, 0.), Err(ERR_BAD_INDEX), "to {bad}");
+            for op in [OP_SET_CURRENT_PATTERN, OP_COPY_PATTERN, OP_CLEAR_PATTERN_DATA] {
+                let slot = if bad == 16. { 32. } else { bad };
+                assert_eq!(decode(op, slot, 0., 0., 0.), Err(ERR_BAD_INDEX), "op {op} slot {slot}");
+            }
+        }
     }
     #[test]
     fn decode_value_ranges() {

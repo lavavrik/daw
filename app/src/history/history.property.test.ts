@@ -9,7 +9,7 @@
 // Every single undo and redo (in the sequence and in the final unwind /
 // rewind) is checked too, against a shadow: the expected before/after of
 // each entry, recorded from outside the history (serialize at op
-// boundaries; entries are told apart by h.debugStacks() ids and merge
+// boundaries; entries are told apart by debugStacks(h) ids and merge
 // counts, never by the history's own snapshots). A wrong intermediate
 // before/after (one undo applying the wrong state, masked at the ends) fails.
 import { describe, expect, it } from 'vitest';
@@ -26,7 +26,7 @@ import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
 import { buildFixture } from '../project/testFixture';
 import { blankModel, run, view } from './engineModel';
-import { createHistory } from './history';
+import { createHistory, debugStacks } from './history';
 import { diffApply } from './diffApply';
 
 /** mulberry32: a small seeded PRNG. */
@@ -68,10 +68,10 @@ async function sequence(seed: number, ops: number) {
   const ctx = () => `seed ${seed}: ${log.join(', ')}`;
   /** Expected states per entry id. */
   const shadow = new Map<number, { before: ProjectJson; after: ProjectJson }>();
-  let seen = h.debugStacks();
+  let seen = debugStacks(h);
   /** After an op that may edit (`pre`: the state before it): new entries and merges. */
   const track = (pre: ProjectJson) => {
-    const now = h.debugStacks();
+    const now = debugStacks(h);
     const post = serialize(p);
     const merges = new Map(seen.undo);
     for (const [id, n] of now.undo) {
@@ -83,9 +83,9 @@ async function sequence(seed: number, ops: number) {
   /** One undo or redo, checked against the shadow. */
   const step = (dir: 'undo' | 'redo'): boolean => {
     const pre = serialize(p);
-    const was = h.debugStacks();
+    const was = debugStacks(h);
     const ok = dir === 'undo' ? h.undo() : h.redo();
-    const now = h.debugStacks();
+    const now = debugStacks(h);
     seen = now;
     expect(m.errors, ctx()).toEqual([]);
     if (!ok) return false;

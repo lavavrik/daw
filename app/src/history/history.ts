@@ -100,12 +100,24 @@ export interface History {
   rebase(fn: (snap: ProjectJson) => ProjectJson): void;
   /** True while undo/redo applies a snapshot (actions then just run). */
   readonly applying: boolean;
-  /**
-   * Test-only view of the stacks (oldest first): each entry's id (unique for
-   * this history) and how many edits merged into it. No snapshots: the
-   * property test keeps its own expected states per entry.
-   */
-  debugStacks(): { undo: [id: number, merges: number][]; redo: [id: number, merges: number][] };
+}
+
+/** debugStacks' result: per stack (oldest first), each entry's id and merge count. */
+export type DebugStacks = { undo: [id: number, merges: number][]; redo: [id: number, merges: number][] };
+
+/** Each history's stack view, for debugStacks (not part of History). */
+const stackViews = new WeakMap<History, () => DebugStacks>();
+
+/**
+ * Test-only view of `h`'s stacks (oldest first): each entry's id (unique for
+ * this history) and how many edits merged into it. No snapshots: the
+ * property test keeps its own expected states per entry. Kept off the
+ * History interface, so app code cannot come to depend on it.
+ */
+export function debugStacks(h: History): DebugStacks {
+  const view = stackViews.get(h);
+  if (!view) throw new Error('debugStacks: not a createHistory history');
+  return view();
 }
 
 interface Entry {
@@ -116,7 +128,7 @@ interface Entry {
   coalesce?: string;
   /** Keyed merges since `after` was taken (only ever the newest entry): settle() retakes it. */
   stale?: boolean;
-  /** debugStacks: identity and merge count. */
+  /** debugStacks (test-only): identity and merge count. */
   id: number;
   merges: number;
 }
@@ -263,7 +275,7 @@ export function createHistory(o: HistoryOptions): History {
     return true;
   }
 
-  return {
+  const h: History = {
     transact(label, fn, opts) {
       if (applying) return fn();
       if (open) {
@@ -329,10 +341,6 @@ export function createHistory(o: HistoryOptions): History {
       if (open?.before) open.before = map(open.before);
       if (lastSnap) lastSnap = map(lastSnap);
     },
-    debugStacks: () => ({
-      undo: undo.map((e) => [e.id, e.merges]),
-      redo: redo.map((e) => [e.id, e.merges]),
-    }),
     get canUndo() {
       return undo.length > 0;
     },
@@ -349,4 +357,9 @@ export function createHistory(o: HistoryOptions): History {
       return applying;
     },
   };
+  stackViews.set(h, () => ({
+    undo: undo.map((e) => [e.id, e.merges]),
+    redo: redo.map((e) => [e.id, e.merges]),
+  }));
+  return h;
 }

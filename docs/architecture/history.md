@@ -128,8 +128,9 @@ entry kept two whole-project snapshots and two fingerprint strings.
   to a fresh load at both ends. Every single undo and redo is also checked
   against a shadow of each entry's expected before/after, recorded from
   outside (serialize at op boundaries; entries identified through the
-  test-only `debugStacks()` ids and merge counts), and half the passes are
-  followed by a pattern switch, so a wrong intermediate snapshot fails.
+  ids and merge counts of the test-only `debugStacks(h)`, a module export
+  kept off the History interface), and half the passes are followed by a
+  pattern switch, so a wrong intermediate snapshot fails.
 
 Measured (`MEASURE=1 npx vitest run src/history/history.measure.test.ts
 --pool=forks --execArgv=--expose-gc`, from `app/`): 16 drum + 16 synth

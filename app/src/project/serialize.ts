@@ -140,7 +140,12 @@ export function serialize(p: Project): ProjectJson {
  * selection (selecting a track is not an edit).
  */
 export function projectFingerprint(p: Project): string {
-  return JSON.stringify({ ...serialize(p), selection: null });
+  return fingerprintOf(serialize(p));
+}
+
+/** projectFingerprint of an already serialized project (no second serialize). */
+export function fingerprintOf(json: ProjectJson): string {
+  return JSON.stringify({ ...json, selection: null });
 }
 
 /** The sample files a save writes: project path -> original bytes. */

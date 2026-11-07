@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { banners } from '../state/banners.svelte';
 import { Project } from '../state/project.svelte';
 import { createProjectSession } from './session';
+import { markEdited } from '../state/edits';
 import { projectFiles, projectFingerprint, serialize } from './serialize';
 import { FakeDir, asDir } from './fakeDir';
 import { buildFixture, fakeDecoder, fakeEngine } from './testFixture';
@@ -93,7 +94,7 @@ describe('project session', () => {
     const calls: string[] = [];
     const dir = new FakeDir('Here');
     const s = createProjectSession(p, engine(), {
-      beforeLoad: () => calls.push('before'), afterLoad: () => calls.push('after'), onSaved: () => calls.push('saved'),
+      beforeLoad: () => calls.push('before'), afterLoad: () => calls.push('after'), onSaved: () => void calls.push('saved'),
       pick: async () => asDir(dir),
     });
     const warnings = await s.restore(serialize(src), new Map(projectFiles(src, serialize(src))));
@@ -109,4 +110,27 @@ describe('project session', () => {
     expect(calls).toEqual(['before', 'after', 'saved']);
     expect(p.dirty).toBe(false);
   });
+
+  it('an edit during a slow save stays unsaved; onSaved gets the version and time from before serialize (fix 3)', async () => {
+    const { p } = buildFixture();
+    markEdited(p);
+    const dir = new FakeDir('Song');
+    const got: { version: number; t: number }[] = [];
+    const s = createProjectSession(p, engine(), { onSaved: (info) => got.push(info) });
+    const v0 = p.version;
+    const t0 = Date.now();
+    const saving = s.saveTo(asDir(dir)); // serialized synchronously, written later
+    const savedPrint = projectFingerprint(p);
+    p.tempo = 97; // an edit while the files are still being written
+    markEdited(p);
+    await saving;
+    expect(got).toHaveLength(1);
+    expect(got[0].version).toBe(v0);
+    expect(got[0].t).toBeGreaterThanOrEqual(t0);
+    expect(got[0].t).toBeLessThanOrEqual(Date.now());
+    expect(p.savedFingerprint).toBe(savedPrint); // what was written, not the edited state
+    expect(p.dirty).toBe(true);
+    expect(projectFingerprint(p)).not.toBe(p.savedFingerprint);
+  });
 });
+

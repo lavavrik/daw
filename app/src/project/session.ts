@@ -12,7 +12,7 @@ import { Project } from '../state/project.svelte';
 import { folderInUse, pickProjectFolder, readProject, writeProject } from './fsFolder';
 import { loadProject } from './load';
 import type { LoadEngine, SampleDecoder } from './load';
-import { projectFiles, projectFingerprint, serialize } from './serialize';
+import { fingerprintOf, projectFiles, projectFingerprint, serialize } from './serialize';
 
 export interface SessionEngine extends LoadEngine {
   readonly context: SampleDecoder;
@@ -45,10 +45,19 @@ export function warningsText(title: string, warnings: string[], n = 6): string {
 /** savedFingerprint of a project that has no saved copy (a restored autosave). */
 export const NEVER_SAVED = '';
 
-/** "Unsaved changes" are measured from now. */
-export function markSaved(p: Project) {
-  p.savedFingerprint = projectFingerprint(p);
+/**
+ * "Unsaved changes" are measured from now, or from `fingerprint` (the state a
+ * save wrote, which edits made during the write no longer match).
+ */
+export function markSaved(p: Project, fingerprint = projectFingerprint(p)) {
+  p.savedFingerprint = fingerprint;
   p.dirty = false;
+}
+
+/** What a finished save wrote: the edit count and time when it was serialized. */
+export interface SavedInfo {
+  version: number;
+  t: number;
 }
 
 export interface SessionOptions {
@@ -60,8 +69,12 @@ export interface SessionOptions {
   beforeLoad?: () => void;
   /** Runs after every New / Open that got that far, success or not (recorder resync). */
   afterLoad?: () => void;
-  /** After every successful save (App: records the explicit-save time, drops a pending autosave). */
-  onSaved?: () => void;
+  /**
+   * After every successful save, with the version / time of its snapshot
+   * (App: records the explicit-save time; drops a pending autosave only if
+   * no edit landed during the write).
+   */
+  onSaved?: (info: SavedInfo) => void;
   /** The folder picker (tests pass a fake). */
   pick?: () => Promise<FileSystemDirectoryHandle | null>;
 }
@@ -80,11 +93,14 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
   };
 
   async function saveTo(dir: FileSystemDirectoryHandle) {
+    // The snapshot: edits may land while the files are written (async).
+    const info: SavedInfo = { version: p.version, t: Date.now() };
     const json = serialize(p);
     await writeProject(dir, json, projectFiles(p, json));
     p.folder = dir;
-    markSaved(p);
-    opts.onSaved?.();
+    markSaved(p, fingerprintOf(json));
+    if (p.version !== info.version) p.dirty = true; // those edits are not in the folder
+    opts.onSaved?.(info);
   }
 
   /** loadProject with the hooks; afterLoad runs whenever beforeLoad did. */

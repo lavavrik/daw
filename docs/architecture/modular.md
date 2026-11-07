@@ -95,8 +95,10 @@ Modules are enum-dispatched (no trait objects, no allocation):
 
 Keyboard and MIDI notes go to the *input track*: the selected synth track,
 else the last-selected one (selecting drums keeps the previous synth).
-`SET_INPUT_TRACK` sends AllOff, pedal-up and bend 0 to the old track, then
-replays the cached bend, mod and sustain to the new one. Removing the input
+`SET_INPUT_TRACK` sends pedal-up, an Off per live-held pitch (keys down or
+pedal-held) and bend 0 to the old track, never AllOff, so its sequenced notes
+keep playing (a pitch held both live and by the pattern ends on the pattern's
+Off); then it replays the cached bend, mod and sustain to the new one. Removing the input
 track unsets it.
 
 ## Performance

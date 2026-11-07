@@ -14,6 +14,9 @@
 //!   the period, so it never overlaps its own next On.
 //! * Ticks below 0 (the count-in) never produce events; a window crossing 0
 //!   yields only the events at ticks `>= 0`.
+//! * The rack applies notes at `RACK_BLOCK` (32-frame) boundaries, so a note
+//!   shorter than one sub-block (about 1.3 ticks at 120 BPM, 48 kHz) may have
+//!   its On and Off land together and never open the gate.
 //!
 //! # Sounding set (per pitch)
 //! The pattern tracks which pitches it has switched on (a 128-bit set) and

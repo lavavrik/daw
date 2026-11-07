@@ -14,8 +14,12 @@
 //! `NOTE_ON`/`NOTE_OFF`/`PITCH_BEND`/`MOD_WHEEL`/`SUSTAIN` go to the input
 //! track's rack (`SET_INPUT_TRACK`). With no input track, or one that is not a
 //! synth track, they are ignored (and still return `OK`). Switching the input
-//! track sends the previous one `AllOff`, pedal up and bend 0, so no note is
-//! left hanging. The engine caches the last bend / mod wheel / sustain it
+//! track sends the previous one pedal up, an `Off` for every pitch held live
+//! there (keys down, and released keys the pedal still holds) and bend 0, so
+//! no live note is left hanging. It never sends `AllOff`: the old track's
+//! *sequenced* notes keep sounding until their own Offs. A pitch held both
+//! live and by the old track's pattern is skipped on the switch (they share
+//! one MIDI In voice); the pattern's own Off (or Stop) ends it. The engine caches the last bend / mod wheel / sustain it
 //! received and replays them to the new input track, so controller state
 //! follows the switch (e.g. a held pedal keeps holding). When the input slot
 //! stops being a synth track (`REMOVE_TRACK`, or `ADD_DRUM_TRACK` over it) the
@@ -89,6 +93,10 @@ pub struct Engine {
     bend: f32,
     mod_wheel: f32,
     sustain: bool,
+    /// Pitches whose live key is down on the input track (bit = pitch).
+    live_down: u128,
+    /// Pitches whose live key is up but held by the pedal on the input track.
+    live_sustained: u128,
 }
 
 impl Engine {
@@ -110,6 +118,8 @@ impl Engine {
             bend: 0.0,
             mod_wheel: 0.0,
             sustain: false,
+            live_down: 0,
+            live_sustained: 0,
         }
     }
 
@@ -159,6 +169,56 @@ impl Engine {
         self.synths.rack_mut(slot).ok_or(protocol::ERR_BAD_INDEX)
     }
 
+    /// Is there an input track that is a synth track (live events land)?
+    fn input_live(&self) -> bool {
+        self.input.is_some_and(|slot| self.kind(slot) == SlotKind::Synth)
+    }
+
+    /// Track live key state for the input track (only when events land).
+    fn track_live(&mut self, ev: NoteEvent) {
+        if !self.input_live() {
+            return;
+        }
+        match ev {
+            NoteEvent::On { note, .. } => {
+                let b = 1u128 << (note & 127);
+                self.live_down |= b;
+                self.live_sustained &= !b;
+            }
+            NoteEvent::Off { note } => {
+                let b = 1u128 << (note & 127);
+                if self.live_down & b != 0 && self.sustain {
+                    self.live_sustained |= b;
+                }
+                self.live_down &= !b;
+            }
+            NoteEvent::Sustain(false) => self.live_sustained = 0,
+            _ => {}
+        }
+    }
+
+    /// Release the live notes of the input track: pedal up, then an `Off` per
+    /// live-held pitch the track's pattern is not also sounding (that one ends
+    /// on the pattern's Off), then bend 0. Never `AllOff` (see module docs).
+    fn release_live(&mut self) {
+        let held = self.live_down | self.live_sustained;
+        self.live_down = 0;
+        self.live_sustained = 0;
+        let Some(slot) = self.input else { return };
+        if self.kind(slot) != SlotKind::Synth {
+            return;
+        }
+        let seq = self.synths.pattern(slot).map_or(0, |p| p.sounding());
+        self.synths.note(slot, NoteEvent::Sustain(false));
+        let mut mask = held & !seq;
+        while mask != 0 {
+            let pitch = mask.trailing_zeros() as u8;
+            self.synths.note(slot, NoteEvent::Off { note: pitch });
+            mask &= mask - 1;
+        }
+        self.synths.note(slot, NoteEvent::Bend(0.0));
+    }
+
     /// Send a live event to the input track (ignored without one).
     fn live(&mut self, ev: NoteEvent) {
         if let Some(slot) = self.input {
@@ -178,6 +238,8 @@ impl Engine {
                 self.synths.remove_track(slot);
                 if self.input == Some(slot) {
                     self.input = None;
+                    self.live_down = 0;
+                    self.live_sustained = 0;
                 }
             }
             SlotKind::Empty => {}
@@ -205,9 +267,14 @@ impl Engine {
         let rack_code = |code: i32| if code == protocol::OK { Ok(()) } else { Err(code) };
         match cmd {
             // MIDI convention: NoteOn with velocity 0 is a NoteOff.
-            Command::NoteOn { note, velocity: 0 } => self.live(NoteEvent::Off { note }),
-            Command::NoteOn { note, velocity } => self.live(NoteEvent::On { note, vel: velocity }),
-            Command::NoteOff { note } => self.live(NoteEvent::Off { note }),
+            Command::NoteOn { note, velocity: 0 } | Command::NoteOff { note } => {
+                self.track_live(NoteEvent::Off { note });
+                self.live(NoteEvent::Off { note })
+            }
+            Command::NoteOn { note, velocity } => {
+                self.track_live(NoteEvent::On { note, vel: velocity });
+                self.live(NoteEvent::On { note, vel: velocity })
+            }
             Command::PitchBend { value } => {
                 self.bend = value;
                 self.live(NoteEvent::Bend(value))
@@ -218,15 +285,14 @@ impl Engine {
             }
             Command::Sustain { on } => {
                 self.sustain = on;
+                self.track_live(NoteEvent::Sustain(on));
                 self.live(NoteEvent::Sustain(on))
             }
-            // Old track: everything off, pedal up, bend centred. New track:
-            // the cached controller state.
+            // Old track: pedal up, live notes off (sequenced ones keep
+            // playing), bend centred. New track: the cached controller state.
             Command::SetInputTrack { slot } => {
                 if slot != self.input {
-                    self.live(NoteEvent::AllOff);
-                    self.live(NoteEvent::Sustain(false));
-                    self.live(NoteEvent::Bend(0.0));
+                    self.release_live();
                     self.input = slot;
                     self.live(NoteEvent::Bend(self.bend));
                     self.live(NoteEvent::Mod(self.mod_wheel));
@@ -1689,6 +1755,37 @@ mod tests {
             let b = k * 24000;
             assert!(s[b + 6000] > 0.5 && s[b + 18000] < -0.5, "beat {k}: {} {}", s[b + 6000], s[b + 18000]);
         }
+    }
+
+    #[test]
+    fn input_switch_keeps_sequenced_notes_sounding() {
+        // Track 3: pattern note 60 for a whole bar (96000 samples at 120),
+        // plus live keys 72 and 60 (60 shares the sequenced voice). Gate
+        // patches: 0.2 per open gate.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 3.0, 0.25);
+        gate_patch(&mut e, 4.0, 0.25);
+        e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0);
+        set_note(&mut e, 3, 0, 60, 0, 3840);
+        play(&mut e, 0.0);
+        render(&mut e, 4864);
+        e.command(OP_NOTE_ON, 72.0, 127.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 60.0, 127.0, 0.0, 0.0);
+        let s = render(&mut e, 4864);
+        assert!((s[4863] - 0.4).abs() < 1e-3, "60 (seq + live) and 72: {}", s[4863]);
+        // Switch: the live 72 releases; 60 keeps sounding (sequenced).
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 4.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 128 * 600); // to sample 86528
+        assert!(s[32..].iter().all(|&x| (x - 0.2).abs() < 1e-3), "sequenced note cut: {}", s[s.len() - 1]);
+        // The pattern's own Off at 96000 ends it (the live 60 shared that voice).
+        let s = render(&mut e, 128 * 100); // 86528 .. 99328
+        let end = 96000 - 86528;
+        assert!((s[end - 1] - 0.2).abs() < 1e-3);
+        assert!(s[end + 32..].iter().all(|&x| x == 0.0), "released by the pattern's Off");
+        // Keys released after the switch go to track 4: harmless.
+        assert_eq!(e.command(OP_NOTE_OFF, 72.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0), OK);
     }
 
     #[test]

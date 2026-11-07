@@ -1,15 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { Op } from '../audio/protocol';
-import { STARTER_PATCHES, trackPatch, validatePatch } from './patches';
+import { HOUSE_GROUPS, HOUSE_PHRASES } from './housePatches';
+import { BUILTIN_GROUPS, BUILTIN_PATCHES, isBuiltinName, STARTER_PATCHES, trackPatch, validatePatch } from './patches';
 import { Project } from './project.svelte';
 import { addSynthTrack, loadPatch } from './rack-actions';
 
-describe('starter patches', () => {
-  it('has the five patches in order', () => {
+describe('built-in patches', () => {
+  it('has the five starter patches in order', () => {
     expect(STARTER_PATCHES.map((p) => p.name)).toEqual(['Deep Bass', 'Chord Stab', 'Pad', 'Lead', 'Pluck']);
   });
-  for (const patch of STARTER_PATCHES) {
+  it('BUILTIN_GROUPS starts with Starter in the old order', () => {
+    expect(BUILTIN_GROUPS[0].label).toBe('Starter');
+    expect(BUILTIN_GROUPS[0].patches).toBe(STARTER_PATCHES);
+    expect(BUILTIN_GROUPS.map((g) => g.label)).toEqual([
+      'Starter', 'House · Leads & Stabs', 'House · Keys', 'House · Bass', 'House · Pads',
+    ]);
+    expect(BUILTIN_PATCHES).toEqual(BUILTIN_GROUPS.flatMap((g) => g.patches));
+    expect(BUILTIN_GROUPS.slice(1)).toEqual(HOUSE_GROUPS);
+  });
+  it('the House set has the Sax first, and every house patch a phrase', () => {
+    expect(HOUSE_GROUPS[0].patches[0]?.name).toBe('Sax');
+    for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead)$/);
+  });
+  it('names unique case-insensitively, no trademarks', () => {
+    const names = BUILTIN_PATCHES.map((p) => p.name.trim().toLowerCase());
+    expect(new Set(names).size).toBe(names.length);
+    for (const n of BUILTIN_PATCHES.map((p) => p.name)) expect(n, n).not.toMatch(/\b(M1|Rhodes|303|TB|Roland|Korg)\b/i);
+  });
+  it('isBuiltinName matches case-insensitively', () => {
+    expect(isBuiltinName('Deep Bass')).toBe(true);
+    expect(isBuiltinName('  deep BASS ')).toBe(true);
+    expect(isBuiltinName('sax')).toBe(true);
+    expect(isBuiltinName('SAX ')).toBe(true);
+    expect(isBuiltinName('Saxophone')).toBe(false);
+    expect(isBuiltinName('')).toBe(false);
+  });
+  for (const patch of BUILTIN_PATCHES) {
     describe(patch.name, () => {
       const byIdx = new Map(patch.modules.map((m) => [m.idx, m]));
       it('has unique idx and known module ids', () => {
@@ -40,6 +67,10 @@ describe('starter patches', () => {
           seen.add(key);
         }
       });
+      it('has at most 24 modules and no Delay or Reverb (mixer sends instead)', () => {
+        expect(patch.modules.length).toBeLessThanOrEqual(24);
+        expect(patch.modules.filter((m) => m.id === 'delay' || m.id === 'reverb')).toEqual([]);
+      });
       it('has exactly one Out and one MIDI In; pitch/gate wired', () => {
         expect(patch.modules.filter((m) => m.id === 'out')).toHaveLength(1);
         expect(patch.modules.filter((m) => m.id === 'midi_in')).toHaveLength(1);
@@ -56,11 +87,13 @@ describe('starter patches', () => {
 });
 
 describe('validatePatch', () => {
-  it('a starter patch is valid as is', () => {
-    for (const patch of STARTER_PATCHES) {
+  it('validatePatch keeps every built-in as is', () => {
+    for (const patch of BUILTIN_PATCHES) {
       const r = validatePatch(JSON.parse(JSON.stringify(patch)));
-      expect(r.warnings).toEqual([]);
-      expect(r.patch.modules.map((m) => m.idx)).toEqual(patch.modules.map((m) => m.idx));
+      expect(r.warnings, patch.name).toEqual([]);
+      expect(r.patch.modules.map((m) => [m.idx, m.id, m.params ?? {}])).toEqual(
+        patch.modules.map((m) => [m.idx, m.id, m.params ?? {}]),
+      );
       expect(r.patch.cables).toEqual(patch.cables);
     }
   });

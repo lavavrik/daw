@@ -3,6 +3,8 @@
 //! the harness's own threads don't pollute each other's counts) wraps the
 //! system allocator.
 
+mod common;
+
 use daw_engine::protocol::*;
 use daw_engine::Engine;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -874,4 +876,51 @@ fn automation_does_not_allocate() {
     assert_eq!(disarm(), 0, "automation allocated");
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.01, "the tracks should be audible, peak {peak}");
+}
+
+/// The House patches (plan 11): every patch's load replayed over the previous
+/// one on a sounding track, its phrase played and released, all ARMED. Two
+/// passes, so every patch (even a single one) also replaces itself.
+#[test]
+fn house_patches_do_not_allocate() {
+    let patches = common::house_patches(); // parsed before arming
+    assert!(!patches.is_empty());
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32, what: &str| assert_eq!(code, OK, "{what}");
+    let mut render = |e: &mut Engine, blocks: usize| {
+        let mut peak = 0.0f32;
+        for _ in 0..blocks {
+            e.process(&mut l, &mut r);
+            peak = l.iter().chain(r.iter()).fold(peak, |m, x| m.max(x.abs()));
+        }
+        assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+        peak
+    };
+
+    arm();
+
+    for p in patches.iter().chain(patches.iter()) {
+        // A note from the previous patch is sounding while this one loads.
+        ok(e.command(OP_NOTE_ON, 67., 100., 0., 0.), "held note");
+        render(&mut e, 20);
+        for c in &p.cmds {
+            ok(e.command(c[0] as u32, c[1], c[2], c[3], c[4]), &p.name);
+        }
+        ok(e.command(OP_NOTE_OFF, 67., 0., 0., 0.), "held note off");
+        let mut peak = 0.0f32;
+        for notes in p.phrase.steps() {
+            for &n in *notes {
+                ok(e.command(OP_NOTE_ON, n as f64, 100., 0., 0.), &p.name);
+            }
+            peak = peak.max(render(&mut e, 100));
+            for &n in *notes {
+                ok(e.command(OP_NOTE_OFF, n as f64, 0., 0., 0.), &p.name);
+            }
+        }
+        render(&mut e, 100); // the release
+        assert!(peak > 0.01, "{} should be audible, peak {peak}", p.name);
+    }
+
+    assert_eq!(disarm(), 0, "house patch loads and playback allocated");
 }

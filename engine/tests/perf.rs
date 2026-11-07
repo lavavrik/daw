@@ -45,6 +45,13 @@
 //! is one synth track running MIDI In → Osc → Filter → Chorus → Delay →
 //! Reverb → Out with 8 voices held: the per-voice part (Osc, Filter) runs 8
 //! channels, the effects run once on the summed stereo signal.
+//!
+//! The House patches ([`house_patches_render_under_budget`], plan 11) each
+//! run alone through the whole [`Engine`] (commands replayed from
+//! `fixtures/house_patches.txt`): poly patches with an 8-note chord held, mono
+//! ones with one note, 5 s each, under one track's 6.25 % share.
+
+mod common;
 
 use daw_engine::arrangement::Timeline;
 use daw_engine::automation::AutoFrame;
@@ -525,4 +532,41 @@ fn fx_chain_track_renders_under_budget() {
     assert!(peak > 0.0 && peak.is_finite(), "patch must sound (peak {peak})");
     // One track's share of the 25% four-track budget.
     assert!(ratio < 0.0625, "over budget: {:.2}% of real time", ratio * 100.0);
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn house_patches_render_under_budget() {
+    let patches = common::house_patches();
+    assert!(!patches.is_empty());
+    let mut over = Vec::new();
+    for p in &patches {
+        let mut e = Engine::new(SR);
+        for c in &p.cmds {
+            assert_eq!(e.command(c[0] as u32, c[1], c[2], c[3], c[4]), OK, "{}: {c:?}", p.name);
+        }
+        let notes: &[u8] = if p.phrase.mono() { &[60] } else { &[48, 52, 55, 59, 62, 65, 69, 72] };
+        for &n in notes {
+            assert_eq!(e.command(OP_NOTE_ON, n as f64, 100., 0., 0.), OK);
+        }
+        let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+        for _ in 0..100 {
+            e.process(&mut l, &mut r);
+        }
+        let blocks = 5 * SR as usize / BLOCK;
+        let mut peak = 0.0f32;
+        let t0 = Instant::now();
+        for _ in 0..blocks {
+            e.process(&mut l, &mut r);
+            peak = peak.max(l[0].abs());
+        }
+        let ratio = t0.elapsed().as_secs_f64() / ((blocks * BLOCK) as f64 / SR as f64);
+        println!("perf (house): {} ({} voices held): {:.2}% of real time", p.name, notes.len(), ratio * 100.0);
+        assert!(peak > 0.0 && peak.is_finite(), "{} must sound (peak {peak})", p.name);
+        if ratio >= 0.0625 {
+            over.push(format!("{} {:.2}%", p.name, ratio * 100.0));
+        }
+    }
+    // One track's share of the 25% four-track budget.
+    assert!(over.is_empty(), "over budget: {over:?}");
 }

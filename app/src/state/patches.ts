@@ -1,5 +1,6 @@
-// Starter patches. Params are given by catalog name; anything omitted uses the
-// catalog default. Choice params are choice indices (osc wave: 0 saw, 1 square,
+// Built-in patches: the starter patches (here) and the House set
+// (housePatches.ts), listed in the patch menu by BUILTIN_GROUPS. Params are
+// given by catalog name; anything omitted uses the catalog default. Choice params are choice indices (osc wave: 0 saw, 1 square,
 // 2 tri, 3 sine; filter mode: 0 LP24, 1 LP12; midi_in mode: 0 poly, 1 mono;
 // lfo wave: 0 sine, 1 tri). patches.test.ts checks every value is in range.
 // In every patch MIDI In `pitch` feeds each Osc and `gate` feeds each ADSR.
@@ -9,10 +10,23 @@
 // ~0.9 before the master clamp. engine/tests/starter_patches.rs measures this
 // from engine/tests/fixtures/starter_patches.txt; after editing a patch,
 // regenerate that fixture (see patches.fixture.test.ts) and rerun cargo test.
+//
+// Level policy (plan 11). The starter patches keep the quiet poly levels
+// above (they are the default track patch and the test fixtures, so they never
+// change). The House set is levelled instead: each house patch, played its
+// typical phrase at velocity 100, reads −15 dBFS ± 3 dB momentary loudness
+// (max RMS of (L+R)/2 over 400 ms windows, unweighted, pre-limiter at the
+// default master gain), and its pre-limiter peak at velocity 127 stays < 0.9.
+// Unweighted RMS makes a sub bass sound quieter on small speakers at equal
+// RMS; that is accepted. engine/tests/house_patches.rs measures both.
+//
+// The group (menu section) is not part of a Patch, so saved files never
+// carry it; a built-in name can't be used for Save patch (isBuiltinName).
 
 import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef } from '../audio/catalog';
 import type { ModuleDef } from '../audio/catalog';
 import { MAX_MODULES } from '../audio/protocol';
+import { HOUSE_GROUPS } from './housePatches';
 import type { SynthTrack } from './project.svelte';
 
 /**
@@ -284,3 +298,18 @@ export const STARTER_PATCHES: Patch[] = [
     ],
   },
 ];
+
+/** The patch menu's built-in sections, in order: Starter, then the House groups. */
+export const BUILTIN_GROUPS: { label: string; patches: Patch[] }[] = [
+  { label: 'Starter', patches: STARTER_PATCHES },
+  ...HOUSE_GROUPS,
+];
+
+/** Every built-in patch, flat, in menu order. */
+export const BUILTIN_PATCHES: Patch[] = BUILTIN_GROUPS.flatMap((g) => g.patches);
+
+/** True if `name` (trimmed, any case) is a built-in patch's name: Save patch refuses those. */
+export function isBuiltinName(name: string): boolean {
+  const n = name.trim().toLowerCase();
+  return n !== '' && BUILTIN_PATCHES.some((p) => p.name.toLowerCase() === n);
+}

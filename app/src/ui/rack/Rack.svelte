@@ -53,7 +53,7 @@
   import { warningsText } from '../../project/session';
   import { banners, flashHint } from '../../state/banners.svelte';
   import { edit, markEdited } from '../../state/edits';
-  import { STARTER_PATCHES, trackPatch } from '../../state/patches';
+  import { BUILTIN_GROUPS, BUILTIN_PATCHES, isBuiltinName, trackPatch } from '../../state/patches';
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import {
@@ -355,22 +355,22 @@
     removeModule(p, engine, track.id, idx);
     edited.add(track.id);
   }
-  // ---- patches: starter + library --------------------------------------------
-  // The dropdown lists the starter patches, then the library's patches/*.json
+  // ---- patches: built-in + library -------------------------------------------
+  // The dropdown lists the built-in patches by group (Starter, then the House
+  // groups; an empty group is not shown), then the library's patches/*.json
   // (values "lib:<path>"; a library patch's name is its file name). Save
-  // patch is refused under a starter name, so a name picks one option.
+  // patch is refused under a built-in name, so a name picks one option.
   const lib = library.state;
   const libPatches = $derived(lib.source === 'folder' ? lib.patches : []);
-  const isStarter = (name: string) => STARTER_PATCHES.some((x) => x.name.toLowerCase() === name.trim().toLowerCase());
   /** The option showing the current patch (also what revert reloads). */
   const selValue = $derived(
-    patchOptionValue(track.patchName, loadedFrom.get(track.id) ?? null, STARTER_PATCHES.map((x) => x.name), libPatches),
+    patchOptionValue(track.patchName, loadedFrom.get(track.id) ?? null, BUILTIN_PATCHES.map((x) => x.name), libPatches),
   );
   /** What the last patch load dropped or clamped (validatePatch), shown inline. */
   let patchNote = $state<string | null>(null);
 
   /**
-   * Replaces the rack with a starter patch (by name) or a library patch
+   * Replaces the rack with a built-in patch (by name) or a library patch
    * ("lib:<path>": read, then validated by loadPatch like any patch from
    * outside). With unsaved edits it asks first: a stray arrow key on a
    * focused select (Windows/Linux change the value without opening it) or a
@@ -394,7 +394,7 @@
       // The file name is the patch's name (what the dropdown shows).
       if (typeof patch === 'object' && patch !== null && !Array.isArray(patch)) patch = { ...patch, name };
     } else {
-      patch = STARTER_PATCHES.find((x) => x.name === value);
+      patch = BUILTIN_PATCHES.find((x) => x.name === value);
       if (!patch) return false;
       name = value;
     }
@@ -432,7 +432,7 @@
         : 'Choose a library folder to save patches',
   );
   function openSave() {
-    saving = { name: isStarter(track.patchName) ? '' : track.patchName, error: null, exists: null, busy: false };
+    saving = { name: isBuiltinName(track.patchName) ? '' : track.patchName, error: null, exists: null, busy: false };
     void tick().then(() => document.querySelector<HTMLInputElement>('[data-testid="patch-save-name"]')?.select());
   }
   async function save(replace = false) {
@@ -441,7 +441,7 @@
     const file = patchFileName(s.name);
     if (!file) return void (s.error = 'Give the patch a name');
     const name = file.slice(0, -'.json'.length);
-    if (isStarter(name)) return void (s.error = `"${name}" is a starter patch — pick another name`);
+    if (isBuiltinName(name)) return void (s.error = `"${name}" is a built-in patch — pick another name`);
     const tid = track.id;
     const t = synthTrack(p, tid);
     if (!t) return;
@@ -602,14 +602,16 @@
     <label class="patch">
       <span>Patch</span>
       <select data-testid="patch-select" value={selValue} onchange={pickPatch} onkeydown={selectKey}>
-        {#if selValue === track.patchName && !STARTER_PATCHES.some((x) => x.name === track.patchName)}
+        {#if selValue === track.patchName && !BUILTIN_PATCHES.some((x) => x.name === track.patchName)}
           <option value={track.patchName} disabled>{track.patchName || '—'}</option>
         {/if}
-        <optgroup label="Starter">
-          {#each STARTER_PATCHES as sp (sp.name)}
-            <option value={sp.name}>{sp.name}</option>
-          {/each}
-        </optgroup>
+        {#each BUILTIN_GROUPS.filter((g) => g.patches.length) as g (g.label)}
+          <optgroup label={g.label}>
+            {#each g.patches as bp (bp.name)}
+              <option value={bp.name}>{bp.name}</option>
+            {/each}
+          </optgroup>
+        {/each}
         {#if libPatches.length}
           <optgroup label="Library">
             {#each libPatches as lp (lp.path)}

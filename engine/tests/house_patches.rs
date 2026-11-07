@@ -1,0 +1,623 @@
+//! The House patch set (plan 11): levels, clipping and release for every
+//! patch, plus the Sax's measured acceptance numbers.
+//!
+//! The patches live in TS (`app/src/state/housePatches.ts`). As with
+//! `starter_patches.rs`, the vitest `patches.fixture.test.ts` records the
+//! exact command list the UI sends for each one into
+//! `tests/fixtures/house_patches.txt` (see `common/mod.rs`), and these tests
+//! replay it through `Engine::command`, the real UI-to-engine path.
+//!
+//! # Measuring (shared by every test here)
+//! * **Pre-limiter at the default master gain.** The tests set master gain
+//!   0.1 instead of the default 0.8, so the output is exactly 1/8 of the
+//!   default pre-limiter signal and stays far below the limiter; every
+//!   [`Render`] is that output × 8.
+//! * **Timing.** The engine output is delayed by the limiter lookahead
+//!   ([`Engine::latency`]); [`run`] drops it, so sample 0 of a render is the
+//!   first note-on. Events land on 128-frame block starts (2.7 ms).
+//! * **Momentary loudness** ([`momentary_db`]): the maximum RMS of
+//!   `(L+R)/2` over 400 ms windows (100 ms hop), unweighted, in dBFS.
+//! * **Spectra**: Hann windows; [`harmonics`] evaluates single DFT bins
+//!   (Goertzel-equivalent) at k·f0, [`spectrum`] is a Welch average of
+//!   4096-point FFT frames (hop 1024). [`centroid`] is magnitude-weighted
+//!   (the usual definition), over 50 Hz–10 kHz.
+//! * **f0** ([`f0_track`]): normalised autocorrelation over 40 ms frames
+//!   (10 ms hop), the first peak within 0.9 of the best one (no octave
+//!   errors on a strong 2nd harmonic), refined by a parabola.
+
+mod common;
+
+use common::{house_patches, HousePatch, Phrase};
+use daw_engine::engine::Engine;
+use daw_engine::protocol::{
+    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_RACK_ADD_MODULE, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
+};
+use daw_engine::rack::catalog::{spec, ModuleKind};
+
+const SR: f32 = 48000.0;
+const BLOCK: usize = 128;
+/// Master gain 0.1 instead of 0.8: output × 8 is the pre-limiter signal.
+const PRE: f32 = 8.0;
+
+// ---- harness ------------------------------------------------------------------
+
+/// A mono render: `m` is `(L+R)/2` pre-limiter, `peak` the largest |L| or |R|
+/// pre-limiter. Sample 0 is the first event.
+struct Render {
+    m: Vec<f32>,
+    peak: f32,
+}
+
+impl Render {
+    fn at(&self, sec: f32) -> usize {
+        ((sec * SR) as usize).min(self.m.len())
+    }
+    /// Samples between `a` and `b` seconds.
+    fn span(&self, a: f32, b: f32) -> &[f32] {
+        &self.m[self.at(a)..self.at(b)]
+    }
+}
+
+fn patch(name: &str) -> HousePatch {
+    house_patches().into_iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no house patch {name:?} in the fixture"))
+}
+
+/// A fresh engine with `cmds` replayed (a synth track in slot 0, selected as
+/// the input track), master gain 0.1, and 50 ms of silence rendered so the
+/// load's declick fade-in and every smoothed param have settled.
+fn load_cmds(cmds: &[[f64; 5]]) -> Engine {
+    let mut e = Engine::new(SR);
+    for c in cmds {
+        assert_eq!(e.command(c[0] as u32, c[1], c[2], c[3], c[4]), OK, "{c:?}");
+    }
+    assert_eq!(e.command(OP_SET_MASTER_GAIN, 0.1, 0., 0., 0.), OK);
+    settle(&mut e);
+    e
+}
+
+fn settle(e: &mut Engine) {
+    let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    for _ in 0..(0.05 * SR) as usize / BLOCK {
+        e.process(&mut l, &mut r);
+    }
+}
+
+/// [`load_cmds`] by patch name.
+fn load(name: &str) -> Engine {
+    load_cmds(&patch(name).cmds)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Ev {
+    On(u8, u8),
+    Off(u8),
+    Mod(f32),
+}
+
+/// Render `dur` seconds, applying each `(time s, event)` at the first block
+/// start at or after its time (events in list order within a block).
+fn run(e: &mut Engine, events: &[(f32, Ev)], dur: f32) -> Render {
+    let lat = e.latency();
+    let frames = (dur * SR) as usize + lat;
+    let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    let mut m = Vec::with_capacity(frames + BLOCK);
+    let mut peak = 0.0f32;
+    let mut next = 0;
+    let mut t = 0usize;
+    while t < frames {
+        while next < events.len() && (events[next].0 * SR) as usize <= t {
+            let code = match events[next].1 {
+                Ev::On(n, v) => e.command(OP_NOTE_ON, n as f64, v as f64, 0., 0.),
+                Ev::Off(n) => e.command(OP_NOTE_OFF, n as f64, 0., 0., 0.),
+                Ev::Mod(x) => e.command(OP_MOD_WHEEL, x as f64, 0., 0., 0.),
+            };
+            assert_eq!(code, OK, "{:?}", events[next]);
+            next += 1;
+        }
+        e.process(&mut l, &mut r);
+        for i in 0..BLOCK {
+            let (a, b) = (l[i] * PRE, r[i] * PRE);
+            assert!(a.is_finite() && b.is_finite(), "non-finite output");
+            assert!(l[i].abs() < 0.99 && r[i].abs() < 0.99, "output reached the clamp: can't measure");
+            if t + i >= lat {
+                peak = peak.max(a.abs()).max(b.abs());
+                m.push(0.5 * (a + b));
+            }
+        }
+        t += BLOCK;
+    }
+    m.truncate(frames - lat);
+    Render { m, peak }
+}
+
+/// Press `notes` at velocity `vel` at 0, release them after `hold` s, and
+/// render `release` s more.
+fn play(e: &mut Engine, notes: &[u8], vel: u8, hold: f32, release: f32) -> Render {
+    let mut ev: Vec<(f32, Ev)> = notes.iter().map(|&n| (0.0, Ev::On(n, vel))).collect();
+    ev.extend(notes.iter().map(|&n| (hold, Ev::Off(n))));
+    run(e, &ev, hold + release)
+}
+
+/// A patch's phrase at `vel`: each step held `step` s (the next step starts as
+/// the previous one is released), then `release` s more.
+fn play_phrase(e: &mut Engine, phrase: Phrase, vel: u8, step: f32, release: f32) -> Render {
+    let mut ev = Vec::new();
+    for (i, notes) in phrase.steps().iter().enumerate() {
+        let t = i as f32 * step;
+        ev.extend(notes.iter().map(|&n| (t, Ev::On(n, vel))));
+        ev.extend(notes.iter().map(|&n| (t + step, Ev::Off(n))));
+    }
+    ev.sort_by(|a, b| a.0.total_cmp(&b.0)); // stable: offs stay before ons at a step change
+    run(e, &ev, phrase.steps().len() as f32 * step + release)
+}
+
+/// A `RACK_SET_PARAM` on slot 0 by catalog param name (for A/B renders, e.g.
+/// vibrato or breath off). `module` is the patch's module idx and its kind.
+fn set(e: &mut Engine, module: (usize, ModuleKind), param: &str, value: f32) {
+    let s = spec(module.1);
+    let p = s.params.iter().position(|p| p.name == param).unwrap_or_else(|| panic!("{} has no param {param:?}", s.id));
+    assert_eq!(e.command(OP_RACK_SET_PARAM, 0., module.0 as f64, p as f64, value as f64), OK);
+    settle(e);
+}
+
+fn db(x: f32) -> f32 {
+    20.0 * x.max(1e-12).log10()
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| (v * v) as f64).sum::<f64>() / x.len().max(1) as f64).sqrt() as f32
+}
+
+/// Momentary loudness (dBFS): the max RMS over 400 ms windows, 100 ms hop.
+fn momentary_db(r: &Render) -> f32 {
+    let (w, hop) = ((0.4 * SR) as usize, (0.1 * SR) as usize);
+    if r.m.len() <= w {
+        return db(rms(&r.m));
+    }
+    (0..=(r.m.len() - w) / hop).map(|i| rms(&r.m[i * hop..i * hop + w])).fold(0.0, f32::max).log10() * 20.0
+}
+
+fn peak_pre_limiter(r: &Render) -> f32 {
+    r.peak
+}
+
+fn hann(n: usize) -> Vec<f64> {
+    (0..n).map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n as f64).cos()).collect()
+}
+
+/// Amplitudes of harmonics 1, 2, … (index 0 = h1) of `f0` below 0.45 × SR,
+/// over a Hann `window` (samples) starting at `at` s. A full-scale sine at k·f0
+/// reads 1.
+fn harmonics(r: &Render, f0: f32, at: f32, window: usize) -> Vec<f32> {
+    let x = &r.m[r.at(at)..r.at(at) + window];
+    let w = hann(window);
+    let wsum: f64 = w.iter().sum();
+    let mut out = Vec::new();
+    let mut k = 1;
+    while (k as f32 * f0) < 0.45 * SR {
+        let om = 2.0 * std::f64::consts::PI * (k as f64 * f0 as f64) / SR as f64;
+        // Goertzel.
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        let c = 2.0 * om.cos();
+        for (xi, wi) in x.iter().zip(&w) {
+            let s0 = *xi as f64 * wi + c * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let re = s1 - s2 * om.cos();
+        let im = s2 * om.sin();
+        out.push((2.0 * (re * re + im * im).sqrt() / wsum) as f32);
+        k += 1;
+    }
+    out
+}
+
+/// In-place radix-2 FFT.
+fn fft(re: &mut [f64], im: &mut [f64]) {
+    let n = re.len();
+    let mut j = 0;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let ang = -2.0 * std::f64::consts::PI / len as f64;
+        for start in (0..n).step_by(len) {
+            for k in 0..len / 2 {
+                let (wr, wi) = ((ang * k as f64).cos(), (ang * k as f64).sin());
+                let (a, b) = (start + k, start + k + len / 2);
+                let (xr, xi) = (re[b] * wr - im[b] * wi, re[b] * wi + im[b] * wr);
+                re[b] = re[a] - xr;
+                im[b] = im[a] - xi;
+                re[a] += xr;
+                im[a] += xi;
+            }
+        }
+        len <<= 1;
+    }
+}
+
+const FFT_N: usize = 4096;
+const BIN_HZ: f32 = SR / FFT_N as f32;
+
+/// Welch power spectrum between `a` and `b` s: the mean of |FFT|² over
+/// Hann frames of 4096 (hop 1024). Bin i is at `i × BIN_HZ`.
+fn spectrum(r: &Render, a: f32, b: f32) -> Vec<f64> {
+    let x = r.span(a, b);
+    assert!(x.len() >= FFT_N, "span too short for a spectrum");
+    let w = hann(FFT_N);
+    let mut acc = vec![0.0f64; FFT_N / 2];
+    let mut frames = 0;
+    let mut s = 0;
+    while s + FFT_N <= x.len() {
+        let mut re: Vec<f64> = (0..FFT_N).map(|i| x[s + i] as f64 * w[i]).collect();
+        let mut im = vec![0.0f64; FFT_N];
+        fft(&mut re, &mut im);
+        for i in 0..FFT_N / 2 {
+            acc[i] += re[i] * re[i] + im[i] * im[i];
+        }
+        frames += 1;
+        s += 1024;
+    }
+    acc.iter_mut().for_each(|v| *v /= frames as f64);
+    acc
+}
+
+/// Magnitude-weighted spectral centroid (Hz) over 50 Hz–10 kHz, between `a`
+/// and `b` s.
+fn centroid(r: &Render, a: f32, b: f32) -> f32 {
+    let p = spectrum(r, a, b);
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    for (i, pw) in p.iter().enumerate() {
+        let f = i as f32 * BIN_HZ;
+        if (50.0..=10000.0).contains(&f) {
+            num += f as f64 * pw.sqrt();
+            den += pw.sqrt();
+        }
+    }
+    (num / den) as f32
+}
+
+/// RMS over consecutive 5 ms frames.
+fn rms_env_5ms(r: &Render) -> Vec<f32> {
+    r.m.chunks_exact((0.005 * SR) as usize).map(rms).collect()
+}
+
+/// f0 (Hz) per 40 ms frame (10 ms hop) lying fully between `a` and `b` s, as
+/// `(frame centre s, f0)`, searching `fmin..fmax`. Keep the range within an
+/// octave around the expected note: a formant-boosted 2nd harmonic can
+/// otherwise win at half the period.
+fn f0_track(r: &Render, a: f32, b: f32, fmin: f32, fmax: f32) -> Vec<(f32, f32)> {
+    let (frame, hop) = ((0.04 * SR) as usize, (0.01 * SR) as usize);
+    let (lo, hi) = ((SR / fmax).floor() as usize, (SR / fmin).ceil() as usize);
+    let mut out = Vec::new();
+    let mut s = r.at(a);
+    while s + frame <= r.at(b) {
+        let x = &r.m[s..s + frame];
+        // Normalised autocorrelation of the frame with itself shifted by `lag`.
+        let nac = |lag: usize| -> f64 {
+            let (mut xy, mut xx, mut yy) = (0.0f64, 0.0f64, 0.0f64);
+            for i in 0..frame - lag {
+                let (p, q) = (x[i] as f64, x[i + lag] as f64);
+                xy += p * q;
+                xx += p * p;
+                yy += q * q;
+            }
+            xy / (xx * yy).sqrt().max(1e-30)
+        };
+        let c: Vec<f64> = (lo - 1..=hi + 1).map(nac).collect(); // c[j] is lag lo - 1 + j
+        let best = c[1..c.len() - 1].iter().cloned().fold(f64::MIN, f64::max);
+        let j = (1..c.len() - 1).find(|&j| c[j] >= c[j - 1] && c[j] >= c[j + 1] && c[j] >= 0.9 * best).expect("a peak");
+        let d = c[j - 1] - 2.0 * c[j] + c[j + 1];
+        let off = if d.abs() > 1e-12 { 0.5 * (c[j - 1] - c[j + 1]) / d } else { 0.0 };
+        let lag = (lo - 1 + j) as f64 + off;
+        out.push(((s + frame / 2) as f32 / SR, (SR as f64 / lag) as f32));
+        s += hop;
+    }
+    out
+}
+
+fn cents(f: f32, f_ref: f32) -> f32 {
+    1200.0 * (f / f_ref).log2()
+}
+
+fn hz(note: u8) -> f32 {
+    440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+/// The kind of module `idx` in a patch's fixture (from its RACK_ADD_MODULE).
+fn kind_at(p: &HousePatch, idx: usize) -> Option<ModuleKind> {
+    p.cmds
+        .iter()
+        .find(|c| c[0] as u32 == OP_RACK_ADD_MODULE && c[2] as usize == idx)
+        .and_then(|c| ModuleKind::from_id(c[3] as u32))
+}
+
+/// The longest ADSR `release` in a patch (catalog default where unset).
+fn longest_release(p: &HousePatch) -> f32 {
+    let rel = spec(ModuleKind::Adsr).params.iter().position(|q| q.name == "release").unwrap();
+    let default = spec(ModuleKind::Adsr).params[rel].default;
+    (0..32)
+        .filter(|&i| kind_at(p, i) == Some(ModuleKind::Adsr))
+        .map(|i| {
+            p.cmds
+                .iter()
+                .rev()
+                .find(|c| c[0] as u32 == OP_RACK_SET_PARAM && c[2] as usize == i && c[3] as usize == rel)
+                .map_or(default, |c| c[4] as f32)
+        })
+        .fold(0.0, f32::max)
+}
+
+// ---- every house patch --------------------------------------------------------
+
+/// Loudness window (plan 11 *Levels*): −15 dBFS ± 3 dB momentary at vel 100.
+const LOUDNESS_DB: f32 = -15.0;
+const LOUDNESS_TOL: f32 = 3.0;
+/// Allowed pre-limiter peak at velocity 127.
+const PEAK_LIMIT: f32 = 0.9;
+
+#[test]
+fn house_patches_sit_at_similar_levels() {
+    let all = house_patches();
+    assert!(!all.is_empty());
+    let mut failed = Vec::new();
+    for p in &all {
+        let mut e = load_cmds(&p.cmds);
+        let r = play_phrase(&mut e, p.phrase, 100, 1.5, 0.5);
+        let m = momentary_db(&r);
+        eprintln!("{}: momentary {m:.1} dBFS ({:?})", p.name, p.phrase);
+        if (m - LOUDNESS_DB).abs() > LOUDNESS_TOL {
+            failed.push(format!("{} {m:.1}", p.name));
+        }
+    }
+    assert!(failed.is_empty(), "outside {LOUDNESS_DB} ± {LOUDNESS_TOL} dBFS: {failed:?}");
+}
+
+#[test]
+fn house_patches_do_not_clip() {
+    // starter_patches.rs's sets per voice type.
+    let chords4: [&[u8]; 4] = [&[48, 52, 55, 59], &[60, 64, 67, 71], &[36, 48, 55, 60], &[57, 60, 64, 69]];
+    let chords5: [&[u8]; 3] = [&[48, 52, 55, 59, 62], &[36, 48, 55, 60, 64], &[57, 60, 64, 67, 72]];
+    let notes: [&[u8]; 4] = [&[36], &[48], &[60], &[72]];
+    let mut failed = Vec::new();
+    for p in &house_patches() {
+        let (set, hold): (&[&[u8]], f32) = match p.phrase {
+            Phrase::Chord4 => (&chords4, 1.0),
+            Phrase::Chord5 => (&chords5, 2.0),
+            Phrase::Bass | Phrase::Lead => (&notes, 1.0),
+        };
+        let worst = set
+            .iter()
+            .map(|c| {
+                let mut e = load_cmds(&p.cmds);
+                peak_pre_limiter(&play(&mut e, c, 127, hold, 1.0))
+            })
+            .fold(0.0f32, f32::max);
+        eprintln!("{}: pre-limiter peak {worst:.3} at vel 127", p.name);
+        assert!(worst > 0.05, "{} is (nearly) silent: {worst}", p.name);
+        if worst >= PEAK_LIMIT {
+            failed.push(format!("{} {worst:.3}", p.name));
+        }
+    }
+    assert!(failed.is_empty(), "pre-limiter peak >= {PEAK_LIMIT}: {failed:?}");
+}
+
+#[test]
+fn house_patches_release_to_silence() {
+    let mut failed = Vec::new();
+    for p in &house_patches() {
+        let rel = longest_release(p);
+        let mut e = load_cmds(&p.cmds);
+        let hold = 1.0;
+        let r = play_phrase(&mut e, p.phrase, 100, hold, rel + 1.2);
+        let end = p.phrase.steps().len() as f32 * hold;
+        // From release + 1 s after the last note-off, the 100 ms RMS is < −60 dBFS.
+        let tail = db(rms(r.span(end + rel + 1.0, end + rel + 1.1)));
+        eprintln!("{}: {tail:.1} dBFS at release ({rel:.2} s) + 1 s", p.name);
+        if tail >= -60.0 {
+            failed.push(format!("{} {tail:.1}", p.name));
+        }
+    }
+    assert!(failed.is_empty(), "not silent (−60 dBFS) at release + 1 s: {failed:?}");
+}
+
+// ---- Sax acceptance (plan 11 *Sax recipe*; C4, vel 100 unless stated) ------------
+
+/// Sax module indices (`housePatches.ts`); [`sax`] checks them against the fixture.
+const SAX_FORMANT: (usize, ModuleKind) = (4, ModuleKind::Formant);
+const SAX_BREATH_VCA: (usize, ModuleKind) = (12, ModuleKind::Vca);
+const SAX_VIB_VCA: (usize, ModuleKind) = (15, ModuleKind::Vca);
+
+/// The Sax loaded, its module map checked; optionally vibrato and/or breath off.
+fn sax(vibrato: bool, breath: bool) -> Engine {
+    let p = patch("Sax");
+    for m in [SAX_FORMANT, SAX_BREATH_VCA, SAX_VIB_VCA] {
+        assert_eq!(kind_at(&p, m.0), Some(m.1), "Sax module {} is not {:?}: update the indices here", m.0, m.1);
+    }
+    let mut e = load("Sax");
+    // Always the same commands and settle time, so oscillator and LFO phases
+    // match between A/B renders (the tone is then identical sample for sample).
+    set(&mut e, SAX_VIB_VCA, "level", if vibrato { 1.0 } else { 0.0 });
+    set(&mut e, SAX_BREATH_VCA, "level", if breath { 1.0 } else { 0.0 });
+    e
+}
+
+/// A Formant param of the Sax as set in the fixture (catalog default if unset).
+fn sax_formant(param: &str) -> f32 {
+    let p = patch("Sax");
+    let s = spec(ModuleKind::Formant);
+    let i = s.params.iter().position(|q| q.name == param).unwrap();
+    p.cmds
+        .iter()
+        .rev()
+        .find(|c| c[0] as u32 == OP_RACK_SET_PARAM && c[2] as usize == SAX_FORMANT.0 && c[3] as usize == i)
+        .map_or(s.params[i].default, |c| c[4] as f32)
+}
+
+#[test]
+fn sax_formant_peaks() {
+    let (f1, f2, f3) = (sax_formant("f1"), sax_formant("f2"), sax_formant("f3"));
+    for note in [60u8, 55] {
+        let f0 = hz(note);
+        let r = play(&mut sax(false, true), &[note], 100, 1.0, 0.0);
+        let a = harmonics(&r, f0, 0.8, 4096);
+        // Saw-normalised envelope: a saw's harmonics fall as 1/k, so A_k·k is flat for a raw saw.
+        let e: Vec<(f32, f32)> = a.iter().enumerate().map(|(i, &x)| ((i + 1) as f32 * f0, db(x * (i + 1) as f32))).collect();
+        let max_in = |lo: f32, hi: f32| e.iter().filter(|(f, _)| (lo..=hi).contains(f)).map(|x| x.1).fold(f32::MIN, f32::max);
+        let trough = e
+            .iter()
+            .filter(|(f, _)| (700.0..=1150.0).contains(f) || (1900.0..=2200.0).contains(f))
+            .map(|x| x.1)
+            .fold(f32::MAX, f32::min);
+        let peaks = [f1, f2, f3].map(|f| max_in(0.8 * f, 1.2 * f));
+        eprintln!(
+            "Sax note {note}: E_k {:?}",
+            e.iter().take(16).map(|(f, d)| format!("{f:.0}:{d:.1}")).collect::<Vec<_>>()
+        );
+        eprintln!("Sax note {note}: peaks {peaks:?} dB vs trough {trough:.1} dB");
+        for (i, pk) in peaks.iter().enumerate() {
+            assert!(pk - trough >= 3.0, "note {note}: peak f{} {pk:.1} dB is not 3 dB above the trough {trough:.1} dB", i + 1);
+        }
+    }
+}
+
+#[test]
+fn sax_brightness_tracks_velocity() {
+    let c = |vel: u8| {
+        let r = play(&mut sax(true, true), &[60], vel, 1.0, 0.0);
+        eprintln!("Sax vel {vel}: momentary {:.1} dBFS", momentary_db(&r));
+        centroid(&r, 0.5, 1.0)
+    };
+    let (c40, c100, c127) = (c(40), c(100), c(127));
+    eprintln!("Sax centroid: vel 40 {c40:.0} Hz, vel 100 {c100:.0} Hz, vel 127 {c127:.0} Hz");
+    assert!((900.0..=1800.0).contains(&c100), "vel 100 centroid {c100:.0} Hz outside 0.9–1.8 kHz");
+    assert!(c127 >= 1.2 * c40, "vel 127 centroid {c127:.0} is not 1.2 × vel 40's {c40:.0}");
+}
+
+#[test]
+fn sax_attack_time() {
+    let r = play(&mut sax(true, true), &[60], 100, 1.0, 0.0);
+    let env = rms_env_5ms(&r);
+    let steady = env[100..200].iter().sum::<f32>() / 100.0; // 0.5–1.0 s
+    let first = |frac: f32| env.iter().position(|&x| x >= frac * steady).expect("reaches the level") as f32 * 0.005;
+    let (t10, t90) = (first(0.1), first(0.9));
+    let rise = t90 - t10;
+    eprintln!("Sax attack: 10 % at {:.0} ms, 90 % at {:.0} ms, rise {:.0} ms", t10 * 1e3, t90 * 1e3, rise * 1e3);
+    assert!((0.025..=0.090).contains(&rise), "10→90 % rise {:.0} ms outside 25–90 ms", rise * 1e3);
+}
+
+#[test]
+fn sax_vibrato_is_delayed() {
+    let r = play(&mut sax(true, true), &[60], 100, 1.7, 0.0);
+    let f0 = hz(60);
+    let early: Vec<f32> = f0_track(&r, 0.0, 0.2, 0.7 * f0, 1.4 * f0).iter().map(|x| cents(x.1, f0)).collect();
+    let pp = |v: &[f32]| v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min);
+    let early_pp = pp(&early);
+    let late_track = f0_track(&r, 0.8, 1.6, 0.7 * f0, 1.4 * f0);
+    let late: Vec<f32> = late_track.iter().map(|x| cents(x.1, f0)).collect();
+    let late_pp = pp(&late);
+    // Rate: zero crossings of the linearly detrended deviation.
+    let n = late.len() as f32;
+    let tm = late_track.iter().map(|x| x.0).sum::<f32>() / n;
+    let vm = late.iter().sum::<f32>() / n;
+    let slope = late_track.iter().zip(&late).map(|(t, v)| (t.0 - tm) * (v - vm)).sum::<f32>()
+        / late_track.iter().map(|t| (t.0 - tm).powi(2)).sum::<f32>();
+    let d: Vec<f32> = late_track.iter().zip(&late).map(|(t, v)| v - vm - slope * (t.0 - tm)).collect();
+    let crossings = d.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    let span = late_track.last().unwrap().0 - late_track[0].0;
+    let rate = crossings as f32 / (2.0 * span);
+    eprintln!("Sax vibrato: 0–0.2 s {early_pp:.1} ct p-p; 0.8–1.6 s {late_pp:.1} ct p-p at {rate:.2} Hz");
+    assert!(early_pp < 6.0, "vibrato before 0.2 s: {early_pp:.1} cents p-p");
+    assert!((20.0..=50.0).contains(&late_pp), "vibrato depth {late_pp:.1} cents p-p outside 20–50");
+    assert!((4.5..=6.0).contains(&rate), "vibrato rate {rate:.2} Hz outside 4.5–6");
+}
+
+#[test]
+fn sax_has_breath() {
+    // Vibrato off in both renders: it would smear the harmonics into the
+    // "inharmonic" bins, which is not breath.
+    let (a, b) = (0.3, 1.0);
+    let with = play(&mut sax(false, true), &[60], 100, 1.0, 0.0);
+    let without = play(&mut sax(false, false), &[60], 100, 1.0, 0.0);
+    let f0 = hz(60);
+    let inharmonic = |r: &Render| -> f64 {
+        spectrum(r, a, b)
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                let f = *i as f32 * BIN_HZ;
+                (4000.0..=8000.0).contains(&f) && (f - (f / f0).round() * f0).abs() > 40.0
+            })
+            .map(|x| *x.1)
+            .sum()
+    };
+    let gain = 10.0 * (inharmonic(&with) / inharmonic(&without).max(1e-30)).log10();
+    // The tone is the same in both renders (the breath joins after the
+    // saturator, in the output mixer), so the difference is the breath alone.
+    let breath: Vec<f32> = with.m.iter().zip(&without.m).map(|(x, y)| x - y).collect();
+    let below = db(rms(&with.m[..with.at(1.0)])) - db(rms(&breath[..with.at(1.0)]));
+    eprintln!("Sax breath: +{gain:.1} dB inharmonic 4–8 kHz; breath {below:.1} dB below the total");
+    assert!(gain >= 6.0, "breath adds only {gain:.1} dB of inharmonic 4–8 kHz energy");
+    assert!(below >= 20.0, "breath only {below:.1} dB below the total (not subtle)");
+}
+
+#[test]
+fn sax_legato_glides() {
+    let (c4, d4) = (hz(60), hz(62));
+    // Overlapped: 62 pressed at 0.5 s while 60 is held until 0.6 s.
+    let t = 0.5f32;
+    let ev = [(0.0, Ev::On(60, 100)), (t, Ev::On(62, 100)), (t + 0.1, Ev::Off(60)), (1.2, Ev::Off(62))];
+    let r = run(&mut sax(false, true), &ev, 1.2);
+    let env = rms_env_5ms(&r);
+    let mean = |a: f32, b: f32| db(env[(a / 0.005) as usize..(b / 0.005) as usize].iter().sum::<f32>() / ((b - a) / 0.005));
+    let reference = mean(t - 0.1, t).min(mean(t + 0.15, t + 0.25));
+    let dip = env[(t / 0.005) as usize..((t + 0.15) / 0.005) as usize].iter().map(|&x| db(x)).fold(f32::MAX, f32::min);
+    eprintln!("Sax legato: level {reference:.1} dB, lowest at the change {dip:.1} dB");
+    assert!(reference - dip <= 1.5, "amplitude dips {:.1} dB at the legato change", reference - dip);
+    let track = f0_track(&r, t - 0.1, t + 0.3, 0.7 * c4, 1.4 * d4);
+    let after: Vec<(f32, f32)> = track.iter().filter(|x| x.0 >= t).map(|x| (x.0 - t, cents(x.1, d4))).collect();
+    let arrive = after.iter().position(|x| x.1.abs() <= 5.0).expect("reaches D4");
+    let arrive_t = after[arrive].0;
+    eprintln!(
+        "Sax legato: f0 {:?}; at D4 ± 5 ct after {:.0} ms",
+        after.iter().take(14).map(|x| format!("{:.0}ms:{:.1}", x.0 * 1e3, x.1)).collect::<Vec<_>>(),
+        arrive_t * 1e3
+    );
+    assert!((0.020..=0.120).contains(&arrive_t), "glide reaches D4 after {:.0} ms, not 20–120", arrive_t * 1e3);
+    // Monotonic (0.5 cent tolerance for estimator noise), from C4 up, and it stays.
+    let before = track.iter().filter(|x| x.0 < t - 0.02).map(|x| cents(x.1, c4)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+    assert!(before.abs() <= 5.0, "C4 before the change: {before:.1} ct");
+    for w in after[..=arrive].windows(2) {
+        assert!(w[1].1 >= w[0].1 - 0.5, "glide is not monotonic: {:?}", after);
+    }
+    assert!(after[arrive..].iter().all(|x| x.1.abs() <= 5.0), "leaves D4 after arriving: {after:?}");
+
+    // Separated by 50 ms of silence: a jump.
+    let t2 = 0.35f32;
+    let ev = [(0.0, Ev::On(60, 100)), (0.3, Ev::Off(60)), (t2, Ev::On(62, 100)), (0.8, Ev::Off(62))];
+    let r = run(&mut sax(false, true), &ev, 0.8);
+    let first = f0_track(&r, t2 + 0.02, 0.8, 0.7 * c4, 1.4 * d4)[0];
+    let off = cents(first.1, d4);
+    eprintln!("Sax separated: first frame after 20 ms (centre {:.0} ms) {off:.1} ct from D4", (first.0 - t2) * 1e3);
+    assert!(off.abs() <= 5.0, "a separated note glides: {off:.1} cents from D4 after 20 ms");
+}
+
+#[test]
+fn sax_mod_wheel_brightens() {
+    // The mod wheel stands in for a breath controller (Formant cv: up to +0.5 oct).
+    let r0 = play(&mut sax(false, true), &[60], 100, 1.0, 0.0);
+    let r1 = run(&mut sax(false, true), &[(0.0, Ev::Mod(1.0)), (0.0, Ev::On(60, 100)), (1.0, Ev::Off(60))], 1.0);
+    let (c0, c1) = (centroid(&r0, 0.5, 1.0), centroid(&r1, 0.5, 1.0));
+    eprintln!("Sax mod wheel: centroid {c0:.0} Hz → {c1:.0} Hz");
+    assert!(c1 > 1.05 * c0, "mod wheel does not brighten: {c0:.0} → {c1:.0} Hz");
+}

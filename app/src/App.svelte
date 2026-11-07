@@ -21,7 +21,7 @@
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
   import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
-  import { STARTER_PATCHES } from './state/patches';
+  import { BUILTIN_PATCHES } from './state/patches';
   import { installShortcuts, type PanelTab } from './input/shortcuts';
   import { connectMidi } from './input/midi';
   import { DEFAULT_OCTAVE } from './input/qwertyPiano';
@@ -319,7 +319,7 @@
     // through the same code paths as the UI.
     addDrumTrack: () => (engine ? addDrumTrack(project, engine) : null),
     addSynthTrack: (patchName) =>
-      engine ? addSynthTrack(project, engine, undefined, STARTER_PATCHES.find((x) => x.name === patchName)) : null,
+      engine ? addSynthTrack(project, engine, undefined, BUILTIN_PATCHES.find((x) => x.name === patchName)) : null,
     addRow: (trackId) => (engine ? addRow(project, engine, trackId) : null),
     removeTrack: (trackId) => engine && removeTrack(project, engine, trackId),
     setRowSample: (trackId, rowId, sampleId, name) => engine && setRowSample(project, engine, trackId, rowId, sampleId, name),

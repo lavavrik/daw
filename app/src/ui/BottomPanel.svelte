@@ -8,7 +8,9 @@
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
   import PatternPicker from './PatternPicker.svelte';
+  import { onMount } from 'svelte';
   import { currentPattern } from '../state/project.svelte';
+  import { patternPosAt } from '../state/song-actions';
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
@@ -31,6 +33,24 @@
   function pickSynthTab(t: 'pianoroll' | 'instrument') {
     synthTab = lastSynthTab = t;
   }
+
+  // Song-mode hint: shown while the edited pattern is not playing at the
+  // playhead (no clip of it under the playhead, or stopped).
+  let songIdle = $state(false);
+  onMount(() => {
+    let raf = 0;
+    const loop = () => {
+      let idle = false;
+      if (p.mode === 'song' && track) {
+        const t = clock && p.playing ? clock.heardTicks() : NaN;
+        idle = patternPosAt(track, track.currentPatternId, t) === null;
+      }
+      if (idle !== songIdle) songIdle = idle;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  });
 
   // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
@@ -62,6 +82,9 @@
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
       </div>
     {/if}
+    {#if songIdle}
+      <div class="banner hint" data-testid="song-hint">Song mode plays clips — playhead shows where a clip of this pattern plays</div>
+    {/if}
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
@@ -85,5 +108,6 @@
   .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
   .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
+  .hint { background: #1f2430; color: #9aa6c4; border: 1px solid #2f3850; font-size: 11px; }
   .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
 </style>

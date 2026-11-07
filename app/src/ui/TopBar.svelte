@@ -132,7 +132,7 @@
   <button
     class="small"
     class:on={p.loop.on && p.mode === 'song'}
-    aria-pressed={p.loop.on}
+    aria-pressed={p.loop.on && p.mode === 'song'}
     data-testid="loop-toggle"
     disabled={p.mode !== 'song'}
     onclick={() => setLoop(p, engine, { on: !p.loop.on })}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
+  import { addClip } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
@@ -36,7 +37,10 @@
   let stopWatch: (() => void) | null = null;
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op, clock: null, recorder: null, project };
+  window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
+    // Real song actions for e2e (no-ops before audio starts).
+    addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
+  } };
 
   /**
    * Play / Stop for the button and Space. Play while armed with Count-in on

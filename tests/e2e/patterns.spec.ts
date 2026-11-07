@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { makeWav } from './wav';
 
 // Pattern picker, PAT/SONG toggle and song-aware playheads (plan 4, Task 4).
 
@@ -8,7 +9,35 @@ async function start(page: Page) {
   await expect(page.getByTestId('pattern-picker')).toBeVisible(); // default drum track is selected
 }
 
-const on = (page: Page, id: string) => page.getByTestId(id).getAttribute('aria-pressed');
+/** Max peakL (telemetry slot 5) over `ms`: a short hit is easy to miss with one read. */
+function maxPeak(page: Page, ms = 1500) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<number>((resolve) => {
+        const eng = (window as any).__daw.engine;
+        let max = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          max = Math.max(max, eng.telemetry()[5]);
+          if (performance.now() - t0 > ms) {
+            clearInterval(id);
+            resolve(max);
+          }
+        }, 4);
+      }),
+    ms,
+  );
+}
+
+async function loadKick(page: Page) {
+  await page.evaluate(({ bytes }) => {
+    const el = document.querySelector('[data-testid="row-0"]')!;
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array(bytes)], 'kick.wav', { type: 'audio/wav' }));
+    for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
+  }, { bytes: [...makeWav()] });
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
+}
 
 test('new pattern, edit, switch back', async ({ page }) => {
   await start(page);
@@ -26,15 +55,20 @@ test('new pattern, edit, switch back', async ({ page }) => {
   await expect(page.getByTestId('step-0-0')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('step-0-5')).toHaveAttribute('aria-pressed', 'false');
 
-  // Playback follows the selection: the engine plays the current pattern, and
-  // the playhead shows in the step grid in Pattern mode.
+  // Playback follows the selection, proven engine-side by audio: Pattern 1
+  // has a kick on step 1, Pattern 2 is empty. Switching while playing must
+  // silence / restore the track (fails if SET_CURRENT_PATTERN is never sent).
+  await loadKick(page);
   await page.getByRole('button', { name: /Play/ }).click();
   await expect(page.locator('.cell.playhead').first()).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await maxPeak(page, 600)).toBeLessThan(0.001); // Pattern 2 (current): silent
+  await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 1' });
+  expect(await maxPeak(page)).toBeGreaterThan(0.1);
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 2' });
-  await expect(page.getByTestId('step-0-5')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.cell.playhead').first()).toBeVisible();
-  const errs = await page.evaluate(() => (window as any).__daw.engine.failure);
-  expect(errs).toBeNull();
+  await page.waitForTimeout(2200); // the engine may finish the running bar (~1.9 s); let the tail die
+  expect(await maxPeak(page, 1500)).toBeLessThan(0.001);
+  expect(await page.evaluate(() => (window as any).__daw.engine.failure)).toBeNull();
 });
 
 test('rename: Enter commits, Escape cancels, empty rejected; delete guards', async ({ page }) => {
@@ -62,9 +96,7 @@ test('rename: Enter commits, Escape cancels, empty rejected; delete guards', asy
   // Referenced by a clip: delete disabled with the count.
   await page.evaluate(() => {
     const d = (window as any).__daw;
-    const t = d.project.tracks[0];
-    d.engine.send(d.Op.CLIP_SET, t.slot * 256, t.patterns.find((x: any) => x.id === t.currentPatternId).engineIdx, 0, 3840);
-    t.clips.push({ id: 'c1', idx: 0, patternId: t.currentPatternId, start: 0, len: 3840, offset: 0 });
+    d.actions.addClip(d.project.tracks[0].id, { start: 0 });
   });
   await expect(page.getByTestId('pattern-delete')).toBeDisabled();
   await expect(page.getByTestId('pattern-delete')).toHaveAttribute('title', 'Used by 1 clip');
@@ -98,14 +130,14 @@ test('Song mode playhead only shows while a clip of the pattern plays', async ({
   await start(page);
   await page.evaluate(() => {
     const d = (window as any).__daw;
-    const t = d.project.tracks[0];
-    // Clip at bar 2 (song tick 3840) for one bar of pattern 0.
-    d.engine.send(d.Op.CLIP_SET, t.slot * 256, 0, 3840, 3840);
-    t.clips.push({ id: 'c1', idx: 0, patternId: t.currentPatternId, start: 3840, len: 3840, offset: 0 });
+    // Clip at bar 2 (song tick 3840) for one bar of the current pattern.
+    d.actions.addClip(d.project.tracks[0].id, { start: 3840, len: 3840 });
   });
   await page.getByTestId('mode-song').click();
+  await expect(page.getByTestId('song-hint')).toBeVisible(); // stopped: nothing plays this pattern
   await page.getByRole('button', { name: /Play/ }).click();
   // Bar 1 is empty: no column; then the clip starts and the playhead appears.
   await expect(page.locator('.cell.playhead').first()).toBeVisible({ timeout: 6000 });
+  await expect(page.getByTestId('song-hint')).toBeHidden();
   await expect(page.locator('.cell.playhead').first()).toBeHidden({ timeout: 6000 }); // after the clip ends
 });

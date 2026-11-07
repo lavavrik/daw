@@ -8,8 +8,8 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners).
 ```
 My Song/
   project.json            schemaVersion 1
-  samples/0-kick.wav      original bytes, never re-encoded ("<id>-<name>")
-  samples/1-snare.wav
+  samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
+  samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
 
 Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
@@ -44,7 +44,7 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; Task 4's autosave).
     "reverb": { "rev_size": 0.6, ... }, "delay": { "delay_time": 6, ... },
     "master": { "fader": 0, "limiter_ceiling": -0.3, ... }
   },
-  "samples": [{ "id": 0, "name": "kick.wav", "type": "audio/wav", "file": "samples/0-kick.wav" }],
+  "samples": [{ "id": 0, "name": "kick.wav", "type": "audio/wav", "file": "samples/0-1a2b3c4d-kick.wav" }],
   "selection": { "track": 0, "synth": 1 }  // selected track, Keys → target (slots)
 }
 ```
@@ -60,7 +60,19 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; Task 4's autosave).
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
-  what "● unsaved" compares against the last save / load / New (App effect).
+  what a save / load / New records as the saved state.
+
+## Unsaved changes and `Project.version`
+
+Every edit sends an engine command, so `AudioEngine.onCommand` →
+`commandEdits` (`state/edits.ts`) marks the project dirty and bumps
+`Project.version` for every op except transport, live notes and selection
+(`NON_EDIT_OPS`); the two command-free edits (add row, rename pattern) call
+`markEdited` themselves. O(1) per command. `project/dirtyCheck.ts` then,
+500 ms after edits pause and in an idle callback, compares
+`projectFingerprint` with the saved one and clears `dirty` if the project is
+back to its saved state. **Task 4's autosave subscribes to `p.version`.**
+Nothing is marked while `p.loading`.
 
 ## Validation (`validate`)
 
@@ -84,11 +96,15 @@ notice banner after the load (all of them in the console):
 
 ## Load order (`loadProject`)
 
-1. `validate` (error → throw, nothing touched).
+1. `validate` (error → throw, nothing touched). From here `p.loading` is set
+   (App shows "Loading…"; shortcuts, transport and drops are ignored).
 2. Decode every listed sample (a missing or undecodable file → warning; its
    rows/players load without it).
-3. `STOP`, blank the UI state, `RESET_ALL`; **await the worklet's
-   `reset-done`** (audio-path.md): uploads must not overtake the reset.
+3. `beforeLoad` (App: stop via the recorder's path, release keys), `STOP`,
+   blank the UI state, `RESET_ALL`; **await the worklet's `reset-done`**
+   (audio-path.md): uploads must not overtake the reset. Any failure from
+   here on also sets `p.folder = null`, so a later Save cannot write the
+   blank session over the folder it came from.
 4. Upload the samples with **compact ids 0..n−1** (fixes id burning);
    drum rows and SamplePlayer `sample` params are remapped old → new.
 5. Replay synchronously:
@@ -103,15 +119,27 @@ notice banner after the load (all of them in the console):
      — always, because RESET_ALL put the engine back to 124 BPM / Pattern /
      loop off / metronome off / no input.
 
+After every New / Open that reached step 3 the session's `afterLoad` runs
+(App: the recorder retargets the new live input; Song mode disarms). Load
+warnings go to their own banner (`banners.load`).
+
 `load.test.ts` replays every load through a model of the engine's checks
 (`testFixture.ts` `checkLog`): no out-of-range command, nothing addressed to a
 missing track/module/sample, nothing after the keys but transport.
 
 ## Saving (`writeProject`)
 
-`samples/` first (unchanged files are not rewritten), then
+`samples/` first (unchanged files are not rewritten; names carry a content
+hash, so an existing file is never overwritten with other bytes), then
 `project.json.tmp`, then the tmp is moved over `project.json` (or, where the
 handle cannot move, `project.json` is written from it — Chrome's writable
-streams replace a file atomically on close). Samples the new `project.json`
-no longer lists are removed last. A failure at any step leaves the previous
-project readable. Save As names the project after the chosen folder.
+streams replace a file atomically on close). Only then are the samples
+removed that the **previous** `project.json` listed and the new one does
+not; nothing else in the folder is ever deleted. A failure at any step
+leaves the previous project readable. `readProject` reads `project.json` and
+only the sample files it lists.
+
+Save As names the project after the chosen folder. A folder that already
+holds a `project.json` or anything in `samples/` (and is not this project's
+own folder) is written only after an inline "Replace the project in …?"
+(`banners.ask`, never `confirm()`).

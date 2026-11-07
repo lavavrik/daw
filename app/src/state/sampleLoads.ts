@@ -14,6 +14,15 @@
 // that later fails gives it back. A reset (project load) recounts by itself;
 // after an audio restart the new engine's own uploads were counted, so only
 // a load still deferred there keeps (a recomputed) reservation.
+//
+// Failed loads (plan 9): an audio clip is placed on its sample id at once,
+// before the deferred load settles. A load that then fails (not OK, not a
+// reset) is remembered here for the session (`sampleFailed`): the timeline
+// draws its clip as failed instead of as a normal clip that plays nothing,
+// and the target's `onFail` can say more than the generic banner. The clip
+// keeps its sample id (Save still writes the bytes; a reopen loads it). A
+// new session forgets the failures (ids start over: Project.generation), and
+// an audio restart that uploads the sample fine clears it.
 import { Err, HostErr } from '../audio/protocol';
 import { loadErrorText } from '../audio/samples';
 import { setRowSample } from './actions';
@@ -33,7 +42,12 @@ interface Waiting {
   attach: (id: number) => void;
   /** Floats reserved for it in p.arenaFloats (0: none to give back). */
   floats: number;
+  /** Runs after a failure (not a reset), after the generic banner is set. */
+  onFail?: (id: number) => void;
 }
+
+/** Sample id -> the Project.generation in which its deferred load failed. */
+const failed = new Map<number, number>();
 
 /** Deferred loads: sample id -> where to attach it once the worklet has it. */
 const pending = new Map<number, Waiting>();
@@ -47,11 +61,13 @@ let sink: SampleLoadEngine | null = null;
  */
 export function installSampleLoads(p: Project, engine: SampleLoadEngine): () => void {
   pending.clear();
+  failed.clear();
   project = p;
   bind(engine);
   return () => {
     if (sink) sink.onSampleLoaded = undefined;
     pending.clear();
+    failed.clear();
     project = null;
     sink = null;
   };
@@ -77,8 +93,18 @@ function settle(id: number, code: number, sampleRate: number) {
   // RESET: dropped by an engine reset (project load); its session is gone.
   if (code === Err.OK) w.attach(id);
   else if (code !== HostErr.RESET && project) project.arenaFloats = Math.max(0, project.arenaFloats - w.floats);
-  if (code !== Err.OK && code !== HostErr.RESET) banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, sampleRate)}`;
+  if (code !== Err.OK && code !== HostErr.RESET) {
+    if (project) failed.set(id, project.generation);
+    banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, sampleRate)}`;
+    w.onFail?.(id);
+  }
   if (pending.size === 0) banners.notice = null;
+}
+
+/** Did sample `id`'s deferred load fail in this session? (Its audio clips then play nothing.) */
+export function sampleFailed(id: number): boolean {
+  const gen = failed.get(id);
+  return gen !== undefined && project !== null && gen === project.generation;
 }
 
 /**
@@ -91,6 +117,7 @@ function settle(id: number, code: number, sampleRate: number) {
 export function rebindSampleLoads(engine: SampleLoadEngine, codes: Map<number, number>) {
   if (sink && sink !== engine) sink.onSampleLoaded = undefined;
   bind(engine);
+  for (const [id, code] of codes) if (code === Err.OK) failed.delete(id); // the new engine has it now
   for (const [id, w] of [...pending]) {
     const code = codes.get(id);
     // The restart counted only the uploads its engine took (OK / DEFERRED).
@@ -111,9 +138,14 @@ export function deferSampleLoad(id: number, tid: string, rowId: string, name: st
   });
 }
 
-/** Same, for any target: `attach(id)` runs once the load succeeded. */
-export function deferSampleAssign(id: number, name: string, attach: (id: number) => void) {
-  pending.set(id, { name, attach, floats: sink ? floatsOf(id, sink.sampleRate) : 0 });
+/**
+ * Same, for any target: `attach(id)` runs once the load succeeded, `onFail(id)`
+ * once it failed (not for a reset). Register it as soon as importSample
+ * returns: a Stop before that would settle the load with no one waiting.
+ */
+export function deferSampleAssign(id: number, name: string, attach: (id: number) => void, onFail?: (id: number) => void) {
+  failed.delete(id);
+  pending.set(id, { name, attach, floats: sink ? floatsOf(id, sink.sampleRate) : 0, onFail });
   banners.notice = `"${name}" will load when playback stops`;
 }
 

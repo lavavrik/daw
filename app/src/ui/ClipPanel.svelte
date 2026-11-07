@@ -22,6 +22,8 @@
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
   import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, fileSeconds, setAudioClip } from '../state/audio-actions';
   import { clipFocus, sampleName } from './song/clipFocus.svelte';
+  import { banners } from '../state/banners.svelte';
+  import { pendingSampleIds, sampleFailed } from '../state/sampleLoads';
 
   let { p, engine, track }: { p: Project; engine: CommandSink; track: AudioTrack } = $props();
 
@@ -32,6 +34,15 @@
     void p.peaksVersion; // sampleMeta is a plain Map: re-read when it changes
     return clip && clip.sampleId !== null ? (p.sampleMeta.get(clip.sampleId) ?? null) : null;
   });
+  /** Its deferred load failed, or still waits for Stop (both settle with a peaksVersion / notice change). */
+  const loadState = $derived.by(() => {
+    void p.peaksVersion;
+    void banners.notice;
+    const id = clip?.sampleId ?? null;
+    if (id === null) return null;
+    return sampleFailed(id) ? 'failed' : pendingSampleIds().includes(id) ? 'pending' : null;
+  });
+  const gainId = $props.id();
 
   /** "−6.0 dB", "+3.5 dB", "−∞ dB" (the minimum is silence). */
   function gainText(db: number) {
@@ -85,7 +96,9 @@
   {:else}
     {@const c = clip}
     <div class="info" data-testid="cliptab-info">
-      <b class:missing={c.sampleId === null}>{name}</b>
+      <b class:missing={c.sampleId === null || loadState === 'failed'}>{name}</b>
+      {#if loadState === 'failed'}<span class="bad" data-testid="cliptab-failed">sample failed to load: it plays nothing — stop and drop it again</span>{/if}
+      {#if loadState === 'pending'}<span>loads when playback stops</span>{/if}
       <span>{barsBeats(c.len)} on the timeline</span>
       {#if meta}<span>{meta.seconds.toFixed(2)} s file · {chText(meta.channels)}</span>{/if}
       {#if c.loop}<span class="tag">loops</span>{/if}
@@ -94,13 +107,13 @@
       <label class="gain">
         <span class="lbl">Gain</span>
         <input
-          type="range" data-testid="cliptab-gain" aria-label="Clip gain (dB)"
+          type="range" id={gainId} data-testid="cliptab-gain" aria-label="Clip gain (dB)" aria-valuetext={gainText(c.gain)}
           min={CLIP_GAIN_MIN_DB} max={CLIP_GAIN_MAX_DB} step="0.1" value={c.gain}
           title="Clip gain: −∞ to +12 dB (double-click: 0 dB)"
           oninput={setGain}
           ondblclick={() => setAudioClip(p, engine, c.id, { gain: 0 })}
         />
-        <output data-testid="cliptab-gain-text">{gainText(c.gain)}</output>
+        <output for={gainId} data-testid="cliptab-gain-text">{gainText(c.gain)}</output>
       </label>
       <label>
         <span class="lbl">Fade in</span>
@@ -137,7 +150,7 @@
   .empty { color: #8d90a0; margin: 4px 0; }
   .info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: #9a9da8; }
   .info b { color: var(--c); font-size: 13px; }
-  .info b.missing { color: #ff8a92; }
+  .info b.missing, .bad { color: #ff8a92; }
   .tag { font-size: 10px; border: 1px solid #3a3d48; border-radius: 3px; padding: 0 4px; color: #c9cbd3; }
   .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; }
   label { display: flex; align-items: center; gap: 6px; color: #c9cbd3; }

@@ -428,3 +428,39 @@ test('drop on a drum lane shows the hint', async ({ page }) => {
   await expect(page.getByTestId('banner')).toBeHidden(); // not the window's "drop onto a row" error
   expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length)).toBe(before);
 });
+
+test('a long stereo file gets its peaks from the Worker', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  // 60 s of stereo: over 2^22 floats at any context rate, so audio/peaks.ts
+  // analyses it in its Worker (the buffers go there and back). Built in the page.
+  const b = (await page.getByTestId('tl-below').boundingBox())!;
+  const lane = (await page.getByTestId('tl-lane-0').boundingBox())!;
+  await page.evaluate(({ x, y }) => {
+    const sr = 48000;
+    const n = sr * 60;
+    const buf = new ArrayBuffer(44 + n * 4);
+    const v = new DataView(buf);
+    const str = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    str(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); str(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true); v.setUint16(22, 2, true); v.setUint32(24, sr, true); v.setUint32(28, sr * 4, true);
+    v.setUint16(32, 4, true); v.setUint16(34, 16, true); str(36, 'data'); v.setUint32(40, n * 4, true);
+    for (let i = 0; i < n; i++) {
+      const s = Math.round(Math.sin((2 * Math.PI * 110 * i) / sr) * (i / n) * 30000);
+      v.setInt16(44 + i * 4, s, true);
+      v.setInt16(46 + i * 4, s, true);
+    }
+    const el = document.querySelector('[data-testid="tl-below"]')!;
+    const dt = new DataTransfer();
+    dt.items.add(new File([buf], 'stem.wav', { type: 'audio/wav' }));
+    for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+  }, { x: lane.x + 2, y: b.y + 10 });
+  await expect.poll(async () => (await audioTracks(page)).length, { timeout: 30_000 }).toBe(1);
+  const slot = (await audioTracks(page))[0].slot;
+  await expect(page.getByTestId(`clip-${slot}-0`)).toHaveAttribute('data-pattern', 'stem');
+  await expect(page.getByTestId(`clip-${slot}-0`)).toHaveAttribute('data-peaks', '1');
+  await expect(page.getByTestId('banner')).toBeHidden();
+  // The whole file reached the engine (the channels came back from the Worker).
+  const seconds = await page.evaluate(() => [...(window as any).__daw.project.sampleMeta.values()].at(-1).seconds);
+  expect(seconds).toBeCloseTo(60, 1);
+});

@@ -98,7 +98,7 @@ export async function loadProject(
 
   markBusy(p);
   try {
-    const decoded: { oldId: number; file: SampleFile; channels: Float32Array[]; peaks: Peaks }[] = [];
+    const decoded: { oldId: number; file: SampleFile; channels: Float32Array[]; peaks: Peaks | null }[] = [];
     for (const s of proj.samples) {
       const bytes = sampleBytes.get(s.file);
       if (!bytes) {
@@ -110,8 +110,10 @@ export async function loadProject(
         const decodedChannels = await decodeBytes(bytes.slice(0), s.name, ctx);
         const file = await sampleFile(s.name, s.type, bytes); // hash: async
         // Waveform peaks before the upload transfers the buffers (audio/peaks.ts; cached by hash).
-        const { peaks, channels } = await peaksFor(decodedChannels, file.hash);
-        decoded.push({ oldId: s.id, file, channels, peaks });
+        // A peaks worker that died with the buffers: decode again, no peaks (flat placeholder).
+        const pk = await peaksFor(decodedChannels, file.hash);
+        const channels = pk.channels ?? (await decodeBytes(bytes.slice(0), s.name, ctx));
+        decoded.push({ oldId: s.id, file, channels, peaks: pk.peaks });
       } catch {
         warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
       }

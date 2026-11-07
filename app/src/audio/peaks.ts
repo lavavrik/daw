@@ -13,10 +13,13 @@
 // way). The audio restart keeps the peaks it has (the same audio at
 // another rate: the lanes map peaks to file time, not to frames).
 //
-// Where: a file over WORKER_FRAMES (2^21 frames, ~44 s at 48 kHz) goes to a
-// dedicated Worker (peaksWorker.ts) with its channel buffers TRANSFERRED
-// there and back, so nothing is copied and the UI thread never stalls on a
-// stem; smaller files are computed inline (a few ms). Results are cached in
+// Where: a file over WORKER_FLOATS (2^22 floats, frames × channels: ~44 s of
+// stereo at 48 kHz) goes to a dedicated Worker (peaksWorker.ts) with its
+// channel buffers TRANSFERRED there and back, so nothing is copied and the
+// UI thread never stalls on a stem; smaller files are computed inline (a few
+// ms). A worker failure never throws: peaksFor then gives no peaks (the lane
+// draws a flat placeholder) and no channels if they were lost in the worker,
+// and the caller decodes the kept original bytes again. Results are cached in
 // session memory by content hash (state/sampleFiles.ts contentHash), so a
 // restore, an undo-revived sample or the same file dropped twice costs
 // nothing. Peaks are never saved.
@@ -24,8 +27,8 @@ import type { Peaks } from '../state/project.svelte';
 
 /** Frames per min/max pair at level 0. */
 export const PEAK_FRAMES = 256;
-/** Files longer than this (frames) are analysed in a Worker. */
-export const WORKER_FRAMES = 2 ** 21;
+/** Files bigger than this (frames × channels) are analysed in a Worker. */
+export const WORKER_FLOATS = 2 ** 22;
 
 /** Peaks plus the file's length in frames (where the last, partial pair ends). */
 export interface PeaksData extends Peaks {
@@ -115,6 +118,8 @@ export function peaksWorkerReply(channels: Float32Array[]): { msg: PeaksReply; t
 export interface PeaksWorkerLike {
   onmessage: ((e: { data: unknown }) => void) | null;
   onerror: ((e: unknown) => void) | null;
+  /** The reply could not be deserialized (the buffers are gone with it). */
+  onmessageerror: ((e: unknown) => void) | null;
   postMessage(msg: unknown, transfer: Transferable[]): void;
   terminate(): void;
 }
@@ -135,9 +140,9 @@ export function peaksInWorker(channels: Float32Array[], spawn: () => PeaksWorker
       w.terminate();
       resolve(e.data as PeaksReply);
     };
-    w.onerror = (e) => {
+    w.onerror = w.onmessageerror = (e) => {
       w.terminate();
-      reject(new Error(`waveform analysis failed${e instanceof ErrorEvent ? `: ${e.message}` : ''}`));
+      reject(new Error(`waveform analysis failed${typeof ErrorEvent !== 'undefined' && e instanceof ErrorEvent ? `: ${e.message}` : ''}`));
     };
     const req: PeaksRequest = { channels };
     w.postMessage(req, channels.map((c) => c.buffer as ArrayBuffer));
@@ -164,19 +169,37 @@ function remember(key: string, pk: PeaksData) {
 }
 
 /**
+ * What peaksFor gives: the peaks and the channels to use from now on; or,
+ * after a worker failure, no peaks, and `channels` null when the worker
+ * took them with it (decode the kept bytes again).
+ */
+export type PeaksResult = PeaksReply | { peaks: null; channels: Float32Array[] | null };
+
+/**
  * Peaks for a decoded sample, from the cache (`hash`: its content hash) or
- * computed: in a Worker past WORKER_FRAMES (when Workers exist), else
+ * computed: in a Worker past WORKER_FLOATS (when Workers exist), else
  * inline. Always use the returned `channels` afterwards (a worker run
- * transferred the originals away).
+ * transferred the originals away). Never throws (see PeaksResult).
  */
 export async function peaksFor(
   channels: Float32Array[], hash: string | null, spawn: () => PeaksWorkerLike = spawnWorker,
-): Promise<PeaksReply> {
+): Promise<PeaksResult> {
   const hit = hash !== null ? cache.get(hash) : undefined;
   if (hit) return { peaks: hit, channels };
-  const big = (channels[0]?.length ?? 0) > WORKER_FRAMES;
+  const floats = channels.reduce((n, c) => n + c.length, 0);
   const canSpawn = spawn !== spawnWorker || typeof Worker !== 'undefined';
-  const r = big && canSpawn ? await peaksInWorker(channels, spawn) : { peaks: computePeaks(channels), channels };
-  if (hash !== null) remember(hash, r.peaks);
-  return r;
+  if (!(floats > WORKER_FLOATS && canSpawn)) {
+    const peaks = computePeaks(channels);
+    if (hash !== null) remember(hash, peaks);
+    return { peaks, channels };
+  }
+  try {
+    const r = await peaksInWorker(channels, spawn);
+    if (hash !== null) remember(hash, r.peaks);
+    return r;
+  } catch {
+    // Not cached. A worker that never started left the buffers attached.
+    const kept = channels.length > 0 && channels.every((c) => c.byteLength > 0);
+    return { peaks: null, channels: kept ? channels : null };
+  }
 }

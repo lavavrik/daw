@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PEAK_FRAMES, WORKER_FRAMES, computePeaks, peaksFor, peaksInWorker, peaksLevel, peaksWorkerReply } from './peaks';
+import { PEAK_FRAMES, WORKER_FLOATS, computePeaks, peaksFor, peaksInWorker, peaksLevel, peaksWorkerReply } from './peaks';
 import type { PeaksWorkerLike } from './peaks';
 
 /** A worker stand-in with postMessage semantics: structuredClone with `transfer` detaches the sender's buffers. */
@@ -8,6 +8,7 @@ function fakeWorker(): PeaksWorkerLike & { terminated: boolean } {
     terminated: false,
     onmessage: null as ((e: { data: unknown }) => void) | null,
     onerror: null as ((e: unknown) => void) | null,
+    onmessageerror: null as ((e: unknown) => void) | null,
     postMessage(msg: unknown, transfer: Transferable[]) {
       const inside = structuredClone(msg, { transfer }) as { channels: Float32Array[] };
       const reply = peaksWorkerReply(inside.channels);
@@ -93,19 +94,52 @@ describe('peaks', () => {
     expect(r.peaks).toEqual(computePeaks([copyA, copyB]));
     expect(w.terminated).toBe(true);
 
-    // Small files are computed inline; big ones go to the worker; both cache by content hash.
-    expect(WORKER_FRAMES).toBe(2 ** 21);
+    // Small files are computed inline; big ones (frames × channels) go to the worker; both cache by content hash.
+    expect(WORKER_FLOATS).toBe(2 ** 22);
     let spawned = 0;
     const small = [new Float32Array(1000).fill(0.25)];
     const s1 = await peaksFor(small, 'hash-small', () => (spawned++, fakeWorker()));
     expect(spawned).toBe(0);
-    expect(s1.channels[0]).toBe(small[0]);
+    expect(s1.channels![0]).toBe(small[0]);
     const s2 = await peaksFor([new Float32Array(1000)], 'hash-small', () => (spawned++, fakeWorker()));
     expect(s2.peaks).toBe(s1.peaks); // cached: same object, not recomputed
-    const big = [new Float32Array(WORKER_FRAMES + 1)];
+    // Counted in floats: a stereo file half as long goes too, a mono one of the same length does not.
+    const monoHalf = [new Float32Array(WORKER_FLOATS / 2 + 1)];
+    await peaksFor(monoHalf, 'hash-mono', () => (spawned++, fakeWorker()));
+    expect(spawned).toBe(0);
+    const big = [new Float32Array(WORKER_FLOATS / 2 + 1), new Float32Array(WORKER_FLOATS / 2 + 1)];
     const g = await peaksFor(big, 'hash-big', () => (spawned++, fakeWorker()));
     expect(spawned).toBe(1);
     expect(big[0].byteLength).toBe(0);
-    expect(g.channels[0].length).toBe(WORKER_FRAMES + 1);
+    expect(g.channels![0].length).toBe(WORKER_FLOATS / 2 + 1);
+  });
+
+  it('a worker failure never throws: no peaks, and the channels say whether they were lost', async () => {
+    // Fails after taking the buffers (they were transferred): no channels come back.
+    const dying = (kind: 'error' | 'messageerror'): PeaksWorkerLike => {
+      const w: PeaksWorkerLike = {
+        onmessage: null, onerror: null, onmessageerror: null,
+        postMessage(msg: unknown, transfer: Transferable[]) {
+          structuredClone(msg, { transfer }); // the worker has them now
+          queueMicrotask(() => (kind === 'error' ? w.onerror : w.onmessageerror)?.({ data: null }));
+        },
+        terminate() {},
+      };
+      return w;
+    };
+    for (const kind of ['error', 'messageerror'] as const) {
+      const ch = [new Float32Array(WORKER_FLOATS + 1)];
+      expect(await peaksFor(ch, null, () => dying(kind))).toEqual({ peaks: null, channels: null });
+      expect(ch[0].byteLength).toBe(0);
+    }
+    // A worker that cannot even start never took them: they come back, without peaks (no inline stall).
+    const ch = [new Float32Array(WORKER_FLOATS + 1)];
+    const r = await peaksFor(ch, 'hash-nostart', () => { throw new Error('no workers here'); });
+    expect(r.peaks).toBeNull();
+    expect(r.channels![0]).toBe(ch[0]);
+    // A failure is not cached.
+    let spawned = 0;
+    await peaksFor([new Float32Array(WORKER_FLOATS + 1)], 'hash-nostart', () => (spawned++, fakeWorker()));
+    expect(spawned).toBe(1);
   });
 });

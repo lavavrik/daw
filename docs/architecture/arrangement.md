@@ -126,16 +126,25 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
   lane (or the ruler) only shows "Drop audio on an audio track or below the
   tracks". Every file is imported first (`sampleImport.ts`: decode, budget,
   peaks, upload); the track and all clips are then placed inside one
-  `edit()`, so one undo removes the whole drop. A DEFERRED load (dropped
-  while playing) is placed at once on its sample id (the engine chases it
-  in when it lands) and drawn hatched while `pendingSampleIds()` has it.
+  `edit()`, so one undo removes the whole drop (`state/audioDrop.ts`). A
+  DEFERRED load (dropped while playing) is registered with `sampleLoads.ts`
+  right after its own import (a Stop during a later file's import settles
+  it), placed at once on its sample id (the engine chases it in when it
+  lands) and drawn hatched while `pendingSampleIds()` has it. If it fails,
+  the clip keeps its id but `sampleFailed(id)` marks it: drawn red-hatched,
+  "sample failed to load" (lane, overlay `data-state`, Clip tab), and the
+  banner names the track that went silent.
 - **Waveforms.** `computePeaks` keeps Int8 min/max per 256 frames per
   channel plus 4× coarser levels down to one pair; `peaksLevel` picks the
   coarsest level with at least one pair per pixel. Computed after decode and
   before the upload transfers the channels (import and project load; the
   autosave restore loads the same way; the audio restart keeps them), in a
-  Worker past 2^21 frames with the buffers transferred both ways, cached by
-  content hash. The lane maps a pixel to file time (`offset + (tick −
+  Worker past 2^22 floats (frames × channels) with the buffers transferred
+  both ways, cached by content hash. A Worker failure never loses the
+  sample: `peaksFor` returns no peaks (and no channels if the worker took
+  them), and the import or load decodes the kept bytes again (flat
+  placeholder). While playing, only the playhead canvas over the lanes and
+  the ruler redraw each frame. The lane maps a pixel to file time (`offset + (tick −
   start) / ticksPerSecond`, wrapped for a loop clip) and peaks to file
   fractions, so peaks made at one sample rate draw right at another.
 - **Edges.** A one-shot clip's right edge stops at `audioEdges(...).maxEnd`

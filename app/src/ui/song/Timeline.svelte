@@ -86,10 +86,9 @@
   import type { CommandSink } from '../../state/actions';
   import { addDrumTrack, selectTrack } from '../../state/actions';
   import type { ImportEngine } from '../../state/sampleImport';
-  import { importSample } from '../../state/sampleImport';
-  import { deferSampleAssign, pendingSampleIds } from '../../state/sampleLoads';
+  import { dropAudioFiles } from '../../state/audioDrop';
+  import { pendingSampleIds, sampleFailed } from '../../state/sampleLoads';
   import { banners } from '../../state/banners.svelte';
-  import { edit } from '../../state/edits';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
   import { peaksFrames, peaksLevel } from '../../audio/peaks';
   import { clipFocus, sampleName } from './clipFocus.svelte';
@@ -102,7 +101,7 @@
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
   } from '../../state/song-actions';
-  import { addAudioClip, addAudioTrack, clipGainLinear, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
+  import { addAudioTrack, clipGainLinear, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
@@ -130,6 +129,8 @@
   let root = $state<HTMLDivElement | null>(null);
   let lanesEl = $state<HTMLDivElement | null>(null);
   let canvas = $state<HTMLCanvasElement | null>(null);
+  /** Transparent canvas over the lanes: the playhead only (drawPlayhead). */
+  let ovCanvas = $state<HTMLCanvasElement | null>(null);
   let rulerCv = $state<HTMLCanvasElement | null>(null);
   let width = $state(0);
   let dpr = $state(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
@@ -350,12 +351,13 @@
       if (isAudio(c)) drawAudio(ctx, t.color, c, x0, x1, y, h, v, W, pending);
       else drawRepeats(ctx, t.color, repeatTicks(c.start, c.len, c.offset, patLenOf(t, c)), x0, x1, y, h, v);
       if (w > 18) { // name in the track colour; pinned to the left edge while scrolled
-        const name = patNameOf(t, c);
+        const st = isAudio(c) ? audioState(c, pending) : null;
+        const name = patNameOf(t, c) + (st === 'failed' ? ' · sample failed to load' : '');
         if (isAudio(c)) { // over the waveform: on a dark backing
           ctx.fillStyle = 'rgba(18,19,23,0.75)';
           ctx.fillRect(Math.max(x0, 0) + 2, y + 3, ctx.measureText(name).width + 4, 12);
         }
-        ctx.fillStyle = isAudio(c) && c.sampleId === null ? MISSING : t.color;
+        ctx.fillStyle = st === 'missing' || st === 'failed' ? MISSING : t.color;
         ctx.fillText(name, Math.max(x0, 0) + 4, y + 5);
       }
       ctx.restore();
@@ -380,7 +382,22 @@
       ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
+  }
 
+  /**
+   * The playhead / parked position over the lanes, on its own transparent
+   * canvas on top: while playing only this (and the ruler) is redrawn every
+   * frame, never the lanes and their waveforms.
+   */
+  function drawPlayhead() {
+    const cv = ovCanvas;
+    const v = view;
+    const W = width;
+    const H = lanesH;
+    if (!cv || !v || W <= 0 || H <= 0) return;
+    const ctx = sizeCanvas(cv, W, H);
+    if (!ctx) return;
+    ctx.clearRect(0, 0, W, H);
     const m = marker();
     if (m) {
       const x = Math.round(tickToX(m.t, v)) + 0.5;
@@ -420,6 +437,20 @@
   }
 
   const MISSING = '#ff8a92';
+
+  /**
+   * What is wrong with an audio clip's sample, if anything: `missing` (none:
+   * not in the project folder), `failed` (its deferred load failed:
+   * sampleLoads.sampleFailed; it plays nothing), `pending` (its deferred
+   * load waits for Stop). Drawn hatched (red for the first two), and said in
+   * the overlay's aria-label and data-state.
+   */
+  function audioState(c: AudioClip, pending: ReadonlySet<number>): 'missing' | 'failed' | 'pending' | null {
+    if (c.sampleId === null) return 'missing';
+    if (sampleFailed(c.sampleId)) return 'failed';
+    return pending.has(c.sampleId) ? 'pending' : null;
+  }
+  const STATE_TEXT = { missing: 'missing sample', failed: 'sample failed to load: stop and drop it again', pending: 'loads when playback stops' };
 
   /** Diagonal stripes over [x0, x1) × [y, y + h) (the caller has clipped to the clip). */
   function hatch(ctx: CanvasRenderingContext2D, color: string, x0: number, x1: number, y: number, h: number) {
@@ -548,8 +579,9 @@
       ctx.fill();
     }
 
-    if (c.sampleId === null) hatch(ctx, MISSING, x0, x1, y, h);
-    else if (pending.has(c.sampleId)) hatch(ctx, color, x0, x1, y, h);
+    const st = audioState(c, pending);
+    if (st === 'missing' || st === 'failed') hatch(ctx, MISSING, x0, x1, y, h);
+    else if (st === 'pending') hatch(ctx, color, x0, x1, y, h);
   }
 
   function drawRuler() {
@@ -608,6 +640,7 @@
 
   function draw() {
     drawLanes();
+    drawPlayhead();
     drawRuler();
   }
   $effect(() => draw());
@@ -631,7 +664,8 @@
         wasVisible = visible || !!drag;
       }
       if (root) root.dataset.playhead = playTick === null ? '' : String(Math.round(playTick));
-      draw();
+      drawPlayhead(); // the lanes redraw only when something they show changes ($effect above)
+      drawRuler();
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -815,6 +849,10 @@
           // A lane in the group's way is not an Audio lane (or is full): time only.
           moveClips(p, engine, d.ids, a.start + dt - f.c.start);
           flashHint('Audio clips move between audio tracks only');
+        } else if (dLane !== 0) {
+          // On another track now: select it, so the Clip tab follows the clip.
+          const nf = byId.get(a.id);
+          if (nf && isAudio(nf.c)) focusAudio(nf.t, nf.c);
         }
       });
     } else {
@@ -900,7 +938,11 @@
       const origs = d.kind === 'move' ? d.orig : [d.orig];
       if (d.kind === 'move') { // audio clips moved to another lane go back first
         const f = byId.get(d.anchor.id);
-        if (f && f.lane !== d.anchorLane) moveClips(p, engine, d.ids, 0, d.anchorLane - f.lane);
+        if (f && f.lane !== d.anchorLane) {
+          moveClips(p, engine, d.ids, 0, d.anchorLane - f.lane);
+          const nf = byId.get(d.anchor.id);
+          if (nf && isAudio(nf.c)) focusAudio(nf.t, nf.c);
+        }
       }
       for (const o of origs) resizeClip(p, engine, o.id, { start: o.start, len: o.len, offset: o.offset });
     }
@@ -1114,11 +1156,9 @@
   }
 
   /**
-   * Import every dropped file (one at a time, in order; a failed one says why
-   * and is skipped), then place them all in ONE edit: a new Audio track when
-   * `trackId` is null, then the clips one after another from `start`. A
-   * DEFERRED load (dropped while playing) is placed at once and drawn
-   * hatched until its sample lands at Stop.
+   * The drop's files, imported and placed by state/audioDrop.ts (one edit;
+   * deferred loads registered as they land), then selected: the first clip
+   * is the one the Clip tab shows.
    */
   async function placeDropped(pending: Promise<File[]>, trackId: string | null, start: number) {
     let files: File[];
@@ -1128,40 +1168,17 @@
       banners.error = err instanceof Error ? err.message : String(err);
       return;
     }
-    const gen = p.generation;
-    const alive = () => p.generation === gen && (trackId === null || p.tracks.some((t) => t.id === trackId));
-    const loaded: { id: number; name: string; deferred: boolean }[] = [];
-    for (const f of files) {
-      const r = await importSample(p, engine, f, alive);
-      if (r.ok) loaded.push(r);
-      else if (r.error) banners.error = r.error;
+    const r = await dropAudioFiles(p, engine, files, trackId, start);
+    if (!r.track) {
+      if (r.imported && trackId === null && p.tracks.length >= MAX_TRACKS) flashHint(FULL_TITLE);
+      return;
     }
-    if (!loaded.length || !alive() || p.loading) return;
-    let track = null as Track | null; // set inside the edit
-    const placed = edit(p, loaded.length > 1 ? 'Drop audio files' : 'Drop audio file', () => {
-      const t = trackId ? p.tracks.find((x) => x.id === trackId) ?? null : addAudioTrack(p, engine);
-      if (!t) return [];
-      track = t;
-      const out: AudioClip[] = [];
-      let at = start;
-      for (const r of loaded) {
-        if (at >= MAX_SONG_TICKS) break;
-        const c = addAudioClip(p, engine, t.id, { sampleId: r.id, start: at });
-        if (!c) break; // 256 clips on this lane
-        out.push(c);
-        at = c.start + c.len;
-      }
-      return out;
-    });
-    for (const r of loaded) if (r.deferred) deferSampleAssign(r.id, r.name, () => p.peaksVersion++); // the clip already plays it
-    if (!track) return flashHint(FULL_TITLE);
-    if (placed.length) {
-      selected = new Set(placed.map((c) => c.id));
-      focusAudio(track, placed[0]);
+    if (r.placed.length) {
+      selected = new Set(r.placed.map((c) => c.id));
+      focusAudio(r.track, r.placed[0]);
       p.mixerOpen = false;
-      if (loaded.length === files.length) banners.error = null; // a stale import error is moot now
     }
-    if (placed.length < loaded.length) flashHint('Some files did not fit (song end or 256 clips per track)');
+    if (r.placed.length < r.imported) flashHint('Some files did not fit (song end or 256 clips per track)');
   }
 
   // ---- keyboard (see KEYBOARD FOCUS RULE at the top) ---------------------------
@@ -1220,14 +1237,17 @@
         ? t.clips.map((c) => {
           const left = tickToX(c.start, v);
           const name = patNameOf(t, c);
-          void p.peaksVersion;
+          void p.peaksVersion; // peaks landed, a deferred load settled or failed
+          void banners.notice;
+          const state = isAudio(c) ? audioState(c, new Set(pendingSampleIds())) : null;
           return {
             c,
             name,
             peaks: isAudio(c) && c.sampleId !== null && !!p.sampleMeta.get(c.sampleId)?.peaks,
+            state,
             left,
             width: Math.max(MIN_CLIP_W, c.len / v.ticksPerPx),
-            label: `${t.name} · ${name} · ${barRange(c.start, c.len)}`,
+            label: `${t.name} · ${name} · ${barRange(c.start, c.len)}${state && state !== 'missing' ? ` · ${STATE_TEXT[state]}` : ''}`,
           };
         })
         : [],
@@ -1291,6 +1311,7 @@
         onkeydown={key}
       >
         <canvas bind:this={canvas} class="lanes-cv" data-testid="tl-canvas"></canvas>
+        <canvas bind:this={ovCanvas} class="lanes-cv ov" data-testid="tl-playhead-canvas" aria-hidden="true"></canvas>
         {#each overlays as o, lane (o.t.id)}
           <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{lane * LANE_H}px" title="{o.t.name}: {isPatternTrack(o.t) ? `click to place ${currentPattern(o.t).name}` : 'drop audio files here'}">
             {#each o.clips as k (k.c.id)}
@@ -1308,6 +1329,7 @@
                   data-loop={a.loop}
                   data-gain={a.gain}
                   data-peaks={k.peaks ? 1 : 0}
+                  data-state={k.state ?? ''}
                   data-selected={selected.has(a.id)}
                   aria-label={k.label}
                   title="{k.label} — drag to move (also onto another audio track), edges trim, double-click for the Clip tab, right-click for more"
@@ -1390,7 +1412,7 @@
           data-testid="tl-menu-loop"
           title="Loop to fill: the file repeats until the clip ends (off: it plays once and its right edge stops at the file's end)"
           onclick={menuLoop}
-        ><span class="check">{menuClip.c.loop ? '✓' : ''}</span>Loop to fill</button>
+        ><span class="check" aria-hidden="true">{menuClip.c.loop ? '✓' : ''}</span>Loop to fill</button>
       {/if}
       <button role="menuitem" data-testid="tl-menu-delete" onclick={menuDelete}>
         Delete{menuDeleteIds.length > 1 ? ` ${menuDeleteIds.length} clips` : ''}
@@ -1410,6 +1432,7 @@
   .lanes { position: relative; min-width: 0; overflow: hidden; outline: none; touch-action: none; background: #17181c; }
   .lanes:focus-visible { box-shadow: inset 0 0 0 1px #f0a23a88; }
   .lanes-cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .lanes-cv.ov { pointer-events: none; z-index: 1; }
   .lane { position: absolute; left: 0; right: 0; height: var(--lane-h); }
   .clip { position: absolute; top: 2px; height: 23px; }
   .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: #4d505b; font-size: 11px; }

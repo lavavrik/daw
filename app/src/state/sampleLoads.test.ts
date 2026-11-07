@@ -4,7 +4,7 @@ import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { banners } from './banners.svelte';
 import { Project } from './project.svelte';
-import { deferSampleAssign, deferSampleLoad, installSampleLoads, pendingSampleLoads, rebindSampleLoads } from './sampleLoads';
+import { deferSampleAssign, deferSampleLoad, installSampleLoads, pendingSampleLoads, rebindSampleLoads, sampleFailed } from './sampleLoads';
 
 function fakeEngine() {
   const sent: number[][] = [];
@@ -146,6 +146,37 @@ describe('deferred sample loads across an audio restart', () => {
     p.sampleMeta.set(25, { seconds: 1, channels: 1, peaks: null });
     rebindSampleLoads(fakeEngine().e, new Map([[25, Err.OUT_OF_MEMORY]]));
     expect(p.arenaFloats).toBe(1000);
+    undo();
+  });
+});
+
+describe('failed deferred loads (audio clips)', () => {
+  it('a failed deferred load is marked failed and its onFail runs; a new session or a good restart upload forgets it', () => {
+    const p = new Project();
+    const { e } = fakeEngine();
+    const undo = installSampleLoads(p, e);
+    banners.error = null;
+    const failed: number[] = [];
+    deferSampleAssign(3, 'vox', () => {}, (id) => failed.push(id));
+    deferSampleAssign(4, 'loop', () => {}, (id) => failed.push(id));
+    deferSampleAssign(5, 'gone', () => {}, (id) => failed.push(id));
+    e.onSampleLoaded!(3, Err.OUT_OF_MEMORY);
+    e.onSampleLoaded!(4, Err.OK);
+    e.onSampleLoaded!(5, HostErr.RESET); // its session is gone: not a failure to show
+    expect(failed).toEqual([3]);
+    expect(sampleFailed(3)).toBe(true);
+    expect(sampleFailed(4)).toBe(false);
+    expect(sampleFailed(5)).toBe(false);
+    expect(banners.error).toMatch(/vox/);
+    // An audio restart that uploads it fine: no longer failed.
+    deferSampleAssign(6, 'pad', () => {}, () => {});
+    e.onSampleLoaded!(6, Err.OUT_OF_MEMORY);
+    rebindSampleLoads(fakeEngine().e, new Map([[6, Err.OK]]));
+    expect(sampleFailed(6)).toBe(false);
+    expect(sampleFailed(3)).toBe(true);
+    // A new session (project load: ids start over) forgets every failure.
+    p.generation++;
+    expect(sampleFailed(3)).toBe(false);
     undo();
   });
 });

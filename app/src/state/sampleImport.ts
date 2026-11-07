@@ -70,11 +70,17 @@ export async function importSample(
   const kept = await sampleFile(file.name, file.type, bytes); // hashed async, before the id is taken
   // Waveform peaks (audio/peaks.ts) before the upload transfers the channels
   // away; a big file goes to a Worker and its buffers come back in `channels`.
-  let peaks: Peaks;
-  try {
-    ({ peaks, channels } = await peaksFor(channels, kept.hash));
-  } catch {
-    return restarted() ? again : unreadable;
+  // A worker that died with them: decode the kept bytes again, no peaks (the
+  // lane draws a flat placeholder).
+  const pk = await peaksFor(channels, kept.hash);
+  const peaks: Peaks | null = pk.peaks;
+  if (pk.channels) channels = pk.channels;
+  else {
+    try {
+      channels = await decodeBytes(bytes.slice(0), file.name, engine.context);
+    } catch {
+      return restarted() ? again : unreadable;
+    }
   }
   if (restarted()) return again;
   // A project load started meanwhile: this drop belonged to the old session.

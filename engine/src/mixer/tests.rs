@@ -727,3 +727,40 @@ fn removing_a_muted_track_never_leaks_its_fade() {
         }
     }
 }
+
+/// FNV-1a over the bit patterns of `xs` (a bit-exact fingerprint).
+fn fingerprint(xs: &[f32]) -> u64 {
+    xs.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| {
+        x.to_bits().to_le_bytes().iter().fold(h, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+    })
+}
+
+#[test]
+fn mixer_delay_reverb_unchanged() {
+    // Plan 6 moved the Delay/Reverb rings behind a borrowed-buffer split so
+    // rack FX modules can use pooled memory (rack/fx_pool.rs). The mixer's
+    // own returns must sound bit-identical: a sine held into both returns
+    // (pre-fader sends, track fader off, so only the returns are heard),
+    // with return params moved mid-tail. The fingerprints were recorded on
+    // the pre-refactor code.
+    let mut e = Engine::new(SR);
+    sine_patch(&mut e, 0, 0.8);
+    mix(&mut e, 0, P_FADER, -60.0);
+    mix(&mut e, 0, P_SEND_A, 0.0);
+    mix(&mut e, 0, P_SEND_B, 0.0);
+    mix(&mut e, 0, P_SEND_A_PRE, 1.0);
+    mix(&mut e, 0, P_SEND_B_PRE, 1.0);
+    mix(&mut e, MIX_DELAY, P_DELAY_FEEDBACK, 0.7);
+    hold(&mut e, 0, 57.0);
+    let (mut l, mut r) = render(&mut e, 24000);
+    ok(e.command(OP_NOTE_OFF, 57.0, 0.0, 0.0, 0.0));
+    mix(&mut e, MIX_REVERB, P_REV_SIZE, 1.0);
+    mix(&mut e, MIX_REVERB, P_REV_DECAY, 6.0);
+    mix(&mut e, MIX_DELAY, P_DELAY_TIME, 8.0);
+    let (l2, r2) = render(&mut e, 72000);
+    l.extend_from_slice(&l2);
+    r.extend_from_slice(&r2);
+    assert!(l.iter().chain(&r).all(|x| x.is_finite()));
+    assert!(l[48000..].iter().any(|x| x.abs() > 0.01), "the returns are heard");
+    assert_eq!((fingerprint(&l), fingerprint(&r)), (260100827811768916, 5996882931469960278));
+}

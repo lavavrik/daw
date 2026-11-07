@@ -10,6 +10,9 @@ import type { DrumTrack } from '../state/project.svelte';
 import { serialize } from '../project/serialize';
 import { createHistory } from './history';
 import { diffApply } from './diffApply';
+import { banners } from '../state/banners.svelte';
+import { createDirtyCheck } from '../project/dirtyCheck';
+import { markSaved } from '../project/session';
 
 /** A project with one drum track, its history installed as App does it. */
 function setup(opts: { coalesceTask?: boolean; cap?: number } = {}) {
@@ -116,6 +119,39 @@ describe('history', () => {
     s.h.undo();
     expect(s.p.dirty).toBe(true);
     expect(s.p.version).toBeGreaterThan(v);
+  });
+
+  it('an apply that throws clears the history and raises an error banner', () => {
+    const p = new Project();
+    addDrumTrack(p, { send: () => true });
+    let fail = false;
+    const sink = { send: () => true };
+    const h = createHistory({
+      snapshot: () => serialize(p),
+      apply: (from, to) => { if (fail) throw new Error('boom'); diffApply(p, sink, from, to); },
+    });
+    p.history = h;
+    const d = p.tracks[0] as DrumTrack;
+    toggleStep(p, sink, d.id, d.rows[0].id, 2);
+    banners.error = null;
+    fail = true;
+    expect(h.undo()).toBe(false);
+    expect(banners.error).toBe('Undo failed \u2014 history cleared');
+    expect(h.canUndo).toBe(false);
+    expect(h.canRedo).toBe(false);
+    banners.error = null;
+  });
+
+  it('undo back to the saved state settles dirty to false (edit, save, edit, undo)', async () => {
+    const s = setup();
+    s.toggle(1);
+    markSaved(s.p);
+    s.toggle(2);
+    expect(s.h.undo()).toBe(true);
+    expect(s.p.dirty).toBe(true); // marked at once ...
+    createDirtyCheck(s.p, { idle: (fn) => fn(), delayMs: 0 }).poke();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(s.p.dirty).toBe(false); // ... settled by the fingerprint check
   });
 
   it('undo and redo are refused while a load replaces the session; clear forgets everything', () => {

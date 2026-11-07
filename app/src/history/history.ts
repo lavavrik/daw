@@ -22,6 +22,7 @@
 // dropped (selecting is not an edit; projectFingerprint ignores it too).
 // A new entry clears the redo stack; at most `cap` entries are kept.
 import type { ProjectJson } from '../project/schema';
+import { banners } from '../state/banners.svelte';
 import { fingerprintOf } from '../project/serialize';
 
 export interface HistoryOptions {
@@ -152,6 +153,18 @@ export function createHistory(o: HistoryOptions): History {
     applying = true;
     try {
       o.apply(o.snapshot(), target(e));
+    } catch (err) {
+      // The project may be half-applied, so no entry can be trusted: drop
+      // them all (the popped one included) and say so.
+      console.error('history apply failed', err);
+      applying = false;
+      undo.length = 0;
+      redo.length = 0;
+      open = null;
+      last = null;
+      changed();
+      banners.error = 'Undo failed \u2014 history cleared';
+      return false;
     } finally {
       applying = false;
     }

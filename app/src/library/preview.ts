@@ -170,9 +170,14 @@ export function createPreview(ctx: PreviewContext, onChange: (key: string | null
     if (mine !== token) return;
     const compressed = COMPRESSED.test(key) || COMPRESSED_TYPE.test(blob.type);
     if (blob.size > (compressed ? streamCompressedBytes : streamBytes)) {
-      let s: { stop(): void };
+      // `h` exists before stream() starts: onEnded may fire while it is
+      // still starting (a very short file), before `s` is known.
+      let s: { stop(): void } | null = null;
+      let ended = false;
+      const h = () => s?.stop();
       try {
         s = await stream(blob, () => {
+          ended = true;
           if (halt !== h) return;
           halt = null;
           set(null);
@@ -180,8 +185,8 @@ export function createPreview(ctx: PreviewContext, onChange: (key: string | null
       } catch (e) {
         return fail(e);
       }
-      const h = () => s.stop();
       if (mine !== token) return s.stop(); // superseded while starting
+      if (ended) return set(null); // already over
       halt = h;
       return;
     }

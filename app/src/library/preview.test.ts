@@ -154,6 +154,20 @@ describe('sample preview', () => {
     expect(states).toEqual(['huge.wav', null, 'huge.wav', null]);
   });
 
+  it('a stream that ends while it is still starting clears the preview (no TDZ error, P8)', async () => {
+    const { ctx } = fakeCtx();
+    const states: (string | null)[] = [];
+    // A very short file: onEnded fires before play() has resolved.
+    const stream: NonNullable<PreviewOptions['stream']> = async (_blob, onEnded) => {
+      onEnded();
+      return { stop: () => {} };
+    };
+    const pv = createPreview(ctx, (k) => states.push(k), { streamBytes: 100, stream });
+    await pv.play('blip.wav', async () => new Blob([new Uint8Array(101)]));
+    expect(pv.current).toBeNull();
+    expect(states).toEqual(['blip.wav', null]);
+  });
+
   it('compressed files stream from a lower size (they expand ~10x when decoded)', async () => {
     const { ctx, decodes } = fakeCtx();
     const s = fakeStreamer();

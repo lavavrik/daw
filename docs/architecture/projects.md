@@ -154,8 +154,14 @@ O(1) edit signal as the unsaved mark; a load never bumps it). A write runs
 **5 s after the last change** (debounced; continuous editing still writes at
 least every 30 s) and at once on `visibilitychange` → hidden (`flush`). One
 write at a time; a change during a write is written after it. Never while
-`p.loading` (retried after). A Save / Save As drops the pending write
-(`cancel`): that state is in the folder.
+`p.loading` (retried after). A Save / Save As drops the pending write only
+if no edit landed while its files were written (below).
+
+**Snapshot cost:** a write's `serialize` + `JSON.stringify` is synchronous
+(a consistent snapshot). For a maximal project (32 drum tracks × 16 patterns,
+16 rows × 64 steps all filled) it measured **~37 ms** in the unit test
+(`autosave.test.ts`, node); typical projects are a small fraction of that.
+Sample bytes are never copied or compared on the UI thread.
 
 **Where:** OPFS (`navigator.storage.getDirectory()`), per browser profile:
 
@@ -187,6 +193,30 @@ other-format marker counts as none) and the pool samples it lists;
 `autosave.tmp/` is never read. The `serialize` snapshot is taken
 synchronously at the start of a write, so no edit can interleave with it.
 
+**Several tabs** (one OPFS per browser profile):
+
+- every write, read and discard runs under the Web Lock `daw-autosave`, so
+  one tab's sweep can never remove a sample another tab's write is about to
+  list;
+- only the tab holding `daw-autosave-owner` (requested with `ifAvailable`
+  when audio starts, kept for the tab's lifetime) autosaves or offers a
+  restore. Any other tab shows the hint "Autosave is off — this project is
+  open in another tab" and never writes, so it cannot offer (or "Start
+  fresh" away) the first tab's live session. Without Web Locks a tab
+  assumes it is alone.
+
+**Failures** (e.g. `QuotaExceededError`): one error banner "Autosave failed:
+<reason>" (not repeated until a write succeeds, which clears it). The write
+is retried on its own with a backoff — 5, 10, 20, 40 s, then every 60 s —
+and edits meanwhile do not bring it forward, so a full disk never means a
+full rewrite on every edit.
+
+**Explicit saves** (`session.saveTo`): the snapshot `{ version, t }` and the
+fingerprint are taken before `serialize`; the files are written async, so
+edits can land meanwhile. `savedFingerprint` is the written state (those
+edits stay "● unsaved"), the last explicit save is recorded as `t`, and
+the pending autosave is dropped only if `p.version` is unchanged.
+
 **Restore on start:** after audio starts, App peeks the marker. If it is
 newer than the **last explicit save** (Save / Save As record `Date.now()` in
 `localStorage["daw.lastExplicitSave"]`; none recorded = any autosave
@@ -204,7 +234,3 @@ written once it is answered). A New / Open while it is open answers it
   (`savedFingerprint = NEVER_SAVED`, which no fingerprint matches).
 - **Start fresh** → `discardAutosave`: the marker is removed first, then
   `autosave/` and `autosave.tmp/`.
-
-A failed write shows one error banner ("Autosave failed — …"; not repeated
-until a write succeeds, which clears it) and is retried on the next change.
-

@@ -149,11 +149,25 @@ describe('Recorder', () => {
     s.rec.noteOn(62, 100, BAR_TICKS + 480); // other pitch, same start: kept
     s.rec.noteOff(62, BAR_TICKS + 600);
     expect(s.notes().map((n) => [n.pitch, n.start])).toEqual([[60, 480], [62, 480]]);
-    // A new pass may write it again (merge = overdub on top of the pattern).
-    s.rec.onTransport(false, 2 * BAR_TICKS);
-    s.rec.onTransport(true, 0);
-    s.rec.noteOn(60, 100, 480);
+  });
+
+  it('overdub skips exact duplicates across passes (record, quantize, record again)', () => {
+    const s = setup(1);
+    rolling(s);
+    s.rec.noteOn(60, 100, 470);
     s.rec.noteOff(60, 720);
+    s.rec.onTransport(false, BAR_TICKS);
+    s.tracks.a.patterns[0].notes[0].start = 480; // quantized between the passes
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(60, 100, 480); // lands exactly on the quantized note: an invisible stack
+    s.rec.noteOff(60, 600);
+    s.rec.noteOn(60, 100, 960); // same pitch, new start: kept
+    s.rec.noteOff(60, 1000);
+    expect(s.notes().map((n) => [n.pitch, n.start])).toEqual([[60, 480], [60, 960]]);
+    // A note drawn by hand counts the same as a recorded one.
+    s.tracks.a.patterns[0].notes.push({ id: 'drawn', idx: 99, pitch: 64, start: 0, len: 100, vel: 100 });
+    s.rec.noteOn(64, 100, BAR_TICKS);
+    s.rec.noteOff(64, BAR_TICKS + 50);
     expect(s.notes()).toHaveLength(3);
   });
 

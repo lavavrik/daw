@@ -196,8 +196,8 @@ thread can extrapolate at constant tempo. If `getOutputTimestamp()` is
 unusable (`contextTime <= 0`, early or headless), the clock falls back to
 `currentTime - (baseLatency + outputLatency)`. Playheads draw the same heard
 tick. Details that matter: pedal (sustain) aware; the 60-tick grace window covers ticks in [-60, 0) (see Count-in); length is at least 1
-(jitter-safe); notes overdub (identical pitch and start in a pass is not
-duplicated); "Undo take" removes exactly the notes the last pass added.
+(jitter-safe); notes overdub (a note with the same pitch and start as one
+already in the pattern -- from any pass, or drawn -- is not written again); "Undo take" removes exactly the notes the last pass added.
 Switching the live-input track mid-pass (selecting, adding or removing a
 synth track) ends every held recorded note at that heard tick on the old track
 -- where the engine cuts the live pitches -- and later notes record on the new
@@ -205,8 +205,9 @@ input track as a new take (`Recorder.onInputChanged`, called from an App
 `$effect` on `liveInputTrack()`). Recording targets the input track's *current pattern*. A pattern switch on
 that track mid-pass works the same way: `selectPattern` calls
 `Project.beforePatternSwitch` *before* the engine switches, so held notes are
-written into the old pattern. The take is keyed by (track, pattern), and so is
-the overdub duplicate set, which is cleared only at pass start and on undo.
+written into the old pattern. The take is keyed by (track, pattern); the
+overdub duplicate check reads that pattern's notes, so an undone note may be
+recorded again.
 "Undo take" for a pattern that is not current first selects that pattern
 (a visible switch that is never undone), then deletes. A take whose track or
 pattern was removed is dropped, and Undo is disabled. Recording is

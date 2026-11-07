@@ -34,9 +34,9 @@
 //   and retarget: the next note-on picks the then-current target (same pass).
 // - Song mode: recording is disabled. toggleArm() is a no-op (disarming
 //   still works), and nothing records while deps.songMode() is true.
-// - Overdub: notes merge into the pattern; the same pitch at the same start
-//   twice in one pass on one (track, pattern) is written once (unless the
-//   first one is gone again, e.g. undone).
+// - Overdub: notes merge into the pattern; a note with the same pitch and
+//   start as one already in that pattern (this pass, an earlier pass, or
+//   drawn) is not written again (unless the first one is gone, e.g. undone).
 // - Undo (plan 7): a *pass* is one undo entry. Every note goes to
 //   deps.addNote with the pass number, and recorderFor writes it through the
 //   history with the coalesce key of that pass, so all of a pass's notes
@@ -125,7 +125,6 @@ export class Recorder implements NoteListener {
   #pattern: NotePatternState | null = null;
   /** Numbers the passes (deps.addNote); bumped at each pass start. */
   #pass = 0;
-  #written = new Set<string>(); // `${trackId}:${patternId}:${pitch}:${start}` written this pass
   #fullReported = false;
   /** Open (held, recording) notes by `${source}:${pitch}`. */
   #open = new Map<string, Open>();
@@ -273,7 +272,6 @@ export class Recorder implements NoteListener {
   #beginPass() {
     this.#pass++;
     this.#open.clear();
-    this.#written.clear();
     this.#newTarget();
   }
 
@@ -299,8 +297,11 @@ export class Recorder implements NoteListener {
     const start = mod(startAbs, period);
     // Negative (jitter between the two timestamp mappings) -> 1.
     const len = Math.min(period, Math.max(1, Math.round(endTick) - startAbs));
-    const dup = `${t.id}:${pat.id}:${o.pitch}:${start}`;
-    if (this.#written.has(dup) && pat.notes.some((n) => n.pitch === o.pitch && n.start === start)) return;
+    // An exact duplicate (same pitch and start) of a note already in the
+    // pattern is skipped -- from this pass, an earlier one (record, quantize,
+    // record again) or drawn by hand. It would stack invisibly under the old
+    // one. One that was undone is gone from the pattern, so it records again.
+    if (pat.notes.some((n) => n.pitch === o.pitch && n.start === start)) return;
     const n = this.deps.addNote(t.id, pat.id, { pitch: o.pitch, start, len, vel: o.vel }, this.#pass);
     if (!n) {
       // Null is also "track was removed mid-pass": only a full pattern is reported.
@@ -310,7 +311,6 @@ export class Recorder implements NoteListener {
       }
       return;
     }
-    this.#written.add(dup);
   }
 }
 

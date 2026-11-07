@@ -84,7 +84,8 @@
 //! [`Rack::automate`] at sub-block boundaries ([`Rack::render_add_auto`]):
 //! the value is written straight into the running module's param, the
 //! module's normal path (a `smooth` param glides over its 5 ms one-pole,
-//! the others apply at the sub-block), and it never queues behind a
+//! the others apply at the sub-block; a silent rack snaps its smoothers
+//! instead, so a song starts at its automated values), and it never queues behind a
 //! structural fade, so only non-integer params are automatable. A module
 //! whose add or removal is still queued is not driven. The hand-set value
 //! (the base) is kept by the lane; the engine re-applies it with
@@ -345,6 +346,7 @@ impl Rack {
     /// removal is still queued, an integer param or a non-finite value.
     pub fn automate(&mut self, idx: usize, param: usize, value: f32) {
         let pending = self.pending_kind(idx);
+        let sounding = self.is_sounding();
         let Some(slot) = self.slots.get_mut(idx) else { return };
         let Some(kind) = slot.module.as_ref().map(Module::kind) else { return };
         if pending != Some(kind) || !value.is_finite() {
@@ -356,6 +358,13 @@ impl Rack {
         }
         if let Some(x) = slot.params.get_mut(param) {
             *x = value.clamp(p.min, p.max);
+        }
+        // A silent rack (a replayed or exported song's first block, or after
+        // a rest) has nothing to glide from: take the value at once.
+        if !sounding {
+            if let Some(m) = slot.module.as_mut() {
+                m.snap();
+            }
         }
     }
 
@@ -1204,6 +1213,25 @@ mod tests {
         assert!(out[(0.004 * SR) as usize..].iter().all(|&x| x == 0.0));
         assert!(r.order().is_empty());
         assert!((0..MAX_MODULES).all(|i| r.kind(i).is_none()));
+    }
+
+    #[test]
+    fn automation_on_a_silent_rack_takes_its_value_at_once() {
+        // A replayed song's first block: no glide from the base to the lane.
+        let mut r = Rack::new(SR);
+        chain(&mut r, 0, 1, 2);
+        assert_eq!(r.set_param(0, LFO_WAVE, SQUARE), OK);
+        assert_eq!(r.set_param(0, LFO_RATE, 0.5), OK);
+        assert_eq!(r.set_param(0, LFO_DEPTH, 1.0), OK);
+        assert!(!r.is_sounding());
+        r.automate(1, VCA_LEVEL, 0.5); // base is 1.0
+        let out = render(&mut r, 4800);
+        let settled = out[out.len() - 1];
+        assert!((settled - 0.4).abs() < 1e-3, "{settled}");
+        // Past the 2 ms fade-in and the LFO's slew, a glide from 1.0 would
+        // still be near 0.5-0.9 here.
+        let early = &out[(0.008 * SR) as usize..(0.012 * SR) as usize];
+        assert!(early.iter().all(|&x| (x - 0.4).abs() < 0.02), "glided from the base: {:?}", &early[..4]);
     }
 
     #[test]

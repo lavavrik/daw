@@ -57,6 +57,11 @@ fn exp_coef(seconds: f32, sr: f32) -> f32 {
 }
 
 impl Adsr {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.sustain.snap();
+    }
+
     pub fn new(sr: f32) -> Adsr {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
         Adsr {

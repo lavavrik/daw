@@ -254,7 +254,7 @@ and drops. Design notes:
   dot (off: the knob's own value plays) and **×** to remove the lane.
 - **Master row.** **+ Master row** (under the timeline) adds a row below the
   last track for the master and the two returns (e.g. "Master · Ceiling",
-  "Reverb · Size"). It stays while it has a lane.
+  "Reverb · Size"). It stays once it has had a lane; **×** hides it.
 - **Editing.**
   - Click empty lane space to add a point (snapped to 1/16, **Alt** = free);
     keep the mouse down to drag it into place.

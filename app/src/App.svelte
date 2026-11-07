@@ -288,6 +288,11 @@
     onSuspended: (ids) => (laneView.suspended = ids),
   });
   provideAutoBus(autoBus);
+  // A new clock means a new engine (an audio restart): it has no overrides.
+  $effect(() => {
+    void clock;
+    untrack(() => autoBus.reset());
+  });
   $effect(() => {
     void project.version;
     void project.playing;

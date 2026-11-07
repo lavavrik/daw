@@ -24,6 +24,13 @@ pub struct Mixer {
 }
 
 impl Mixer {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        for l in &mut self.level {
+            l.snap();
+        }
+    }
+
     /// A mixer with its levels at the catalog defaults.
     pub fn new(sr: f32) -> Mixer {
         Mixer { level: [0, 1, 2, 3].map(|i| Smooth::new(sr, default(K, i))) }

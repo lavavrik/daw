@@ -18,6 +18,11 @@ pub struct Noise {
 }
 
 impl Noise {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.level.snap();
+    }
+
     /// A noise generator at the catalog default level.
     pub fn new(sr: f32) -> Noise {
         Noise { state: SEED, level: Smooth::new(sr, default(K, LEVEL)) }

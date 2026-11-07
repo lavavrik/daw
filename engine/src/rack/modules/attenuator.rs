@@ -21,6 +21,12 @@ pub struct Attenuator {
 }
 
 impl Attenuator {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.amount.snap();
+        self.offset.snap();
+    }
+
     pub fn new(sr: f32) -> Attenuator {
         Attenuator { amount: Smooth::new(sr, default(K, AMOUNT)), offset: Smooth::new(sr, default(K, OFFSET)) }
     }

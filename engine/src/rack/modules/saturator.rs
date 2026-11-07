@@ -44,6 +44,13 @@ pub struct Saturator {
 }
 
 impl Saturator {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.drive.snap();
+        self.mix.snap();
+        self.tone.snap();
+    }
+
     pub fn new(sr: f32) -> Saturator {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
         Saturator {

@@ -1019,6 +1019,25 @@ mod tests {
         o
     }
 
+    /// `reference` shares `Shape` with the code under test, so pin the curve
+    /// with numbers worked out by hand.
+    #[test]
+    fn exp_curves_match_hand_computed_values() {
+        let at = |shape: Shape, a: f32, b: f32| {
+            let mut lane = Lane::new();
+            lane.set_shape(shape);
+            assert_eq!(lane.set_point(0, 0, a, false), Ok(()));
+            assert_eq!(lane.set_point(1, 1000, b, false), Ok(()));
+            lane.value_at(500.0).unwrap() as f64
+        };
+        // Zero zone (min 0): the half-way knob position of 0 -> 2 is 0.058941.
+        let z = at(Shape { min: 0.0, max: 2.0, exp: true }, 0.0, 2.0);
+        assert!((z - 0.058941).abs() < 1e-5, "{z}");
+        // Plain exponential: half-way from 200 to 2000 is the geometric mean, sqrt(200 * 2000).
+        let e = at(Shape { min: 20.0, max: 20000.0, exp: true }, 200.0, 2000.0);
+        assert!((e - 632.456).abs() < 1e-2, "{e}");
+    }
+
     #[test]
     fn lane_eval_matches_fixture() {
         if std::env::var("UPDATE_FIXTURE").as_deref() == Ok("1") {

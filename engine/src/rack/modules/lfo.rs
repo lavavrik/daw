@@ -46,6 +46,11 @@ pub struct Lfo {
 }
 
 impl Lfo {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.depth.snap();
+    }
+
     pub fn new(sr: f32) -> Lfo {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
         Lfo { sr, phase: 0.0, depth: Smooth::new(sr, default(K, DEPTH)), slew: Smooth::with_time(sr, SLEW_SECONDS, 0.0) }

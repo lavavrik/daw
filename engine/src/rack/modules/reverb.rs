@@ -31,6 +31,11 @@ pub struct Reverb {
 }
 
 impl Reverb {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.mix.snap();
+    }
+
     /// A reverb on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Reverb {
         Reverb { pool: PoolSlot::new(FxKind::Reverb, slot), core: ReverbCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }

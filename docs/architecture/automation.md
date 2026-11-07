@@ -123,7 +123,9 @@ lanes, notes and audio clips in one place.
 - **Rack params** are written into the running module at its sub-block
   boundaries (`Rack::automate`). A `smooth` param glides over the module's
   5 ms one-pole. The others (tune, ADSR times, LFO rate) apply at the
-  sub-block, which never clicks.
+  sub-block, which never clicks. On a silent rack (nothing heard for 50 ms,
+  as at the start of a replayed song) the module's smoothers snap to the
+  value instead, so the first automated block has no glide from the base.
 - **The first block** of a freshly added track strip takes a step at once,
   and so do the returns and master before their first block after a reset.
   A replayed project (load, export, restart) therefore starts at its

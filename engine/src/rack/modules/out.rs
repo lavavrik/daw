@@ -21,6 +21,11 @@ pub struct Out {
 }
 
 impl Out {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.level.snap();
+    }
+
     pub fn new(sr: f32) -> Out {
         Out { level: Smooth::new(sr, default(ModuleKind::Out, LEVEL)), l: [0.0; RACK_BLOCK], r: [0.0; RACK_BLOCK] }
     }

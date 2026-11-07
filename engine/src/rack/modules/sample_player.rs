@@ -155,6 +155,11 @@ pub struct SamplePlayer {
 }
 
 impl SamplePlayer {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.gain.snap();
+    }
+
     pub fn new(sr: f32) -> SamplePlayer {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
         SamplePlayer {

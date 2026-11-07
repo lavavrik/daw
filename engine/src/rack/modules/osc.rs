@@ -113,6 +113,13 @@ pub struct Osc {
 }
 
 impl Osc {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.pw.snap();
+        self.fm.snap();
+        self.detune.snap();
+    }
+
     /// A fresh oscillator with deterministic start phases.
     pub fn new(sr: f32) -> Osc {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };

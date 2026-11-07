@@ -16,6 +16,11 @@ pub struct Vca {
 }
 
 impl Vca {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.level.snap();
+    }
+
     pub fn new(sr: f32) -> Vca {
         Vca { level: Smooth::new(sr, default(ModuleKind::Vca, LEVEL)) }
     }

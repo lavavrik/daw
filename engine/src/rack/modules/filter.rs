@@ -207,6 +207,14 @@ pub struct Filter {
 }
 
 impl Filter {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.cutoff.snap();
+        self.reso.snap();
+        self.cv_amt.snap();
+        self.drive.snap();
+    }
+
     /// A silent filter at the catalog defaults.
     pub fn new(sr: f32) -> Filter {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };

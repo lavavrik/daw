@@ -68,6 +68,19 @@ describe('autoBus', () => {
     expect(other).toEqual([{ status: 'none', value: null, laneId: null }]);
   });
 
+  it('reset (an audio restart) drops suspensions the new engine does not have', () => {
+    const { p, t, bus, views, suspendedSet } = rig();
+    p.mode = 'song';
+    p.playing = false; // stopped: the override lasts until the next jump (until = Infinity)
+    bus.frame();
+    expect(bus.touch(t.id, { kind: 'mix', param: 'fader' })).toBe(true);
+    bus.frame();
+    expect(last(views).status).toBe('suspended');
+    bus.reset();
+    expect(last(views).status).toBe('on');
+    expect(suspendedSet().size).toBe(0);
+  });
+
   it('suspended until the next breakpoint', () => {
     const { p, t, lane, sent, clock, bus, views, suspendedSet } = rig();
     p.mode = 'song';

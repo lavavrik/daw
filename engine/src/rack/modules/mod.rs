@@ -126,6 +126,27 @@ impl Module {
         }
     }
 
+    /// Make the next sub-block take every `smooth` param at its target at
+    /// once (automation on a silent rack; see `Rack::automate`).
+    pub fn snap(&mut self) {
+        match self {
+            Module::MidiIn(_) | Module::Chorus(_) | Module::Eq(_) | Module::Compressor(_) => {}
+            Module::Osc(m) => m.snap(),
+            Module::Noise(m) => m.snap(),
+            Module::Filter(m) => m.snap(),
+            Module::Mixer(m) => m.snap(),
+            Module::Adsr(m) => m.snap(),
+            Module::Vca(m) => m.snap(),
+            Module::Lfo(m) => m.snap(),
+            Module::Out(m) => m.snap(),
+            Module::Delay(m) => m.snap(),
+            Module::Reverb(m) => m.snap(),
+            Module::Saturator(m) => m.snap(),
+            Module::Attenuator(m) => m.snap(),
+            Module::SamplePlayer(m) => m.snap(),
+        }
+    }
+
     pub fn kind(&self) -> ModuleKind {
         match self {
             Module::MidiIn(_) => ModuleKind::MidiIn,
@@ -371,6 +392,8 @@ pub const SMOOTH_SECONDS: f32 = 0.005;
 pub struct Smooth {
     value: f32,
     coef: f32,
+    /// The next `next` jumps to its target instead of gliding.
+    snap: bool,
 }
 
 impl Smooth {
@@ -381,13 +404,20 @@ impl Smooth {
     /// A smoother with time constant `seconds` (e.g. the LFO's output slew).
     pub fn with_time(sr: f32, seconds: f32, initial: f32) -> Smooth {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
-        Smooth { value: initial, coef: 1.0 - (-1.0 / (seconds.max(1e-6) * sr)).exp() }
+        Smooth { value: initial, coef: 1.0 - (-1.0 / (seconds.max(1e-6) * sr)).exp(), snap: false }
     }
 
     /// Advance one sample toward `target` and return the smoothed value.
     /// Snaps once within 1e-6 of the target (also the denormal guard).
     #[inline]
     pub fn next(&mut self, target: f32) -> f32 {
+        if self.snap {
+            self.snap = false;
+            if target.is_finite() {
+                self.value = target;
+                return target;
+            }
+        }
         let d = target - self.value;
         if d.abs() < 1e-6 || !d.is_finite() {
             self.value = if target.is_finite() { target } else { self.value };
@@ -395,6 +425,11 @@ impl Smooth {
             self.value += d * self.coef;
         }
         self.value
+    }
+
+    /// Skip the glide: the next `next(target)` returns `target`.
+    pub fn snap(&mut self) {
+        self.snap = true;
     }
 
     pub fn value(&self) -> f32 {

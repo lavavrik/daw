@@ -90,6 +90,12 @@ export interface AutoBus {
   laneFor(owner: MixChannelTarget, target: AutoTarget): AutomationLane | null;
   /** Evaluate every control now (and start the loop if it should run). */
   refresh(): void;
+  /**
+   * The engine was replaced (an audio restart): its overrides are gone, so
+   * drop every suspension here (one made while stopped would otherwise
+   * outlive it) and re-evaluate.
+   */
+  reset(): void;
   /** One frame: evaluate and notify (the loop's body; tests drive it by hand). */
   frame(): void;
 }
@@ -257,6 +263,14 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
     },
     laneFor(owner, target) {
       return lanes().get(keyOf(owner, target))?.lane ?? null;
+    },
+    reset() {
+      const had = suspended.size > 0;
+      suspended.clear();
+      sig = '';
+      lastHeard = NaN;
+      setSuspended(had);
+      frame();
     },
     refresh() {
       frame();

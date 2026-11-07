@@ -33,6 +33,11 @@ pub struct Delay {
 }
 
 impl Delay {
+    /// Automation: the next sub-block takes its `smooth` params at once.
+    pub fn snap(&mut self) {
+        self.mix.snap();
+    }
+
     /// A delay on FX-pool slot `slot`.
     pub fn new(sr: f32, slot: u8) -> Delay {
         Delay { pool: PoolSlot::new(FxKind::Delay, slot), core: DelayCore::new(sr), mix: Smooth::new(sr, super::default(K, MIX)) }

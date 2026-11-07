@@ -228,6 +228,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
         try {
           await replace(serialize(new Project()), new Map());
           addDrumTrack(p, engine); // like a fresh start
+          p.history?.clear(); // that track is the starting point, not an edit
           p.folder = null;
           markSaved(p);
           banners.error = null;

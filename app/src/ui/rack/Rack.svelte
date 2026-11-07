@@ -43,7 +43,7 @@
   import { PATCHES_DIR, patchFileName } from '../../library/scan';
   import { warningsText } from '../../project/session';
   import { banners, flashHint } from '../../state/banners.svelte';
-  import { markEdited } from '../../state/edits';
+  import { edit, markEdited } from '../../state/edits';
   import { STARTER_PATCHES, trackPatch } from '../../state/patches';
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
@@ -354,8 +354,10 @@
       }
       saving = null;
       if (t.patchName !== name) {
-        t.patchName = name; // the rack is now that library patch (sends no command)
-        markEdited(p);
+        edit(p, 'Rename patch', () => {
+          t.patchName = name; // the rack is now that library patch (sends no command)
+          markEdited(p);
+        });
       }
       edited.delete(tid);
       loadedFrom.set(tid, `${LIB}${PATCHES_DIR}/${file}`);

@@ -2,7 +2,8 @@
 
 A project is a folder. Code: `app/src/project/` — `schema.ts` (the JSON
 shape + `validate`), `serialize.ts` (pure `serialize`, `projectFingerprint`),
-`load.ts` (`loadProject`: reset + command replay), `fsFolder.ts` (folder
+`load.ts` (`loadProject`: reset + command replay), `commands.ts`
+(`projectCommands`: the pure replay-order builder), `fsFolder.ts` (folder
 I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 `autosave.ts` (OPFS autosave + restore on start).
 
@@ -120,10 +121,15 @@ notice banner after the load (all of them in the console):
    blank session over the folder it came from.
 4. Upload the samples with **compact ids 0..n−1** (fixes id burning);
    drum rows and SamplePlayer `sample` params are remapped old → new.
-5. Replay synchronously:
+5. Replay synchronously. The command list comes from the pure
+   `projectCommands(json, sampleIds)` (`commands.ts`, no Project, no
+   engine): the one place that knows this order, shared with undo's
+   whole-track restore (`docs/architecture/history.md`), the export Worker
+   and the audio restart. It also returns the normalized project the UI
+   state is built from (`projectState`), so the two cannot disagree.
    - per track: `ADD_*_TRACK`; per pattern `SET_CURRENT_PATTERN` + its
      lengths + `SET_STEP` / `NOTE_SET`; the current pattern; row
-     sample/gain/pan/mute; the rack via `loadPatch` (its FX-pool budget counts
+     sample/gain/pan/mute; the rack via `patchRack` (as `loadPatch`; its FX-pool budget counts
      the tracks already loaded: extra Delays/Reverbs/Choruses are dropped with
      "All 8 … in use"); clips;
    - `MIX_SET` by name (non-defaults; RESET_ALL set the rest), then

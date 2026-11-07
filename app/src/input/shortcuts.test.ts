@@ -4,7 +4,7 @@ import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from '
 import { createNoteInput } from './noteInput';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void } = {}, project: object = { playing: false }) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void } = {}, project: object = { playing: false }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -48,6 +48,32 @@ describe('shortcut handlers', () => {
     expect(calls).toEqual(['save', 'as', 'open']);
     expect(prevented).toBe(4);
     expect(sent).toEqual([]); // no piano note for S
+  });
+
+  it('Cmd/Ctrl+Z undoes, Shift+Cmd/Ctrl+Z and Ctrl+Y redo; not while typing; Z alone is still octave down', () => {
+    const calls: string[] = [];
+    const { h, octs } = mk({ onUndo: () => calls.push('undo'), onRedo: () => calls.push('redo') });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    h.onKeyDown(key('KeyZ', { metaKey: true, ...pd }));
+    h.onKeyDown(key('KeyZ', { ctrlKey: true, ...pd }));
+    h.onKeyDown(key('KeyZ', { metaKey: true, shiftKey: true, ...pd }));
+    h.onKeyDown(key('KeyY', { ctrlKey: true, ...pd }));
+    h.onKeyDown(key('KeyZ', { metaKey: true, repeat: true, ...pd })); // held: repeats
+    expect(calls).toEqual(['undo', 'undo', 'redo', 'redo', 'undo']);
+    expect(prevented).toBe(5);
+    // In a text field the browser undoes the text.
+    const input = { tagName: 'INPUT', type: 'text' };
+    h.onKeyDown(key('KeyZ', { metaKey: true, target: input, ...pd }));
+    expect(calls).toHaveLength(5);
+    expect(prevented).toBe(5);
+    h.onKeyDown(key('KeyZ'));
+    expect(octs).toEqual([3]);
+    // While a project loads: swallowed, nothing runs.
+    const l = mk({ onUndo: () => calls.push('undo') }, { playing: false, loading: true });
+    l.h.onKeyDown(key('KeyZ', { metaKey: true, ...pd }));
+    expect(calls).toHaveLength(5);
+    expect(prevented).toBe(6);
   });
 
   it('piano key sends note on / off', () => {

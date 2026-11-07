@@ -11,7 +11,7 @@
   import type { AudioClock } from './audio/audioClock';
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
-  import { addDrumTrack, addRow, liveInputTrack, play, setRowSample, setStep, stop } from './state/actions';
+  import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
   import { library } from './library/library.svelte';
   import { addNote } from './state/pattern-actions';
@@ -37,6 +37,10 @@
     readAutosave, withAutosaveLock,
   } from './project/autosave';
   import type { AutosaveInfo, LockManagerLike } from './project/autosave';
+  import { createHistory } from './history/history';
+  import type { History } from './history/history';
+  import { diffApply } from './history/diffApply';
+  import { serialize } from './project/serialize';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -49,7 +53,10 @@
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
   let noteInput = $state.raw<NoteInput | null>(null);
-  let rec = $state<RecStatus>({ armed: false, state: 'off', takeNotes: 0 });
+  let rec = $state<RecStatus>({ armed: false, state: 'off', canUndoTake: false });
+  /** Undo/redo labels for the top bar's ↶ ↷ (null: nothing to undo / redo). */
+  let undoLabels = $state<{ undo: string | null; redo: string | null }>({ undo: null, redo: null });
+  let history = $state.raw<History | null>(null);
   let stopWatch: (() => void) | null = null;
   let session = $state.raw<ProjectSession | null>(null);
   /** The top bar: ⌘O goes through its Project menu (the same "Discard and open…" guard). */
@@ -196,6 +203,7 @@
     addSynthTrack: (patchName) =>
       engine ? addSynthTrack(project, engine, undefined, STARTER_PATCHES.find((x) => x.name === patchName)) : null,
     addRow: (trackId) => (engine ? addRow(project, engine, trackId) : null),
+    removeTrack: (trackId) => engine && removeTrack(project, engine, trackId),
     setRowSample: (trackId, rowId, sampleId, name) => engine && setRowSample(project, engine, trackId, rowId, sampleId, name),
     setStep: (trackId, rowId, step, vel) => engine && setStep(project, engine, trackId, rowId, step, vel),
     addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
@@ -209,6 +217,7 @@
   saveTo: (dir) => (session ? session.saveTo(dir) : Promise.reject(new Error('audio not started'))),
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
   autosave,
+  history: null,
   };
 
   /**
@@ -317,6 +326,24 @@
     };
     addDrumTrack(project, e); // default track so the UI has something to show
     markSaved(project); // a fresh session has nothing to save yet
+    // Undo/redo (history/history.ts): every action is a transact, every
+    // pointer gesture one entry (installGestures), restored by diffApply
+    // through the engine sink, so dirty marking and autosave see it.
+    const h = createHistory({
+      snapshot: () => serialize(project),
+      apply: (from, to) => diffApply(project, e, from, to),
+      canApply: () => !project.loading,
+      // Held recorded notes close now: they belong to the pass being undone.
+      beforeApply: () => r.onInputChanged(c.heardTicks()),
+      onChange: () => {
+        undoLabels = h.labels;
+        refreshRec();
+      },
+      coalesceTask: true,
+    });
+    project.history = h;
+    history = h;
+    window.__daw.history = h;
     // New / Open replace the session: stop through the normal path first (the
     // recorder closes held notes at the heard tick) and release held keys.
     e.onCommand = (op) => commandEdits(project, op);
@@ -358,10 +385,44 @@
       onSave: () => void s.save(),
       onSaveAs: () => void s.saveAs(),
       onOpen: () => topBar?.request('open'),
+      onUndo: () => h.undo(),
+      onRedo: () => h.redo(),
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
   }
+
+  // Every pointer gesture (press .. release) is one undo entry: a knob,
+  // fader, note or clip drag, a step-paint stroke. The commit waits one task
+  // after the release so the editors' own pointerup handlers (final drag
+  // value) and the click that follows land inside the gesture.
+  onMount(() => {
+    const down = new Set<number>();
+    const press = (e: PointerEvent) => {
+      if (down.size === 0 && !project.loading) history?.begin();
+      down.add(e.pointerId);
+    };
+    const release = (e: PointerEvent) => {
+      down.delete(e.pointerId);
+      setTimeout(() => {
+        if (down.size === 0) history?.commit();
+      }, 0);
+    };
+    const lost = () => {
+      down.clear();
+      history?.commit();
+    };
+    window.addEventListener('pointerdown', press, true);
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    window.addEventListener('blur', lost);
+    return () => {
+      window.removeEventListener('pointerdown', press, true);
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      window.removeEventListener('blur', lost);
+    };
+  });
 
   // The browser may suspend the AudioContext (device change, long idle);
   // resume() needs a user gesture, so every click / key press wakes it. This
@@ -416,8 +477,9 @@
     {#if recorder && session}
       <TopBar
         bind:this={topBar}
-        p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer}
+        p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
         onTogglePlay={transportToggle} onToggleArm={toggleArm}
+        onUndo={() => history?.undo()} onRedo={() => history?.redo()}
       />
     {/if}
     {#if restoreOffer}

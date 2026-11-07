@@ -131,6 +131,7 @@ export async function loadProject(
 /** The UI state of a blank engine session (what RESET_ALL leaves). */
 export function blankState(p: Project) {
   p.generation++; // a new session: older async results are dropped (sampleImport)
+  p.history?.clear(); // undo never crosses into another session
   p.playing = false;
   p.tracks = [];
   p.selectedTrackId = null;

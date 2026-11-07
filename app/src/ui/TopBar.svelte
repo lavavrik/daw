@@ -9,6 +9,9 @@
   // count-in and the recorder's stop tick are handled in one place. Count-in
   // and Rec offset persist in localStorage (state/recorder.ts).
   //
+  // Undo / redo (↶ ↷): the history's newest entries, named in the tooltips
+  // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
+  //
   // Project menu (left): the project name with a "● unsaved" mark, and New,
   // Open…, Save (⌘S), Save As… (⇧⌘S). New / Open — from the menu or ⌘O,
   // which opens the menu through `request` — ask inline in the menu (no
@@ -17,7 +20,7 @@
   // banners (project/session.ts).
   //
   // Layout: one row that never wraps at 1280 px (tight since the Project menu:
-  // 5 px gaps, "Metro", narrow BPM field). Every control is nowrap;
+  // 4 px gaps, "Metro", narrow BPM field, compact ↶ ↷ and "↶ Take"). Every control is nowrap;
   // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
   // the full text in their tooltips.
   import { onMount, untrack } from 'svelte';
@@ -43,6 +46,9 @@
     onToggleArm,
     session,
     restoreOffer = null,
+    undoLabels = { undo: null, redo: null },
+    onUndo,
+    onRedo,
   }: {
     p: Project;
     engine: AudioEngine;
@@ -56,6 +62,10 @@
     session: ProjectSession;
     /** The "Restore last session" offer, while it is open (New / Open would discard it). */
     restoreOffer?: { name: string } | null;
+    /** What ↶ / ↷ would undo / redo (history labels; null: nothing). */
+    undoLabels?: { undo: string | null; redo: string | null };
+    onUndo: () => void;
+    onRedo: () => void;
   } = $props();
 
   // ---- Project menu --------------------------------------------------------
@@ -192,6 +202,16 @@
       {/if}
     </div>
   </details>
+  <span class="seg hist" role="group" aria-label="Undo and redo">
+    <button
+      data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
+      title={undoLabels.undo ? `Undo ${undoLabels.undo} (${mod}Z)` : 'Nothing to undo'}
+    >↶</button>
+    <button
+      data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
+      title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
+    >↷</button>
+  </span>
   <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)" data-testid="play">
     {p.playing ? '■ Stop' : '▶ Play'}
   </button>
@@ -250,11 +270,12 @@
   </details>
   <button
     class="small"
-    disabled={rec.takeNotes === 0}
+    disabled={!rec.canUndoTake}
     data-testid="undo-take"
     onclick={() => recorder.undoLastTake()}
-    title="Remove the notes the last recording pass added"
-  >Undo take</button>
+    aria-label="Undo take"
+    title="Undo take: undo the last recording pass (the newest undo step)"
+  >↶ Take</button>
   <label class="bpm">
     <span class="lbl">BPM</span>
     <input
@@ -297,7 +318,7 @@
 <style>
   /* overflow-x: clip (not hidden): clips a too-wide row without becoming a
      scroll container, so the popovers (Project menu, Offset) can drop below. */
-  .bar { display: flex; gap: 5px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
+  .bar { display: flex; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
   button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }
@@ -310,6 +331,7 @@
   .seg button:first-child { border-radius: 4px 0 0 4px; }
   .seg button:last-child { border-radius: 0 4px 4px 0; }
   .small { font-size: 11px; padding: 4px 8px; }
+  .hist button { padding: 4px 5px; }
   .rec { min-width: 84px; color: #e06666; }
   .rec.armed { background: #c92a2a; border-color: #c92a2a; color: #fff; font-weight: 700; }
   .rec.live { animation: rec-pulse 1s ease-in-out infinite; }

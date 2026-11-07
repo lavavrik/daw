@@ -6,6 +6,7 @@ import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, newChannel, synthTrack 
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
+import { edit } from './edits';
 import { STARTER_PATCHES, validatePatch } from './patches';
 import { makeNotePattern } from './pattern-actions';
 import type { Patch } from './patches';
@@ -18,32 +19,34 @@ import type { Patch } from './patches';
 export function addSynthTrack(
   p: Project, sink: CommandSink, name = uniqueTrackName(p, 'Synth'), patch: Patch = STARTER_PATCHES[0],
 ): SynthTrack | null {
-  const used = new Set(p.tracks.map((t) => t.slot));
-  let slot = 0;
-  while (slot < MAX_TRACKS && used.has(slot)) slot++;
-  if (slot >= MAX_TRACKS) return null;
-  // ADD_SYNTH_TRACK resets all engine patterns and selects 0; bars sent below.
-  const pattern = makeNotePattern(0, 'Pattern 1', DEFAULT_PATTERN_BARS);
-  p.tracks.push({
-    kind: 'synth',
-    id: crypto.randomUUID(),
-    slot,
-    name,
-    color: TRACK_COLORS[slot % TRACK_COLORS.length],
-    patchName: '',
-    modules: [],
-    cables: [],
-    patterns: [pattern],
-    currentPatternId: pattern.id,
-    clips: [],
+  return edit(p, 'Add synth track', () => {
+    const used = new Set(p.tracks.map((t) => t.slot));
+    let slot = 0;
+    while (slot < MAX_TRACKS && used.has(slot)) slot++;
+    if (slot >= MAX_TRACKS) return null;
+    // ADD_SYNTH_TRACK resets all engine patterns and selects 0; bars sent below.
+    const pattern = makeNotePattern(0, 'Pattern 1', DEFAULT_PATTERN_BARS);
+    p.tracks.push({
+      kind: 'synth',
+      id: crypto.randomUUID(),
+      slot,
+      name,
+      color: TRACK_COLORS[slot % TRACK_COLORS.length],
+      patchName: '',
+      modules: [],
+      cables: [],
+      patterns: [pattern],
+      currentPatternId: pattern.id,
+      clips: [],
+    });
+    const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
+    p.mixer.channels[track.id] = newChannel(); // the engine resets the mixer slot on ADD
+    sink.send(Op.ADD_SYNTH_TRACK, slot);
+    sink.send(Op.SET_PATTERN_BARS, slot, DEFAULT_PATTERN_BARS);
+    loadPatch(p, sink, track.id, patch);
+    selectTrack(p, sink, track.id);
+    return track;
   });
-  const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
-  p.mixer.channels[track.id] = newChannel(); // the engine resets the mixer slot on ADD
-  sink.send(Op.ADD_SYNTH_TRACK, slot);
-  sink.send(Op.SET_PATTERN_BARS, slot, DEFAULT_PATTERN_BARS);
-  loadPatch(p, sink, track.id, patch);
-  selectTrack(p, sink, track.id);
-  return track;
 }
 
 /**
@@ -56,16 +59,18 @@ export function addSynthTrack(
  * engine hands their slots over to the adds that follow.
  */
 export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch: unknown): string[] {
-  const t = synthTrack(p, trackId);
-  if (!t) return [];
-  const own = (id: string) => t.modules.filter((m) => moduleDef(m.kind).id === id).length;
-  const { patch: v, warnings } = validatePatch(patch, { fxFree: (id) => fxSlotsFree(p, id) + own(id) });
-  const rack = patchRack(t.slot, v);
-  for (const c of rack.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
-  t.modules = rack.modules;
-  t.cables = rack.cables;
-  t.patchName = v.name;
-  return warnings;
+  return edit(p, 'Load patch', () => {
+    const t = synthTrack(p, trackId);
+    if (!t) return [];
+    const own = (id: string) => t.modules.filter((m) => moduleDef(m.kind).id === id).length;
+    const { patch: v, warnings } = validatePatch(patch, { fxFree: (id) => fxSlotsFree(p, id) + own(id) });
+    const rack = patchRack(t.slot, v);
+    for (const c of rack.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
+    t.modules = rack.modules;
+    t.cables = rack.cables;
+    t.patchName = v.name;
+    return warnings;
+  });
 }
 
 /** One engine command: [op, a, b, c, d] (missing args are 0). */
@@ -155,27 +160,31 @@ export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: 
  * all in use (the engine would refuse it), or the track/kind is unknown.
  */
 export function addModule(p: Project, sink: CommandSink, trackId: string, kind: string | number): number | null {
-  const t = synthTrack(p, trackId);
-  if (!t) return null;
-  let def;
-  try { def = moduleDef(kind); } catch { return null; }
-  if (fxSlotsFree(p, def.kind) <= 0) return null;
-  const used = new Set(t.modules.map((m) => m.idx));
-  let idx = 0;
-  while (idx < MAX_MODULES && used.has(idx)) idx++;
-  if (idx >= MAX_MODULES) return null;
-  t.modules.push({ idx, kind: def.kind, params: def.params.map((pd) => pd.default) });
-  sink.send(Op.RACK_ADD_MODULE, t.slot, idx, def.kind);
-  return idx;
+  return edit(p, 'Add module', () => {
+    const t = synthTrack(p, trackId);
+    if (!t) return null;
+    let def;
+    try { def = moduleDef(kind); } catch { return null; }
+    if (fxSlotsFree(p, def.kind) <= 0) return null;
+    const used = new Set(t.modules.map((m) => m.idx));
+    let idx = 0;
+    while (idx < MAX_MODULES && used.has(idx)) idx++;
+    if (idx >= MAX_MODULES) return null;
+    t.modules.push({ idx, kind: def.kind, params: def.params.map((pd) => pd.default) });
+    sink.send(Op.RACK_ADD_MODULE, t.slot, idx, def.kind);
+    return idx;
+  });
 }
 
 /** The engine drops the module's cables itself; mirror that in state. */
 export function removeModule(p: Project, sink: CommandSink, trackId: string, idx: number) {
-  const t = synthTrack(p, trackId);
-  if (!t || !t.modules.some((m) => m.idx === idx)) return;
-  t.modules = t.modules.filter((m) => m.idx !== idx);
-  t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
-  sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
+  return edit(p, 'Remove module', () => {
+    const t = synthTrack(p, trackId);
+    if (!t || !t.modules.some((m) => m.idx === idx)) return;
+    t.modules = t.modules.filter((m) => m.idx !== idx);
+    t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
+    sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
+  });
 }
 
 /** Replaces any cable already on `to` (one cable per input). */
@@ -183,31 +192,43 @@ export function connect(
   p: Project, sink: CommandSink, trackId: string,
   from: { m: number; port: number }, to: { m: number; port: number },
 ) {
-  const t = synthTrack(p, trackId);
-  if (!t) return;
-  const fm = t.modules.find((m) => m.idx === from.m);
-  const tm = t.modules.find((m) => m.idx === to.m);
-  if (!fm || !tm) return;
-  if (from.port < 0 || from.port >= moduleDef(fm.kind).outputs.length) return;
-  if (to.port < 0 || to.port >= moduleDef(tm.kind).inputs.length) return;
-  t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
-  t.cables.push({ from: { ...from }, to: { ...to } });
-  sink.send(Op.RACK_CONNECT, t.slot, packPort(from.m, from.port), packPort(to.m, to.port));
+  return edit(p, 'Connect', () => {
+    const t = synthTrack(p, trackId);
+    if (!t) return;
+    const fm = t.modules.find((m) => m.idx === from.m);
+    const tm = t.modules.find((m) => m.idx === to.m);
+    if (!fm || !tm) return;
+    if (from.port < 0 || from.port >= moduleDef(fm.kind).outputs.length) return;
+    if (to.port < 0 || to.port >= moduleDef(tm.kind).inputs.length) return;
+    t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
+    t.cables.push({ from: { ...from }, to: { ...to } });
+    sink.send(Op.RACK_CONNECT, t.slot, packPort(from.m, from.port), packPort(to.m, to.port));
+  });
 }
 
 export function disconnect(p: Project, sink: CommandSink, trackId: string, to: { m: number; port: number }) {
-  const t = synthTrack(p, trackId);
-  if (!t) return;
-  t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
-  sink.send(Op.RACK_DISCONNECT, t.slot, packPort(to.m, to.port));
+  return edit(p, 'Disconnect', () => {
+    const t = synthTrack(p, trackId);
+    if (!t) return;
+    t.cables = t.cables.filter((c) => !(c.to.m === to.m && c.to.port === to.port));
+    sink.send(Op.RACK_DISCONNECT, t.slot, packPort(to.m, to.port));
+  });
+}
+
+/** "Set Cutoff": the undo label of a knob. */
+function paramLabel(p: Project, trackId: string, idx: number, paramIdx: number): string {
+  const m = synthTrack(p, trackId)?.modules.find((x) => x.idx === idx);
+  return `Set ${(m && moduleDef(m.kind).params[paramIdx]?.label) || 'param'}`;
 }
 
 export function setParam(p: Project, sink: CommandSink, trackId: string, idx: number, paramIdx: number, value: number) {
-  const t = synthTrack(p, trackId);
-  const m = t?.modules.find((x) => x.idx === idx);
-  if (!t || !m || Number.isNaN(value)) return;
-  const pd = moduleDef(m.kind).params[paramIdx];
-  if (!pd) return;
-  m.params[paramIdx] = clampParam(pd, value);
-  sink.send(Op.RACK_SET_PARAM, t.slot, idx, paramIdx, m.params[paramIdx]);
+  return edit(p, paramLabel(p, trackId, idx, paramIdx), () => {
+    const t = synthTrack(p, trackId);
+    const m = t?.modules.find((x) => x.idx === idx);
+    if (!t || !m || Number.isNaN(value)) return;
+    const pd = moduleDef(m.kind).params[paramIdx];
+    if (!pd) return;
+    m.params[paramIdx] = clampParam(pd, value);
+    sink.send(Op.RACK_SET_PARAM, t.slot, idx, paramIdx, m.params[paramIdx]);
+  });
 }

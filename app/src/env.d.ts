@@ -7,6 +7,7 @@ import type { Recorder } from './state/recorder';
 import type { Clip, Project } from './state/project.svelte';
 import type { Autosave } from './project/autosave';
 import type { Library } from './library/library.svelte';
+import type { History } from './history/history';
 
 /** Real state actions bound to the project + engine, for e2e tests (App.svelte). */
 interface DawActions {
@@ -28,6 +29,8 @@ declare global {
       autosave: Autosave;
       /** The Browser's library (e2e: attach(handle) with an OPFS folder). */
       library: Library;
+      /** Undo/redo (null until audio starts). */
+      history: History | null;
     };
   }
 }

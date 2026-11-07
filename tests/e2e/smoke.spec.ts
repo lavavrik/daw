@@ -12,7 +12,7 @@ type DawWindow = {
       failure: string | null;
     } | null;
     Op: Record<string, number>;
-    recorder?: { lastTakeIds: string[]; armed: boolean } | null;
+    recorder?: { armed: boolean } | null;
     clock?: { heardTicks(): number } | null;
     project: {
       tempo: number; tracks: { patterns: { notes?: { pitch: number; start: number; len: number }[] }[] }[] };
@@ -720,9 +720,9 @@ test('four synth tracks stay under budget', async ({ page }) => {
 
 // ---- Recording (plan 3, Task 4) ----
 
-/** Ids of the notes the last recording pass added. */
+/** Notes in the recorded synth track's (only) pattern. */
 const takeLen = (page: Page) => () =>
-  page.evaluate(() => (window as unknown as DawWindow).__daw!.recorder!.lastTakeIds.length);
+  page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patterns[0].notes!.length);
 
 test('record: R arms, played notes land in the pattern, a note held through Stop is closed, undo removes the take', async ({ page }) => {
   await startAudio(page);

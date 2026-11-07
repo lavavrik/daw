@@ -6,9 +6,11 @@ import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
 import { loadProject, ProjectLoadError } from './load';
 import { projectCommands } from './commands';
+import { createHistory } from '../history/history';
+import { setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
-import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from './testFixture';
+import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
 import type { ProjectJson } from './schema';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -51,12 +53,24 @@ describe('loadProject', () => {
     const json = roundJson(serialize(src));
     const e = fakeEngine();
     await loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
-    const afterSamples = e.log.slice(e.log.findLastIndex((x) => 'sample' in x) + 1);
+    const lastSample = e.log.map((x) => 'sample' in x).lastIndexOf(true);
+    const afterSamples = e.log.slice(lastSample + 1);
     const pc = projectCommands(json, new Map(json.samples.map((s) => [s.id, s.id])));
     expect(pc.commands.map(([op, a = 0, b = 0, c = 0, d = 0]) => ({ op, args: [a, b, c, d] }))).toEqual(afterSamples);
     expect(pc.samples.map((s) => s.id)).toEqual([0, 1, 2]);
     expect(pc.project).toEqual(json);
     expect(pc.warnings).toEqual([]);
+  });
+
+  it('a load clears the undo history (undo never crosses sessions)', async () => {
+    const { p: src } = await buildFixture();
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    p.history = createHistory({ snapshot: () => serialize(p), apply: () => {} });
+    setTempo(p, nullSink, 99);
+    expect(p.history.canUndo).toBe(true);
+    await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder);
+    expect([p.history.canUndo, p.history.canRedo]).toEqual([false, false]);
   });
 
   it('after a load the engine matches the UI tempo/metronome/mode/loop/input track', async () => {

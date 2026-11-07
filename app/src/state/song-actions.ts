@@ -12,6 +12,7 @@ import { patternLength } from './project.svelte';
 import type { Clip, Project, Track } from './project.svelte';
 import type { CommandSink } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
+import { edit } from './edits';
 
 /** Largest clip offset into its pattern (16 bars - 1 tick, the engine limit). */
 export const MAX_OFFSET = 61439;
@@ -58,19 +59,21 @@ export function addClip(
   p: Project, sink: CommandSink, trackId: string,
   o: { start: number; len?: number; patternId?: string; offset?: number },
 ): Clip | null {
-  const t = findTrack(p, trackId);
-  const pat = t && patternOf(t, o.patternId ?? t.currentPatternId);
-  if (!t || !pat) return null;
-  const start = Math.round(o.start);
-  const len = Math.round(o.len ?? patternLength(pat));
-  const offset = Math.round(o.offset ?? 0);
-  if (!valid(start, len, offset)) return null;
-  const idx = freeClipIdx(t);
-  if (idx === null) return null;
-  t.clips.push({ id: crypto.randomUUID(), idx, patternId: pat.id, start, len, offset });
-  const c = t.clips[t.clips.length - 1]; // reactive proxy
-  sendClip(sink, t, c);
-  return c;
+  return edit(p, 'Add clip', () => {
+    const t = findTrack(p, trackId);
+    const pat = t && patternOf(t, o.patternId ?? t.currentPatternId);
+    if (!t || !pat) return null;
+    const start = Math.round(o.start);
+    const len = Math.round(o.len ?? patternLength(pat));
+    const offset = Math.round(o.offset ?? 0);
+    if (!valid(start, len, offset)) return null;
+    const idx = freeClipIdx(t);
+    if (idx === null) return null;
+    t.clips.push({ id: crypto.randomUUID(), idx, patternId: pat.id, start, len, offset });
+    const c = t.clips[t.clips.length - 1]; // reactive proxy
+    sendClip(sink, t, c);
+    return c;
+  });
 }
 
 /**
@@ -82,54 +85,62 @@ export function addClip(
  * copy can enable it later (same-kind lanes only).
  */
 export function moveClips(p: Project, sink: CommandSink, ids: string[], dTicks: number, dLane = 0): boolean {
-  const found = findClips(p, ids);
-  if (!found.length || !Number.isFinite(dTicks) || dLane !== 0) return false;
-  const minStart = Math.min(...found.map(({ c }) => c.start));
-  const maxEnd = Math.max(...found.map(({ c }) => c.start + c.len));
-  const dt = Math.min(MAX_SONG_TICKS - maxEnd, Math.max(-minStart, Math.round(dTicks)));
-  if (dt === 0) return true;
-  for (const { t, c } of found) {
-    c.start += dt;
-    sendClip(sink, t, c);
-  }
-  return true;
+  return edit(p, 'Move clips', () => {
+    const found = findClips(p, ids);
+    if (!found.length || !Number.isFinite(dTicks) || dLane !== 0) return false;
+    const minStart = Math.min(...found.map(({ c }) => c.start));
+    const maxEnd = Math.max(...found.map(({ c }) => c.start + c.len));
+    const dt = Math.min(MAX_SONG_TICKS - maxEnd, Math.max(-minStart, Math.round(dTicks)));
+    if (dt === 0) return true;
+    for (const { t, c } of found) {
+      c.start += dt;
+      sendClip(sink, t, c);
+    }
+    return true;
+  });
 }
 
 /** Sets any of start/len/offset (rounded). False (nothing changes) when the result is invalid. */
 export function resizeClip(
   p: Project, sink: CommandSink, id: string, o: { start?: number; len?: number; offset?: number },
 ): boolean {
-  const [f] = findClips(p, [id]);
-  if (!f) return false;
-  const { t, c } = f;
-  const start = o.start !== undefined ? Math.round(o.start) : c.start;
-  const len = o.len !== undefined ? Math.round(o.len) : c.len;
-  const offset = o.offset !== undefined ? Math.round(o.offset) : c.offset;
-  if (!valid(start, len, offset)) return false;
-  if (start === c.start && len === c.len && offset === c.offset) return true; // drags re-send often
-  c.start = start;
-  c.len = len;
-  c.offset = offset;
-  sendClip(sink, t, c);
-  return true;
+  return edit(p, 'Resize clip', () => {
+    const [f] = findClips(p, [id]);
+    if (!f) return false;
+    const { t, c } = f;
+    const start = o.start !== undefined ? Math.round(o.start) : c.start;
+    const len = o.len !== undefined ? Math.round(o.len) : c.len;
+    const offset = o.offset !== undefined ? Math.round(o.offset) : c.offset;
+    if (!valid(start, len, offset)) return false;
+    if (start === c.start && len === c.len && offset === c.offset) return true; // drags re-send often
+    c.start = start;
+    c.len = len;
+    c.offset = offset;
+    sendClip(sink, t, c);
+    return true;
+  });
 }
 
 /** Unknown ids are skipped. */
 export function deleteClips(p: Project, sink: CommandSink, ids: string[]) {
-  for (const { t, c } of findClips(p, ids)) {
-    sink.send(Op.CLIP_REMOVE, t.slot * MAX_CLIPS + c.idx);
-    t.clips.splice(t.clips.indexOf(c), 1);
-  }
+  return edit(p, 'Delete clips', () => {
+    for (const { t, c } of findClips(p, ids)) {
+      sink.send(Op.CLIP_REMOVE, t.slot * MAX_CLIPS + c.idx);
+      t.clips.splice(t.clips.indexOf(c), 1);
+    }
+  });
 }
 
 /** Each copy goes right after its source (same lane, pattern, length, offset). Copies that do not fit are skipped. */
 export function duplicateClips(p: Project, sink: CommandSink, ids: string[]): Clip[] {
-  const out: Clip[] = [];
-  for (const { t, c } of findClips(p, ids)) {
-    const copy = addClip(p, sink, t.id, { start: c.start + c.len, len: c.len, patternId: c.patternId, offset: c.offset });
-    if (copy) out.push(copy);
-  }
-  return out;
+  return edit(p, 'Duplicate clips', () => {
+    const out: Clip[] = [];
+    for (const { t, c } of findClips(p, ids)) {
+      const copy = addClip(p, sink, t.id, { start: c.start + c.len, len: c.len, patternId: c.patternId, offset: c.offset });
+      if (copy) out.push(copy);
+    }
+    return out;
+  });
 }
 
 /**
@@ -138,22 +149,26 @@ export function duplicateClips(p: Project, sink: CommandSink, ids: string[]): Cl
  * other. The current pattern does not change. Null when unknown or full.
  */
 export function makeUnique(p: Project, sink: CommandSink, trackId: string, clipId: string) {
-  const t = findTrack(p, trackId);
-  const c = t?.clips.find((x) => x.id === clipId);
-  if (!t || !c) return null;
-  const pat = copyPattern(p, sink, t.id, c.patternId);
-  if (!pat) return null;
-  c.patternId = pat.id;
-  sendClip(sink, t, c);
-  return pat;
+  return edit(p, 'Make unique', () => {
+    const t = findTrack(p, trackId);
+    const c = t?.clips.find((x) => x.id === clipId);
+    if (!t || !c) return null;
+    const pat = copyPattern(p, sink, t.id, c.patternId);
+    if (!pat) return null;
+    c.patternId = pat.id;
+    sendClip(sink, t, c);
+    return pat;
+  });
 }
 
 /** SET_MODE; entering Song mode also sends SEEK to the parked song position. */
 export function setMode(p: Project, sink: CommandSink, mode: 'pattern' | 'song') {
-  if (p.mode === mode || (mode !== 'pattern' && mode !== 'song')) return;
-  p.mode = mode;
-  sink.send(Op.SET_MODE, mode === 'song' ? 1 : 0);
-  if (mode === 'song') sink.send(Op.SEEK, p.songPosition);
+  return edit(p, mode === 'song' ? 'Song mode' : 'Pattern mode', () => {
+    if (p.mode === mode || (mode !== 'pattern' && mode !== 'song')) return;
+    p.mode = mode;
+    sink.send(Op.SET_MODE, mode === 'song' ? 1 : 0);
+    if (mode === 'song') sink.send(Op.SEEK, p.songPosition);
+  });
 }
 
 /**
@@ -162,14 +177,16 @@ export function setMode(p: Project, sink: CommandSink, mode: 'pattern' | 'song')
  * SET_LOOP(0, 0) (disabled) while off; the range is kept either way.
  */
 export function setLoop(p: Project, sink: CommandSink, o: { on?: boolean; start?: number; end?: number }): boolean {
-  const on = o.on ?? p.loop.on;
-  const start = o.start !== undefined ? Math.round(o.start) : p.loop.start;
-  const end = o.end !== undefined ? Math.round(o.end) : p.loop.end;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > MAX_SONG_TICKS || start >= end) return false;
-  p.loop = { on, start, end };
-  if (on) sink.send(Op.SET_LOOP, start, end);
-  else sink.send(Op.SET_LOOP, 0, 0);
-  return true;
+  return edit(p, 'Loop', () => {
+    const on = o.on ?? p.loop.on;
+    const start = o.start !== undefined ? Math.round(o.start) : p.loop.start;
+    const end = o.end !== undefined ? Math.round(o.end) : p.loop.end;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > MAX_SONG_TICKS || start >= end) return false;
+    p.loop = { on, start, end };
+    if (on) sink.send(Op.SET_LOOP, start, end);
+    else sink.send(Op.SET_LOOP, 0, 0);
+    return true;
+  });
 }
 
 /** Song position (clamped, rounded; NaN ignored). The engine ignores SEEK in Pattern mode; setMode re-sends it. */

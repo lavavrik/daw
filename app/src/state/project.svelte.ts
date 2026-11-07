@@ -2,6 +2,7 @@
 // every UI edit is mirrored to the audio engine.
 import { BAR_TICKS, STEP_TICKS } from '../audio/protocol';
 import { defaultMixParams } from '../audio/mixerCatalog';
+import type { History } from '../history/history';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -229,6 +230,11 @@ export class Project {
    * notes held across the switch are written into the old pattern. Not reactive.
    */
   beforePatternSwitch: ((trackId: string) => void) | null = null;
+  /**
+   * Undo/redo (history/history.ts), installed by App once audio runs; null
+   * in tests that do not need it (edits then just run). Not reactive.
+   */
+  history: History | null = null;
 }
 
 /** The synth track with this id, or null (unknown id or a drum track). */

@@ -1,5 +1,6 @@
 // Global keyboard shortcuts: Space = play/stop, R = record arm, Z/X = octave
-// down/up, Shift+L = PAT/SONG, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
+// down/up, Shift+L = PAT/SONG, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open,
+// Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
 // through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
 // timeStamp, so the recorder can place them at the heard time.
 import { togglePlay } from '../state/actions';
@@ -28,6 +29,10 @@ export interface ShortcutOptions {
   onSaveAs?: () => void;
   /** Cmd/Ctrl+O: Project ▸ Open…. */
   onOpen?: () => void;
+  /** Cmd/Ctrl+Z (not while typing: the text field undoes its own text). */
+  onUndo?: () => void;
+  /** Shift+Cmd/Ctrl+Z or Ctrl+Y (not while typing). */
+  onRedo?: () => void;
 }
 
 /** Performance-time stamp of an event; "now" when absent (synthetic releases). */
@@ -91,7 +96,16 @@ export function createShortcutHandlers(
       if (p.loading) {
         // A project is replacing the session: no edits, transport or notes.
         // Still swallow Space / Cmd+S / Cmd+O so the browser does nothing.
-        if (e.code === 'Space' || ((e.metaKey || e.ctrlKey) && (e.code === 'KeyS' || e.code === 'KeyO'))) e.preventDefault();
+        if (e.code === 'Space' || ((e.metaKey || e.ctrlKey) && ['KeyS', 'KeyO', 'KeyZ', 'KeyY'].includes(e.code))) e.preventDefault();
+        return;
+      }
+      // Undo / redo (held: repeats, like any editor). In a text field the
+      // browser's own text undo runs instead.
+      const undoKey = (e.metaKey || e.ctrlKey) && !e.altKey && e.code === 'KeyZ';
+      const redoKey = (undoKey && e.shiftKey) || (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyY');
+      if ((undoKey || redoKey) && !isTyping(e.target)) {
+        e.preventDefault();
+        (redoKey ? opts.onRedo : opts.onUndo)?.();
         return;
       }
       // Project shortcuts work even in a text field (like any app's Save);

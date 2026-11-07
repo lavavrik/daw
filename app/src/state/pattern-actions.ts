@@ -14,7 +14,7 @@ import { BAR_TICKS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, Op } from '../aud
 import { MAX_ROWS, MAX_STEPS, currentPattern, synthTrack } from './project.svelte';
 import type { DrumPattern, Note, NotePatternState, Project, SynthTrack, Track } from './project.svelte';
 import type { CommandSink } from './actions';
-import { markEdited } from './edits';
+import { edit, markEdited } from './edits';
 
 export const MAX_NOTE_LEN = 61440;
 /** Last start tick the engine accepts (MAX_PATTERN_BARS bars). */
@@ -59,24 +59,26 @@ export function addNote(
   o: { pitch: number; start: number; len: number; vel?: number },
   patternId?: string,
 ): Note | null {
-  const tp = target(p, trackId, patternId);
-  if (!tp) return null;
-  const { t, pat } = tp;
-  const used = new Set(pat.notes.map((n) => n.idx));
-  let idx = 0;
-  while (idx < MAX_NOTES && used.has(idx)) idx++;
-  if (idx >= MAX_NOTES) return null;
-  pat.notes.push({
-    id: crypto.randomUUID(),
-    idx,
-    pitch: clampInt(o.pitch, 0, 127),
-    vel: clampInt(o.vel ?? 100, 1, 127),
-    start: clampInt(o.start, 0, patternTicks(t) - 1),
-    len: clampInt(o.len, 1, MAX_NOTE_LEN),
+  return edit(p, 'Add note', () => {
+    const tp = target(p, trackId, patternId);
+    if (!tp) return null;
+    const { t, pat } = tp;
+    const used = new Set(pat.notes.map((n) => n.idx));
+    let idx = 0;
+    while (idx < MAX_NOTES && used.has(idx)) idx++;
+    if (idx >= MAX_NOTES) return null;
+    pat.notes.push({
+      id: crypto.randomUUID(),
+      idx,
+      pitch: clampInt(o.pitch, 0, 127),
+      vel: clampInt(o.vel ?? 100, 1, 127),
+      start: clampInt(o.start, 0, patternTicks(t) - 1),
+      len: clampInt(o.len, 1, MAX_NOTE_LEN),
+    });
+    const n = pat.notes[pat.notes.length - 1]; // reactive proxy
+    sendNote(sink, t, n);
+    return n;
   });
-  const n = pat.notes[pat.notes.length - 1]; // reactive proxy
-  sendNote(sink, t, n);
-  return n;
 }
 
 /**
@@ -88,57 +90,72 @@ export function addNote(
  * editor's job (prMath.clampMove). A note whose values end up unchanged sends
  * nothing (drags re-send often).
  */
+/** Undo label of an updateNotes call: what its changes touch. */
+function notesLabel(changes: { pitch?: number; start?: number; len?: number; vel?: number }[]): string {
+  if (changes.some((c) => c.pitch !== undefined || c.start !== undefined)) return 'Move notes';
+  if (changes.some((c) => c.len !== undefined)) return 'Resize notes';
+  return 'Note velocity';
+}
+
 export function updateNotes(
   p: Project, sink: CommandSink, trackId: string,
   changes: { id: string; pitch?: number; start?: number; len?: number; vel?: number }[],
 ) {
-  const tp = target(p, trackId);
-  if (!tp) return;
-  const { t, pat } = tp;
-  const byId = new Map(pat.notes.map((n) => [n.id, n]));
-  for (const c of changes) {
-    const n = byId.get(c.id);
-    if (!n) continue;
-    const pitch = c.pitch !== undefined ? clampInt(c.pitch, 0, 127) : n.pitch;
-    const vel = c.vel !== undefined ? clampInt(c.vel, 1, 127) : n.vel;
-    const start = c.start !== undefined ? clampInt(c.start, 0, MAX_START) : n.start;
-    const len = c.len !== undefined ? clampInt(c.len, 1, MAX_NOTE_LEN) : n.len;
-    if (pitch === n.pitch && vel === n.vel && start === n.start && len === n.len) continue;
-    n.pitch = pitch;
-    n.vel = vel;
-    n.start = start;
-    n.len = len;
-    sendNote(sink, t, n);
-  }
+  return edit(p, notesLabel(changes), () => {
+    const tp = target(p, trackId);
+    if (!tp) return;
+    const { t, pat } = tp;
+    const byId = new Map(pat.notes.map((n) => [n.id, n]));
+    for (const c of changes) {
+      const n = byId.get(c.id);
+      if (!n) continue;
+      const pitch = c.pitch !== undefined ? clampInt(c.pitch, 0, 127) : n.pitch;
+      const vel = c.vel !== undefined ? clampInt(c.vel, 1, 127) : n.vel;
+      const start = c.start !== undefined ? clampInt(c.start, 0, MAX_START) : n.start;
+      const len = c.len !== undefined ? clampInt(c.len, 1, MAX_NOTE_LEN) : n.len;
+      if (pitch === n.pitch && vel === n.vel && start === n.start && len === n.len) continue;
+      n.pitch = pitch;
+      n.vel = vel;
+      n.start = start;
+      n.len = len;
+      sendNote(sink, t, n);
+    }
+  });
 }
 
 /** From the current pattern (`patternId`: only if that one is current; else false). */
 export function deleteNotes(p: Project, sink: CommandSink, trackId: string, ids: string[], patternId?: string): boolean {
-  const tp = target(p, trackId, patternId);
-  if (!tp) return false;
-  const { t, pat } = tp;
-  const gone = new Set(ids);
-  for (const n of pat.notes) {
-    if (gone.has(n.id)) sink.send(Op.NOTE_REMOVE, t.slot * MAX_NOTES + n.idx);
-  }
-  pat.notes = pat.notes.filter((n) => !gone.has(n.id));
-  return true;
+  return edit(p, 'Delete notes', () => {
+    const tp = target(p, trackId, patternId);
+    if (!tp) return false;
+    const { t, pat } = tp;
+    const gone = new Set(ids);
+    for (const n of pat.notes) {
+      if (gone.has(n.id)) sink.send(Op.NOTE_REMOVE, t.slot * MAX_NOTES + n.idx);
+    }
+    pat.notes = pat.notes.filter((n) => !gone.has(n.id));
+    return true;
+  });
 }
 
 /** Never moves notes: those past the new end stay (they just do not play). */
 export function setPatternBars(p: Project, sink: CommandSink, trackId: string, bars: number) {
-  const tp = target(p, trackId);
-  if (!tp) return;
-  tp.pat.bars = clampInt(bars, 1, MAX_PATTERN_BARS);
-  sink.send(Op.SET_PATTERN_BARS, tp.t.slot, tp.pat.bars);
+  return edit(p, 'Pattern length', () => {
+    const tp = target(p, trackId);
+    if (!tp) return;
+    tp.pat.bars = clampInt(bars, 1, MAX_PATTERN_BARS);
+    sink.send(Op.SET_PATTERN_BARS, tp.t.slot, tp.pat.bars);
+  });
 }
 
 /** Empties the current pattern (every clip using it goes silent at once). */
 export function clearPattern(p: Project, sink: CommandSink, trackId: string) {
-  const tp = target(p, trackId);
-  if (!tp) return;
-  tp.pat.notes = [];
-  sink.send(Op.NOTE_CLEAR, tp.t.slot);
+  return edit(p, 'Clear pattern', () => {
+    const tp = target(p, trackId);
+    if (!tp) return;
+    tp.pat.notes = [];
+    sink.send(Op.NOTE_CLEAR, tp.t.slot);
+  });
 }
 
 /**
@@ -149,21 +166,23 @@ export function clearPattern(p: Project, sink: CommandSink, trackId: string) {
 export function quantizeNotes(
   p: Project, sink: CommandSink, trackId: string, ids: string[], gridTicks: number, strength = 1,
 ) {
-  const tp = target(p, trackId);
-  if (!tp || !(gridTicks > 0)) return;
-  const { t, pat } = tp;
-  const want = ids.length ? new Set(ids) : null;
-  const total = patternTicks(t);
-  const s = Number.isFinite(strength) ? Math.min(1, Math.max(0, strength)) : 1;
-  const changes: { id: string; start: number }[] = [];
-  for (const n of pat.notes) {
-    if (want && !want.has(n.id)) continue;
-    if (n.start >= total) continue;
-    let snapped = Math.round(n.start / gridTicks) * gridTicks;
-    if (snapped >= total) snapped = 0;
-    changes.push({ id: n.id, start: n.start + (snapped - n.start) * s });
-  }
-  updateNotes(p, sink, trackId, changes);
+  return edit(p, 'Quantize', () => {
+    const tp = target(p, trackId);
+    if (!tp || !(gridTicks > 0)) return;
+    const { t, pat } = tp;
+    const want = ids.length ? new Set(ids) : null;
+    const total = patternTicks(t);
+    const s = Number.isFinite(strength) ? Math.min(1, Math.max(0, strength)) : 1;
+    const changes: { id: string; start: number }[] = [];
+    for (const n of pat.notes) {
+      if (want && !want.has(n.id)) continue;
+      if (n.start >= total) continue;
+      let snapped = Math.round(n.start / gridTicks) * gridTicks;
+      if (snapped >= total) snapped = 0;
+      changes.push({ id: n.id, start: n.start + (snapped - n.start) * s });
+    }
+    updateNotes(p, sink, trackId, changes);
+  });
 }
 
 // ---- pattern CRUD ------------------------------------------------------------
@@ -240,25 +259,27 @@ export function selectPattern(p: Project, sink: CommandSink, trackId: string, pa
  * lengths, so they are sent after selecting it. Null at MAX_PATTERNS.
  */
 export function newPattern(p: Project, sink: CommandSink, trackId: string): AnyPattern | null {
-  const t = findTrack(p, trackId);
-  if (!t) return null;
-  const idx = freeEngineIdx(t);
-  if (idx === null) return null;
-  const name = freeName(t, 'Pattern', true);
-  if (t.kind === 'drum') {
-    const cur = currentPattern(t);
-    t.patterns.push(makeDrumPattern(idx, name, cur.stepCount, cur.swing));
-    const pat = t.patterns[t.patterns.length - 1]; // reactive proxy
+  return edit(p, 'New pattern', () => {
+    const t = findTrack(p, trackId);
+    if (!t) return null;
+    const idx = freeEngineIdx(t);
+    if (idx === null) return null;
+    const name = freeName(t, 'Pattern', true);
+    if (t.kind === 'drum') {
+      const cur = currentPattern(t);
+      t.patterns.push(makeDrumPattern(idx, name, cur.stepCount, cur.swing));
+      const pat = t.patterns[t.patterns.length - 1]; // reactive proxy
+      selectPattern(p, sink, t.id, pat.id);
+      sink.send(Op.SET_STEP_COUNT, t.slot, pat.stepCount);
+      sink.send(Op.SET_SWING, t.slot, pat.swing);
+      return pat;
+    }
+    t.patterns.push(makeNotePattern(idx, name, currentPattern(t).bars));
+    const pat = t.patterns[t.patterns.length - 1];
     selectPattern(p, sink, t.id, pat.id);
-    sink.send(Op.SET_STEP_COUNT, t.slot, pat.stepCount);
-    sink.send(Op.SET_SWING, t.slot, pat.swing);
+    sink.send(Op.SET_PATTERN_BARS, t.slot, pat.bars);
     return pat;
-  }
-  t.patterns.push(makeNotePattern(idx, name, currentPattern(t).bars));
-  const pat = t.patterns[t.patterns.length - 1];
-  selectPattern(p, sink, t.id, pat.id);
-  sink.send(Op.SET_PATTERN_BARS, t.slot, pat.bars);
-  return pat;
+  });
 }
 
 /**
@@ -267,45 +288,51 @@ export function newPattern(p: Project, sink: CommandSink, trackId: string): AnyP
  * and makeUnique. Null at MAX_PATTERNS or for an unknown pattern.
  */
 export function copyPattern(p: Project, sink: CommandSink, trackId: string, patternId: string): AnyPattern | null {
-  const t = findTrack(p, trackId);
-  const src = t && patternOf(t, patternId);
-  if (!t || !src) return null;
-  const idx = freeEngineIdx(t);
-  if (idx === null) return null;
-  const name = copyName(t, src.name);
-  let pat: AnyPattern;
-  if (t.kind === 'drum') {
-    const s = src as DrumPattern;
-    t.patterns.push({ ...makeDrumPattern(idx, name, s.stepCount, s.swing), steps: s.steps.map((r) => [...r]) });
-    pat = t.patterns[t.patterns.length - 1];
-  } else {
-    const s = src as NotePatternState;
-    // Same note idx: each engine pattern has its own note slots.
-    t.patterns.push({ ...makeNotePattern(idx, name, s.bars), notes: s.notes.map((n) => ({ ...n, id: crypto.randomUUID() })) });
-    pat = t.patterns[t.patterns.length - 1];
-  }
-  sink.send(Op.COPY_PATTERN, t.slot, src.engineIdx, idx);
-  return pat;
+  return edit(p, 'Copy pattern', () => {
+    const t = findTrack(p, trackId);
+    const src = t && patternOf(t, patternId);
+    if (!t || !src) return null;
+    const idx = freeEngineIdx(t);
+    if (idx === null) return null;
+    const name = copyName(t, src.name);
+    let pat: AnyPattern;
+    if (t.kind === 'drum') {
+      const s = src as DrumPattern;
+      t.patterns.push({ ...makeDrumPattern(idx, name, s.stepCount, s.swing), steps: s.steps.map((r) => [...r]) });
+      pat = t.patterns[t.patterns.length - 1];
+    } else {
+      const s = src as NotePatternState;
+      // Same note idx: each engine pattern has its own note slots.
+      t.patterns.push({ ...makeNotePattern(idx, name, s.bars), notes: s.notes.map((n) => ({ ...n, id: crypto.randomUUID() })) });
+      pat = t.patterns[t.patterns.length - 1];
+    }
+    sink.send(Op.COPY_PATTERN, t.slot, src.engineIdx, idx);
+    return pat;
+  });
 }
 
 /** A copy of `patternId` (default: the current one) that becomes current. */
 export function duplicatePattern(p: Project, sink: CommandSink, trackId: string, patternId?: string): AnyPattern | null {
-  const t = findTrack(p, trackId);
-  if (!t) return null;
-  const pat = copyPattern(p, sink, trackId, patternId ?? t.currentPatternId);
-  if (pat) selectPattern(p, sink, trackId, pat.id);
-  return pat;
+  return edit(p, 'Duplicate pattern', () => {
+    const t = findTrack(p, trackId);
+    if (!t) return null;
+    const pat = copyPattern(p, sink, trackId, patternId ?? t.currentPatternId);
+    if (pat) selectPattern(p, sink, trackId, pat.id);
+    return pat;
+  });
 }
 
 /** UI-only (the engine has no names). Trimmed; empty names are refused. */
 export function renamePattern(p: Project, _sink: CommandSink, trackId: string, patternId: string, name: string): boolean {
-  const t = findTrack(p, trackId);
-  const pat = t && patternOf(t, patternId);
-  const n = name.trim();
-  if (!pat || !n) return false;
-  pat.name = n;
-  markEdited(p); // no engine command, so mark it here
-  return true;
+  return edit(p, 'Rename pattern', () => {
+    const t = findTrack(p, trackId);
+    const pat = t && patternOf(t, patternId);
+    const n = name.trim();
+    if (!pat || !n) return false;
+    pat.name = n;
+    markEdited(p); // no engine command, so mark it here
+    return true;
+  });
 }
 
 /**
@@ -315,17 +342,19 @@ export function renamePattern(p: Project, _sink: CommandSink, trackId: string, p
  * freed slot is empty when newPattern reuses it; no renumbering.
  */
 export function deletePattern(p: Project, sink: CommandSink, trackId: string, patternId: string): boolean {
-  const t = findTrack(p, trackId);
-  const pat = t && patternOf(t, patternId);
-  if (!t || !pat || t.patterns.length <= 1) return false;
-  if (t.clips.some((c) => c.patternId === pat.id)) return false;
-  if (t.currentPatternId === pat.id) {
-    const rest: AnyPattern[] = t.patterns;
-    const next = rest.filter((x) => x.id !== pat.id).sort((a, b) => a.engineIdx - b.engineIdx)[0];
-    selectPattern(p, sink, t.id, next.id);
-  }
-  sink.send(Op.CLEAR_PATTERN_DATA, t.slot, pat.engineIdx);
-  if (t.kind === 'drum') t.patterns = t.patterns.filter((x) => x.id !== pat.id);
-  else t.patterns = t.patterns.filter((x) => x.id !== pat.id);
-  return true;
+  return edit(p, 'Delete pattern', () => {
+    const t = findTrack(p, trackId);
+    const pat = t && patternOf(t, patternId);
+    if (!t || !pat || t.patterns.length <= 1) return false;
+    if (t.clips.some((c) => c.patternId === pat.id)) return false;
+    if (t.currentPatternId === pat.id) {
+      const rest: AnyPattern[] = t.patterns;
+      const next = rest.filter((x) => x.id !== pat.id).sort((a, b) => a.engineIdx - b.engineIdx)[0];
+      selectPattern(p, sink, t.id, next.id);
+    }
+    sink.send(Op.CLEAR_PATTERN_DATA, t.slot, pat.engineIdx);
+    if (t.kind === 'drum') t.patterns = t.patterns.filter((x) => x.id !== pat.id);
+    else t.patterns = t.patterns.filter((x) => x.id !== pat.id);
+    return true;
+  });
 }

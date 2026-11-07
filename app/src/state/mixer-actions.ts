@@ -6,6 +6,7 @@ import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
+import { edit } from './edits';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
 
 export type MixChannelTarget = string /* trackId */ | 'reverb' | 'delay' | 'master';
@@ -42,14 +43,16 @@ export function accepts(def: MixParamDef, kind: MixTarget, index: number): boole
 
 /** Clamp to the catalog range (integers rounded, NaN -> default) and send MIX_SET. */
 export function setMix(p: Project, sink: CommandSink, target: MixChannelTarget, param: string, value: number) {
-  const r = resolve(p, target);
-  const def = MIX_PARAMS.find((d) => d.name === param);
-  // The engine rejects params the channel does not take; so do we (nothing
-  // stored, nothing sent).
-  if (!r || !def || !accepts(def, r.kind, r.index)) return;
-  const v = clampParam(def, value);
-  r.ch.params[def.id] = v;
-  sink.send(Op.MIX_SET, r.index, def.id, v);
+  return edit(p, `Set ${MIX_PARAMS.find((d) => d.name === param)?.label ?? param}`, () => {
+    const r = resolve(p, target);
+    const def = MIX_PARAMS.find((d) => d.name === param);
+    // The engine rejects params the channel does not take; so do we (nothing
+    // stored, nothing sent).
+    if (!r || !def || !accepts(def, r.kind, r.index)) return;
+    const v = clampParam(def, value);
+    r.ch.params[def.id] = v;
+    sink.send(Op.MIX_SET, r.index, def.id, v);
+  });
 }
 
 const flag = (p: Project, target: MixChannelTarget, name: string): number | null => {
@@ -58,14 +61,18 @@ const flag = (p: Project, target: MixChannelTarget, name: string): number | null
 };
 
 export function toggleSolo(p: Project, sink: CommandSink, trackId: string) {
-  const cur = flag(p, trackId, 'solo');
-  if (cur !== null) setMix(p, sink, trackId, 'solo', cur ? 0 : 1);
+  return edit(p, 'Solo', () => {
+    const cur = flag(p, trackId, 'solo');
+    if (cur !== null) setMix(p, sink, trackId, 'solo', cur ? 0 : 1);
+  });
 }
 
 /** Tracks and the two returns. */
 export function toggleMute(p: Project, sink: CommandSink, target: MixChannelTarget) {
-  const cur = flag(p, target, 'mute');
-  if (cur !== null) setMix(p, sink, target, 'mute', cur ? 0 : 1);
+  return edit(p, 'Mute', () => {
+    const cur = flag(p, target, 'mute');
+    if (cur !== null) setMix(p, sink, target, 'mute', cur ? 0 : 1);
+  });
 }
 
 /**
@@ -94,29 +101,31 @@ export function rowKeyAllowed(p: Project, trackId: string, key: SidechainKey | n
  * (rowKeyAllowed) are refused: nothing changes, nothing is sent, false.
  */
 export function setSidechain(p: Project, sink: CommandSink, trackId: string, key: SidechainKey | null): boolean {
-  const t = p.tracks.find((x) => x.id === trackId);
-  const ch = p.mixer.channels[trackId];
-  if (!t || !ch) return false;
-  let stored: SidechainKey | null = null;
-  let code = -1;
-  if (key) {
-    const src = p.tracks.find((x) => x.id === key.trackId);
-    if (!src) return false;
-    if (key.row === null) {
-      if (src.id !== trackId) {
-        stored = { trackId: src.id, row: null };
-        code = keyCode({ slot: src.slot });
+  return edit(p, 'Sidechain', () => {
+    const t = p.tracks.find((x) => x.id === trackId);
+    const ch = p.mixer.channels[trackId];
+    if (!t || !ch) return false;
+    let stored: SidechainKey | null = null;
+    let code = -1;
+    if (key) {
+      const src = p.tracks.find((x) => x.id === key.trackId);
+      if (!src) return false;
+      if (key.row === null) {
+        if (src.id !== trackId) {
+          stored = { trackId: src.id, row: null };
+          code = keyCode({ slot: src.slot });
+        }
+      } else {
+        if (src.kind !== 'drum' || !Number.isInteger(key.row) || key.row < 0 || key.row >= src.rows.length) return false;
+        if (!rowKeyAllowed(p, trackId, key)) return false;
+        stored = { trackId: src.id, row: key.row };
+        code = keyCode({ slot: src.slot, row: key.row });
       }
-    } else {
-      if (src.kind !== 'drum' || !Number.isInteger(key.row) || key.row < 0 || key.row >= src.rows.length) return false;
-      if (!rowKeyAllowed(p, trackId, key)) return false;
-      stored = { trackId: src.id, row: key.row };
-      code = keyCode({ slot: src.slot, row: key.row });
     }
-  }
-  ch.key = stored;
-  sink.send(Op.MIX_SET_KEY, t.slot, code);
-  return true;
+    ch.key = stored;
+    sink.send(Op.MIX_SET_KEY, t.slot, code);
+    return true;
+  });
 }
 
 /** "Drums · kick", "Synth", or "none". */

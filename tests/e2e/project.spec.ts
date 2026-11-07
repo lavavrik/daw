@@ -17,6 +17,7 @@ type Daw = {
   actions: Record<string, (...args: any[]) => any>;
   saveTo(dir: FileSystemDirectoryHandle): Promise<void>;
   openFrom(dir: FileSystemDirectoryHandle): Promise<string[]>;
+  autosave: { lastSaved: number | null; flush(): Promise<void> };
 };
 const daw = () => (window as unknown as { __daw: Daw }).__daw;
 
@@ -204,4 +205,80 @@ test('Project menu: New asks inline before discarding unsaved changes', async ({
   await page.getByTestId('project-discard').click();
   await expect(page.getByTestId('project-name')).toHaveText('Untitled');
   await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.map((t) => t.kind))).toEqual(['drum']);
+});
+
+test('restore banner appears and restores', async ({ page }) => {
+  test.setTimeout(60_000);
+  await startAudio(page);
+  await expect(page.getByTestId('restore')).toBeHidden(); // a fresh browser profile: nothing to restore
+  await makeBeat(page);
+  await page.evaluate(() => ((window as unknown as { __daw: Daw }).__daw.project.name = 'Night Drive'));
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.setMix('master', 'fader', -3)); // one more edit after the rename
+  const want = await summary(page);
+  // The debounced autosave (5 s after the last edit) lands in OPFS.
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.autosave.lastSaved), { timeout: 15_000 })
+    .not.toBeNull();
+  const written = await page.evaluate(async () => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('autosave');
+    const marker = JSON.parse(await (await (await dir.getFileHandle('autosave.json')).getFile()).text());
+    return { name: marker.project.name, samples: marker.project.samples.length };
+  });
+  expect(written).toEqual({ name: 'Night Drive', samples: 1 });
+
+  // Reload (a crash or a closed tab): the next start offers the session back.
+  await startAudio(page);
+  const offer = page.getByTestId('restore');
+  await expect(offer).toBeVisible();
+  await expect(offer).toContainText('Night Drive');
+  expect(await summary(page)).not.toEqual(want); // a fresh session until Restore
+  await offer.getByRole('button', { name: 'Restore last session' }).click();
+  await expect(offer).toBeHidden();
+  await expect.poll(() => summary(page)).toEqual(want);
+  await expect(page.getByTestId('project-name')).toContainText('Night Drive');
+  await expect(page.getByTestId('project-name')).toContainText('unsaved');
+  await page.keyboard.press('Space');
+  const peaks = await stripPeaks(page, [0, 1], 2000);
+  await page.keyboard.press('Space');
+  expect(peaks[0]).toBeGreaterThan(0.01); // the kick (its sample came back from OPFS)
+  expect(peaks[1]).toBeGreaterThan(0.01);
+
+  // "Start fresh" removes it: the next start offers nothing.
+  await startAudio(page);
+  await page.getByTestId('restore').getByRole('button', { name: 'Start fresh' }).click();
+  await expect(page.getByTestId('restore')).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(async () => (await navigator.storage.getDirectory()).getDirectoryHandle('autosave').then(() => true, () => false)))
+    .toBe(false);
+  await startAudio(page);
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('restore')).toBeHidden();
+
+  // Leave no autosave state behind.
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for (const n of ['autosave', 'autosave.tmp']) await root.removeEntry(n, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  });
+});
+
+test('an explicit save makes the older autosave stale (no offer)', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.autosave.flush());
+  const dirName = `e2e-stale-${test.info().workerIndex}`;
+  await opfsDir(page, dirName);
+  await page.evaluate(async (n) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
+    await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
+  }, dirName);
+  await startAudio(page);
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('restore')).toBeHidden();
+  await page.evaluate(async (n) => {
+    const root = await navigator.storage.getDirectory();
+    for (const x of ['autosave', 'autosave.tmp', n]) await root.removeEntry(x, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  }, dirName);
 });

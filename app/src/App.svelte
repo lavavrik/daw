@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
   import { addClip } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
@@ -30,6 +30,11 @@
   import { createDirtyCheck } from './project/dirtyCheck';
   import { commandEdits } from './state/edits';
   import { releaseHeldKeys } from './input/shortcuts';
+  import {
+    createAutosave, discardAutosave, lastExplicitSave, offersRestore, opfsRoot, peekAutosave, readAutosave,
+    recordExplicitSave,
+  } from './project/autosave';
+  import type { AutosaveInfo } from './project/autosave';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -59,6 +64,89 @@
     document.title = `${project.dirty ? '● ' : ''}${project.name} — DAW`;
   });
 
+  // Autosave (project/autosave.ts): to OPFS 5 s after the last edit (the same
+  // project.version signal; a load never bumps it) and when the tab is
+  // hidden. Held until the start-up check has run, and while the "Restore
+  // last session" offer is open, so the previous session is never
+  // overwritten before the user chose.
+  let autosaveError: string | null = null;
+  const autosave = createAutosave({
+    getProject: () => project,
+    root: opfsRoot,
+    onError: (m) => {
+      if (m !== null) banners.error = autosaveError = m;
+      else if (banners.error === autosaveError) banners.error = null;
+    },
+  });
+  autosave.hold(true);
+  let seenVersion = project.version;
+  $effect(() => {
+    const v = project.version;
+    if (v === seenVersion) return;
+    seenVersion = v;
+    untrack(() => autosave.markDirty());
+  });
+  onMount(() => {
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') void autosave.flush();
+    };
+    document.addEventListener('visibilitychange', hidden);
+    return () => document.removeEventListener('visibilitychange', hidden);
+  });
+
+  /** An autosave newer than the last explicit save, offered in an inline banner (never confirm()). */
+  let restoreOffer = $state<AutosaveInfo | null>(null);
+  let restoring = false;
+
+  async function checkAutosave() {
+    try {
+      const info = await peekAutosave(await opfsRoot());
+      if (offersRestore(info, lastExplicitSave())) {
+        restoreOffer = info;
+        return; // stays held until answered
+      }
+    } catch (e) {
+      console.warn('Could not check for an autosave', e);
+    }
+    autosave.hold(false);
+  }
+
+  async function restoreLastSession() {
+    if (!session || restoring) return;
+    restoring = true;
+    restoreOffer = null;
+    try {
+      const saved = await readAutosave(await opfsRoot());
+      if (!saved) throw new Error('the autosave is gone');
+      await session.restore(saved.json, saved.files);
+      autosave.cancel(); // the restored state is what the autosave holds
+      banners.error = null;
+      flashHint(`Restored "${project.name}" — not saved to a folder yet`);
+    } catch (e) {
+      banners.error = `Couldn't restore the last session — ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      restoring = false;
+      autosave.hold(false);
+    }
+  }
+
+  async function startFresh() {
+    restoreOffer = null;
+    try {
+      await discardAutosave(await opfsRoot());
+    } catch (e) {
+      console.warn('Could not remove the autosave', e);
+    }
+    autosave.hold(false);
+  }
+
+  /** "Mar 3, 14:05" (or just "14:05" today). */
+  function when(t: number) {
+    const d = new Date(t);
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+  }
+
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
     // Real song actions for e2e (no-ops before audio starts).
@@ -78,6 +166,7 @@
   // Project save/load with any directory handle (e2e: OPFS). Same code as the Project menu.
   saveTo: (dir) => (session ? session.saveTo(dir) : Promise.reject(new Error('audio not started'))),
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
+  autosave,
   };
 
   /**
@@ -194,6 +283,12 @@
       // samples decoded): stop like the Stop button does, so the recorder
       // closes held notes at the heard tick; release held piano keys.
       beforeLoad: () => {
+        // A New / Open while the restore offer is open answers it: that
+        // project replaces the session, and later edits autosave over it.
+        if (restoreOffer && !restoring) {
+          restoreOffer = null;
+          autosave.hold(false);
+        }
         if (project.playing) {
           r.onTransport(false, c.heardTicks());
           stop(project, e);
@@ -207,8 +302,14 @@
         if (project.mode === 'song' && r.armed) r.toggleArm();
         refreshRec();
       },
+      // Project ▸ Save / Save As: the autosave of this state is not needed.
+      onSaved: () => {
+        recordExplicitSave();
+        autosave.cancel();
+      },
     });
     session = s;
+    void checkAutosave(); // after audio started: a restore needs the engine
     uninstall = installShortcuts(project, e, input, {
       onOctave: (o) => (octave = o),
       onTogglePlay: transportToggle,
@@ -223,6 +324,7 @@
 
   onDestroy(() => {
     dirtyCheck.dispose();
+    autosave.dispose();
     stopWatch?.();
     uninstall?.();
     uninstallMidi?.();
@@ -258,6 +360,14 @@
     {#if recorder && session}
       <TopBar p={project} {engine} {octave} {midi} {recorder} {rec} {session} onTogglePlay={transportToggle} onToggleArm={toggleArm} />
     {/if}
+    {#if restoreOffer}
+      {@const offer = restoreOffer}
+      <div class="restore" data-testid="restore" role="alertdialog" aria-label="Restore last session">
+        <span>Unsaved work from your last session: <b>{offer.name}</b> (autosaved {when(offer.savedAt)}).</span>
+        <button class="ok" onclick={() => void restoreLastSession()}>Restore last session</button>
+        <button onclick={() => void startFresh()}>Start fresh</button>
+      </div>
+    {/if}
     <div class="main">
       <Browser />
       <div class="right">
@@ -287,5 +397,9 @@
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
   .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
+  .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
+  .restore span { flex: 1; }
+  .restore button { font: inherit; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
+  .restore .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
   .loading { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #16171b99; color: #e4e5ea; font-size: 14px; cursor: progress; }
 </style>

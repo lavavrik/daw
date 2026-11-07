@@ -26,6 +26,12 @@ export interface ProjectSession {
   saveTo(dir: FileSystemDirectoryHandle): Promise<void>;
   /** Returns the load warnings (also shown in the notice banner). */
   openFrom(dir: FileSystemDirectoryHandle): Promise<string[]>;
+  /**
+   * Load an autosave (project/autosave.ts) as an unsaved project with no
+   * folder: same validation and warnings banner as Open; the name is kept.
+   * Throws on failure. Returns the load warnings.
+   */
+  restore(json: unknown, files: Map<string, ArrayBuffer>): Promise<string[]>;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -35,6 +41,9 @@ export function warningsText(title: string, warnings: string[], n = 6): string {
   const shown = warnings.slice(0, n).join(' · ');
   return `${title}: ${shown}${warnings.length > n ? ` · +${warnings.length - n} more (see console)` : ''}`;
 }
+
+/** savedFingerprint of a project that has no saved copy (a restored autosave). */
+export const NEVER_SAVED = '';
 
 /** "Unsaved changes" are measured from now. */
 export function markSaved(p: Project) {
@@ -51,6 +60,8 @@ export interface SessionOptions {
   beforeLoad?: () => void;
   /** Runs after every New / Open that got that far, success or not (recorder resync). */
   afterLoad?: () => void;
+  /** After every successful save (App: records the explicit-save time, drops a pending autosave). */
+  onSaved?: () => void;
   /** The folder picker (tests pass a fake). */
   pick?: () => Promise<FileSystemDirectoryHandle | null>;
 }
@@ -73,6 +84,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
     await writeProject(dir, json, projectFiles(p, json));
     p.folder = dir;
     markSaved(p);
+    opts.onSaved?.();
   }
 
   /** loadProject with the hooks; afterLoad runs whenever beforeLoad did. */
@@ -90,16 +102,32 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
     }
   }
 
+  function showWarnings(verb: string, warnings: string[]) {
+    banners.load = null;
+    if (warnings.length) {
+      console.warn(`${verb} "${p.name}" with changes:\n${warnings.join('\n')}`);
+      banners.load = warningsText(`${verb} "${p.name}" — skipped or changed`, warnings);
+    }
+  }
+
   async function openFrom(dir: FileSystemDirectoryHandle): Promise<string[]> {
     const { json, files } = await readProject(dir); // nothing changes if this fails
     const warnings = await replace(json, files);
     p.folder = dir;
     markSaved(p);
-    banners.load = null;
-    if (warnings.length) {
-      console.warn(`Opened "${p.name}" with changes:\n${warnings.join('\n')}`);
-      banners.load = warningsText(`Opened "${p.name}" — skipped or changed`, warnings);
-    }
+    showWarnings('Opened', warnings);
+    return warnings;
+  }
+
+  async function restore(json: unknown, files: Map<string, ArrayBuffer>): Promise<string[]> {
+    const warnings = await replace(json, files);
+    // No folder (the handle is not kept in an autosave) and never saved:
+    // NEVER_SAVED matches no fingerprint, so the idle dirty check keeps the
+    // "● unsaved" mark until a Save.
+    p.folder = null;
+    p.savedFingerprint = NEVER_SAVED;
+    p.dirty = true;
+    showWarnings('Restored', warnings);
     return warnings;
   }
 
@@ -148,6 +176,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
   return {
     saveTo,
     openFrom,
+    restore,
     saveAs: () => once(saveAs),
     save: () => once(() => (p.folder ? saveInto(p.folder, p.name) : saveAs())),
     open: () =>

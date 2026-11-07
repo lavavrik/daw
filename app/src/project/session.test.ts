@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { banners } from '../state/banners.svelte';
 import { Project } from '../state/project.svelte';
 import { createProjectSession } from './session';
+import { projectFiles, projectFingerprint, serialize } from './serialize';
 import { FakeDir, asDir } from './fakeDir';
 import { buildFixture, fakeDecoder, fakeEngine } from './testFixture';
 
@@ -82,5 +83,30 @@ describe('project session', () => {
     await expect(s.openFrom(asDir(dir))).rejects.toThrow(/refused/);
     expect(calls).toEqual(['after']);
     expect(p.folder).toBeNull();
+  });
+
+  it('restore loads as an unsaved project without a folder; Save calls onSaved (autosave)', async () => {
+    const { p: src } = buildFixture();
+    src.name = 'Late Night';
+    const p = new Project();
+    p.folder = asDir(new FakeDir('Old'));
+    const calls: string[] = [];
+    const dir = new FakeDir('Here');
+    const s = createProjectSession(p, engine(), {
+      beforeLoad: () => calls.push('before'), afterLoad: () => calls.push('after'), onSaved: () => calls.push('saved'),
+      pick: async () => asDir(dir),
+    });
+    const warnings = await s.restore(serialize(src), new Map(projectFiles(src, serialize(src))));
+    expect(warnings).toEqual([]);
+    expect(calls).toEqual(['before', 'after']);
+    expect(p.name).toBe('Late Night');
+    expect(p.folder).toBeNull();
+    expect(p.dirty).toBe(true);
+    expect(projectFingerprint(p)).toBe(projectFingerprint(src));
+    // The idle dirty check must not clear it: nothing was saved yet.
+    expect(p.savedFingerprint).not.toBe(projectFingerprint(p));
+    await s.saveAs();
+    expect(calls).toEqual(['before', 'after', 'saved']);
+    expect(p.dirty).toBe(false);
   });
 });

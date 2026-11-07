@@ -14,6 +14,7 @@ export class FakeFile {
     return {
       write: async (v: ArrayBuffer | string | Uint8Array) => {
         if (root.failOn && this.name === root.failOn) throw new Error(`disk full writing ${this.name}`);
+        root.chunks++;
         chunks.push(typeof v === 'string' ? new TextEncoder().encode(v) : new Uint8Array(v instanceof Uint8Array ? v : v));
       },
       close: async () => {
@@ -41,6 +42,8 @@ export class FakeDir {
   files = new Map<string, FakeFile | FakeDir>();
   log: string[] = [];
   failOn: string | null = null;
+  /** Number of write() calls (chunked writes), not logged. */
+  chunks = 0;
   noMove = false;
   constructor(public name = 'proj', public parentDir: FakeDir | null = null) {}
   root(): FakeDir {

@@ -1,11 +1,16 @@
 <script module lang="ts">
-  import { SvelteSet } from 'svelte/reactivity';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   /**
    * Track ids whose rack was edited since its patch was loaded: drives the
    * "(edited)" marker next to the patch name. UI state only (not saved, not
    * in Project); module-level so it survives switching tracks/tabs.
    */
   const edited = new SvelteSet<string>();
+  /**
+   * Track id -> the patch-dropdown option its patch was last loaded or saved
+   * from (library/patchSource.ts): tells a library "Pad" from the starter.
+   */
+  const loadedFrom = new SvelteMap<string, string>();
 </script>
 
 <script lang="ts">
@@ -34,7 +39,8 @@
   import { baseName } from '../../audio/samples';
   import { droppedFiles } from '../../library/drag';
   import { LibraryLostError, library } from '../../library/library.svelte';
-  import { patchFileName } from '../../library/scan';
+  import { LIB, patchOptionValue } from '../../library/patchSource';
+  import { PATCHES_DIR, patchFileName } from '../../library/scan';
   import { warningsText } from '../../project/session';
   import { banners, flashHint } from '../../state/banners.svelte';
   import { markEdited } from '../../state/edits';
@@ -258,16 +264,13 @@
   // The dropdown lists the starter patches, then the library's patches/*.json
   // (values "lib:<path>"; a library patch's name is its file name). Save
   // patch is refused under a starter name, so a name picks one option.
-  const LIB = 'lib:';
   const lib = library.state;
-  const libPatches = $derived(lib.source === 'folder' ? (lib.tree?.patches ?? []) : []);
+  const libPatches = $derived(lib.source === 'folder' ? lib.patches : []);
   const isStarter = (name: string) => STARTER_PATCHES.some((x) => x.name.toLowerCase() === name.trim().toLowerCase());
-  /** The option showing the current patch. */
-  const selValue = $derived.by(() => {
-    if (STARTER_PATCHES.some((x) => x.name === track.patchName)) return track.patchName;
-    const lp = libPatches.find((x) => x.name === track.patchName);
-    return lp ? LIB + lp.path : track.patchName;
-  });
+  /** The option showing the current patch (also what revert reloads). */
+  const selValue = $derived(
+    patchOptionValue(track.patchName, loadedFrom.get(track.id) ?? null, STARTER_PATCHES.map((x) => x.name), libPatches),
+  );
   /** What the last patch load dropped or clamped (validatePatch), shown inline. */
   let patchNote = $state<string | null>(null);
 
@@ -304,6 +307,7 @@
     }
     const warnings = loadPatch(p, engine, tid, patch);
     edited.delete(tid);
+    loadedFrom.set(tid, value);
     if (warnings.length) console.warn(`Patch "${name}":`, warnings);
     patchNote = warnings.length ? warningsText(`Loaded "${name}" without what was invalid`, warnings) : null;
     return true;
@@ -317,7 +321,7 @@
 
   // ---- Save patch (to the library's patches/) ----------------------------------
   /** The inline save form; `exists`: that file is there, ask before replacing. */
-  let saving = $state<{ name: string; error: string | null; exists: boolean; busy: boolean } | null>(null);
+  let saving = $state<{ name: string; error: string | null; exists: string | null; busy: boolean } | null>(null);
   const saveTitle = $derived(
     lib.writable
       ? "Save this rack to the library folder's patches/"
@@ -326,7 +330,7 @@
         : 'Choose a library folder to save patches',
   );
   function openSave() {
-    saving = { name: isStarter(track.patchName) ? '' : track.patchName, error: null, exists: false, busy: false };
+    saving = { name: isStarter(track.patchName) ? '' : track.patchName, error: null, exists: null, busy: false };
     void tick().then(() => document.querySelector<HTMLInputElement>('[data-testid="patch-save-name"]')?.select());
   }
   async function save(replace = false) {
@@ -344,7 +348,7 @@
       // Sample ids belong to this session: a library patch keeps no sample.
       const r = await library.savePatch(name, { ...trackPatch(t, () => -1), name }, { replace });
       if (r === 'exists') {
-        s.exists = true;
+        s.exists = name; // as saved (patchFileName), not as typed
         s.error = null;
         return;
       }
@@ -354,9 +358,10 @@
         markEdited(p);
       }
       edited.delete(tid);
+      loadedFrom.set(tid, `${LIB}${PATCHES_DIR}/${file}`);
       flashHint(`Saved patch "${name}" to the library`);
     } catch (e) {
-      s.exists = false;
+      s.exists = null;
       s.error = e instanceof LibraryLostError
         ? 'The library folder is out of reach — reconnect it in the Browser'
         : `Couldn't save — ${e instanceof Error ? e.message : String(e)}`;
@@ -536,9 +541,9 @@
     {@const sv = saving}
     <div class="note save" role="group" aria-label="Save patch">
       {#if sv.exists}
-        <span data-testid="patch-replace">A patch named "{sv.name.trim()}" is already in the library. Replace it?</span>
+        <span data-testid="patch-replace">A patch named "{sv.exists}" is already in the library. Replace it?</span>
         <button class="ok" data-testid="patch-replace-ok" disabled={sv.busy} onclick={() => void save(true)}>Replace</button>
-        <button data-testid="patch-replace-cancel" onclick={() => (sv.exists = false)}>Cancel</button>
+        <button data-testid="patch-replace-cancel" onclick={() => (sv.exists = null)}>Cancel</button>
       {:else}
         <label>Save patch as
           <input data-testid="patch-save-name" bind:value={sv.name} maxlength="64" placeholder="Patch name" onkeydown={saveKey} />

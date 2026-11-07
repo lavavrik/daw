@@ -167,6 +167,10 @@ test('save patch then load from library', async ({ page }) => {
   const name = `e2e-lib-patch-${test.info().workerIndex}`;
   await makeLibrary(page, name, [
     {
+      path: 'patches/Pad.json',
+      text: JSON.stringify({ name: 'Pad', modules: [{ idx: 0, id: 'midi_in' }, { idx: 1, id: 'out' }], cables: [] }),
+    },
+    {
       path: 'patches/Broken.json',
       text: JSON.stringify({
         name: 'Broken',
@@ -199,11 +203,12 @@ test('save patch then load from library', async ({ page }) => {
   }, name);
   expect(onDisk.modules.map((m: { id: string }) => m.id)).toEqual(['midi_in', 'osc', 'lfo', 'filter', 'adsr', 'vca', 'out']);
 
-  // Saving again under the same name asks inline before replacing.
+  // Saving again under the same name asks inline before replacing (showing the name as it is saved).
   await page.getByTestId('patch-save').click();
-  await page.getByTestId('patch-save-name').fill('My Lead');
+  await page.getByTestId('patch-save-name').fill('My/Lead');
   await page.getByTestId('patch-save-ok').click();
   await expect(page.getByTestId('patch-replace')).toBeVisible();
+  await expect(page.getByTestId('patch-replace')).toContainText('"My Lead"');
   await page.getByTestId('patch-replace-cancel').click();
   await expect(page.getByTestId('patch-replace')).toBeHidden();
 
@@ -216,6 +221,11 @@ test('save patch then load from library', async ({ page }) => {
   expect(back).toEqual(lead);
   await expect(page.getByTestId('patch-select')).toHaveValue('lib:patches/My Lead.json');
   await expect(page.getByTestId('patch-warnings')).toBeHidden();
+
+  // A library patch named like a starter (a hand-made file): the dropdown keeps showing the library one.
+  await page.getByTestId('patch-select').selectOption('lib:patches/Pad.json');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks[1].modules!.length)).toBe(2);
+  await expect(page.getByTestId('patch-select')).toHaveValue('lib:patches/Pad.json');
 
   // A broken library patch: what is valid loads, the rest is listed in a banner.
   await page.getByTestId('patch-select').selectOption('lib:patches/Broken.json');

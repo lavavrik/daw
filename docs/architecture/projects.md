@@ -259,20 +259,32 @@ My Sounds/                any layout; every audio file below is listed
   switch to `lost` with one message in the pane, and the read throws
   `LibraryLostError`, which callers never report again (plan 6 review focus
   4: no error spam). A read that fails while the root is still listable
-  (one file renamed or deleted) is not `lost`: it rescans and reports that
-  file once. The pane rescans when the tab becomes visible again, which is
+  (one file renamed or deleted) is not `lost`: it re-lists and reports that
+  file once. The pane refreshes when the tab becomes visible again, which is
   also when a revoked permission or a deleted folder shows.
-- **Scan** (`scan.ts`): names and `/`-paths only (no handles kept); hidden
-  entries skipped; folders without audio pruned; `patches/*.json` (not
-  nested) listed under Patches; capped at 5000 entries / depth 8.
+- **Listing** (`scan.ts`): **lazy, one folder level at a time** — the root
+  when the library opens, a sub-folder when it is expanded
+  (`library.expand` / `collapse`; `state.listings` by path). Names and
+  `/`-paths only (no handles kept); hidden entries and non-audio files
+  (e.g. Ableton `.asd` beside every sample) are skipped and never count;
+  folders and samples are each sorted by name and capped at 2000 per
+  folder, with "N more not shown". A refresh re-lists only the root, the
+  expanded folders and `patches/` (an expanded folder that vanished just
+  closes). `patches/*.json` (not nested) is listed eagerly under Patches.
 - **Starter kit** (`starter.ts`): `samples/starter/*` through Vite
   (`import.meta.glob(…, { query: '?url' })`: `/@fs/` in dev, emitted assets
   in a build), read with `fetch`. Read-only: Save patch is disabled ("Choose
   a library folder to save patches").
-- **Preview** (`preview.ts`): an `AudioBufferSourceNode` to the context's
-  destination, never through the engine; one at a time; a decode that was
-  superseded never starts; decoded buffers cached (16, LRU), cleared on
-  rescan.
+- **Preview** (`preview.ts`): never through the engine; one at a time;
+  work that was superseded never starts. The library hands over the disk
+  `File` unread (`sampleBlob`), and its size decides: up to 50 MB (5 MB for
+  compressed mp3/ogg/m4a/flac/aac, which expand ~10x) it is decoded and
+  played by an `AudioBufferSourceNode` to the context's destination;
+  bigger files stream through an `HTMLAudioElement` on an object URL
+  (revoked on stop/end), so a 1 h WAV never becomes 1.4 GB of floats.
+  Decoded buffers are cached by memory — at most 32M floats (128 MB) in
+  all, least recently used out first, nothing longer than 30 s — and the
+  cache is cleared on every re-list.
 - **Into the project** (`drag.ts`, `state/sampleImport.ts`): a library
   sample is dragged with the private type `application/x-daw-library-sample`
   (its path). Rows, "+ Add row" and Sample Player panels read it with
@@ -287,7 +299,11 @@ My Sounds/                any layout; every audio file below is listed
   -1)` — a Sample Player's `sample` is a session id, so a library patch keeps
   none. An existing file is replaced only after an inline "Replace it?".
   The patch dropdown lists library patches after the starters (value
-  `lib:<path>`; the file name is the patch name). Loading goes through
+  `lib:<path>`; the file name is the patch name). The Rack remembers the
+  option each track's patch was loaded or saved from (`patchSource.ts`), so
+  a hand-made library "Pad" stays selected — and is what revert reloads —
+  rather than the starter Pad. The Replace prompt names the file as saved
+  (sanitised), not as typed. Loading goes through
   `loadPatch` → `validatePatch`: unknown modules, bad cables, out-of-range
   params and pooled effects beyond the FX pool are dropped or clamped, and
   what was dropped shows in the Rack's inline banner.

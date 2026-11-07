@@ -12,5 +12,6 @@ crate-type = ["cdylib", "rlib"]
 # Test-only: the native export reference (tests/export_render.rs) computes its
 # math with the same libm the wasm std uses (compiler-builtins), so native and
 # engine.wasm renders are bit-identical. Keep the version equal to the
-# toolchain's library/compiler-builtins/libm.
+# toolchain's library/compiler-builtins/libm; the toolchain is pinned in
+# rust-toolchain.toml, so bump the two together.
 libm = { version = "=0.2.16", default-features = false }

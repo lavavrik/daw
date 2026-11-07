@@ -1,0 +1,11 @@
+# Pinned so the engine's test-only `libm` dev-dependency (engine/Cargo.toml)
+# stays the libm the toolchain's wasm32 std uses (compiler-builtins): the
+# export's native reference render (engine/tests/export_render.rs) is
+# bit-identical to engine.wasm only while the two match. Bump both together:
+# the libm version is in `$(rustc --print sysroot)/lib/rustlib/src/rust/
+# library/compiler-builtins/libm/Cargo.toml` (needs the rust-src component).
+[toolchain]
+channel = "1.96.0"
+targets = ["wasm32-unknown-unknown"]
+components = ["clippy", "rustfmt", "rust-src"]
+profile = "minimal"

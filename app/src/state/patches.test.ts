@@ -23,6 +23,15 @@ describe('built-in patches', () => {
     expect(HOUSE_GROUPS[0].patches[0]?.name).toBe('Sax');
     for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead)$/);
   });
+  it('the House set has its 12 patches in their groups', () => {
+    expect(HOUSE_GROUPS.map((g) => g.patches.map((p) => p.name))).toEqual([
+      ['Sax', 'Brass Stab', 'Arp Pluck'],
+      ['Tine Keys', 'Piano Stab', 'Garage Organ'],
+      ['Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass'],
+      ['Strings', 'Warm Pad'],
+    ]);
+    expect(Object.keys(HOUSE_PHRASES).sort()).toEqual(HOUSE_GROUPS.flatMap((g) => g.patches.map((p) => p.name)).sort());
+  });
   it('names unique case-insensitively, no trademarks', () => {
     const names = BUILTIN_PATCHES.map((p) => p.name.trim().toLowerCase());
     expect(new Set(names).size).toBe(names.length);

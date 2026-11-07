@@ -114,15 +114,568 @@ const SAX: Patch = {
   ],
 };
 
+/**
+ * Brass Stab: a bright brass hit for disco-house stabs. Detuned saws through
+ * a low-q brass formant body; the filter envelope opens slower than the amp
+ * (the "blat": the note speaks dark and blooms bright in ~40 ms) and also
+ * lifts the formants. Velocity → brighter and louder.
+ */
+const BRASS_STAB: Patch = {
+  name: 'Brass Stab',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // Section: three detuned saws.
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 3, detune: 18 } },
+    // One more saw 7 cents sharp, so the section beats slowly.
+    { idx: 2, id: 'osc', params: { wave: 0, fine: 7 } },
+    // Saws mix.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.5 } },
+    // Brass body: broad (low q) resonances near 650 / 1300 / 2500 Hz; the filter env lifts them (bloom).
+    { idx: 4, id: 'formant', params: { f1: 650, f2: 1300, f3: 2500, q: 2, g2: 0.8, g3: 0.5, track: 0.2, cv_amt: 0.6, mix: 0.7 } },
+    // Brightness: LP12 swept up 3.5 oct by the filter envelope.
+    { idx: 5, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.15, cv_amt: 3.5 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Stab envelope: instant speak, falls to 0.6, short tail; velocity → level.
+    { idx: 7, id: 'adsr', params: { attack: 0.004, decay: 0.3, sustain: 0.6, release: 0.15, vel_amt: 0.4 } },
+    // Filter envelope: a slower 50 ms attack than the amp (the blat), velocity → brighter.
+    { idx: 8, id: 'adsr', params: { attack: 0.05, decay: 0.3, sustain: 0.35, release: 0.15, vel_amt: 0.6 } },
+    // Out: sets the house level.
+    { idx: 9, id: 'out', params: { level: 0.6 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'pitch'], to: [4, 'pitch'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'gate'], to: [8, 'gate'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [0, 'vel'], to: [8, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [8, 'env'], to: [4, 'cv'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [8, 'env'], to: [5, 'cv'] },
+    { from: [5, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [9, 'l'] },
+    { from: [6, 'out'], to: [9, 'r'] },
+  ],
+};
+
+/**
+ * Arp Pluck: a short, bright pluck for 1/16 arps. Saw plus a square an
+ * octave up through a resonant LP24 that snaps shut; no sustain, so fast
+ * notes never smear. Velocity → brighter and louder.
+ */
+const ARP_PLUCK: Patch = {
+  name: 'Arp Pluck',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // Body: a slightly detuned saw pair (softer onset peaks than one saw, a touch of width).
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 2, detune: 10 } },
+    // Sparkle: a square an octave up.
+    { idx: 2, id: 'osc', params: { wave: 1, octave: 1 } },
+    // Mix: saw forward.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.35 } },
+    // LP24 with some resonance: the "pluck" is its envelope (up to 4 oct) snapping it shut.
+    { idx: 4, id: 'filter', params: { mode: 0, cutoff: 400, reso: 0.3, cv_amt: 4 } },
+    // Filter envelope: a 4 ms snap, ~0.2 s decay to closed (the pluck); velocity → brighter.
+    { idx: 5, id: 'adsr', params: { attack: 0.004, decay: 0.2, sustain: 0, release: 0.08, vel_amt: 0.4 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: no sustain (−20 dB at ~0.3 s held, after the saturator; a released 1/16 is cut by the 80 ms release), velocity → level.
+    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 0.55, sustain: 0, release: 0.08, vel_amt: 0.4 } },
+    // Out: sets the house level.
+    { idx: 8, id: 'out', params: { level: 0.26 } },
+    // Per-voice glue: soft-clips each note's onset spike and thickens its tail.
+    { idx: 9, id: 'saturator', params: { drive: 0.45, mix: 1 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [5, 'gate'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [5, 'vel'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [5, 'env'], to: [4, 'cv'] },
+    { from: [4, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [9, 'in'] },
+    { from: [9, 'out'], to: [8, 'l'] },
+    { from: [9, 'out'], to: [8, 'r'] },
+  ],
+};
+
+/**
+ * Tine Keys: an FM electric piano for deep-house chords. A 1:1 sine pair
+ * gives the warm, slightly barking body (its index decays and follows
+ * velocity); a sine at exactly 14× the note is the tine "ping", scaled by
+ * velocity twice (its envelope and a velocity VCA), so a soft touch is mellow
+ * and a hard hit rings the bell. Long decay, chorus for the classic shimmer.
+ * (The Osc's linear FM floors at 0 Hz, so a 1:1 pair can't go past index 1
+ * without detuning; the bell is therefore its own partial.)
+ */
+const TINE_KEYS: Patch = {
+  name: 'Tine Keys',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // Carrier: a sine; fm 0.2 → the modulator VCA's 0..1 is an FM index of 0..1.
+    { idx: 1, id: 'osc', params: { wave: 3, fm: 0.2 } },
+    // Modulator: a sine at the note (1:1, harmonic sidebands).
+    { idx: 2, id: 'osc', params: { wave: 3 } },
+    // Modulation depth (the FM index), driven by the mod envelope.
+    { idx: 3, id: 'vca' },
+    // Mod envelope: the bark at the onset settles to a soft glow; velocity → index.
+    { idx: 4, id: 'adsr', params: { attack: 0.001, decay: 1.2, sustain: 0.15, release: 0.3, vel_amt: 0.9 } },
+    // Amp.
+    { idx: 5, id: 'vca' },
+    // Amp envelope: struck, a long piano-like decay; velocity → level.
+    { idx: 6, id: 'adsr', params: { attack: 0.002, decay: 5, sustain: 0, release: 0.4, vel_amt: 0.35 } },
+    // Tine: a sine at 14× the note (3 oct + 9.688 st = ×1.75 × 8).
+    { idx: 7, id: 'osc', params: { wave: 3, octave: 3, tune: 9.6883 } },
+    // Tine amp, by its envelope.
+    { idx: 8, id: 'vca' },
+    // Tine envelope: a quick ping; velocity → level.
+    { idx: 9, id: 'adsr', params: { attack: 0.001, decay: 0.25, sustain: 0, release: 0.1, vel_amt: 1 } },
+    // Tine amp, by velocity again (velocity², so the bell is mostly a hard-hit thing).
+    { idx: 10, id: 'vca' },
+    // Body + tine.
+    { idx: 11, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.3 } },
+    // The e-piano chorus shimmer.
+    { idx: 12, id: 'chorus', params: { rate: 0.7, depth: 0.5, mix: 0.35 } },
+    // Out: sets the house level.
+    { idx: 13, id: 'out', params: { level: 0.27 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'pitch'], to: [7, 'pitch'] },
+    { from: [0, 'gate'], to: [4, 'gate'] },
+    { from: [0, 'gate'], to: [6, 'gate'] },
+    { from: [0, 'gate'], to: [9, 'gate'] },
+    { from: [0, 'vel'], to: [4, 'vel'] },
+    { from: [0, 'vel'], to: [6, 'vel'] },
+    { from: [0, 'vel'], to: [9, 'vel'] },
+    { from: [0, 'vel'], to: [10, 'cv'] },
+    { from: [2, 'out'], to: [3, 'in'] },
+    { from: [4, 'env'], to: [3, 'cv'] },
+    { from: [3, 'out'], to: [1, 'fm'] },
+    { from: [1, 'out'], to: [5, 'in'] },
+    { from: [6, 'env'], to: [5, 'cv'] },
+    { from: [5, 'out'], to: [11, 'in1'] },
+    { from: [7, 'out'], to: [8, 'in'] },
+    { from: [9, 'env'], to: [8, 'cv'] },
+    { from: [8, 'out'], to: [10, 'in'] },
+    { from: [10, 'out'], to: [11, 'in2'] },
+    { from: [11, 'out'], to: [12, 'l'] },
+    { from: [12, 'l'], to: [13, 'l'] },
+    { from: [12, 'r'], to: [13, 'r'] },
+  ],
+};
+
+/**
+ * Piano Stab: the classic house piano chord stab. Saw plus a slightly
+ * detuned square an octave up, through an LP12 whose fast-decaying,
+ * velocity-scaled envelope gives the bright hammer that mellows; the amp
+ * decays with no sustain (held chords fade like a piano); a light saturator
+ * for weight.
+ */
+const PIANO_STAB: Patch = {
+  name: 'Piano Stab',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // Body: a saw.
+    { idx: 1, id: 'osc', params: { wave: 0 } },
+    // Brightness: a square an octave up, 6 cents sharp (the slightly out-of-tune string pair).
+    { idx: 2, id: 'osc', params: { wave: 1, octave: 1, fine: 6 } },
+    // Mix.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45 } },
+    // LP12 opened by the hammer envelope.
+    { idx: 4, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
+    // Hammer envelope: instant, decays over ~0.5 s; velocity → brighter.
+    { idx: 5, id: 'adsr', params: { attack: 0.001, decay: 0.5, sustain: 0.05, release: 0.2, vel_amt: 0.6 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: struck, decays with no sustain (−20 dB at ~0.85 s); velocity → level.
+    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 1.7, sustain: 0, release: 0.25, vel_amt: 0.4 } },
+    // Weight: a light, slightly bright saturation, half wet.
+    { idx: 8, id: 'saturator', params: { drive: 0.15, mix: 0.5, tone: 0.6 } },
+    // Out: sets the house level.
+    { idx: 9, id: 'out', params: { level: 0.27 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [5, 'gate'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [5, 'vel'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [5, 'env'], to: [4, 'cv'] },
+    { from: [4, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'in'] },
+    { from: [8, 'out'], to: [9, 'l'] },
+    { from: [8, 'out'], to: [9, 'r'] },
+  ],
+};
+
+/**
+ * Garage Organ: the percussive UK-garage organ chord. A square with sines an
+ * octave up and down (drawbar-ish), through a formant body whose own fast
+ * envelope sweeps it down an octave at each hit (the "wah" bounce), into a
+ * fast decay to a low sustain.
+ */
+const GARAGE_ORGAN: Patch = {
+  name: 'Garage Organ',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // 8': a square (the hollow organ tone).
+    { idx: 1, id: 'osc', params: { wave: 1 } },
+    // 4': a sine an octave up.
+    { idx: 2, id: 'osc', params: { wave: 3, octave: 1 } },
+    // 16': a sine an octave down.
+    { idx: 3, id: 'osc', params: { wave: 3, octave: -1 } },
+    // Drawbars.
+    { idx: 4, id: 'mixer', params: { lvl1: 0.5, lvl2: 0.5, lvl3: 0.6 } },
+    // Vowel body: its envelope starts it an octave up and drops it in ~0.15 s ("wah"); 60 % wet.
+    { idx: 5, id: 'formant', params: { f1: 450, f2: 1100, f3: 2600, q: 3, g2: 0.7, g3: 0.4, track: 0.3, cv_amt: 1, mix: 0.6 } },
+    // Wah envelope.
+    { idx: 6, id: 'adsr', params: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 } },
+    // Amp.
+    { idx: 7, id: 'vca' },
+    // Amp envelope: percussive, a fast decay to a low (0.25) sustain; velocity → level.
+    { idx: 8, id: 'adsr', params: { attack: 0.001, decay: 0.3, sustain: 0.25, release: 0.12, vel_amt: 0.4 } },
+    // Out: sets the house level.
+    { idx: 9, id: 'out', params: { level: 0.28 } },
+    // Per-voice drive (an organ through a hot amp): rounds each hit's onset peak.
+    { idx: 10, id: 'saturator', params: { drive: 0.3, mix: 1 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'pitch'], to: [3, 'pitch'] },
+    { from: [0, 'pitch'], to: [5, 'pitch'] },
+    { from: [0, 'gate'], to: [6, 'gate'] },
+    { from: [0, 'gate'], to: [8, 'gate'] },
+    { from: [0, 'vel'], to: [8, 'vel'] },
+    { from: [1, 'out'], to: [4, 'in1'] },
+    { from: [2, 'out'], to: [4, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in3'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [6, 'env'], to: [5, 'cv'] },
+    { from: [5, 'out'], to: [7, 'in'] },
+    { from: [8, 'env'], to: [7, 'cv'] },
+    { from: [7, 'out'], to: [10, 'in'] },
+    { from: [10, 'out'], to: [9, 'l'] },
+    { from: [10, 'out'], to: [9, 'r'] },
+  ],
+};
+
+/**
+ * Organ Bass: the hollow 90s house organ bass. A sine with an octave sine
+ * just under it (the strong 2nd harmonic is the sound) and a touch of
+ * square for edge, through an LP12 a click envelope flicks open at each note;
+ * a short decay to a mid sustain.
+ */
+const ORGAN_BASS: Patch = {
+  name: 'Organ Bass',
+  modules: [
+    // Mono, last-note priority, no glide (organ notes jump).
+    { idx: 0, id: 'midi_in', params: { mode: 1 } },
+    // Fundamental: a sine.
+    { idx: 1, id: 'osc', params: { wave: 3 } },
+    // The octave: a sine an octave up.
+    { idx: 2, id: 'osc', params: { wave: 3, octave: 1 } },
+    // Edge: a quiet square an octave up.
+    { idx: 3, id: 'osc', params: { wave: 1, octave: 1 } },
+    // Drawbars: fundamental, octave a little under it, a touch of square.
+    { idx: 4, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.55, lvl3: 0.12 } },
+    // LP12: tames the square; the click envelope opens it 3 oct for a moment.
+    { idx: 5, id: 'filter', params: { mode: 1, cutoff: 500, reso: 0.1, cv_amt: 3 } },
+    // Key click: 40 ms.
+    { idx: 6, id: 'adsr', params: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.05 } },
+    // Amp.
+    { idx: 7, id: 'vca' },
+    // Amp envelope: a short decay to a mid sustain, quick release; velocity → level.
+    { idx: 8, id: 'adsr', params: { attack: 0.002, decay: 0.35, sustain: 0.6, release: 0.08, vel_amt: 0.3 } },
+    // Out: sets the house level.
+    { idx: 9, id: 'out', params: { level: 0.45 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'pitch'], to: [3, 'pitch'] },
+    { from: [0, 'gate'], to: [6, 'gate'] },
+    { from: [0, 'gate'], to: [8, 'gate'] },
+    { from: [0, 'vel'], to: [8, 'vel'] },
+    { from: [1, 'out'], to: [4, 'in1'] },
+    { from: [2, 'out'], to: [4, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in3'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [6, 'env'], to: [5, 'cv'] },
+    { from: [5, 'out'], to: [7, 'in'] },
+    { from: [8, 'env'], to: [7, 'cv'] },
+    { from: [7, 'out'], to: [9, 'l'] },
+    { from: [7, 'out'], to: [9, 'r'] },
+  ],
+};
+
+/**
+ * Reese Bass: a detuned, phasing Reese. Four saws (two detuned pairs)
+ * beating against each other through a dark LP24 and a saturator; the mod
+ * wheel opens the filter 4 oct toward a snarling hoover. Glide on every note.
+ */
+const REESE_BASS: Patch = {
+  name: 'Reese Bass',
+  modules: [
+    // Mono, glide on every note (80 ms).
+    { idx: 0, id: 'midi_in', params: { mode: 1, glide: 0.08, glide_mode: 0 } },
+    // Saw pair, wide detune.
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 2, detune: 35 } },
+    // Second saw pair, 11 cents sharp: the slow phasing.
+    { idx: 2, id: 'osc', params: { wave: 0, unison: 2, detune: 35, fine: 11 } },
+    // Equal mix.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.6, lvl2: 0.6 } },
+    // Dark LP24; the mod wheel opens it up to 4 oct (220 Hz → 3.5 kHz).
+    { idx: 4, id: 'filter', params: { mode: 0, cutoff: 220, reso: 0.25, cv_amt: 4, drive: 0.2 } },
+    // Snarl.
+    { idx: 5, id: 'saturator', params: { drive: 0.45, mix: 0.8 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: organ-like (full sustain), short release; a little velocity.
+    { idx: 7, id: 'adsr', params: { attack: 0.005, decay: 0.3, sustain: 1, release: 0.15, vel_amt: 0.2 } },
+    // Out: sets the house level.
+    { idx: 8, id: 'out', params: { level: 0.3 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [0, 'mod'], to: [4, 'cv'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [5, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'l'] },
+    { from: [6, 'out'], to: [8, 'r'] },
+  ],
+};
+
+/**
+ * Acid Line: an original squelchy acid bass (not a copy of any instrument).
+ * One saw into a driven, resonant LP24 with a snappy filter envelope; the
+ * accent is velocity (a harder note opens the filter further and is a little
+ * louder) and the slide is legato glide (only overlapping notes slide). The
+ * mod wheel adds to the cutoff, for the classic hands-on filter ride.
+ */
+const ACID_LINE: Patch = {
+  name: 'Acid Line',
+  modules: [
+    // Mono; overlapping notes slide in 60 ms, separated ones jump.
+    { idx: 0, id: 'midi_in', params: { mode: 1, glide: 0.06, glide_mode: 1 } },
+    // A saw.
+    { idx: 1, id: 'osc', params: { wave: 0 } },
+    // The squelch: resonant, driven LP24, swept up to 5 oct.
+    { idx: 2, id: 'filter', params: { mode: 0, cutoff: 200, reso: 0.78, cv_amt: 5, drive: 0.35 } },
+    // Filter envelope: snappy decay to nearly closed; velocity = accent (deeper sweep).
+    { idx: 3, id: 'adsr', params: { attack: 0.002, decay: 0.22, sustain: 0.08, release: 0.1, vel_amt: 0.75 } },
+    // Filter cv: the envelope plus the mod wheel (cutoff ride).
+    { idx: 4, id: 'mixer', params: { lvl1: 1, lvl2: 0.6 } },
+    // Grit.
+    { idx: 5, id: 'saturator', params: { drive: 0.5, mix: 0.8, tone: 0.55 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: quick, high sustain, short release; accent a little louder.
+    { idx: 7, id: 'adsr', params: { attack: 0.002, decay: 0.4, sustain: 0.85, release: 0.06, vel_amt: 0.35 } },
+    // Out: sets the house level.
+    { idx: 8, id: 'out', params: { level: 0.3 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'gate'], to: [3, 'gate'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [3, 'vel'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [0, 'mod'], to: [4, 'in2'] },
+    { from: [3, 'env'], to: [4, 'in1'] },
+    { from: [4, 'out'], to: [2, 'cv'] },
+    { from: [1, 'out'], to: [2, 'in'] },
+    { from: [2, 'out'], to: [5, 'in'] },
+    { from: [5, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'l'] },
+    { from: [6, 'out'], to: [8, 'r'] },
+  ],
+};
+
+/**
+ * Sub Bass: a clean sub for deep house. A sine with a quiet triangle under
+ * an LP12 at 180 Hz, then a gentle, mostly-dry saturator that adds just
+ * enough harmonics to be heard on small speakers. Short legato glide.
+ */
+const SUB_BASS: Patch = {
+  name: 'Sub Bass',
+  modules: [
+    // Mono; overlapping notes glide in 30 ms.
+    { idx: 0, id: 'midi_in', params: { mode: 1, glide: 0.03, glide_mode: 1 } },
+    // The sub: a sine.
+    { idx: 1, id: 'osc', params: { wave: 3 } },
+    // A quiet triangle (a little odd-harmonic body).
+    { idx: 2, id: 'osc', params: { wave: 2 } },
+    // Mix.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.2 } },
+    // LP12 at 180 Hz: keeps it sub.
+    { idx: 4, id: 'filter', params: { mode: 1, cutoff: 180, reso: 0 } },
+    // Small-speaker harmonics: gentle drive, 20 % wet.
+    { idx: 5, id: 'saturator', params: { drive: 0.3, mix: 0.2 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: clickless onset, full sustain, short release; a little velocity.
+    { idx: 7, id: 'adsr', params: { attack: 0.003, decay: 0.2, sustain: 1, release: 0.08, vel_amt: 0.2 } },
+    // Out: sets the house level.
+    { idx: 8, id: 'out', params: { level: 0.42 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [5, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'l'] },
+    { from: [6, 'out'], to: [8, 'r'] },
+  ],
+};
+
+/**
+ * Strings: a string-machine section. Four detuned saws plus a detuned pair an
+ * octave up through a gentle LP12, a slow ~0.35 s swell and a long release,
+ * then the ensemble chorus that makes it a string machine.
+ */
+const STRINGS: Patch = {
+  name: 'Strings',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // 8': four detuned saws.
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 4, detune: 22 } },
+    // 4': two detuned saws an octave up.
+    { idx: 2, id: 'osc', params: { wave: 0, octave: 1, unison: 2, detune: 14 } },
+    // Registers.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.35 } },
+    // Gentle LP12: silky, not buzzy.
+    { idx: 4, id: 'filter', params: { mode: 1, cutoff: 2800, reso: 0.05 } },
+    // Amp.
+    { idx: 5, id: 'vca' },
+    // Amp envelope: a 0.45 s bowed swell, full sustain, a long 1 s release; a little velocity.
+    { idx: 6, id: 'adsr', params: { attack: 0.45, decay: 0.5, sustain: 1, release: 1, vel_amt: 0.3 } },
+    // The ensemble: slow, deep chorus.
+    { idx: 7, id: 'chorus', params: { rate: 0.45, depth: 0.5, mix: 0.35 } },
+    // Out: sets the house level.
+    { idx: 8, id: 'out', params: { level: 0.3 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [6, 'gate'] },
+    { from: [0, 'vel'], to: [6, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [4, 'out'], to: [5, 'in'] },
+    { from: [6, 'env'], to: [5, 'cv'] },
+    { from: [5, 'out'], to: [7, 'l'] },
+    { from: [7, 'l'], to: [8, 'l'] },
+    { from: [7, 'r'], to: [8, 'r'] },
+  ],
+};
+
+/**
+ * Warm Pad: a moving pad (unlike the starter Pad). Three detuned saws plus a
+ * triangle an octave up, through an LP12 that a tempo-synced LFO sweeps over
+ * two bars, a slow swell and release, and a wide chorus.
+ */
+const WARM_PAD: Patch = {
+  name: 'Warm Pad',
+  modules: [
+    // Poly, 8 voices.
+    { idx: 0, id: 'midi_in' },
+    // Body: three detuned saws.
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 3, detune: 20 } },
+    // Air: a triangle an octave up.
+    { idx: 2, id: 'osc', params: { wave: 2, octave: 1 } },
+    // Mix.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.4 } },
+    // Warm LP12, swept ±1.2 oct around 900 Hz by the LFO.
+    { idx: 4, id: 'filter', params: { mode: 1, cutoff: 900, reso: 0.2, cv_amt: 1.2 } },
+    // The movement: a sine locked to the song, one cycle per 2 bars.
+    { idx: 5, id: 'lfo', params: { wave: 0, sync: 1, division: 6 } },
+    // Amp.
+    { idx: 6, id: 'vca' },
+    // Amp envelope: slow swell, full sustain, long release; a little velocity.
+    { idx: 7, id: 'adsr', params: { attack: 0.9, decay: 1, sustain: 1, release: 1.8, vel_amt: 0.25 } },
+    // Width: a slow, deep chorus.
+    { idx: 8, id: 'chorus', params: { rate: 0.3, depth: 0.7, mix: 0.4 } },
+    // Out: sets the house level.
+    { idx: 9, id: 'out', params: { level: 0.35 } },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in1'] },
+    { from: [2, 'out'], to: [3, 'in2'] },
+    { from: [3, 'out'], to: [4, 'in'] },
+    { from: [5, 'out'], to: [4, 'cv'] },
+    { from: [4, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'l'] },
+    { from: [8, 'l'], to: [9, 'l'] },
+    { from: [8, 'r'], to: [9, 'r'] },
+  ],
+};
+
 /** The House groups, in menu order (labels are shown as optgroups). */
 export const HOUSE_GROUPS: { label: string; patches: Patch[] }[] = [
-  { label: 'House · Leads & Stabs', patches: [SAX] },
-  { label: 'House · Keys', patches: [] },
-  { label: 'House · Bass', patches: [] },
-  { label: 'House · Pads', patches: [] },
+  { label: 'House · Leads & Stabs', patches: [SAX, BRASS_STAB, ARP_PLUCK] },
+  { label: 'House · Keys', patches: [TINE_KEYS, PIANO_STAB, GARAGE_ORGAN] },
+  { label: 'House · Bass', patches: [ORGAN_BASS, REESE_BASS, ACID_LINE, SUB_BASS] },
+  { label: 'House · Pads', patches: [STRINGS, WARM_PAD] },
 ];
 
 /** Each house patch's typical phrase, by name (not part of Patch, so saved files are unchanged). */
 export const HOUSE_PHRASES: Record<string, HousePhrase> = {
   Sax: 'lead',
+  'Brass Stab': 'chord4',
+  'Arp Pluck': 'chord4',
+  'Tine Keys': 'chord4',
+  'Piano Stab': 'chord4',
+  'Garage Organ': 'chord4',
+  'Organ Bass': 'bass',
+  'Reese Bass': 'bass',
+  'Acid Line': 'bass',
+  'Sub Bass': 'bass',
+  Strings: 'chord5',
+  'Warm Pad': 'chord5',
 };

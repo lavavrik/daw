@@ -1,5 +1,6 @@
 //! The House patch set (plan 11): levels, clipping and release for every
-//! patch, plus the Sax's measured acceptance numbers.
+//! patch, the Sax's measured acceptance numbers, and one character check for
+//! each other patch (Task 4, at the end).
 //!
 //! The patches live in TS (`app/src/state/housePatches.ts`). As with
 //! `starter_patches.rs`, the vitest `patches.fixture.test.ts` records the
@@ -30,7 +31,8 @@ mod common;
 use common::{house_patches, HousePatch, Phrase};
 use daw_engine::engine::Engine;
 use daw_engine::protocol::{
-    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_RACK_ADD_MODULE, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
+    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
+    OP_SET_TEMPO,
 };
 use daw_engine::rack::catalog::{spec, ModuleKind};
 
@@ -451,7 +453,7 @@ const PEAK_LIMIT: f32 = 0.9;
 #[test]
 fn house_patches_sit_at_similar_levels() {
     let all = house_patches();
-    assert!(!all.is_empty());
+    assert_eq!(all.len(), 12, "the whole House set");
     let mut failed = Vec::new();
     for p in &all {
         let mut e = load_cmds(&p.cmds);
@@ -727,4 +729,265 @@ fn sax_mod_wheel_brightens() {
     let (c0, c1) = (harmonic_centroid(&r0, hz(60), 0.5, 1.0), harmonic_centroid(&r1, hz(60), 0.5, 1.0));
     eprintln!("Sax mod wheel: harmonic centroid {c0:.0} Hz → {c1:.0} Hz");
     assert!(c1 > 1.05 * c0, "mod wheel does not brighten: {c0:.0} → {c1:.0} Hz");
+}
+
+// ---- the rest of the House set: one character check each (plan 11 Task 4) ----
+//
+// Each check names the one thing that makes the patch what it is. Windows and
+// definitions are documented per test; levels are 20 ms RMS frames in dB.
+
+/// RMS over consecutive frames of `frame` s, in dB.
+fn rms_env_db(r: &Render, frame: f32) -> Vec<f32> {
+    r.m.chunks_exact((frame * SR) as usize).map(|c| db(rms(c))).collect()
+}
+
+/// Magnitude-weighted centroid (50 Hz–10 kHz) of ONE Hann frame over `a..b`
+/// s, zero-padded to a power of two ≥ 4096 points. For short spans (an
+/// onset, or one frame centred on an instant); the span may start before 0
+/// (zeros there).
+fn centroid_short(r: &Render, a: f32, b: f32) -> f32 {
+    let (ia, ib) = ((a * SR).round() as isize, (b * SR).round() as isize);
+    assert!(ib > ia, "empty span");
+    let n = (ib - ia) as usize;
+    let nfft = n.next_power_of_two().max(FFT_N);
+    let w = hann(n);
+    let mut re = vec![0.0f64; nfft];
+    let mut im = vec![0.0f64; nfft];
+    for i in 0..n {
+        let t = ia + i as isize;
+        if t >= 0 && (t as usize) < r.m.len() {
+            re[i] = r.m[t as usize] as f64 * w[i];
+        }
+    }
+    fft(&mut re, &mut im);
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    for i in 0..nfft / 2 {
+        let f = i as f32 * SR / nfft as f32;
+        if (50.0..=10000.0).contains(&f) {
+            let mag = (re[i] * re[i] + im[i] * im[i]).sqrt();
+            num += f as f64 * mag;
+            den += mag;
+        }
+    }
+    (num / den) as f32
+}
+
+const CHORD4: [u8; 4] = [60, 64, 67, 71];
+/// Acid Line's MIDI In (`housePatches.ts`).
+const ACID_MIDI: (usize, ModuleKind) = (0, ModuleKind::MidiIn);
+const CHORD5: [u8; 5] = [48, 55, 60, 64, 71];
+
+#[test]
+fn house_set_is_complete() {
+    let names: Vec<String> = house_patches().into_iter().map(|p| p.name).collect();
+    assert_eq!(names.len(), 12, "{names:?}");
+    for n in [
+        "Sax", "Brass Stab", "Arp Pluck", "Tine Keys", "Piano Stab", "Garage Organ", "Organ Bass", "Reese Bass", "Acid Line",
+        "Sub Bass", "Strings", "Warm Pad",
+    ] {
+        assert!(names.iter().any(|x| x == n), "{n} missing from {names:?}");
+    }
+}
+
+#[test]
+fn organ_bass_has_its_octave() {
+    // C2, 0.3–0.5 s (past the click), single DFT bins at f0 and 2·f0.
+    let f0 = hz(36);
+    let r = play(&mut load("Organ Bass"), &[36], 100, 1.0, 0.0);
+    let h = harmonics(&r, f0, 0.3, 9600);
+    let (h1, h2) = (db(h[0]), db(h[1]));
+    eprintln!("Organ Bass C2: h1 {h1:.1} dB, h2 {h2:.1} dB, h3 {:.1}, h4 {:.1}", db(h[2]), db(h[3]));
+    assert!((h2 - h1).abs() <= 6.0, "2·f0 is {:.1} dB from f0 (not within 6 dB)", h2 - h1);
+}
+
+#[test]
+fn reese_mod_wheel_opens() {
+    // C2, centroid 0.5–1.0 s with the mod wheel at 0 and at 1 (set before the note).
+    let r0 = run(&mut load("Reese Bass"), &[(0.0, Ev::Mod(0.0)), (0.0, Ev::On(36, 100)), (1.0, Ev::Off(36))], 1.0);
+    let r1 = run(&mut load("Reese Bass"), &[(0.0, Ev::Mod(1.0)), (0.0, Ev::On(36, 100)), (1.0, Ev::Off(36))], 1.0);
+    let (c0, c1) = (centroid(&r0, 0.5, 1.0), centroid(&r1, 0.5, 1.0));
+    eprintln!("Reese mod wheel: centroid {c0:.0} Hz → {c1:.0} Hz ({:.2}×); momentary {:.1} → {:.1} dBFS", c1 / c0, momentary_db(&r0), momentary_db(&r1));
+    assert!(c1 >= 1.5 * c0, "mod wheel 1 raises the centroid only {:.2}× ({c0:.0} → {c1:.0} Hz)", c1 / c0);
+}
+
+#[test]
+fn acid_accent_and_slide() {
+    assert_eq!(kind_at(&patch("Acid Line"), ACID_MIDI.0), Some(ACID_MIDI.1), "Acid Line's MIDI In moved");
+    // Accent: the centroid over the first 150 ms of C2 at vel 127 vs vel 64.
+    let c = |vel: u8| centroid(&play(&mut load("Acid Line"), &[36], vel, 0.5, 0.0), 0.0, 0.15);
+    let (c64, c127) = (c(64), c(127));
+    eprintln!("Acid accent: centroid 0–150 ms vel 64 {c64:.0} Hz, vel 127 {c127:.0} Hz ({:.2}×)", c127 / c64);
+    assert!(c127 >= 1.4 * c64, "vel 127 centroid {c127:.0} is not 1.4 × vel 64's {c64:.0}");
+
+    // Slide (C3 → D3), as sax_legato_glides: overlapped notes glide.
+    let (c3, d3) = (hz(48), hz(50));
+    let t = 0.5f32;
+    let ev = [(0.0, Ev::On(48, 100)), (t, Ev::On(50, 100)), (t + 0.1, Ev::Off(48)), (1.0, Ev::Off(50))];
+    let r = run(&mut load("Acid Line"), &ev, 1.0);
+    let track = f0_track(&r, t - 0.1, t + 0.35, 0.7 * c3, 1.4 * d3);
+    let before = track.iter().filter(|x| x.0 < t - 0.02).map(|x| cents(x.1, c3)).fold(0.0f32, |m, v| if v.abs() > m.abs() { v } else { m });
+    let after: Vec<(f32, f32)> = track.iter().filter(|x| x.0 >= t).map(|x| (x.0 - t, cents(x.1, d3))).collect();
+    eprintln!("Acid slide: f0 {:?}", after.iter().take(16).map(|x| format!("{:.0}ms:{:.1}", x.0 * 1e3, x.1)).collect::<Vec<_>>());
+    assert!(before.abs() <= 5.0, "C3 before the slide: {before:.1} ct");
+    let arrive = after.iter().position(|x| x.1.abs() <= 5.0).expect("reaches D3");
+    let arrive_t = after[arrive].0;
+    assert!((0.020..=0.150).contains(&arrive_t), "slide reaches D3 after {:.0} ms, not 20–150", arrive_t * 1e3);
+    for w in after[..=arrive].windows(2) {
+        assert!(w[1].1 >= w[0].1 - 0.5, "slide is not monotonic: {after:?}");
+    }
+    assert!(after[arrive..].iter().all(|x| x.1.abs() <= 5.0), "leaves D3 after arriving: {after:?}");
+
+    // Separated by 50 ms of silence: a jump. The resonant filter sweep of a
+    // fresh note biases the f0 estimate for ~150 ms (a lone D3 reads ≈ −25
+    // to −40 ct there too), so the note is compared with a lone D3 at the
+    // same onset: the one 40 ms frame starting at the onset (centred at
+    // +20 ms) must match it within 5 ct in Legato, and must not with
+    // glide_mode Always (A/B), so the check can fail.
+    let t2 = 0.35f32;
+    let on = onset(t2);
+    let frame = |ev: &[(f32, Ev)], always: bool| {
+        let mut e = load("Acid Line");
+        set(&mut e, ACID_MIDI, "glide_mode", if always { 0.0 } else { 1.0 });
+        let r = run(&mut e, ev, 0.8);
+        let fr = f0_track(&r, on, on + 0.04, 0.7 * c3, 1.4 * d3);
+        assert_eq!(fr.len(), 1);
+        cents(fr[0].1, d3)
+    };
+    let sep = [(0.0, Ev::On(48, 100)), (0.3, Ev::Off(48)), (t2, Ev::On(50, 100)), (0.8, Ev::Off(50))];
+    let lone = frame(&[(t2, Ev::On(50, 100)), (0.8, Ev::Off(50))], false);
+    let (legato, always) = (frame(&sep, false), frame(&sep, true));
+    eprintln!("Acid separated, frame at +20 ms: lone D3 {lone:.1} ct, Legato {legato:.1} ct, Always {always:.1} ct");
+    assert!((legato - lone).abs() <= 5.0, "a separated note slides in Legato: {legato:.1} vs a lone D3's {lone:.1} cents");
+    assert!((always - lone).abs() > 5.0, "the check can't tell Legato from Always ({always:.1} vs {lone:.1} cents)");
+}
+
+#[test]
+fn sub_bass_is_sub() {
+    // C2, 0.2–1.0 s: the power below 200 Hz over the total.
+    let r = play(&mut load("Sub Bass"), &[36], 100, 1.0, 0.0);
+    let p = spectrum(&r, 0.2, 1.0);
+    let total: f64 = p.iter().sum();
+    let low: f64 = p.iter().enumerate().filter(|(i, _)| (*i as f32 * BIN_HZ) < 200.0).map(|x| *x.1).sum();
+    eprintln!("Sub Bass C2: {:.1} % of the energy below 200 Hz", 100.0 * low / total);
+    assert!(low >= 0.85 * total, "only {:.1} % below 200 Hz", 100.0 * low / total);
+}
+
+/// Strings' amp ADSR (`housePatches.ts`), checked against the fixture.
+const STRINGS_AMP: (usize, ModuleKind) = (6, ModuleKind::Adsr);
+
+/// A param of module `m` as set in a patch's fixture (catalog default if unset).
+fn fixture_param(p: &HousePatch, m: (usize, ModuleKind), param: &str) -> f32 {
+    assert_eq!(kind_at(p, m.0), Some(m.1), "{} module {} is not {:?}: update the index", p.name, m.0, m.1);
+    let s = spec(m.1);
+    let i = s.params.iter().position(|q| q.name == param).unwrap();
+    p.cmds
+        .iter()
+        .rev()
+        .find(|c| c[0] as u32 == OP_RACK_SET_PARAM && c[2] as usize == m.0 && c[3] as usize == i)
+        .map_or(s.params[i].default, |c| c[4] as f32)
+}
+
+#[test]
+fn strings_swell() {
+    // chord5 held. The detuned section and chorus beat by ±2–5 dB, which
+    // would decide where a raw level crosses 90 %, so the swell is measured
+    // as an A/B: the patch as is over the same render with a 1 ms amp attack
+    // (same commands and settle time, so the tone is identical sample for
+    // sample). Their 5 ms RMS ratio is the swell alone; its 10 → 90 % rise
+    // (of its mean over 0.8–1.5 s) must take 0.2–0.6 s.
+    let attack = fixture_param(&patch("Strings"), STRINGS_AMP, "attack");
+    let render = |a: f32| {
+        let mut e = load("Strings");
+        set(&mut e, STRINGS_AMP, "attack", a);
+        rms_env_5ms(&play(&mut e, &CHORD5, 100, 1.5, 0.0))
+    };
+    let (swell, flat) = (render(attack), render(0.001));
+    let ratio: Vec<f32> = swell.iter().zip(&flat).map(|(s, f)| s / f.max(1e-9)).collect();
+    let steady = ratio[160..300].iter().sum::<f32>() / 140.0;
+    let first = |frac: f32| ratio.iter().position(|&x| x >= frac * steady).expect("reaches the level") as f32 * 0.005;
+    let (t10, t90) = (first(0.1), first(0.9));
+    eprintln!("Strings swell (attack {attack} s): 10 % at {:.0} ms, 90 % at {:.0} ms, rise {:.0} ms", t10 * 1e3, t90 * 1e3, (t90 - t10) * 1e3);
+    assert!((0.2..=0.6).contains(&(t90 - t10)), "10→90 % rise {:.0} ms outside 200–600 ms", (t90 - t10) * 1e3);
+}
+
+#[test]
+fn piano_stab_decays() {
+    // chord4 held 2 s. Level: 20 ms RMS frames; the first frame after the
+    // peak 20 dB below it. Brightness: one 85 ms Hann frame centred at 30 ms
+    // (zeros before the onset) vs one centred at 0.5 s.
+    let r = play(&mut load("Piano Stab"), &CHORD4, 100, 2.0, 0.0);
+    let env = rms_env_db(&r, 0.02);
+    let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+    let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
+    let (c30, c500) = (centroid_short(&r, 0.03 - 0.0425, 0.03 + 0.0425), centroid_short(&r, 0.5 - 0.0425, 0.5 + 0.0425));
+    eprintln!("Piano Stab: −20 dB at {t20:?} s; centroid 30 ms {c30:.0} Hz, 0.5 s {c500:.0} Hz ({:.2}×)", c500 / c30);
+    let t20 = t20.expect("falls 20 dB while held");
+    assert!((0.4..=1.5).contains(&t20), "falls 20 dB after {t20:.2} s, not 0.4–1.5 s");
+    assert!(c500 < 0.7 * c30, "centroid at 0.5 s {c500:.0} Hz is not < 0.7 × that at 30 ms {c30:.0} Hz");
+}
+
+#[test]
+fn tine_keys_bell_follows_velocity() {
+    // C4, one Hann window of 4096 from 10 ms: Σ A_k² (k ≥ 5) over A_1², in dB.
+    let bell = |vel: u8| {
+        let r = play(&mut load("Tine Keys"), &[60], vel, 0.5, 0.0);
+        let h = harmonics(&r, hz(60), 0.01, 4096);
+        let hi: f32 = h[4..].iter().map(|a| a * a).sum();
+        10.0 * (hi / (h[0] * h[0])).log10()
+    };
+    let (b40, b127) = (bell(40), bell(127));
+    eprintln!("Tine Keys bell (h≥5 re h1): vel 40 {b40:.1} dB, vel 127 {b127:.1} dB");
+    assert!(b127 - b40 >= 6.0, "vel 127 rings the bell only {:.1} dB more than vel 40", b127 - b40);
+}
+
+#[test]
+fn brass_stab_blooms() {
+    // chord4: centroid of one Hann frame over 30–60 ms vs over 0–10 ms.
+    let r = play(&mut load("Brass Stab"), &CHORD4, 100, 0.5, 0.0);
+    let (c0, c1) = (centroid_short(&r, 0.0, 0.01), centroid_short(&r, 0.03, 0.06));
+    eprintln!("Brass Stab: centroid 0–10 ms {c0:.0} Hz, 30–60 ms {c1:.0} Hz ({:.2}×)", c1 / c0);
+    assert!(c1 > 1.15 * c0, "no bloom: {c0:.0} → {c1:.0} Hz");
+}
+
+#[test]
+fn arp_pluck_is_short() {
+    // chord4 held 1 s: 20 dB below the peak (20 ms RMS) within 350 ms of the
+    // onset even when held (no sustain). A 1/16 at 124 BPM (121 ms) is
+    // released long before that, so arps never smear. (Shorter than this and
+    // a held chord can't reach the house loudness under the 0.9 peak: a
+    // pluck's 400 ms loudness falls with its decay, its onset peak doesn't.)
+    let r = play(&mut load("Arp Pluck"), &CHORD4, 100, 1.0, 0.0);
+    let env = rms_env_db(&r, 0.02);
+    let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+    let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
+    eprintln!("Arp Pluck: −20 dB at {t20:?} s");
+    let t20 = t20.expect("falls 20 dB while held");
+    assert!(t20 <= 0.35, "falls 20 dB only after {t20:.2} s");
+}
+
+#[test]
+fn garage_organ_is_percussive() {
+    // chord4 held 1 s: the 20 ms RMS frame at 300 ms vs the loudest frame.
+    let r = play(&mut load("Garage Organ"), &CHORD4, 100, 1.0, 0.0);
+    let env = rms_env_db(&r, 0.02);
+    let pk = env.iter().cloned().fold(f32::MIN, f32::max);
+    let at = env[(0.3 / 0.02) as usize];
+    eprintln!("Garage Organ: peak {pk:.1} dB, at 300 ms {at:.1} dB ({:.1} dB)", at - pk);
+    assert!(at - pk <= -6.0, "only {:.1} dB down at 300 ms", at - pk);
+}
+
+#[test]
+fn warm_pad_moves() {
+    // 124 BPM (the default tempo), transport playing so the 2-bar LFO is
+    // locked to the bar: one cycle is 8 beats = 3.871 s. chord5 held; the
+    // centroid of 0.25 s windows over one cycle after the swell (from 1.2 s).
+    let mut e = load("Warm Pad");
+    assert_eq!(e.command(OP_SET_TEMPO, 124.0, 0., 0., 0.), OK);
+    assert_eq!(e.command(OP_PLAY, 0.0, 0., 0., 0.), OK);
+    let cycle = 8.0 * 60.0 / 124.0;
+    let r = play(&mut e, &CHORD5, 100, 1.2 + cycle, 0.0);
+    let cs: Vec<f32> = (0..(cycle / 0.25) as usize).map(|i| centroid(&r, 1.2 + 0.25 * i as f32, 1.45 + 0.25 * i as f32)).collect();
+    let (lo, hi) = (cs.iter().cloned().fold(f32::MAX, f32::min), cs.iter().cloned().fold(f32::MIN, f32::max));
+    eprintln!("Warm Pad: centroid over one 2-bar cycle {lo:.0}–{hi:.0} Hz ({:.2}×): {:?}", hi / lo, cs.iter().map(|c| c.round()).collect::<Vec<_>>());
+    assert!(hi >= 1.15 * lo, "centroid varies only {:.1} %", 100.0 * (hi / lo - 1.0));
 }

@@ -9,7 +9,9 @@
   import { Op, TELEMETRY } from './audio/protocol';
   import { createAudioClock } from './audio/audioClock';
   import type { AudioClock } from './audio/audioClock';
-  import type { AudioEngine } from './audio/engine';
+  import { AudioEngine } from './audio/engine';
+  import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
+  import type { LatencyHint } from './audio/restart';
   import { Project } from './state/project.svelte';
   import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
@@ -25,10 +27,10 @@
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners, flashHint } from './state/banners.svelte';
-  import { installSampleLoads } from './state/sampleLoads';
-  import { createProjectSession, markSaved } from './project/session';
+  import { installSampleLoads, rebindSampleLoads } from './state/sampleLoads';
+  import { createProjectSession, markSaved, warningsText } from './project/session';
   import { warnOnUnload } from './project/discard';
-  import type { ProjectSession } from './project/session';
+  import type { ProjectSession, SessionEngine } from './project/session';
   import { createDirtyCheck } from './project/dirtyCheck';
   import { commandEdits } from './state/edits';
   import { releaseHeldKeys } from './input/shortcuts';
@@ -60,6 +62,10 @@
   let history = $state.raw<History | null>(null);
   let stopWatch: (() => void) | null = null;
   let session = $state.raw<ProjectSession | null>(null);
+  /** The hint the running engine was started with (Settings; persisted on Apply). */
+  let latencyHint = $state<LatencyHint>('interactive');
+  /** An audio restart (Settings ▸ Apply) is running. */
+  let restarting = $state(false);
   /** The top bar: ⌘O goes through its Project menu (the same "Discard and open…" guard). */
   let topBar = $state.raw<{ request(cmd: 'new' | 'open'): void } | null>(null);
 
@@ -194,6 +200,32 @@
     return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
   }
 
+  /**
+   * The engine as everything created once per session sees it: the note
+   * input, MIDI, shortcuts, recorder, history and project session hold this
+   * forwarding view, never an AudioEngine, so an audio restart (Settings ▸
+   * Apply, audio/restart.ts), which replaces the engine, needs no re-wiring
+   * for them. Components get `engine` as a (reactive) prop instead. Only
+   * used once audio has started.
+   */
+  const live: SessionEngine = {
+    get sampleRate() {
+      return engine!.sampleRate;
+    },
+    get context() {
+      return engine!.context;
+    },
+    send: (op, a, b, c, d) => engine?.send(op, a, b, c, d) ?? false,
+    resetAll: () => engine!.resetAll(),
+    loadSample: (id, channels) => engine!.loadSample(id, channels),
+    ensureRunning: () => engine!.ensureRunning(),
+  };
+  /** Same for the clock: each engine gets a new one (its telemetry history is per engine). */
+  const liveClock: AudioClock = {
+    heardTicks: () => clock!.heardTicks(),
+    ticksForEvent: (perfMs, offsetMs) => clock!.ticksForEvent(perfMs, offsetMs),
+  };
+
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
     // Real song actions for e2e (no-ops before audio starts).
@@ -219,6 +251,8 @@
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
   autosave,
   history: null,
+  // The project as undo / save see it (e2e: the restart's serialize-equality check).
+  snapshot: () => serialize(project),
   };
 
   /**
@@ -291,18 +325,52 @@
     return () => cancelAnimationFrame(raf);
   }
 
-  function onstarted(e: AudioEngine) {
+  /**
+   * Everything that runs against one particular engine: at start, and again
+   * for the new engine after an audio restart (unwireEngine detaches the old
+   * one first). `codes`: on a restart, the re-uploaded samples' results
+   * (deferred sample loads settle from them).
+   */
+  let stallMsg: string | null = null;
+  function wireEngine(e: AudioEngine, codes?: Map<number, number>) {
     engine = e;
     window.__daw.engine = e;
     // A ring backlog that does not drain means UI and engine disagree until it does.
-    let stallMsg: string | null = null;
     e.onCommandStall = (m) => {
       if (m !== null) banners.error = stallMsg = m;
       else if (banners.error === stallMsg) banners.error = null;
     };
+    // Telemetry history (heard time) is per engine: a new clock, which the
+    // components get as a prop and the recorder through liveClock.
     clock = createAudioClock(e, () => project.tempo);
     window.__daw.clock = clock;
-    const r = recorderFor(project, e, clock, () => {
+    // The engine refused a pooled effect (FX pool full): undo it in the UI.
+    e.onRackAddRefused = (slot, idx, kind) => {
+      const msg = rollbackRefusedAdd(project, slot, idx, kind);
+      if (msg !== null) banners.error = msg;
+    };
+    // Every edit command marks the project dirty (state/edits.ts).
+    e.onCommand = (op) => commandEdits(project, op);
+    // Session-lifetime: deferred sample loads must land even while the step
+    // grid is unmounted (a synth track selected). A restart moves them over.
+    if (codes) rebindSampleLoads(e, codes);
+    else uninstallLoads = installSampleLoads(project, e);
+    stopWatch = watchTransport(e, clock, recorder!);
+  }
+
+  /** Detach the per-engine loops from an engine about to close (audio restart). */
+  function unwireEngine() {
+    stopWatch?.();
+    stopWatch = null;
+    if (stallMsg !== null && banners.error === stallMsg) banners.error = null;
+    stallMsg = null;
+  }
+
+  function onstarted(e: AudioEngine) {
+    latencyHint = e.latencyHint;
+    addDrumTrack(project, e); // default track so the UI has something to show
+    markSaved(project); // a fresh session has nothing to save yet
+    const r = recorderFor(project, live, liveClock, () => {
       banners.error = 'Pattern is full (1024 notes): some recorded notes were dropped';
     });
     const saved = loadRecSettings();
@@ -312,30 +380,19 @@
     window.__daw.recorder = r;
     // Before a track's current pattern changes (selectPattern): held recorded
     // notes are written into the old pattern while the engine still edits it.
-    const c = clock;
-    project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, c.heardTicks());
-    const input = createNoteInput(e, r);
+    project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, liveClock.heardTicks());
+    const input = createNoteInput(live, r);
     noteInput = input;
-    stopWatch = watchTransport(e, clock, r);
-    // Session-lifetime: deferred sample loads must land even while the step
-    // grid is unmounted (a synth track selected).
-    uninstallLoads = installSampleLoads(project, e);
-    // The engine refused a pooled effect (FX pool full): undo it in the UI.
-    e.onRackAddRefused = (slot, idx, kind) => {
-      const msg = rollbackRefusedAdd(project, slot, idx, kind);
-      if (msg !== null) banners.error = msg;
-    };
-    addDrumTrack(project, e); // default track so the UI has something to show
-    markSaved(project); // a fresh session has nothing to save yet
+    wireEngine(e);
     // Undo/redo (history/history.ts): every action is a transact, every
     // pointer gesture one entry (installGestures), restored by diffApply
     // through the engine sink, so dirty marking and autosave see it.
     const h = createHistory({
       snapshot: () => serialize(project),
-      apply: (from, to) => diffApply(project, e, from, to),
+      apply: (from, to) => diffApply(project, live, from, to),
       canApply: () => !project.loading,
       // Held recorded notes close now: they belong to the pass being undone.
-      beforeApply: () => r.onInputChanged(c.heardTicks()),
+      beforeApply: () => r.onInputChanged(liveClock.heardTicks()),
       onChange: () => {
         undoLabels = h.labels;
         refreshRec();
@@ -347,8 +404,7 @@
     window.__daw.history = h;
     // New / Open replace the session: stop through the normal path first (the
     // recorder closes held notes at the heard tick) and release held keys.
-    e.onCommand = (op) => commandEdits(project, op);
-    const s = createProjectSession(project, e, {
+    const s = createProjectSession(project, live, {
       // Right before the engine is reset (after the file validated and the
       // samples decoded): stop like the Stop button does, so the recorder
       // closes held notes at the heard tick; release held piano keys.
@@ -361,15 +417,15 @@
           autosave.hold(false);
         }
         if (project.playing) {
-          r.onTransport(false, c.heardTicks());
-          stop(project, e);
+          r.onTransport(false, liveClock.heardTicks());
+          stop(project, live);
         }
         releaseHeldKeys();
       },
       // The live input and the tracks changed under the recorder: retarget
       // now (Undo take follows), and disarm if the project opened in Song mode.
       afterLoad: () => {
-        r.onInputChanged(c.heardTicks());
+        r.onInputChanged(liveClock.heardTicks());
         if (project.mode === 'song' && r.armed) r.toggleArm();
         refreshRec();
       },
@@ -379,7 +435,7 @@
     });
     session = s;
     void checkAutosave(); // after audio started: a restore needs the engine
-    uninstall = installShortcuts(project, e, input, {
+    uninstall = installShortcuts(project, live, input, {
       onOctave: (o) => (octave = o),
       onTogglePlay: transportToggle,
       onToggleArm: toggleArm,
@@ -390,7 +446,60 @@
       onRedo: redo,
     });
     // Not awaited: the permission prompt must never block startup/rendering.
-    void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
+    // Bound to `live`, so it outlives an audio restart as is.
+    void connectMidi(live, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
+  }
+
+  /**
+   * Settings ▸ Apply: a new AudioContext + engine with `hint`, the project
+   * restored onto it from memory (audio/restart.ts). Runs as one project
+   * operation (session.exclusive: never during an Open / Save / restore), and
+   * never during an export (it decodes with the live context). Resolves with
+   * why it did not run, or null.
+   */
+  async function applyAudioSettings(hint: LatencyHint): Promise<string | null> {
+    const old = engine;
+    const r = recorder;
+    if (!old || !r || !session || restarting) return null;
+    if (banners.exporting) return 'Wait for the export to finish, then Apply again';
+    restarting = true;
+    try {
+      const res = await session.exclusive(() =>
+        restartAudio(project, hint, {
+          old,
+          oldHint: latencyHint,
+          start: (h) => AudioEngine.start({ latencyHint: h }),
+          // Applying stops the transport (plan 7): through the Stop path, so
+          // the recorder closes held notes at the heard tick.
+          stop: () => {
+            if (project.playing) {
+              r.onTransport(false, liveClock.heardTicks());
+              stop(project, live);
+            }
+            releaseHeldKeys();
+            refreshRec();
+          },
+          unwire: unwireEngine,
+          wire: (e, codes) => wireEngine(e, codes),
+        }),
+      );
+      if (res === undefined || res === null) return 'Busy with a project load or save — Apply again when it is done';
+      latencyHint = res.hint;
+      saveLatencyHint(res.hint);
+      r.onInputChanged(liveClock.heardTicks());
+      refreshRec();
+      if (res.error) banners.error = res.error;
+      banners.load = res.warnings.length ? warningsText('Audio restarted — skipped or changed', res.warnings) : null;
+      if (!res.error && !res.warnings.length) flashHint(`Audio restarted (${hintLabel(res.hint)})`);
+      return null;
+    } catch (e) {
+      // No engine could start at all: keep what the user has.
+      void autosave.flush();
+      banners.error = `Audio could not restart — ${e instanceof Error ? e.message : String(e)}. Save, then reload the page.`;
+      return null;
+    } finally {
+      restarting = false;
+    }
   }
 
   // Every pointer gesture is one undo entry (history/gestures.ts: lost
@@ -463,6 +572,7 @@
         p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
         onTogglePlay={transportToggle} onToggleArm={toggleArm}
         onUndo={undo} onRedo={redo}
+        {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
       />
     {/if}
     {#if restoreOffer}
@@ -491,7 +601,7 @@
   <div
     class="loading" data-testid="loading" role="status" aria-live="polite"
     ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()}
-  >Loading…</div>
+  >{restarting ? 'Restarting audio…' : 'Loading…'}</div>
 {/if}
 
 <style>

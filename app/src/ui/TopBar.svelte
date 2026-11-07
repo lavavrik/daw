@@ -21,6 +21,13 @@
   // the save dialog inside the click, then renders in a Worker; its progress
   // and Cancel are a banner in the bottom panel.
   //
+  // Audio settings: the latency readout at the right end is the ⚙ button
+  // ("⚙ 29 ms"); it opens the Settings panel (ui/Settings.svelte: latency
+  // hint, sample rate / base / output / total latency, the Bluetooth hint,
+  // Apply = engine restart via App). The "BT?" badge that used to follow the
+  // readout moved into the panel (that freed the room for the ⚙); the
+  // readout itself turns orange above 40 ms instead.
+  //
   // Layout: one row that never wraps at 1280 px (tight since the Project menu:
   // 4 px gaps, "Metro", narrow BPM field, compact ↶ ↷ and "↶ Take"). Every control is nowrap;
   // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
@@ -28,6 +35,9 @@
   import { onMount, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
+  import { BT_LATENCY_MS } from '../audio/restart';
+  import type { LatencyHint } from '../audio/restart';
+  import Settings from './Settings.svelte';
   import { setLoop, setMode } from '../state/song-actions';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
@@ -53,6 +63,9 @@
     undoLabels = { undo: null, redo: null },
     onUndo,
     onRedo,
+    latencyHint = 'interactive',
+    restarting = false,
+    onApplyAudio = async () => null,
   }: {
     p: Project;
     engine: AudioEngine;
@@ -70,7 +83,16 @@
     undoLabels?: { undo: string | null; redo: string | null };
     onUndo: () => void;
     onRedo: () => void;
+    /** The running engine's latency hint (Settings). */
+    latencyHint?: LatencyHint;
+    /** An audio restart is running. */
+    restarting?: boolean;
+    /** Settings ▸ Apply: restart audio with this hint (App); resolves with why it did not run, or null. */
+    onApplyAudio?: (hint: LatencyHint) => Promise<string | null>;
   } = $props();
+
+  /** The Settings panel mounts while open (its readout polls only then). */
+  let settingsOpen = $state(false);
 
   // ---- Project menu --------------------------------------------------------
   let menu = $state<HTMLDetailsElement | null>(null);
@@ -156,7 +178,7 @@
   let dropouts = $state(0);
   let latency = $state('');
   let latencyMs = $state(0);
-  let engineError = $state<string | null>(null); // set from engine.failure in onMount
+  let engineError = $state<string | null>(null); // set from engine.failure (effect below)
 
   function refresh() {
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);
@@ -167,12 +189,17 @@
 
   onMount(() => {
     refresh();
-    const id = setInterval(refresh, 250);
-    engine.onError = (msg) => (engineError = msg);
-    engineError = engine.failure; // in case it failed before mount
+    const id = setInterval(refresh, 250); // reads the `engine` prop: follows a restart
+    return () => clearInterval(id);
+  });
+  // Per engine: an audio restart hands over a new one (the old one closes
+  // without firing onError).
+  $effect(() => {
+    const e = engine;
+    e.onError = (msg) => (engineError = msg);
+    engineError = e.failure; // in case it failed before mount
     return () => {
-      clearInterval(id);
-      engine.onError = undefined;
+      e.onError = undefined;
     };
   });
 
@@ -320,9 +347,21 @@
   <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
     CPU {cpu}% · {dropouts} drop
   </span>
-  <span class="pill" data-testid="latency" title={latencyMs > 40 ? `${latency}. ${BT_TIP}` : latency}>
-    {Math.round(latencyMs)} ms{#if latencyMs > 40}<span class="bt">{" "}BT?</span>{/if}
-  </span>
+  <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
+    <summary
+      data-testid="settings-button" aria-label="Audio settings" class:bad={latencyMs > BT_LATENCY_MS}
+      title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
+    >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
+    <div class="panel">
+      {#if settingsOpen}
+        <Settings
+          {engine} hint={latencyHint} busy={restarting || p.loading}
+          blocked={banners.exporting ? 'Wait for the export to finish' : null}
+          onApply={onApplyAudio}
+        />
+      {/if}
+    </div>
+  </details>
 </header>
 
 <style>
@@ -370,7 +409,10 @@
   .pill.bad { color: #ff6b6b; font-weight: 600; }
   .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 3px; vertical-align: -1px; }
   .pill.keys { color: #c9cbd3; }
-  .bt { color: #f0a23a; font-size: 10px; font-weight: 600; }
+  .settings summary { color: #9a9da8; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .settings summary.bad { color: #f0a23a; }
+  /* At the right edge: the panel opens leftwards. */
+  .settings .panel { left: auto; right: 0; width: 270px; }
   .fatal { background: #c92a2a; color: #fff; font-weight: 700; padding: 4px 10px; border-radius: 4px; }
   .fatal button { background: #fff; color: #c92a2a; border-color: #fff; font-weight: 700; padding: 1px 8px; }
 </style>

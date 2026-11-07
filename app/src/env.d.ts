@@ -8,6 +8,7 @@ import type { Clip, Project } from './state/project.svelte';
 import type { Autosave } from './project/autosave';
 import type { Library } from './library/library.svelte';
 import type { History } from './history/history';
+import type { ProjectJson } from './project/schema';
 
 /** Real state actions bound to the project + engine, for e2e tests (App.svelte). */
 interface DawActions {
@@ -31,6 +32,8 @@ declare global {
       library: Library;
       /** Undo/redo (null until audio starts). */
       history: History | null;
+      /** serialize(project): what a save writes and undo snapshots (e2e). */
+      snapshot: () => ProjectJson;
     };
   }
 }

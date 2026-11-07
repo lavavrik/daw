@@ -160,6 +160,61 @@ Before `ready`, failures reject `AudioEngine.start()` instead (the start
 overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
 `process()` throw, so e2e tests can exercise this path.
 
+## Restarting the engine (audio settings)
+
+The ⚙ readout at the right of the top bar opens **Settings**
+(`app/src/ui/Settings.svelte`): the latency hint (`interactive`, the default;
+`balanced`; `playback`; or a custom buffer in ms, passed as seconds), a 4 Hz
+readout of the sample rate, `baseLatency`, `outputLatency` and their total, and
+the Bluetooth hint (no buffer setting removes the 100–300 ms a wireless output
+adds; it turns orange above 40 ms, as does the ⚙ readout). The hint is saved in
+`localStorage` (`daw.latencyHint`) and used by the next start
+(`StartOverlay` -> `AudioEngine.start({ latencyHint })`).
+
+A context's latency hint is fixed when it is created, so **Apply** builds a new
+`AudioContext`, worklet and engine and puts the project back onto it from
+memory — no reload, no disk read. `restartAudio` (`app/src/audio/restart.ts`)
+sequences it; App (`applyAudioSettings`) owns the wiring:
+
+1. Runs under the project session's one-operation guard
+   (`session.exclusive`; never during an Open / Save / restore) and not during a
+   WAV export. `p.loading` is set for the whole restart: the "Restarting
+   audio…" overlay blocks edits; shortcuts, undo and sample imports already
+   respect it.
+2. Stop the transport through App's Stop path (the recorder closes held notes
+   at the heard tick) and release held keys.
+3. `unwireEngine`: cancel the per-engine rAF loop (`watchTransport`). Then
+   `AudioEngine.close()`: pending uploads and reset waits settle with
+   `ENGINE_STOPPED`, later `send()`s go nowhere (and mark no edit), the node is
+   disconnected and the context closed.
+4. `AudioEngine.start({ latencyHint })`. If the device refuses the hint, start
+   again with the previous one and say so (if that fails too: "Audio could not
+   restart — save, then reload"; the autosave is flushed).
+5. `replayInto` (`app/src/project/load.ts`): every `p.sampleFiles` entry
+   (the in-memory original bytes) is decoded with the **new** context and
+   uploaded at the id it already has — used or not, since undo snapshots name
+   samples by id — then the commands of `projectCommands(serialize(p))` (the
+   one replay-order builder) are sent. No `RESET_ALL`: the engine is new.
+   `p` itself is not touched, so track ids, selection, name, folder handle,
+   the "● unsaved" mark, `version` and the undo history all carry over.
+6. `wireEngine(new engine)`, in the same task as the last replayed command:
+   `engine` (a prop: TopBar, Browser, song area, editors and the mixer's meter
+   loop read it each time), a new `AudioClock` (telemetry history is per
+   engine), `onCommand` / `onCommandStall` / `onRackAddRefused`, deferred
+   sample loads moved over and settled from the upload results
+   (`rebindSampleLoads`), and the transport watch. TopBar re-attaches
+   `onError` and the Browser drops its preview player (it played on the old
+   context).
+
+What needs no re-wiring: everything created once per session — the note input,
+Web MIDI, the QWERTY shortcuts, the recorder (still armed if it was), the
+history and the project session — holds App's `live` forwarding view
+(`send`, `context`, `loadSample`, ...) and `liveClock`, which always reach
+the current engine and clock. The library's and the project folder's handles
+(IndexedDB, `FileSystemDirectoryHandle`) and the autosave's OPFS lock never
+belonged to the `AudioContext`. Pinned by the e2e test
+`restart keeps project and handles` (`tests/e2e/settings.spec.ts`).
+
 ## Engine timing rules (engine/src/drums.rs)
 
 - **Retrigger:** a new hit on a still-sounding row starts at full level (its

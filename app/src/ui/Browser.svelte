@@ -32,6 +32,18 @@
   let preview: Preview | null = null;
 
   const pv = () => (preview ??= createPreview(engine.context, (k) => (previewing = k)));
+  // An audio restart (Settings ▸ Apply) closes the context the preview plays
+  // on: drop it, so the next preview is created on the new one.
+  let previewEngine: AudioEngine | null = null;
+  $effect(() => {
+    const e = engine;
+    if (previewEngine !== null && previewEngine !== e) {
+      preview?.stop();
+      preview = null;
+      previewing = null;
+    }
+    previewEngine = e;
+  });
 
   async function toggle(s: LibSample) {
     if (previewing === s.path) return pv().stop();

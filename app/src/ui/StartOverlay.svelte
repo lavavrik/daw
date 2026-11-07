@@ -1,7 +1,9 @@
 <script lang="ts">
   // Browsers only let audio start from a user gesture, so the app opens behind
-  // this full-screen button. It starts the engine and hides once running.
+  // this full-screen button. It starts the engine and hides once running,
+  // with the latency hint last applied in the audio settings (audio/restart.ts).
   import { AudioEngine } from '../audio/engine';
+  import { loadLatencyHint } from '../audio/restart';
 
   let { onstarted }: { onstarted: (engine: AudioEngine) => void } = $props();
 
@@ -14,7 +16,7 @@
     busy = true;
     error = null;
     try {
-      const engine = await AudioEngine.start();
+      const engine = await AudioEngine.start({ latencyHint: loadLatencyHint() });
       started = true;
       onstarted(engine);
     } catch (e) {

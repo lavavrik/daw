@@ -48,7 +48,7 @@ describe('deferred sample loads (session lifetime)', () => {
     deferSampleLoad(1, t.id, t.rows[0].id, 'a');
     deferSampleLoad(2, t.id, t.rows[1].id, 'b');
     e.onSampleLoaded!(1, Err.OUT_OF_MEMORY);
-    expect(banners.error).toBe('Couldn\'t load "a" — not enough memory for this sample');
+    expect(banners.error).toBe('Couldn\'t load "a" — not enough sample memory (1 GB limit; removed samples free on reopen)');
     expect(banners.notice).not.toBeNull();
     e.onSampleLoaded!(2, Err.OK);
     expect(banners.notice).toBeNull();

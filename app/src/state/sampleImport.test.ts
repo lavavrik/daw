@@ -46,7 +46,7 @@ describe('importSample (Finder drop and library drag share it)', () => {
       ok: false, error: 'Couldn\'t load "notes.txt" — not a readable audio file',
     });
     const r = await importSample(p, engine(Err.OUT_OF_MEMORY).e, wav(), () => true);
-    expect(r).toEqual({ ok: false, error: 'Couldn\'t load "kick.wav" — not enough memory for this sample' });
+    expect(r).toEqual({ ok: false, error: 'Couldn\'t load "kick.wav" — not enough sample memory (1 GB limit; removed samples free on reopen)' });
     expect(p.sampleFiles.size).toBe(0);
     expect((await importSample(p, engine(HostErr.ENGINE_STOPPED).e, wav(), () => true)).ok).toBe(false);
   });

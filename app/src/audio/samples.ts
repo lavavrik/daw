@@ -1,6 +1,6 @@
 // Turning a dropped file into engine-ready planar channels, and engine load
 // failures into words a user understands.
-import { Err, HostErr, MAX_SAMPLE_FLOATS } from './protocol';
+import { Err, HostErr, MAX_ARENA_FLOATS, MAX_SAMPLE_FLOATS } from './protocol';
 import { MAX_SAMPLES } from '../state/project.svelte';
 
 export class SampleDecodeError extends Error {
@@ -75,7 +75,7 @@ export function loadErrorText(code: number, sampleRate: number): string {
       return `too long (max ~${min(1)} min mono / ~${min(2)} min stereo at ${sampleRate / 1000} kHz)`;
     }
     case Err.OUT_OF_MEMORY:
-      return 'not enough memory for this sample';
+      return `not enough sample memory (${MAX_ARENA_FLOATS / 262144 / 1024} GB limit; removed samples free on reopen)`;
     case Err.BAD_INDEX:
       return `sample limit reached (${MAX_SAMPLES} loads per session)`;
     case HostErr.QUEUE_FULL:

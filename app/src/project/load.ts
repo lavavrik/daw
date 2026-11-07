@@ -45,7 +45,7 @@ import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte'
 import type { ChannelState, Peaks, Project, SampleFile, Track } from '../state/project.svelte';
 import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
-import { sampleFloats } from '../state/sampleBudget';
+import { fitsBudget, overBudgetText, sampleFloats } from '../state/sampleBudget';
 import { deferSampleAssign } from '../state/sampleLoads';
 import { projectCommands, trackState } from './commands';
 import type { EngineCommand } from './commands';
@@ -136,6 +136,11 @@ export async function loadProject(
         const id = ids.size;
         const meta = { seconds: d.channels[0].length / engine.sampleRate, channels: d.channels.length, peaks: d.peaks };
         const floats = sampleFloats(d.channels); // before the upload transfers the buffers away
+        if (!fitsBudget(p, floats)) {
+          // Reopened at a higher rate (or a bigger decode) than the file was saved at.
+          warnings.push(overBudgetText(p, `Sample "${d.file.name}"`, floats));
+          continue;
+        }
         const c = await engine.loadSample(id, d.channels);
         // DEFERRED cannot really happen (stopped); the worklet would finish it on its own.
         if (c === Err.OK || c === Err.DEFERRED) {
@@ -295,6 +300,14 @@ export async function replayInto(
       continue;
     }
     const n = measure(id, channels);
+    // The new engine is blank, so its use is `floats` (p.arenaFloats is the OLD engine's).
+    const fresh = { arenaFloats: floats } as Project;
+    if (!fitsBudget(fresh, n)) {
+      // The new engine (maybe a higher rate) cannot hold it: name the limit, skip the upload.
+      codes.set(id, Err.OUT_OF_MEMORY);
+      warnings.push(overBudgetText(fresh, `Sample "${f.name}"`, n));
+      continue;
+    }
     const c = await engine.loadSample(id, channels);
     codes.set(id, c);
     if (c === Err.OK || c === Err.DEFERRED) {

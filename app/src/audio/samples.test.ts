@@ -40,7 +40,7 @@ describe('loadErrorText', () => {
   it('explains each failure without jargon codes', () => {
     // 64 Mi floats at 48 kHz: 23.3 min mono, 11.65 min stereo.
     expect(loadErrorText(Err.BAD_VALUE, 48000)).toBe('too long (max ~23 min mono / ~11 min stereo at 48 kHz)');
-    expect(loadErrorText(Err.OUT_OF_MEMORY, 48000)).toBe('not enough memory for this sample');
+    expect(loadErrorText(Err.OUT_OF_MEMORY, 48000)).toBe('not enough sample memory (1 GB limit; removed samples free on reopen)');
     expect(loadErrorText(Err.BAD_INDEX, 48000)).toContain('sample limit');
     expect(loadErrorText(HostErr.QUEUE_FULL, 48000)).toContain('drop it again');
     expect(loadErrorText(HostErr.ENGINE_STOPPED, 48000)).toContain('reload');

@@ -194,6 +194,19 @@ editors. A restored session is still "● unsaved" and has no folder yet; Save
 asks for one. Autosave works in one tab at a time: a second tab shows
 "Autosave is off — this project is open in another tab".
 
+## Export WAV
+
+Design notes: `docs/architecture/export.md`.
+
+Project menu ▸ **Export WAV…** renders the song (SONG mode, from the start to
+the end of the last clip plus a 2 s tail) to a 24-bit stereo WAV at the
+project's sample rate, named `<project name> <YYYY-MM-DD>.wav`. Chrome asks
+where to save first; a banner shows the progress with **Cancel**. The
+**metronome is never in the export**, and the loop is ignored. It renders in
+the background, faster than real time, with the same engine you hear, so you
+can keep working (it exports the project as it was when you clicked). A song
+without clips says so instead of writing an empty file.
+
 ## Your sample library
 
 The **Browser** pane shows one library for every project. Click **Choose

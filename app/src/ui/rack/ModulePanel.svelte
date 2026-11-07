@@ -6,11 +6,12 @@
   // plate (VCV convention: outputs are the boxed ones).
   import type { ModuleDef } from '../../audio/catalog';
   import type { RackModule } from '../../state/project.svelte';
+  import { delayClampNote } from '../mixer/mixMath';
   import { categoryColor } from './cables';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
 
-  let { module, def, title, isConnected, onparam, onremove, onjackdown }: {
+  let { module, def, title, isConnected, onparam, onremove, onjackdown, tempo = 120 }: {
     module: RackModule;
     def: ModuleDef;
     /** Display name, numbered when the rack has several of a kind ("Oscillator 2"). */
@@ -19,7 +20,13 @@
     onparam: (paramIdx: number, v: number) => void;
     onremove: () => void;
     onjackdown: (e: PointerEvent, dir: 'in' | 'out', port: number) => void;
+    /** Transport BPM, for the Delay's "(max 2 s)" note. */
+    tempo?: number;
   } = $props();
+
+  /** Extra line under a control: the Delay division clamped to 2 s (shared
+   * with the mixer delay: same table, same rule). */
+  const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
   const color = $derived(categoryColor(def.category));
   const choices = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.pd.choices.length));
@@ -36,7 +43,8 @@
   {#if def.params.length}
     <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>
       {#each choices as { pd, i } (pd.name)}
-        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`} />
+        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+          note={noteFor(pd.name, module.params[i])} />
       {/each}
       {#each knobs as { pd, i } (pd.name)}
         <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`} />

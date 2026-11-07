@@ -1,6 +1,6 @@
 // Synth-track and rack edits. Like actions.ts: every function mutates Project
 // AND sends the matching engine command(s), so UI and engine never diverge.
-import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
+import { clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
 import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, newChannel, synthTrack } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
@@ -82,12 +82,30 @@ export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch:
   t.patchName = patch.name;
 }
 
-/** Lowest free idx; null when the rack is full (or the track/kind is unknown). */
+/**
+ * Pooled effects (Delay, Reverb, Chorus) share the engine's FX pool across
+ * every track. Returns how many more of `kind` fit (Infinity for unpooled
+ * kinds), counting the modules of all synth tracks in the project.
+ */
+export function fxSlotsFree(p: Project, kind: string | number): number {
+  const def = moduleDef(kind);
+  const slots = fxPoolSlots(def);
+  if (slots === null) return Infinity;
+  let used = 0;
+  for (const t of p.tracks) if (t.kind === 'synth') used += t.modules.filter((m) => m.kind === def.kind).length;
+  return Math.max(0, slots - used);
+}
+
+/**
+ * Lowest free idx; null when the rack is full, the kind's FX-pool slots are
+ * all in use (the engine would refuse it), or the track/kind is unknown.
+ */
 export function addModule(p: Project, sink: CommandSink, trackId: string, kind: string | number): number | null {
   const t = synthTrack(p, trackId);
   if (!t) return null;
   let def;
   try { def = moduleDef(kind); } catch { return null; }
+  if (fxSlotsFree(p, def.kind) <= 0) return null;
   const used = new Set(t.modules.map((m) => m.idx));
   let idx = 0;
   while (idx < MAX_MODULES && used.has(idx)) idx++;

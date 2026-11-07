@@ -40,10 +40,21 @@ export interface Catalog {
   rackBlock: number;
   maxModules: number;
   maxPoly: number;
+  /**
+   * Engine FX-pool slots per pooled module id (shared by every track): adding
+   * one more of these than this many, anywhere in the project, is refused by
+   * the engine (ERR_OUT_OF_MEMORY), so the UI never sends it.
+   */
+  fxPool: Record<string, number>;
   modules: ModuleDef[];
 }
 
 export const CATALOG = raw as Catalog;
+
+/** FX-pool slots of a module kind (by id), or null if it needs none. */
+export function fxPoolSlots(def: ModuleDef): number | null {
+  return CATALOG.fxPool[def.id] ?? null;
+}
 
 /** Look up by string id ("osc") or numeric kind. Throws on unknown. */
 export function moduleDef(idOrKind: string | number): ModuleDef {

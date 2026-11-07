@@ -3,7 +3,7 @@ import { Op, packPort } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, liveInputTrack, removeTrack, selectTrack } from './actions';
-import { addModule, addSynthTrack, connect, disconnect, loadPatch, removeModule, setParam } from './rack-actions';
+import { addModule, addSynthTrack, connect, disconnect, fxSlotsFree, loadPatch, removeModule, setParam } from './rack-actions';
 import { STARTER_PATCHES } from './patches';
 
 function fake() {
@@ -86,6 +86,28 @@ describe('rack actions', () => {
     expect(addModule(p, sink, t.id, 'osc')).toBe(0);
     for (let i = 2; i < 32; i++) expect(addModule(p, sink, t.id, 'osc')).toBe(i);
     expect(addModule(p, sink, t.id, 'osc')).toBeNull();
+  });
+
+  it('pooled effects share the engine FX pool across tracks (9th delay refused)', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const empty = { name: 'e', modules: [], cables: [] };
+    const a = addSynthTrack(p, sink, 'A', empty)!;
+    const b = addSynthTrack(p, sink, 'B', empty)!;
+    expect(fxSlotsFree(p, 'delay')).toBe(8);
+    expect(fxSlotsFree(p, 'eq')).toBe(Infinity);
+    for (let i = 0; i < 4; i++) {
+      expect(addModule(p, sink, a.id, 'delay')).not.toBeNull();
+      expect(addModule(p, sink, b.id, 'delay')).not.toBeNull();
+    }
+    expect(fxSlotsFree(p, 'delay')).toBe(0);
+    sent.length = 0;
+    expect(addModule(p, sink, a.id, 'delay')).toBeNull();
+    expect(sent).toEqual([]); // never sent: the engine would answer ERR_OUT_OF_MEMORY
+    expect(addModule(p, sink, a.id, 'reverb')).not.toBeNull(); // its own bank
+    removeModule(p, sink, b.id, b.modules[0].idx);
+    expect(fxSlotsFree(p, 'delay')).toBe(1);
+    expect(addModule(p, sink, a.id, 'delay')).not.toBeNull();
   });
 
   it('setParam clamps', () => {

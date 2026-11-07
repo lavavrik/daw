@@ -566,6 +566,43 @@ test('add module menu adds Noise', async ({ page }) => {
   await expect(page.locator('[data-testid^="module-"]')).toHaveCount(9);
 });
 
+test('effect modules: pink Effect group, a Delay in the signal path, pool limit greys the 9th', async ({ page }) => {
+  await addSynth(page); // Deep Bass: VCA 6 -> Out 7
+  const addBtn = page.getByRole('button', { name: '+ Add module' });
+  await addBtn.click();
+  const menu = page.getByTestId('add-menu');
+  await expect(menu).toContainText('Effect');
+  for (const name of ['Delay', 'Reverb', 'Chorus', 'EQ', 'Compressor']) {
+    await expect(menu.getByRole('menuitem', { name, exact: true })).toBeVisible();
+  }
+  await page.getByTestId('add-delay').click();
+  const delay = page.getByTestId('module-8');
+  await expect(delay).toContainText('Delay');
+  // Effect category colour (pink) on the header rule.
+  await expect(delay).toHaveCSS('border-top-color', 'rgb(255, 122, 138)');
+  await expect(page.getByTestId('knob-8-division')).toContainText('3/16');
+  // VCA -> Delay -> Out: the patch still plays through it.
+  await dragTo(page, 'jack-6-out-out', await centre(page, 'jack-8-in-l'));
+  await dragTo(page, 'jack-8-out-l', await centre(page, 'jack-7-in-l'));
+  await dragTo(page, 'jack-8-out-r', await centre(page, 'jack-7-in-r'));
+  await page.waitForTimeout(100);
+  expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05);
+  // 7 more delays use up the engine's 8 shared slots; the 9th is greyed.
+  for (let i = 0; i < 7; i++) {
+    await addBtn.click();
+    await page.getByTestId('add-delay').click();
+  }
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(16);
+  await addBtn.click();
+  const ninth = page.getByTestId('add-delay');
+  await expect(ninth).toHaveAttribute('aria-disabled', 'true');
+  await expect(ninth).toContainText('All 8 delays in use');
+  await ninth.click({ force: true }); // aria-disabled: Playwright would wait
+  await expect(menu).toBeVisible(); // nothing added, the menu says why
+  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(16);
+  await expect(page.getByTestId('add-reverb')).not.toHaveAttribute('aria-disabled', 'true');
+});
+
 test('loading the Chord Stab patch replaces the rack and plays chords', async ({ page }) => {
   await addSynth(page);
   await page.getByTestId('patch-select').selectOption('Chord Stab');

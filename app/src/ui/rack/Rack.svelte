@@ -27,13 +27,13 @@
   // connect pair) is sent. Drops on anything that is not a matching jack
   // unplug a carried cable / cancel a new one.
   import { tick } from 'svelte';
-  import { CATALOG, moduleDef } from '../../audio/catalog';
-  import type { SignalKind } from '../../audio/catalog';
+  import { CATALOG, fxPoolSlots, moduleDef } from '../../audio/catalog';
+  import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
   import { confirmReleasingKeys } from '../../input/shortcuts';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { Project, SynthTrack } from '../../state/project.svelte';
-  import { addModule, connect, disconnect, loadPatch, removeModule, setParam } from '../../state/rack-actions';
+  import { addModule, connect, disconnect, fxSlotsFree, loadPatch, removeModule, setParam } from '../../state/rack-actions';
   import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
@@ -299,7 +299,19 @@
     };
   });
 
+  /**
+   * Why `md` cannot be added right now: every engine FX-pool slot of its kind
+   * (shared by all tracks) is in use, e.g. "All 8 delays in use"; "" if it can.
+   */
+  function poolFullNote(md: ModuleDef): string {
+    const slots = fxPoolSlots(md);
+    if (slots === null || fxSlotsFree(p, md.id) > 0) return '';
+    const name = md.name.toLowerCase();
+    return `All ${slots} ${name}${name.endsWith('s') ? 'es' : 's'} in use`;
+  }
+
   async function add(id: string) {
+    if (poolFullNote(moduleDef(id))) return; // greyed: stays open, says why
     menuOpen = false;
     const idx = addModule(p, engine, track.id, id);
     if (idx === null) return;
@@ -343,7 +355,9 @@
               <div class="group" style:--c={categoryColor(g.category)}>
                 <div class="gh">{g.category[0].toUpperCase() + g.category.slice(1)}</div>
                 {#each g.modules as md (md.id)}
-                  <button role="menuitem" data-testid={`add-${md.id}`} onclick={() => add(md.id)}>{md.name}</button>
+                  {@const note = poolFullNote(md)}
+                  <button role="menuitem" data-testid={`add-${md.id}`} aria-disabled={note ? 'true' : undefined}
+                    title={note || undefined} onclick={() => add(md.id)}>{md.name}{#if note}<small>{note}</small>{/if}</button>
                 {/each}
               </div>
             {/each}
@@ -369,6 +383,7 @@
           onparam={(i, v) => param(m.idx, i, v)}
           onremove={() => remove(m.idx)}
           onjackdown={(e, dir, port) => jackDown(e, m.idx, dir, port)}
+          tempo={p.tempo}
         />
       {/each}
       {#if modules.length === 0}
@@ -405,6 +420,8 @@
   .gh { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c); border-bottom: 2px solid var(--c); margin-bottom: 3px; padding-bottom: 1px; }
   .group button { font: inherit; text-align: left; padding: 3px 6px; border: 0; border-radius: 2px; background: transparent; color: #d7d9e0; cursor: pointer; white-space: nowrap; }
   .group button:hover, .group button:focus-visible { background: #2e313a; outline: none; color: #fff; }
+  .group button[aria-disabled='true'] { color: #6f7280; cursor: not-allowed; }
+  .group button small { display: block; font-size: 9px; color: #8d90a0; }
   .full { margin: 0; color: #ffd98a; white-space: nowrap; }
   .legend { margin-left: auto; display: flex; gap: 8px; color: #8d90a0; font-size: 10px; }
   .legend span { display: flex; align-items: center; gap: 3px; }

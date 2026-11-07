@@ -1,10 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { CATALOG, clampParam, moduleDef, paramIndex, portIndex } from './catalog';
+import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } from './catalog';
+import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists exactly the nine modules', () => {
-    expect(CATALOG.modules.map((m) => m.id)).toEqual(
-      ['midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out']);
+  it('lists the modules in kind order (plan 6 effects are 9..15)', () => {
+    expect(CATALOG.modules.map((m) => m.id)).toEqual([
+      'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
+      'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
+    ]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(16).keys()]);
+  });
+  it('puts the stereo effects under Effect, with the FX-pool slot counts', () => {
+    const effects = CATALOG.modules.filter((m) => m.category === 'effect').map((m) => m.id);
+    expect(effects).toEqual(['delay', 'reverb', 'chorus', 'eq', 'compressor']);
+    expect(fxPoolSlots(moduleDef('delay'))).toBe(8);
+    expect(fxPoolSlots(moduleDef('reverb'))).toBe(8);
+    expect(fxPoolSlots(moduleDef('chorus'))).toBe(16);
+    expect(fxPoolSlots(moduleDef('eq'))).toBeNull();
+  });
+  it('rack Delay divisions are the mixer delay table', () => {
+    const div = moduleDef('delay').params[paramIndex(moduleDef('delay'), 'division')];
+    const mixDiv = MIXER_CATALOG.params.find((q) => q.name === 'delay_time')!;
+    expect(div.choices).toEqual(mixDiv.choices);
+    expect(div.choices[div.default]).toBe('3/16');
   });
   it('looks modules up by id or kind', () => {
     expect(moduleDef('filter').kind).toBe(3);

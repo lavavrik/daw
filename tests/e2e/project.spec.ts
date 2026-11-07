@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
+import { withAppendedParams } from '../../app/src/project/testdata/appendedParams';
 import { makeWav } from './wav';
 
 // Project save/load through OPFS (an origin-private folder: no picker). The
@@ -457,7 +458,8 @@ test('v1 project opens in v3', async ({ page }) => {
   // Everything but the version, the sample file names (they carry the content
   // hash) and the empty lanes (v2 -> v3) is as saved in v1.
   const strip = (j: { schemaVersion: number; samples: { file: string }[] }) => ({ ...j, schemaVersion: 0, samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })) });
-  const v3 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...t, automation: [] })), mixer: { ...v1.mixer, automation: [] } };
+  // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
+  const v3 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v1.mixer, automation: [] } };
   expect(strip(out)).toEqual(strip(v3));
 
   await page.evaluate(async (names) => {
@@ -531,7 +533,8 @@ test('v2 project opens in v3', async ({ page }) => {
     mode: '',
     samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })),
   });
-  const v3 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...t, automation: [] })), mixer: { ...v2.mixer, automation: [] } };
+  // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
+  const v3 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v2.mixer, automation: [] } };
   expect(out.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips)).toEqual(
     v2.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips),
   );

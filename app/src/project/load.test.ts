@@ -14,6 +14,7 @@ import { serialize } from './serialize';
 import { addAudioFixture, addAutomationFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
 import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
+import { withAppendedParams } from './testdata/appendedParams';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -366,28 +367,11 @@ describe('loadProject', () => {
     expect(checkLog(e.log).errors).toEqual([]);
     const out = serialize(p);
     expect(out.schemaVersion).toBe(3);
-    // Params appended to the catalog after v2 was frozen (plan 11: ADSR
-    // delay/vel_amt, MIDI In glide_mode) load with their defaults and are
-    // written on save; everything else round-trips unchanged.
-    const appended: Record<string, Record<string, number>> = {
-      adsr: { delay: 0, vel_amt: 0 },
-      midi_in: { glide_mode: 0 },
-    };
-    type V2Module = { id: string; params?: Record<string, number> };
-    const withAppended = (t: { patch?: { modules: V2Module[] } }) =>
-      t.patch
-        ? {
-            ...t,
-            patch: {
-              ...t.patch,
-              modules: t.patch.modules.map((m) => (appended[m.id] ? { ...m, params: { ...m.params, ...appended[m.id] } } : m)),
-            },
-          }
-        : t;
+    // Params appended to the catalog since are written with their defaults.
     expect(out).toEqual({
       ...v2,
       schemaVersion: 3,
-      tracks: v2.tracks.map((t: object) => ({ ...withAppended(t), automation: [] })),
+      tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
       mixer: { ...v2.mixer, automation: [] },
     });
   });

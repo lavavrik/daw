@@ -104,9 +104,10 @@ Saturator (14) and Attenuator (15). They wrap the mixer's DSP
     "All 8 delays in use" (counted over the project's tracks).
   - A slot returns to the pool only when its module is gone: when the removal
     or clear *applies*, after the 2 ms declick fade.
-  - A reused slot is zeroed before its new module gets it, 64 KiB per
-    sub-block (a reused delay is mute for about 11 ms), so it never replays
-    the previous owner's echo.
+  - A reused slot is zeroed before its new module gets it, 32 KiB per
+    sub-block (`CLEAR_CHUNK`; a reused delay is mute for about 21 ms), so it
+    never replays the previous owner's echo. Worst case, every pooled slot
+    zeroing in the same sub-block, is 1 MiB of memset per 0.67 ms sub-block.
   - **Handover on replace.** Because a slot is held through its module's
     removal fade, "remove (or clear) then add" in one batch on a sounding
     rack (a patch load) would find a full bank although the UI counts the

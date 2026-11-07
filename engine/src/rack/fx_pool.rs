@@ -33,11 +33,18 @@
 //!   call (once per module per 32-frame sub-block) zeroes at most
 //!   [`CLEAR_CHUNK`] floats and returns `None` until the slot is clean;
 //!   meanwhile the module's wet signal is silent (its dry part still
-//!   passes). A reused delay is thus mute for ~11 ms (1 MiB / 64 KiB per
-//!   sub-block) and never replays the previous owner's echo. Never-used
-//!   slots are clean from the start. The work per module per sub-block is
-//!   bounded by the chunk, so nothing ever zeroes a whole ring at once on
-//!   the audio thread.
+//!   passes). A reused delay is thus mute for ~21 ms at 48 kHz (1 MiB ring,
+//!   32 KiB per 0.67 ms sub-block; a reverb's 256 KiB ~5 ms, a chorus's
+//!   32 KiB one sub-block) and never replays the previous owner's echo.
+//!   Never-used slots are clean from the start. The work per module per
+//!   sub-block is bounded by the chunk, so nothing ever zeroes a whole ring
+//!   at once on the audio thread.
+//! * **Worst-case burst:** every pooled slot of every kind reclaimed dirty
+//!   in the same sub-block (e.g. a project load re-adding 8 delays, 8
+//!   reverbs and 16 choruses right after a reset) zeroes at most
+//!   `(8 + 8 + 16) × CLEAR_CHUNK` floats = 1 MiB per sub-block (choruses
+//!   need just one chunk each), well under the sub-block's time budget at
+//!   memset speed; any single slot costs at most 32 KiB per sub-block.
 
 /// Pooled module kinds (one bank each).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,8 +77,9 @@ pub const CHORUS_SLOTS: usize = 16;
 /// Most slots a bank can have (slot sets are `u32` bitmasks).
 pub const MAX_BANK_SLOTS: usize = 32;
 /// Floats zeroed per [`FxPool::buffer`] call while a reused slot is dirty
-/// (64 KiB: a few µs of memset per module per sub-block).
-pub const CLEAR_CHUNK: usize = 16384;
+/// (32 KiB: a few µs of memset per module per sub-block; see the
+/// worst-case burst in the module docs).
+pub const CLEAR_CHUNK: usize = 8192;
 /// "No slot" (a pooled module built without one outputs silence).
 pub const NO_SLOT: u8 = u8::MAX;
 

@@ -228,7 +228,7 @@ borrows the slot at `process` time. Adding an FX module claims a free slot
 (refused with `ERR_OUT_OF_MEMORY` when that kind is used up; the add menu
 greys it out with "All 8 delays in use") and removing it returns the slot
 once the removal applies, after the declick fade; the slot is zeroed in
-64 KiB steps before its next owner uses it. The pool is shared rather than
+32 KiB steps before its next owner uses it. The pool is shared rather than
 per-track because most patches use none, and the mixer returns already give
 every track a delay and a reverb (see `docs/architecture/modular.md`).
 The mixer's own Reverb/Delay returns keep their dedicated buffers: `Delay` /

@@ -177,4 +177,42 @@ describe('history', () => {
     expect(s.p.tracks.map((t) => t.slot)).toEqual([s.d.slot]);
     expect(s.sent[0]).toEqual([Op.ADD_DRUM_TRACK, s.d.slot, 0, 0, 0]);
   });
+
+  it('undoKey names the newest entry\'s coalesce key (Undo take keys off it, not the label)', () => {
+    const s = setup();
+    const t = addSynthTrack(s.p, s.sink)!;
+    expect(s.h.undoKey).toBeNull();
+    s.h.transact('Record', () => addNote(s.p, s.sink, t.id, { pitch: 60, start: 0, len: 10 }), { coalesce: 'rec:7' });
+    expect(s.h.undoKey).toBe('rec:7');
+    s.h.transact('Record', () => setTempo(s.p, s.sink, 99)); // same label, no key: not a pass
+    expect(s.h.undoKey).toBeNull();
+  });
+
+  it('a transact that merges into the newest entry takes no before-snapshot', () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addSynthTrack(p, sink)!;
+    let snaps = 0;
+    const h = createHistory({ snapshot: () => (snaps++, serialize(p)), apply: (f, to) => diffApply(p, sink, f, to) });
+    p.history = h;
+    h.transact('Record', () => addNote(p, sink, t.id, { pitch: 60, start: 0, len: 10 }), { coalesce: 'rec:1' });
+    expect(snaps).toBe(2); // before + after
+    for (let i = 1; i <= 5; i++) h.transact('Record', () => addNote(p, sink, t.id, { pitch: 60 + i, start: 0, len: 10 }), { coalesce: 'rec:1' });
+    expect(snaps).toBe(2 + 5); // only the after of each merged note
+    h.undo();
+    expect(currentPattern(t).notes).toEqual([]);
+  });
+
+  it('undo / redo with nothing to apply does not run beforeApply', () => {
+    let calls = 0;
+    const p = new Project();
+    const h = createHistory({ snapshot: () => serialize(p), apply: () => {}, beforeApply: () => calls++ });
+    expect([h.undo(), h.redo()]).toEqual([false, false]);
+    expect(calls).toBe(0);
+    p.history = h;
+    setTempo(p, { send: () => true }, 90);
+    h.undo();
+    expect(calls).toBe(1);
+  });
 });
+

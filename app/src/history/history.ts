@@ -57,6 +57,8 @@ export interface History {
   readonly canRedo: boolean;
   /** Labels of the entry undo / redo would apply ("Move notes"), or null. */
   readonly labels: { undo: string | null; redo: string | null };
+  /** The coalesce key of the entry undo would apply ("rec:3": a recording pass), or null. */
+  readonly undoKey: string | null;
   /** True while undo/redo applies a snapshot (actions then just run). */
   readonly applying: boolean;
 }
@@ -65,7 +67,8 @@ interface Entry {
   label: string;
   before: ProjectJson;
   after: ProjectJson;
-  /** fingerprintOf(after), to share snapshots between neighbours. */
+  /** fingerprintOf(before / after): merge checks and snapshot sharing. */
+  beforeFp: string;
   afterFp: string;
   coalesce?: string;
 }
@@ -76,6 +79,8 @@ interface Open {
   before: ProjectJson | null;
   beforeFp: string | null;
   coalesce?: string;
+  /** A one-shot that will merge into this (newest) entry: needs no before-snapshot. */
+  into?: Entry;
 }
 
 export function createHistory(o: HistoryOptions): History {
@@ -97,22 +102,28 @@ export function createHistory(o: HistoryOptions): History {
     g.beforeFp = fingerprintOf(g.before);
   };
 
+  /** The newest entry, if an edit with coalesce key `key` made now would merge into it. */
+  function mergeTarget(key: string | undefined): Entry | undefined {
+    const top = undo[undo.length - 1];
+    return top && top === last && ((key !== undefined && top.coalesce === key) || (o.coalesceTask && taskOpen)) ? top : undefined;
+  }
+
   function push(g: Open) {
-    if (!g.before) return;
+    if (!g.before && !g.into) return;
     const after = o.snapshot();
     const afterFp = fingerprintOf(after);
     const top = undo[undo.length - 1];
-    const merge = top && top === last && ((g.coalesce !== undefined && top.coalesce === g.coalesce) || (o.coalesceTask && taskOpen));
+    const merge = g.into ? g.into === top && top === last : mergeTarget(g.coalesce) !== undefined;
     if (merge) {
-      if (afterFp === fingerprintOf(top.before)) {
+      if (afterFp === top.beforeFp) {
         undo.pop(); // merged back to where it started: nothing to undo
         last = null;
       } else Object.assign(top, { after, afterFp });
     } else {
-      if (g.beforeFp === afterFp) return; // nothing (but maybe the selection) changed
+      if (!g.before || g.beforeFp === afterFp) return; // nothing (but maybe the selection) changed
       // Share the snapshot with the previous entry when nothing happened between them.
       const before = top && top.afterFp === g.beforeFp && JSON.stringify(top.after.selection) === JSON.stringify(g.before.selection) ? top.after : g.before;
-      const e: Entry = { label: g.label ?? 'Edit', before, after, afterFp, coalesce: g.coalesce };
+      const e: Entry = { label: g.label ?? 'Edit', before, after, beforeFp: g.beforeFp!, afterFp, coalesce: g.coalesce };
       undo.push(e);
       if (undo.length > cap) undo.splice(0, undo.length - cap);
       last = e;
@@ -133,6 +144,7 @@ export function createHistory(o: HistoryOptions): History {
 
   function move(from: Entry[], to: Entry[], target: (e: Entry) => ProjectJson): boolean {
     if (applying || depth > 0 || (o.canApply && !o.canApply())) return false;
+    if (from.length === 0 && !open?.before) return false; // nothing to apply (and no gesture edit to commit)
     o.beforeApply?.();
     close(); // an open gesture is an edit that happened first
     const e = from.pop();
@@ -153,7 +165,7 @@ export function createHistory(o: HistoryOptions): History {
     transact(label, fn, opts) {
       if (applying) return fn();
       if (open) {
-        takeBefore(open);
+        if (!open.into) takeBefore(open);
         if (open.label === null) open.label = label;
         depth++;
         try {
@@ -162,8 +174,8 @@ export function createHistory(o: HistoryOptions): History {
           depth--;
         }
       }
-      const g: Open = { label, before: null, beforeFp: null, coalesce: opts?.coalesce };
-      takeBefore(g);
+      const g: Open = { label, before: null, beforeFp: null, coalesce: opts?.coalesce, into: mergeTarget(opts?.coalesce) };
+      if (!g.into) takeBefore(g); // a merge keeps the entry's own "before"
       open = g;
       depth++;
       try {
@@ -198,6 +210,9 @@ export function createHistory(o: HistoryOptions): History {
     },
     get labels() {
       return { undo: undo[undo.length - 1]?.label ?? null, redo: redo[redo.length - 1]?.label ?? null };
+    },
+    get undoKey() {
+      return undo[undo.length - 1]?.coalesce ?? null;
     },
     get applying() {
       return applying;

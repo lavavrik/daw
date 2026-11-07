@@ -37,10 +37,17 @@ edit is undoable as long as it is in the saved project.
   calling another) run inside the outer one, whose label names the entry.
   While a load runs (`p.loading`) or a snapshot is being applied, it just
   runs `fn`.
-- **Gestures:** App brackets every pointer gesture (window `pointerdown` …
-  last `pointerup`/`pointercancel`, committed one task later so the
-  editors' own `pointerup` flush and the following `click` land inside;
-  `blur` commits too) with `begin()`/`commit()`. A knob, fader, note, clip
+- **Gestures** (`history/gestures.ts`, installed by App): every pointer
+  gesture (window `pointerdown` … last `pointerup`/`pointercancel`,
+  committed one task later so the editors' own `pointerup` flush and the
+  following `click` land inside) is bracketed with `begin()`/`commit()`.
+  A pointerup can be lost (a native `<select>` popup, a context menu), so a
+  primary press forgets stale pointer ids and `begin()` closes a gesture
+  still open; a `<select>` `change` and a `contextmenu` (capture phase)
+  and window `blur` end the gesture at once. A text field's `change` does
+  not: it fires when a press elsewhere blurs the field, mid-gesture. Undo /
+  redo while a pointer is still down commits the gesture and then re-opens
+  one (`afterApply`) for the rest of the drag. A knob, fader, note, clip
   or step-paint drag is one entry; the "before" snapshot is taken lazily at
   the first edit, so a click that edits nothing costs nothing, and a drag
   that ends where it started (Escape) leaves no entry.
@@ -50,8 +57,13 @@ edit is undoable as long as it is in the saved project.
 - **Recording:** each recording pass gets a number; the recorder writes
   every note with `edit(p, 'Record', …, { coalesce: 'rec:<pass>' })`, so the
   whole pass is one entry (across retargets). "Undo take" undoes the newest
-  entry when it is a pass. Before any undo/redo the recorder closes its held
-  notes (`beforeApply`), so they belong to the pass being undone.
+  entry when it is a pass: the history's `undoKey` (the newest entry's
+  coalesce key) starts with `rec:`. A note merged into the pass takes no
+  "before" snapshot (the entry keeps its own). Before any undo/redo that has
+  something to apply, the recorder closes its held notes (`beforeApply`), so
+  they belong to the pass being undone. On a **redo** while a recorded note
+  is held, that note becomes a new edit, which clears the redo stack: the
+  redo then does nothing (release the key, then redo).
 
 Undo/redo (⌘Z / ⇧⌘Z or Ctrl+Y, ignored while typing; the top bar's ↶ ↷
 with "Undo Move notes" tooltips) first commit an open gesture, and are
@@ -69,7 +81,10 @@ survive.
 Order:
 
 1. **Tracks** gone, or whose slot changed kind: `REMOVE_TRACK` (keys that
-   pointed at them fall back to none, as in the engine).
+   pointed at them fall back to none, as in the engine); then every rack
+   module that goes, on **every** track, before any module is added: pooled
+   effects (Delay, Reverb, Chorus) share one FX pool, so an effect moved
+   between tracks must leave its old track first or its add is refused.
 2. **Per track**, in `to` order:
    - a slot the live project lacks is rebuilt **whole** with the plan-6 load
      builders (`project/commands.ts` `trackState` + `trackCommands`: the
@@ -80,8 +95,8 @@ Order:
      is selected in turn; `p.beforePatternSwitch` first if the current
      pattern changes), then the current pattern, then **clips**, then
      `CLEAR_PATTERN_DATA` for patterns that are gone; the **rack** — modules
-     removed (a different kind at an idx is remove + add), added, params,
-     then cables by input port.
+     added (a different kind at an idx was removed in step 1), params, then
+     cables by input port.
 3. **Mixer** params by name, then sidechain **keys** (sources exist now;
    keys going to none first, so drum-row key slots are free).
 4. **Transport** (tempo, metronome, loop, mode), selection, and
@@ -97,6 +112,8 @@ removed notes`).
 
 - `history.test.ts`: step toggle undo/redo, drag coalescing, redo cleared by
   a new edit, cap 200, nesting, coalesce keys, same-task merging.
+- `gestures.test.ts`: lost pointerup, `<select>` change, context menu,
+  blur, multi-pointer, undo mid-drag.
 - `diffApply.test.ts`: every kind of edit is undone and redone, and after
   each the UI state serializes to the snapshot and the modelled engine
   (`engineModel.ts`) equals a fresh load of it; only the changed note is

@@ -206,4 +206,21 @@ describe('diffApply', () => {
     expect(m.errors).toEqual([]);
     expect((p.tracks[0] as DrumTrack).rows).toHaveLength(4);
   });
+
+  it('every track\'s module removals go before any add (an effect moved between tracks is never refused)', async () => {
+    const r = await rig();
+    const A = r.A;
+    const rev = r.synth.modules.find((m) => m.kind === moduleDef('reverb').kind)!.idx;
+    removeModule(r.p, r.sink, r.synth.id, rev);
+    addModule(r.p, r.sink, r.synth2.id, 'reverb');
+    const B = serialize(r.p);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A); // the synth (earlier slot) gets its reverb back, synth2 loses its one
+    const at = (op: number, slot: number) => r.log.findIndex((c) => c[0] === op && c[1] === slot);
+    expect(at(Op.RACK_REMOVE_MODULE, r.synth2.slot)).toBeGreaterThanOrEqual(0);
+    expect(at(Op.RACK_REMOVE_MODULE, r.synth2.slot)).toBeLessThan(at(Op.RACK_ADD_MODULE, r.synth.slot));
+    expect(view(r.m, A)).toEqual(loaded(A));
+    expect(r.m.errors).toEqual([]);
+  });
 });
+

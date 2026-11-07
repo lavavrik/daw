@@ -57,6 +57,9 @@ import type { NoteListener } from '../input/noteInput';
 export const REC_OFFSET_MIN = -200;
 /** Undo label of a recording pass. */
 export const RECORD_LABEL = 'Record';
+/** History coalesce key of recording pass `n` (one undo entry per pass). */
+const passKey = (n: number) => `rec:${n}`;
+const isPass = (key: string | null | undefined) => key?.startsWith('rec:') ?? false;
 export const REC_OFFSET_MAX = 200;
 /** Note-ons this many ticks before tick 0 still record (at 0): 1/64 note at 960 PPQ. */
 export const GRACE_TICKS = 60;
@@ -342,9 +345,9 @@ export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock,
     target: () => liveInputTrack(p),
     // One history entry per pass: every note of it merges into one "Record" entry.
     addNote: (trackId, patternId, o, pass) =>
-      edit(p, RECORD_LABEL, () => addNote(p, sink, trackId, o, patternId), { coalesce: `rec:${pass}` }),
-    undoPass: () => (p.history?.labels.undo === RECORD_LABEL ? p.history.undo() : false),
-    canUndoPass: () => p.history?.labels.undo === RECORD_LABEL,
+      edit(p, RECORD_LABEL, () => addNote(p, sink, trackId, o, patternId), { coalesce: passKey(pass) }),
+    undoPass: () => (isPass(p.history?.undoKey) ? p.history!.undo() : false),
+    canUndoPass: () => isPass(p.history?.undoKey),
     songMode: () => p.mode === 'song',
     onFull,
   });

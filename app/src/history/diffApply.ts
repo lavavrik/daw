@@ -10,14 +10,16 @@
 // the rest are created or removed.
 //
 // Order:
-//   1. tracks that are gone, or whose slot changed kind: REMOVE_TRACK;
+//   1. tracks that are gone, or whose slot changed kind: REMOVE_TRACK; then
+//      every rack module that goes, on every track (the FX pool is shared:
+//      removals before any add);
 //   2. per track, in `to` order: a track the live project lacks is rebuilt
 //      whole (trackState + trackCommands, the plan-6 load builders);
 //      otherwise name/colour, drum rows, patterns (new ones, then data of
 //      changed ones -- the engine edits its current pattern, so each is
 //      selected in turn -- then the current pattern, then clips, then
 //      patterns that are gone: CLEAR_PATTERN_DATA), and the synth rack
-//      (modules removed, added, params, cables);
+//      (modules added, params, cables);
 //   3. mixer params by name, then sidechain keys (their sources exist now);
 //   4. tempo, metronome, loop, mode; selection and the live input track.
 // The project name is not restored (a Save As names the project, not an edit).
@@ -53,6 +55,13 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
     if (tj && tj.kind === t.kind) continue;
     dropTrack(p, sink, t);
     if (engineInput === t.slot) engineInput = -1;
+  }
+  // ...and every rack module that goes, on every track, before any is added:
+  // pooled effects (Delay/Reverb/Chorus) share one FX pool, so an effect
+  // moved between tracks must leave its old track first or its add is refused.
+  for (const t of p.tracks) {
+    const tj = want.get(t.slot);
+    if (t.kind === 'synth' && tj?.kind === 'synth' && !same(was.get(t.slot), tj)) removeModules(sink, t, tj);
   }
 
   // 2. Every track of `to`, in its order.
@@ -112,6 +121,23 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   const input = liveInputTrack(p)?.slot ?? -1;
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
   markEdited(p); // also when only UI-only fields (names) changed
+}
+
+/**
+ * Remove (engine + state) the modules of `t` that `tj`'s rack does not have
+ * at their idx with their kind; the engine drops their cables, so does the
+ * state. Returns `tj`'s rack (patchRack). Idempotent.
+ */
+function removeModules(sink: CommandSink, t: SynthTrack, tj: SynthTrackJson) {
+  const want = patchRack(t.slot, tj.patch);
+  const kept = (idx: number, kind: number) => want.modules.some((m) => m.idx === idx && m.kind === kind);
+  const gone = new Set(t.modules.filter((m) => !kept(m.idx, m.kind)).map((m) => m.idx));
+  if (gone.size) {
+    for (const idx of gone) sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
+    t.modules = t.modules.filter((m) => !gone.has(m.idx));
+    t.cables = t.cables.filter((c) => !gone.has(c.from.m) && !gone.has(c.to.m));
+  }
+  return want;
 }
 
 /** State + REMOVE_TRACK; keys that pointed at it fall back to none (as in the engine). */
@@ -256,17 +282,12 @@ function diffSynth(p: Project, sink: CommandSink, t: SynthTrack, tj: SynthTrackJ
     });
 
   // Rack: modules by idx (a different kind there is a remove + add), params, cables by input.
-  const want = patchRack(slot, tj.patch);
+  // (Removals already went out for every track: removeModules in step 1.)
+  const want = removeModules(sink, t, tj);
   t.patchName = tj.patch.name;
-  const kept = (idx: number, kind: number) => want.modules.some((m) => m.idx === idx && m.kind === kind);
-  for (const m of t.modules) {
-    if (kept(m.idx, m.kind)) continue;
-    sink.send(Op.RACK_REMOVE_MODULE, slot, m.idx); // the engine drops its cables too
-  }
-  const gone = new Set(t.modules.filter((m) => !kept(m.idx, m.kind)).map((m) => m.idx));
-  const cables = t.cables.filter((c) => !gone.has(c.from.m) && !gone.has(c.to.m));
+  const cables = t.cables;
   t.modules = want.modules.map((wm) => {
-    const m = t.modules.find((x) => x.idx === wm.idx && !gone.has(x.idx));
+    const m = t.modules.find((x) => x.idx === wm.idx);
     if (!m) {
       sink.send(Op.RACK_ADD_MODULE, slot, wm.idx, wm.kind);
       const defs = moduleDef(wm.kind).params;

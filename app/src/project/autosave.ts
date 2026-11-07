@@ -27,6 +27,11 @@
 //
 // createAutosave: debounced writer. App calls markDirty on every Project.version
 // change (state/edits.ts) and flush on visibilitychange -> hidden.
+//
+// Several tabs share one OPFS: every write / read / discard runs under the
+// Web Lock AUTOSAVE_LOCK (a sweep can never remove a sample another tab's
+// write is about to list), and only the tab holding OWNER_LOCK (taken for
+// its lifetime) autosaves or offers a restore; the others show a hint.
 import type { Project } from '../state/project.svelte';
 import { WRITE_CHUNK, readListedSamples, replaceWith, writeFile } from './fsFolder';
 import type { ProjectJson } from './schema';
@@ -37,6 +42,45 @@ export const AUTOSAVE_TMP = 'autosave.tmp';
 export const MARKER = 'autosave.json';
 const SAMPLES_DIR = 'samples';
 const FORMAT = 1;
+/** Held around every write / read / discard of the autosave. */
+export const AUTOSAVE_LOCK = 'daw-autosave';
+/** Held for a tab's lifetime by the one tab that autosaves. */
+export const OWNER_LOCK = 'daw-autosave-owner';
+/** The longest retry delay after failed writes (quota full, …). */
+const MAX_BACKOFF = 60_000;
+
+/** The slice of navigator.locks (Web Locks) used here; tests pass a fake. */
+export interface LockManagerLike {
+  request(name: string, opts: { ifAvailable?: boolean }, cb: (lock: unknown) => unknown): Promise<unknown>;
+}
+
+const defaultLocks = (): LockManagerLike | undefined =>
+  (globalThis.navigator as { locks?: LockManagerLike } | undefined)?.locks;
+
+/** Run `fn` holding AUTOSAVE_LOCK (no Web Locks: just run it). */
+export async function withAutosaveLock<T>(locks: LockManagerLike | undefined, fn: () => Promise<T>): Promise<T> {
+  if (!locks) return fn();
+  return (await locks.request(AUTOSAVE_LOCK, {}, fn)) as T;
+}
+
+/**
+ * Try to become the tab that autosaves: OWNER_LOCK, if no other tab holds
+ * it, kept until this tab closes. False = another tab of this browser
+ * profile autosaves (this one must neither autosave nor offer a restore).
+ * Without Web Locks (or if they fail) this tab assumes it is alone.
+ */
+export function claimAutosaveOwner(locks: LockManagerLike | undefined = defaultLocks()): Promise<boolean> {
+  if (!locks) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    locks
+      .request(OWNER_LOCK, { ifAvailable: true }, (lock) => {
+        if (!lock) return resolve(false);
+        resolve(true);
+        return new Promise(() => {}); // held for the tab's lifetime
+      })
+      .catch(() => resolve(true));
+  });
+}
 
 /** What the start-up check needs (the marker only; no samples read). */
 export interface AutosaveInfo {
@@ -175,9 +219,11 @@ export interface AutosaveOptions {
   debounceMs?: number;
   /** Continuous editing still writes at least this often. */
   maxWaitMs?: number;
-  /** A write failed (message; reported once until one succeeds) or succeeded again (null). */
+  /** A write failed ("Autosave failed: …"; reported once until one succeeds) or succeeded again (null). */
   onError?: (message: string | null) => void;
   now?: () => number;
+  /** Web Locks (default navigator.locks): each write holds AUTOSAVE_LOCK. */
+  locks?: LockManagerLike;
 }
 
 export interface Autosave {
@@ -193,8 +239,16 @@ export interface Autosave {
    * be overwritten.
    */
   hold(on: boolean): void;
-  /** Forget pending changes (an explicit save or a restore just made them moot). */
+  /** Forget pending changes (a restore just made them moot). */
   cancel(): void;
+  /**
+   * A Project ▸ Save finished. `t`: when its snapshot was taken (recorded as
+   * the last explicit save). `upToDate`: no edit landed since that snapshot;
+   * only then are pending changes dropped (the folder holds them all).
+   */
+  savedExplicitly(t: number, upToDate: boolean): void;
+  /** Off for good (another tab owns the autosave): nothing is ever written. */
+  disable(): void;
   dispose(): void;
 }
 
@@ -202,8 +256,11 @@ export function createAutosave(o: AutosaveOptions): Autosave {
   const debounce = o.debounceMs ?? 5000;
   const maxWait = o.maxWaitMs ?? 30_000;
   const now = o.now ?? Date.now;
+  const locks = 'locks' in o ? o.locks : defaultLocks();
   let pending = false;
   let held = false;
+  let disabled = false;
+  let backoff = 0; // after failed writes: the retry delay (0 = none)
   let firstChange = 0; // when the pending changes began (maxWait)
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: Promise<void> | null = null;
@@ -227,14 +284,22 @@ export function createAutosave(o: AutosaveOptions): Autosave {
     const json = serialize(p);
     const files = projectFiles(p, json);
     try {
-      await writeAutosave(await o.root(), json, files, savedAt);
+      const root = await o.root();
+      await withAutosaveLock(locks, () => writeAutosave(root, json, files, savedAt));
       lastSaved = savedAt;
+      backoff = 0;
       if (reported !== null) o.onError?.((reported = null));
     } catch (e) {
-      pending = true; // retried on the next change
-      const msg = `Autosave failed — ${e instanceof Error ? e.message : String(e)}`;
+      // Retried on its own, backing off (5, 10, 20, 40, 60, 60… s with the
+      // default debounce): a full disk must not mean a full rewrite on every
+      // edit. Edits meanwhile do not bring the retry forward (markDirty).
+      pending = true;
+      firstChange = now();
+      backoff = Math.min(MAX_BACKOFF, Math.max(debounce, backoff * 2));
+      schedule(backoff);
+      const msg = `Autosave failed: ${e instanceof Error ? e.message : String(e)}`;
       console.warn(msg, e);
-      if (msg !== reported) o.onError?.((reported = msg));
+      if (reported === null) o.onError?.((reported = msg)); // one banner until a write succeeds
     }
   }
 
@@ -242,7 +307,7 @@ export function createAutosave(o: AutosaveOptions): Autosave {
   async function run() {
     clearTimeout(timer);
     while (running) await running;
-    if (!pending || held) return;
+    if (!pending || held || disabled) return;
     running = writeOnce().finally(() => (running = null));
     await running;
   }
@@ -251,7 +316,7 @@ export function createAutosave(o: AutosaveOptions): Autosave {
     markDirty() {
       if (!pending) firstChange = now();
       pending = true;
-      if (held) return;
+      if (held || disabled || backoff > 0) return; // backing off: the retry is already scheduled
       schedule(Math.max(0, Math.min(debounce, firstChange + maxWait - now())));
     },
     flush: run,
@@ -265,6 +330,15 @@ export function createAutosave(o: AutosaveOptions): Autosave {
     },
     cancel() {
       pending = false;
+      backoff = 0; // the next change schedules normally
+      clearTimeout(timer);
+    },
+    savedExplicitly(t, upToDate) {
+      recordExplicitSave(t);
+      if (upToDate) this.cancel();
+    },
+    disable() {
+      disabled = true;
       clearTimeout(timer);
     },
     dispose() {

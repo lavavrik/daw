@@ -14,6 +14,7 @@ export class FakeFile {
     return {
       write: async (v: ArrayBuffer | string | Uint8Array) => {
         if (root.failOn && this.name === root.failOn) throw new Error(`disk full writing ${this.name}`);
+        if (root.failOnPath && `${this.parent.path()}${this.name}` === root.failOnPath) throw new Error(`disk full writing ${root.failOnPath}`);
         root.chunks++;
         chunks.push(typeof v === 'string' ? new TextEncoder().encode(v) : new Uint8Array(v instanceof Uint8Array ? v : v));
       },
@@ -42,6 +43,10 @@ export class FakeDir {
   files = new Map<string, FakeFile | FakeDir>();
   log: string[] = [];
   failOn: string | null = null;
+  /** Like failOn, but only for this full path ("autosave/autosave.json"). */
+  failOnPath: string | null = null;
+  /** removeEntry of this name throws. */
+  failRemove: string | null = null;
   /** Number of write() calls (chunked writes), not logged. */
   chunks = 0;
   noMove = false;
@@ -74,6 +79,7 @@ export class FakeDir {
     return f;
   }
   async removeEntry(name: string) {
+    if (this.root().failRemove === name) throw new Error(`cannot remove ${name}`);
     this.files.delete(name);
     this.root().log.push(`remove ${this.path()}${name}`);
   }
@@ -84,3 +90,33 @@ export class FakeDir {
 
 export const asDir = (d: FakeDir) => d as unknown as FileSystemDirectoryHandle;
 export const bytes = (...v: number[]) => new Uint8Array(v).buffer;
+
+/**
+ * A minimal Web Locks manager (navigator.locks): exclusive, FIFO per name,
+ * `ifAvailable` gets null when held. A lock is held until the callback's
+ * promise settles. Shared by "tabs" in a test.
+ */
+export class FakeLocks {
+  private held = new Set<string>();
+  private waiting = new Map<string, (() => void)[]>();
+  /** Every request, in order. */
+  requests: string[] = [];
+  async request(name: string, opts: { ifAvailable?: boolean }, cb: (lock: { name: string } | null) => unknown): Promise<unknown> {
+    this.requests.push(name);
+    if (opts.ifAvailable && this.held.has(name)) return cb(null);
+    while (this.held.has(name)) {
+      await new Promise<void>((r) => {
+        const q = this.waiting.get(name) ?? [];
+        q.push(r);
+        this.waiting.set(name, q);
+      });
+    }
+    this.held.add(name);
+    try {
+      return await cb({ name });
+    } finally {
+      this.held.delete(name);
+      this.waiting.get(name)?.shift()?.();
+    }
+  }
+}

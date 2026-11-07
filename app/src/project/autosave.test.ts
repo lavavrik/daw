@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Project } from '../state/project.svelte';
 import { sampleFile } from '../state/sampleFiles';
+import { MAX_ROWS, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
+import { addDrumTrack, addRow, setStepCount } from '../state/actions';
+import { newPattern } from '../state/pattern-actions';
+import { MAX_PATTERNS } from '../audio/protocol';
 import {
-  AUTOSAVE_DIR, AUTOSAVE_TMP, MARKER, createAutosave, discardAutosave, offersRestore, peekAutosave, readAutosave,
-  writeAutosave,
+  AUTOSAVE_DIR, AUTOSAVE_LOCK, AUTOSAVE_TMP, MARKER, OWNER_LOCK, claimAutosaveOwner, createAutosave, discardAutosave,
+  lastExplicitSave, offersRestore, peekAutosave, readAutosave, withAutosaveLock, writeAutosave,
 } from './autosave';
-import { FakeDir, asDir } from './fakeDir';
+import type { LockManagerLike } from './autosave';
+import { FakeDir, FakeLocks, asDir } from './fakeDir';
+import { nullSink } from './testFixture';
 import { buildFixture } from './testFixture';
 import { serialize } from './serialize';
 
@@ -175,7 +181,7 @@ describe('autosave', () => {
     expect(markerWrites(r)).toHaveLength(1);
   });
 
-  it('a failed write is reported once and retried on the next change', async () => {
+  it('a failed write is reported once and retried', async () => {
     const r = root();
     const { p } = buildFixture();
     const errors: (string | null)[] = [];
@@ -185,11 +191,11 @@ describe('autosave', () => {
     await vi.advanceTimersByTimeAsync(200);
     a.markDirty();
     await vi.advanceTimersByTimeAsync(200);
-    expect(errors).toEqual([expect.stringMatching(/disk full/)]);
+    expect(errors).toEqual([expect.stringMatching(/^Autosave failed: disk full/)]);
     r.failOn = null;
     a.markDirty();
-    await vi.advanceTimersByTimeAsync(200);
-    expect(errors).toEqual([expect.stringMatching(/disk full/), null]);
+    await vi.advanceTimersByTimeAsync(60_000); // the retry, after the backoff
+    expect(errors).toEqual([expect.stringMatching(/^Autosave failed: disk full/), null]);
     expect(markerWrites(r)).toHaveLength(1);
   });
 
@@ -217,4 +223,143 @@ describe('autosave', () => {
     (await r.getDirectoryHandle(AUTOSAVE_DIR)).put(MARKER, '{"format":99,"savedAt":1,"project":{}}');
     expect(await readAutosave(asDir(r))).toBeNull();
   });
+
+  it('failed writes back off (doubling up to 60 s) instead of rewriting on every edit (fix 2)', async () => {
+    const r = root();
+    const { p } = buildFixture();
+    let attempts = 0;
+    const errors: (string | null)[] = [];
+    const a = createAutosave({
+      getProject: () => p, root: async () => (attempts++, asDir(r)), debounceMs: 5000, maxWaitMs: 30_000,
+      onError: (m) => errors.push(m),
+    });
+    r.failOn = MARKER; // e.g. QuotaExceededError
+    const times: number[] = [];
+    const t0 = Date.now();
+    for (let i = 0; i < 300; i++) { // an edit every second for 5 minutes
+      const before = attempts;
+      a.markDirty();
+      await vi.advanceTimersByTimeAsync(1000);
+      if (attempts > before) times.push(Math.round((Date.now() - t0) / 1000));
+    }
+    // First the maxWait write (30 s), then retries 5, 10, 20, 40, 60, 60… s apart.
+    const gaps = times.slice(1).map((t, i) => t - times[i]);
+    expect(gaps.slice(0, 5)).toEqual([5, 10, 20, 40, 60]);
+    expect(gaps.every((g) => g <= 60 && g >= 5)).toBe(true);
+    expect(attempts).toBeLessThan(12);
+    expect(errors).toHaveLength(1); // one banner, not repeated
+    // Success resets the backoff: the next change writes after the usual debounce.
+    r.failOn = null;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(errors).toEqual([expect.any(String), null]);
+    const n = markerWrites(r).length;
+    a.markDirty();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(markerWrites(r).length).toBe(n + 1);
+  });
+
+  it('an explicit save that missed later edits keeps them pending (fix 3)', async () => {
+    const r = root();
+    const { p } = buildFixture();
+    const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 100 });
+    a.markDirty();
+    a.savedExplicitly(1234, false); // an edit landed while the save was writing
+    expect(lastExplicitSave()).toBe(null); // no localStorage in node: nothing recorded, no throw
+    await vi.advanceTimersByTimeAsync(200);
+    expect(markerWrites(r)).toHaveLength(1);
+    a.markDirty();
+    a.savedExplicitly(5678, true); // the save holds everything: nothing to autosave
+    await vi.advanceTimersByTimeAsync(200);
+    expect(markerWrites(r)).toHaveLength(1);
+  });
+
+  it('commit failure (the target marker write) and a failing sweep (fix 5)', async () => {
+    const r = root();
+    const { p } = buildFixture();
+    const first = serialize(p);
+    const files = new Map([...p.sampleFiles].map(([id, f]) => [`samples/${id}-${f.hash}-${f.name}`, f.bytes]));
+    await writeAutosave(asDir(r), first, files, 1);
+    r.noMove = true;
+    r.failOnPath = `${AUTOSAVE_DIR}/${MARKER}`;
+    await expect(writeAutosave(asDir(r), { ...first, name: 'B' }, new Map(), 2)).rejects.toThrow(/disk full/);
+    let back = (await readAutosave(asDir(r)))!;
+    expect(back.json).toEqual(first);
+    expect(back.files.size).toBe(3); // no sweep before a commit
+    // The sweep cannot remove a file: the commit stands, the write succeeds.
+    r.failOnPath = null;
+    const [stale] = [...files.keys()];
+    r.failRemove = stale.slice('samples/'.length);
+    await writeAutosave(asDir(r), { ...first, name: 'C', samples: [] }, new Map(), 3);
+    back = (await readAutosave(asDir(r)))!;
+    expect(back.savedAt).toBe(3);
+    expect((back.json as { name: string }).name).toBe('C');
+  });
+
+  it('two tabs: writes, reads and discards are serialized by the daw-autosave lock (fix 1)', async () => {
+    const r = root();
+    const locks = new FakeLocks();
+    const { p: pa } = buildFixture();
+    const { p: pb } = buildFixture();
+    pb.sampleFiles.set(0, sampleFile('other.wav', 'audio/wav', new Uint8Array([7, 7, 7, 7]).buffer));
+    const a = createAutosave({ getProject: () => pa, root: async () => asDir(r), locks });
+    const b = createAutosave({ getProject: () => pb, root: async () => asDir(r), locks });
+    a.markDirty();
+    b.markDirty();
+    await Promise.all([a.flush(), b.flush()]);
+    // No interleaving: one tab's whole write (ending with its commit) before the other's.
+    const commits = r.log.map((l, i) => (l.startsWith('move') ? i : -1)).filter((i) => i >= 0);
+    expect(commits).toHaveLength(2);
+    expect(r.log.slice(0, commits[0] + 1).some((l) => l.includes('other.wav'))).toBe(false);
+    expect(locks.requests.filter((n) => n === AUTOSAVE_LOCK)).toHaveLength(2);
+    // The committed marker always has every sample it lists.
+    const back = (await withAutosaveLock(locks, () => readAutosave(asDir(r))))!;
+    expect(back.files.size).toBe((back.json as { samples: unknown[] }).samples.length);
+    expect(locks.requests.filter((n) => n === AUTOSAVE_LOCK)).toHaveLength(3);
+  });
+
+  it('only the tab holding the owner lock autosaves (fix 1)', async () => {
+    const locks = new FakeLocks();
+    expect(await claimAutosaveOwner(locks)).toBe(true); // first tab: holds it for its lifetime
+    expect(await claimAutosaveOwner(locks)).toBe(false); // second tab
+    expect(locks.requests).toEqual([OWNER_LOCK, OWNER_LOCK]);
+    expect(await claimAutosaveOwner(undefined)).toBe(true); // no Web Locks: assume alone
+    const broken = { request: async () => { throw new Error('no'); } } as unknown as LockManagerLike;
+    expect(await claimAutosaveOwner(broken)).toBe(true);
+    // A disabled autosave (not the owner) never writes, even on flush.
+    const r = root();
+    const { p } = buildFixture();
+    const a = createAutosave({ getProject: () => p, root: async () => asDir(r), debounceMs: 10 });
+    a.disable();
+    a.hold(false);
+    a.markDirty();
+    await vi.advanceTimersByTimeAsync(100);
+    await a.flush();
+    expect(r.log).toEqual([]);
+  });
+
+  it('serialize + stringify of a maximal project stays well inside a frame budget (fix 7)', () => {
+    vi.useRealTimers();
+    const p = new Project();
+    for (let t = 0; t < MAX_TRACKS; t++) {
+      const d = addDrumTrack(p, nullSink)!;
+      while (d.rows.length < MAX_ROWS) addRow(p, nullSink, d.id);
+      while (d.patterns.length < MAX_PATTERNS) newPattern(p, nullSink, d.id);
+      setStepCount(p, nullSink, d.id, 64);
+      for (const pat of d.patterns) {
+        pat.stepCount = MAX_STEPS;
+        for (const row of pat.steps) row.fill(100);
+      }
+    }
+    serialize(p); // warm up
+    const runs: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const t = performance.now();
+      JSON.stringify({ format: 1, savedAt: 0, project: serialize(p) });
+      runs.push(performance.now() - t);
+    }
+    const ms = Math.min(...runs);
+    console.log(`autosave snapshot of a maximal project (${MAX_TRACKS}x${MAX_PATTERNS} patterns, ${MAX_ROWS}x${MAX_STEPS} filled): ${ms.toFixed(1)} ms`);
+    expect(ms).toBeLessThan(250);
+  });
 });
+

@@ -101,6 +101,6 @@ export const idbLibraryStore = {
     return v && (v.kind === 'starter' || (v.kind === 'folder' && v.handle)) ? v : null;
   },
   async save(v: StoredLibrary | null): Promise<void> {
-    await tx('readwrite', (s) => (v ? s.put(v, KEY) : s.delete(KEY)));
+    await (v ? tx('readwrite', (s) => s.put(v, KEY)) : tx('readwrite', (s) => s.delete(KEY)));
   },
 };

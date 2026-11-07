@@ -15,8 +15,9 @@
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
   import MixerView from './mixer/MixerView.svelte';
+  import type { PanelTab } from '../input/shortcuts';
   import type { NoteInput } from '../input/noteInput';
-  import { banners } from '../state/banners.svelte';
+  import { banners, flashHint } from '../state/banners.svelte';
   import { clearDownload } from '../export/exportFlow';
 
   let { p, engine, clock, noteInput = null }: {
@@ -41,6 +42,21 @@
   function pickSynthTab(t: 'pianoroll' | 'instrument') {
     synthTab = lastSynthTab = t;
     p.mixerOpen = false;
+  }
+
+  /**
+   * Keyboard tab pick (Alt+1..4, F6..F9; App calls this). A tab that is
+   * disabled for the selected track does nothing but flash its tooltip text in
+   * the status line; the selection is never changed. A keyboard cable pick-up
+   * in the Rack ends with the Rack unmounting (it clears itself).
+   */
+  export function pickTab(t: PanelTab) {
+    if (t === 'mixer') p.mixerOpen = true;
+    else if (t === 'step') {
+      if (track?.kind === 'drum') p.mixerOpen = false;
+      else flashHint('Select a drum track');
+    } else if (track?.kind === 'synth') pickSynthTab(t);
+    else flashHint('Select a synth track');
   }
 
   // Song-mode hint: shown while the edited pattern is not playing at the
@@ -86,10 +102,10 @@
       {/if}
     </span>
     <span class="tabs">
-      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'} onclick={() => (p.mixerOpen = false)}>Step grid</button>
-      <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
-      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
-      <button class="tab" class:active={active === 'mixer'} title="All tracks, the Reverb and Delay returns and the Master" data-testid="mixer-tab" onclick={() => (p.mixerOpen = true)}>Mixer</button>
+      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? 'Alt+1 / F6' : 'Select a drum track (Alt+1 / F6)'} onclick={() => (p.mixerOpen = false)}>Step grid</button>
+      <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+2 / F7' : 'Select a synth track (Alt+2 / F7)'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
+      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+3 / F8' : 'Select a synth track (Alt+3 / F8)'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
+      <button class="tab" class:active={active === 'mixer'} title="All tracks, the Reverb and Delay returns and the Master (Alt+4 / F9)" data-testid="mixer-tab" onclick={() => (p.mixerOpen = true)}>Mixer</button>
     </span>
   </div>
   <div class="body">

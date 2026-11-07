@@ -300,6 +300,7 @@ still work there).
 | **Z** / **X** | Octave down / up |
 | **R** | Record arm |
 | **Shift+L** | PAT / SONG |
+| **Alt+1** … **Alt+4**, **F6** … **F9** | Bottom-panel tab: Step grid / Piano roll / Instrument / Mixer. A tab that doesn't fit the selected track shows a hint instead |
 | **Cmd/Ctrl+Z** | Undo |
 | **Shift+Cmd/Ctrl+Z**, **Ctrl+Y** | Redo |
 | **Cmd/Ctrl+S** | Save |

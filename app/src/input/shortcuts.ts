@@ -14,7 +14,17 @@ const PIANO_VELOCITY = 100;
 /** Recorder source id of the computer keyboard. */
 export const QWERTY_SOURCE = 'qwerty';
 
+/** Bottom-panel tabs, in tab order. */
+export type PanelTab = 'step' | 'pianoroll' | 'instrument' | 'mixer';
+/** Alt+1..4 and the FL-style F6..F9 (matched on e.code: macOS Option+digit types other characters). */
+const TAB_CODES: Record<string, PanelTab> = {
+  Digit1: 'step', Digit2: 'pianoroll', Digit3: 'instrument', Digit4: 'mixer',
+  F6: 'step', F7: 'pianoroll', F8: 'instrument', F9: 'mixer',
+};
+
 export interface ShortcutOptions {
+  /** Alt+1..4 / F6..F9: show a bottom-panel tab (the host handles disabled tabs). */
+  onTab?: (tab: PanelTab) => void;
   /** Fires (with the new octave) on Z/X. */
   onOctave?: (o: number) => void;
   /** Space. The app passes its own (count-in, recorder stop tick); default togglePlay(p, sink). */
@@ -53,6 +63,12 @@ export function isTyping(t: EventTarget | null): boolean {
   if (!el || !el.tagName) return false;
   if (el.tagName === 'INPUT') return !NON_TEXT_INPUTS.has((el as HTMLInputElement).type);
   return el.tagName === 'TEXTAREA' || el.isContentEditable;
+}
+
+/** True inside an open inline confirmation / banner question (role=alertdialog). */
+function inDialog(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!el?.closest?.('[role="alertdialog"]');
 }
 
 export interface ShortcutHandlers {
@@ -106,6 +122,17 @@ export function createShortcutHandlers(
       if ((undoKey || redoKey) && !isTyping(e.target)) {
         e.preventDefault();
         (redoKey ? opts.onRedo : opts.onUndo)?.();
+        return;
+      }
+      // Bottom-panel tabs: Alt+digit (no other modifier) or a bare F6..F9. Not
+      // while typing, and not from inside an inline confirmation (it stops its
+      // own keydowns, but the check keeps it true if focus ever sits elsewhere
+      // in the dialog). Documented choice: ignore, don't cancel the confirm.
+      const tab = TAB_CODES[e.code];
+      if (tab && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.altKey === e.code.startsWith('Digit')) {
+        e.preventDefault(); // F6 would focus the address bar
+        if (e.repeat || isTyping(e.target) || inDialog(e.target)) return;
+        opts.onTab?.(tab);
         return;
       }
       // Project shortcuts work even in a text field (like any app's Save);

@@ -69,6 +69,7 @@
   let restarting = $state(false);
   /** The top bar: ⌘O goes through its Project menu (the same "Discard and open…" guard). */
   let topBar = $state.raw<{ request(cmd: 'new' | 'open'): void } | null>(null);
+  let bottomPanel = $state.raw<{ pickTab(t: 'step' | 'pianoroll' | 'instrument' | 'mixer'): void } | null>(null);
 
   // "● unsaved": every edit command sets project.dirty and bumps
   // project.version (state/edits.ts, via engine.onCommand); once edits pause,
@@ -461,6 +462,7 @@
       onOpen: () => topBar?.request('open'),
       onUndo: undo,
       onRedo: redo,
+      onTab: (t) => bottomPanel?.pickTab(t),
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     // Bound to `live`, so it outlives an audio restart as is.
@@ -616,7 +618,7 @@
       <Browser {engine} />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
-        <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} /></div>
+        <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} /></div>
       </div>
     </div>
   {/if}

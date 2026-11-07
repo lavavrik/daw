@@ -224,3 +224,20 @@ test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo
   await page.keyboard.press('ControlOrMeta+z'); // one undo entry brings both back
   await expect(readout(page)).toContainText('2 notes');
 });
+
+test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F9 Mixer', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await page.getByTestId('add-synth-track').click();
+  await page.keyboard.press('Alt+Digit3');
+  await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
+  await page.keyboard.press('Alt+Digit2');
+  await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
+  await expect(page.getByTestId('pr-canvas')).toBeVisible();
+  // Step grid is disabled for a synth track: a hint, same tab.
+  await page.keyboard.press('Alt+Digit1');
+  await expect(page.getByTestId('flash-hint')).toHaveText('Select a drum track');
+  await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
+  await page.keyboard.press('F9');
+  await expect(page.getByTestId('mixer-tab')).toHaveClass(/active/);
+});

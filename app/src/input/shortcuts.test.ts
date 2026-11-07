@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void } = {}, project: object = { playing: false }) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void } = {}, project: object = { playing: false }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -196,5 +196,38 @@ describe('shortcut handlers', () => {
       g.window = w;
       g.document = d;
     }
+  });
+
+  it('Alt+1..4 and F6..F9 pick the bottom-panel tabs (matched on e.code, default prevented)', () => {
+    const tabs: string[] = [];
+    const { h } = mk({ onTab: (t) => tabs.push(t) });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    for (const c of ['Digit1', 'Digit2', 'Digit3', 'Digit4']) h.onKeyDown(key(c, { altKey: true, ...pd }));
+    for (const c of ['F6', 'F7', 'F8', 'F9']) h.onKeyDown(key(c, pd));
+    expect(tabs).toEqual(['step', 'pianoroll', 'instrument', 'mixer', 'step', 'pianoroll', 'instrument', 'mixer']);
+    expect(prevented).toBe(8);
+  });
+  it('tab shortcuts ignore plain digits, other modifiers, repeats and a loading project', () => {
+    const tabs: string[] = [];
+    const { h } = mk({ onTab: (t) => tabs.push(t) });
+    h.onKeyDown(key('Digit1'));
+    h.onKeyDown(key('Digit1', { altKey: true, metaKey: true }));
+    h.onKeyDown(key('Digit1', { altKey: true, ctrlKey: true }));
+    h.onKeyDown(key('F6', { metaKey: true }));
+    h.onKeyDown(key('Digit2', { altKey: true, repeat: true }));
+    expect(tabs).toEqual([]);
+    const l = mk({ onTab: (t) => tabs.push(t) }, { playing: false, loading: true });
+    l.h.onKeyDown(key('Digit1', { altKey: true }));
+    expect(tabs).toEqual([]);
+  });
+  it('tab shortcuts are ignored while typing or while a confirmation is open', () => {
+    const tabs: string[] = [];
+    const { h } = mk({ onTab: (t) => tabs.push(t) });
+    h.onKeyDown(key('Digit1', { altKey: true, target: { tagName: 'INPUT', type: 'text' } }));
+    h.onKeyDown(key('F7', { target: { tagName: 'TEXTAREA' } }));
+    const inConfirm = { tagName: 'BUTTON', closest: (sel: string) => (sel.includes('alertdialog') ? {} : null) };
+    h.onKeyDown(key('F9', { target: inConfirm }));
+    expect(tabs).toEqual([]);
   });
 });

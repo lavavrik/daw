@@ -338,7 +338,7 @@
     {/if}
   </span>
   <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
-  <span class="pill" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
+  <span class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
   <span class="spacer"></span>
   {#if engineError}
     <span class="fatal" role="alert" data-testid="engine-error" title={engineError}>
@@ -346,7 +346,7 @@
     </span>
   {/if}
   <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-    CPU {cpu}% · {dropouts} drop
+    CPU {cpu}%<span class="long"> · {dropouts} drop</span>
   </span>
   <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
     <summary
@@ -366,9 +366,19 @@
 </header>
 
 <style>
-  /* overflow-x: clip (not hidden): clips a too-wide row without becoming a
-     scroll container, so the popovers (Project menu, Offset) can drop below. */
-  .bar { display: flex; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
+  /* Narrow windows degrade in steps, never clipping a control (e2e
+     layout.spec.ts at 1440 / 1280 / 1024): the long readouts (Keys target,
+     MIDI device) are capped with an ellipsis (full text in the tooltip);
+     below 1400 px they shrink further and CPU drops its "· N drop" tail
+     (kept while there are dropouts); if it still doesn't fit, the bar wraps
+     onto a second row. overflow-x: clip (not hidden) stays as the last guard:
+     it never becomes a scroll container, so the popovers can drop below. */
+  .bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
+  .pill.keys, .pill.midi { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+  @media (max-width: 1399px) {
+    .pill.keys, .pill.midi { max-width: 110px; }
+    .pill:not(.bad) .long { display: none; }
+  }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
   button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }

@@ -1,0 +1,42 @@
+import { expect, test } from '@playwright/test';
+
+// The top bar degrades gracefully on narrow windows (plan 7 Task 5): nothing
+// is clipped off the right edge; less important readouts get shorter first,
+// and below that the bar wraps onto a second row. The essentials stay
+// visible at every width.
+
+const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'mode-toggle', 'rec-button', 'settings-button'];
+
+for (const width of [1440, 1280, 1024]) {
+  test(`top bar fits at ${width} px: no control is clipped`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await expect(page.getByTestId('play')).toBeVisible();
+    // Worst case: a synth track is the Keys target (its name shows in the bar).
+    await page.getByTestId('add-synth-track').click();
+    await expect(page.getByTestId('keys-target')).toContainText('Synth');
+    const out = await page.evaluate(() => {
+      const bar = document.querySelector('header')!;
+      const b = bar.getBoundingClientRect();
+      const kids = [...bar.children].filter((el) => getComputedStyle(el).display !== 'none') as HTMLElement[];
+      return {
+        clipped: kids
+          .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > b.right + 0.5 || r.left < b.left - 0.5); })
+          .map((el) => el.dataset.testid ?? el.className),
+        // One row: no control starts below the bottom of the shortest one.
+        rows: (() => {
+          const rs = kids.map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
+          const minBottom = Math.min(...rs.map((r) => r.bottom));
+          return rs.some((r) => r.top >= minBottom) ? 2 : 1;
+        })(),
+        docWidth: document.documentElement.scrollWidth,
+      };
+    });
+    expect(out.clipped).toEqual([]);
+    if (width >= 1280) expect(out.rows, 'one row at 1280 px and wider').toBe(1);
+    expect(out.docWidth).toBeLessThanOrEqual(width);
+    for (const id of ESSENTIAL) await expect(page.getByTestId(id)).toBeInViewport();
+    await expect(page.getByLabel('BPM')).toBeInViewport();
+  });
+}

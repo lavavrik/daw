@@ -17,25 +17,30 @@
 //   1. refuse while a load (or another restart) runs: p.loading;
 //   2. deps.flush(): write the autosave first (a failure is ignored: the
 //      autosave reports its own errors);
-//   3. p.loading + p.restarting for the whole restart (the "Restarting
-//      audio…" overlay blocks edits; shortcuts, undo and sample imports
-//      respect it);
+//   3. p.loading + p.restarting for the whole restart (state/idle.ts
+//      markBusy / markIdle; the "Restarting audio…" overlay blocks edits;
+//      shortcuts, undo and sample imports respect it);
 //   4. deps.stop(): the transport stops through the App's own path (the
 //      recorder closes held notes at the heard tick), held keys released;
 //   5. start a new engine with the hint (two contexts exist for a moment),
 //      within RESTART_TIMEOUT_MS (a vanished device can leave
 //      AudioContext.resume() pending forever);
 //   6. deps.prepare(new): stall reporting, before any command reaches it;
-//   7. replayInto the new engine, within the same timeout;
+//   7. replayInto the new engine -- the samples the project uses (plus
+//      deps.inFlight: deferred loads still waiting) and the commands --
+//      within replayTimeoutMs(their bytes): its own budget, since audio
+//      clips make large used samples normal;
 //   8. success: deps.unwire() (old), deps.wire(new, upload codes) -- in the
 //      same task as the last replayed command -- then the old engine closes
-//      and p.audioRestarts is bumped;
+//      and p.audioRestarts is bumped; then the unused samples are uploaded
+//      (replayInto's `rest`, outside any timeout: `later` in the result);
 //      failure (start refused / timed out, replay threw / timed out): the
 //      new engine (if any; a start that answers late too) is closed, the old
 //      one was never unwired, and the result says "Couldn't apply …; kept
 //      previous settings".
-import { replayInto } from '../project/load';
+import { replayInto, sampleBytes, usedSampleIds } from '../project/load';
 import type { LoadEngine, SampleDecoder } from '../project/load';
+import { markBusy, markIdle } from '../state/idle';
 import type { Project } from '../state/project.svelte';
 import type { LatencyHint } from './engine';
 
@@ -109,8 +114,20 @@ export interface RestartEngine extends LoadEngine {
   close(): Promise<void>;
 }
 
-/** How long starting the new engine, and then restoring the project onto it, may each take. */
+/** How long starting the new engine may take (and the replay's base budget). */
 export const RESTART_TIMEOUT_MS = 8000;
+
+/** The replay gets 1 s more per this many bytes of used samples (25 MB). */
+export const REPLAY_BYTES_PER_S = 25 * 1024 * 1024;
+
+/**
+ * How long the replay (decode + upload of the used samples, then the
+ * commands) may take: 8 s + 1 s per 25 MB of the used samples' original
+ * bytes. A long audio clip's file is normal now; decoding it is not a hang.
+ */
+export function replayTimeoutMs(usedBytes: number): number {
+  return RESTART_TIMEOUT_MS + Math.round((Math.max(0, usedBytes) / REPLAY_BYTES_PER_S) * 1000);
+}
 
 export interface RestartDeps<E extends RestartEngine> {
   /** The engine running now (closed once the new one is up; kept on any failure). */
@@ -132,7 +149,12 @@ export interface RestartDeps<E extends RestartEngine> {
    * `codes`: each re-uploaded sample's result (deferred loads settle from it).
    */
   wire(e: E, codes: Map<number, number>): void;
-  /** Tests: RESTART_TIMEOUT_MS otherwise. */
+  /**
+   * Sample ids that deferred loads still wait for (sampleLoads.ts): they
+   * count as used, so `wire` can settle them from the codes.
+   */
+  inFlight?(): Iterable<number>;
+  /** Tests: both timeouts (start and replay); RESTART_TIMEOUT_MS / replayTimeoutMs otherwise. */
   timeoutMs?: number;
 }
 
@@ -143,6 +165,12 @@ export interface RestartResult {
   warnings: string[];
   /** Why the requested hint was not applied, or null. */
   error: string | null;
+  /**
+   * The unused samples' uploads, which run after the switch: resolves with
+   * their warnings (for the same banner), never rejects. Resolves with []
+   * at once when the restart failed.
+   */
+  later: Promise<string[]>;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -166,36 +194,45 @@ export async function restartAudio<E extends RestartEngine>(
   p: Project, hint: LatencyHint, deps: RestartDeps<E>,
 ): Promise<RestartResult | null> {
   if (p.loading) return null;
-  const ms = deps.timeoutMs ?? RESTART_TIMEOUT_MS;
+  const startMs = deps.timeoutMs ?? RESTART_TIMEOUT_MS;
   try {
     await deps.flush?.();
   } catch {
     // The autosave shows its own error; the restart keeps the project in memory anyway.
   }
   if (p.loading) return null; // a load started during the flush
-  p.loading = true;
-  p.restarting = true;
+  markBusy(p, { restarting: true });
   let e: E | null = null;
   let abandoned = false;
+  let rest: (() => Promise<string[]>) | null = null;
+  let result: RestartResult;
   try {
     deps.stop();
     const starting = deps.start(hint);
     // A start that answers after we gave up is closed at once, never wired.
     starting.then((late) => abandoned && void late.close(), () => {});
-    e = await within(starting, ms, 'audio did not start');
+    e = await within(starting, startMs, 'audio did not start');
     deps.prepare?.(e);
-    const { warnings, codes } = await within(replayInto(p, e, e.context), ms, 'restoring the project did not finish');
+    const used = usedSampleIds(p, deps.inFlight?.() ?? []);
+    const replayMs = deps.timeoutMs ?? replayTimeoutMs(sampleBytes(p, used));
+    const r = await within(replayInto(p, e, e.context, used), replayMs, 'restoring the project did not finish');
     deps.unwire();
-    deps.wire(e, codes);
+    deps.wire(e, r.codes);
     p.audioRestarts++;
     void deps.old.close();
-    return { hint, warnings, error: null };
+    rest = r.rest;
+    result = { hint, warnings: r.warnings, error: null, later: Promise.resolve([]) };
   } catch (err) {
     abandoned = true;
     if (e) void e.close();
-    return { hint: deps.oldHint, warnings: [], error: `Couldn't apply ${hintLabel(hint)}: ${message(err)}; kept previous settings` };
+    result = {
+      hint: deps.oldHint, warnings: [], later: Promise.resolve([]),
+      error: `Couldn't apply ${hintLabel(hint)}: ${message(err)}; kept previous settings`,
+    };
   } finally {
-    p.loading = false;
-    p.restarting = false;
+    markIdle(p);
   }
+  // After the switch and once idle, outside the timeouts (rest never rejects).
+  if (rest) result.later = rest();
+  return result;
 }

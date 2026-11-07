@@ -6,7 +6,7 @@ import { addDrumTrack, addRow, setStepCount } from '../state/actions';
 import { newPattern } from '../state/pattern-actions';
 import { MAX_PATTERNS } from '../audio/protocol';
 import {
-  AUTOSAVE_DIR, AUTOSAVE_LOCK, AUTOSAVE_TMP, MARKER, OWNER_LOCK, claimAutosaveOwner, createAutosave, discardAutosave,
+  AUTOSAVE_DIR, AUTOSAVE_LOCK, AUTOSAVE_TMP, MARKER, OWNER_LOCK, claimAutosaveOwner, createAutosave, createOwnerClaim, discardAutosave,
   lastExplicitSave, offersRestore, peekAutosave, readAutosave, withAutosaveLock, writeAutosave,
 } from './autosave';
 import type { LockManagerLike } from './autosave';
@@ -363,6 +363,24 @@ describe('autosave', () => {
     await vi.advanceTimersByTimeAsync(100);
     await a.flush();
     expect(r.log).toEqual([]);
+  });
+
+  it('owner is claimed before audio starts', async () => {
+    // App claims at mount, before the start overlay is clicked: Web Locks
+    // need no audio, so ownsAutosave is settled before any New can run.
+    const locks = new FakeLocks();
+    const start = vi.fn(); // AudioEngine.start: never called here
+    const notOwner = vi.fn();
+    const first = createOwnerClaim(locks, { onNotOwner: notOwner });
+    expect(first.owns).toBe(false); // not settled yet: not the owner (deletes nothing)
+    expect(await first.settled).toBe(true);
+    expect(first.owns).toBe(true);
+    const second = createOwnerClaim(locks, { onNotOwner: notOwner }); // another tab
+    expect(await second.settled).toBe(false);
+    expect(second.owns).toBe(false);
+    expect(notOwner).toHaveBeenCalledTimes(1); // the second tab's hint, at mount
+    expect(locks.requests).toEqual([OWNER_LOCK, OWNER_LOCK]);
+    expect(start).not.toHaveBeenCalled();
   });
 
   it('serialize + stringify of a maximal project stays well inside a frame budget (fix 7)', async () => {

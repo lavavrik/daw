@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Err, Op } from './protocol';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -10,7 +10,8 @@ import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from '../p
 import { setRowSample, setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import {
-  LATENCY_HINT_KEY, customHint, hintLabel, loadLatencyHint, parseLatencyHint, restartAudio, saveLatencyHint,
+  LATENCY_HINT_KEY, RESTART_TIMEOUT_MS, customHint, hintLabel, loadLatencyHint, parseLatencyHint, replayTimeoutMs, restartAudio,
+  saveLatencyHint,
 } from './restart';
 import type { LatencyHint, RestartDeps } from './restart';
 
@@ -130,18 +131,20 @@ describe('restartAudio', () => {
       during = [l.p.restarting, l.p.audioRestarts];
     };
     const r = await restartAudio(l.p, 'playback', d);
-    expect(r).toEqual({ hint: 'playback', warnings: [], error: null });
+    expect(r).toMatchObject({ hint: 'playback', warnings: [], error: null });
     expect(l.steps).toEqual(['flush', 'stop', 'start playback', 'prepare playback (0 sent)', 'unwire', 'wire playback', 'close old']);
+    expect(await r!.later).toEqual([]);
     expect(l.old.closed).toBe(true);
     expect(during).toEqual([true, 0]);
     expect(l.p.restarting).toBe(false);
     expect(l.p.audioRestarts).toBe(1); // in-flight imports on the old engine see it
-    // Replayed on the fresh engine: samples first, each at its own id, the
-    // ones the project uses before the unused ones (undo may bring those
-    // back), then the commands. No RESET_ALL: a new engine is blank.
+    // Replayed on the fresh engine: the samples the project uses first, each
+    // at its own id, then the commands. No RESET_ALL: a new engine is blank.
+    // The unused one (undo may bring it back) is uploaded after the swap.
     const e = started[0];
     const firstOp = e.log.findIndex((x) => 'op' in x);
-    expect(e.log.slice(0, firstOp)).toEqual([{ sample: 0 }, { sample: 1 }, { sample: 2 }, { sample: 7 }, { sample: 3 }]);
+    expect(e.log.slice(0, firstOp)).toEqual([{ sample: 0 }, { sample: 1 }, { sample: 2 }, { sample: 7 }]);
+    expect(e.log.at(-1)).toEqual({ sample: 3 });
     expect(e.log.some((x) => 'op' in x && x.op === Op.RESET_ALL)).toBe(false);
     expect(checkLog(e.log).errors).toEqual([]);
     expect(l.p.loading).toBe(false);
@@ -279,5 +282,113 @@ describe('restartAudio', () => {
     expect(codes!.get(0)).toBe(Err.OK);
     // The UI keeps the row's sample (a Save still writes it); only the engine lacks it.
     expect(l.p.tracks[0].kind === 'drum' && l.p.tracks[0].rows[2].sampleId).toBe(7);
+  });
+  describe('unused samples and the replay timeout', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('unused samples upload after the switch', async () => {
+      const l = await live(); // sample 3 is unused (fakeAudio(13)); 0, 1, 2, 7 are used
+      vi.useFakeTimers();
+      const { d, started } = deps(l, { timeoutMs: undefined }); // the real 8 s
+      const slow = {
+        // The unused sample takes 20 s to decode: far beyond the 8 s budget.
+        decodeAudioData: async (buf: ArrayBuffer) => {
+          if (new Uint8Array(buf)[0] === 13) await new Promise((r) => setTimeout(r, 20_000));
+          return fakeDecoder.decodeAudioData(buf);
+        },
+      };
+      const start = d.start;
+      d.start = async (h) => {
+        const e = await start(h);
+        e.context = slow as typeof fakeDecoder;
+        const load = e.loadSample.bind(e);
+        e.loadSample = (id, ch) => {
+          l.steps.push(`upload ${id}`);
+          return load(id, ch);
+        };
+        return e;
+      };
+      let res: Awaited<ReturnType<typeof restartAudio>> | undefined;
+      void restartAudio(l.p, 'playback', d).then((r) => (res = r));
+      await vi.advanceTimersByTimeAsync(RESTART_TIMEOUT_MS - 1);
+      expect(res?.error).toBeNull(); // done within the 8 s
+      expect(l.p.loading).toBe(false);
+      expect(l.steps).toEqual([
+        'flush', 'stop', 'start playback', 'prepare playback (0 sent)',
+        'upload 0', 'upload 1', 'upload 2', 'upload 7', 'unwire', 'wire playback', 'close old',
+      ]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(l.steps.at(-1)).toBe('upload 3'); // after wireEngine
+      expect(await res!.later).toEqual([]);
+      expect(started[0].log.at(-1)).toEqual({ sample: 3 });
+      expect(checkLog(started[0].log).errors).toEqual([]);
+    });
+
+    it('an unused sample the new engine refuses for memory is dropped silently; another refusal is a warning', async () => {
+      const l = await live();
+      const { d } = deps(l, {
+        start: async () => engineFor(l.steps, 'new', { sampleCode: (id) => (id === 3 ? Err.OUT_OF_MEMORY : Err.OK) }),
+      });
+      const r = await restartAudio(l.p, 'interactive', d);
+      expect(r?.warnings).toEqual([]);
+      expect(await r!.later).toEqual([]);
+
+      const l2 = await live();
+      const { d: d2 } = deps(l2, {
+        start: async () => engineFor(l2.steps, 'new', { sampleCode: (id) => (id === 3 ? Err.BAD_VALUE : Err.OK) }),
+      });
+      const r2 = await restartAudio(l2.p, 'interactive', d2);
+      expect(r2?.warnings).toEqual([]);
+      const later = await r2!.later;
+      expect(later).toHaveLength(1);
+      expect(later[0]).toMatch(/unused\.wav/);
+    });
+
+    it('a session replaced before the unused samples land: they are not uploaded into it', async () => {
+      const l = await live();
+      let made!: Fake;
+      const { d } = deps(l, {
+        start: async () => (made = engineFor(l.steps, 'new')),
+      });
+      const r = await restartAudio(l.p, 'interactive', d);
+      l.p.generation++; // an Open blanked the session before rest() decoded
+      expect(await r!.later).toEqual([]);
+      expect(made.log.some((x) => 'sample' in x && x.sample === 3)).toBe(false);
+    });
+
+    it('replay timeout scales with used sample bytes', async () => {
+      const MB = 1024 * 1024;
+      expect(replayTimeoutMs(0)).toBe(RESTART_TIMEOUT_MS);
+      expect(replayTimeoutMs(25 * MB)).toBe(RESTART_TIMEOUT_MS + 1000);
+      expect(replayTimeoutMs(100 * MB)).toBe(RESTART_TIMEOUT_MS + 4000);
+      expect(replayTimeoutMs(250 * MB)).toBe(RESTART_TIMEOUT_MS + 10_000);
+
+      // A used sample of 50 MB: the replay may take 10 s; the start still only 8.
+      const run = async (uploadMs: number) => {
+        vi.useRealTimers();
+        const l = await live();
+        const big = new Uint8Array(50 * MB);
+        big[0] = 17;
+        l.p.sampleFiles.set(7, await sampleFile('clap.wav', 'audio/wav', big.buffer));
+        vi.useFakeTimers();
+        const { d } = deps(l, { timeoutMs: undefined });
+        const start = d.start;
+        d.start = async (h) => {
+          const e = await start(h);
+          const load = e.loadSample.bind(e);
+          e.loadSample = async (id, ch) => {
+            if (id === 7) await new Promise((r) => setTimeout(r, uploadMs));
+            return load(id, ch);
+          };
+          return e;
+        };
+        let res: Awaited<ReturnType<typeof restartAudio>> | undefined;
+        void restartAudio(l.p, 'playback', d).then((r) => (res = r));
+        await vi.advanceTimersByTimeAsync(12_000);
+        return res;
+      };
+      expect((await run(9_500))?.error).toBeNull();
+      expect((await run(10_500))?.error).toBe("Couldn't apply Playback: restoring the project did not finish within 10 s; kept previous settings");
+    });
   });
 });

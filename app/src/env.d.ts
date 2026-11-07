@@ -26,6 +26,8 @@ declare global {
       saveTo: (dir: FileSystemDirectoryHandle) => Promise<void>;
       /** Resolves with the load warnings. */
       openFrom: (dir: FileSystemDirectoryHandle) => Promise<string[]>;
+      /** Project ▸ New, as the menu runs it (e2e). */
+      newProject: () => Promise<void>;
       /** The OPFS autosave (e2e: lastSaved, flush). */
       autosave: Autosave;
       /** The Browser's library (e2e: attach(handle) with an OPFS folder). */

@@ -182,23 +182,29 @@ leaves the user exactly where they were:
 1. Runs under the project session's one-operation guard
    (`session.exclusive`; never during an Open / Save / restore) and not during a
    WAV export. The autosave is flushed first. Then `p.loading` and
-   `p.restarting` are set for the whole restart: the "Restarting audio…"
-   overlay blocks edits; shortcuts, undo and sample imports respect it (an
-   import overlapping a restart ends with "Audio restarted — drop … again").
+   `p.restarting` are set for the whole restart (`markBusy` / `markIdle`,
+   `app/src/state/idle.ts`): the "Restarting audio…" overlay blocks edits;
+   shortcuts, undo and sample imports respect it (an import overlapping a
+   restart ends with "Audio restarted — drop … again"; a default-kit import
+   waits for the idle signal and retries).
 2. Stop the transport through App's Stop path (the recorder closes held notes
    at the heard tick) and release held keys.
 3. `AudioEngine.start({ latencyHint })` **while the old engine still runs**
-   (two contexts for a moment), within 8 s (`RESTART_TIMEOUT_MS`: a vanished
-   device can leave `resume()` pending forever). Its command-stall watch is
+   (two contexts for a moment), within 8 s (`RESTART_TIMEOUT_MS`, which
+   covers only the start: a vanished device can leave `resume()` pending
+   forever). Its command-stall watch is
    attached at once (`prepare`), before any replayed command.
-4. `replayInto` (`app/src/project/load.ts`), within the same timeout: every
-   `p.sampleFiles` entry (the in-memory original bytes) is decoded with the
-   **new** context and uploaded at the id it already has — the samples the
-   project uses first, then the unused ones (undo snapshots name samples by
-   id) — then the commands of `projectCommands(serialize(p))` (the one
-   replay-order builder) are sent. No `RESET_ALL`: the engine is new. `p`
-   itself is not touched, so track ids, selection, name, folder handle, the
-   "● unsaved" mark, `version` and the undo history all carry over.
+4. `replayInto` (`app/src/project/load.ts`), within its own timeout,
+   `replayTimeoutMs(usedBytes)` = 8 s + 1 s per 25 MB of the used samples'
+   original bytes (audio clips make large used samples normal; decoding one
+   is not a hang): the samples the project **uses** (`usedSampleIds`:
+   `serialize(p).samples`, plus the ids deferred loads still wait for,
+   `pendingSampleIds`) are decoded from their in-memory original bytes with
+   the **new** context and uploaded at the ids they already have, then the
+   commands of `projectCommands(serialize(p))` (the one replay-order
+   builder) are sent. No `RESET_ALL`: the engine is new. `p` itself is not
+   touched, so track ids, selection, name, folder handle, the "● unsaved"
+   mark, `version` and the undo history all carry over.
 5. Success: `unwireEngine` (the old engine's transport watch and stall watch),
    then `wireEngine(new engine)` in the same task as the last replayed
    command: `engine` (a prop: TopBar, Browser, song area, editors and the
@@ -209,6 +215,16 @@ leaves the user exactly where they were:
    its preview player. Then the old engine closes (`AudioEngine.close()`:
    pending uploads and reset waits settle with `ENGINE_STOPPED`, later
    `send()`s go nowhere and mark no edit) and `p.audioRestarts` is bumped.
+   Then, once idle and **outside any timeout**, `replayInto`'s `rest()`
+   uploads the unused `p.sampleFiles` entries (only an undo can bring one
+   back: snapshots name samples by id), so a large unused file never holds up
+   or times out the switch. Its warnings join the same "Audio restarted —
+   skipped or changed" banner (`RestartResult.later`). An unused sample
+   refused for memory is dropped silently: only a later undo could need it,
+   and that clip or row then plays nothing ("sample not loaded"). `rest`
+   stops as soon as the session is replaced (`p.generation`: the ids are
+   someone else's then) or another restart starts. Until it lands, an undo
+   that brings such a sample back plays nothing for it.
 6. Failure (the hint refused, a start or replay timeout, a replay error): the
    new engine is closed (a start that answers after the timeout is closed when
    it does), the old one was never unwired, and an inline banner says

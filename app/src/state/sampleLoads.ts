@@ -101,3 +101,10 @@ export function deferSampleAssign(id: number, name: string, attach: (id: number)
 
 /** Loads still waiting for Stop (tests / debugging). */
 export const pendingSampleLoads = (): number => pending.size;
+
+/**
+ * The sample ids those loads wait for. An audio restart counts them as used
+ * (audio/restart.ts deps.inFlight): they are uploaded before the switch, so
+ * rebindSampleLoads can settle them from the codes.
+ */
+export const pendingSampleIds = (): number[] => [...pending.keys()];

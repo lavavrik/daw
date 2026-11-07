@@ -18,6 +18,7 @@ type Daw = {
   saveTo(dir: FileSystemDirectoryHandle): Promise<void>;
   openFrom(dir: FileSystemDirectoryHandle): Promise<string[]>;
   autosave: { lastSaved: number | null; flush(): Promise<void> };
+  newProject(): Promise<void>;
 };
 const daw = () => (window as unknown as { __daw: Daw }).__daw;
 
@@ -331,6 +332,49 @@ test('an explicit save makes the older autosave stale (no offer)', async ({ page
     for (const x of ['autosave', 'autosave.tmp', n]) await root.removeEntry(x, { recursive: true }).catch(() => {});
     localStorage.removeItem('daw.lastExplicitSave');
   }, dirName);
+});
+
+test('New right after start deletes the autosave', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
+  await expect
+    .poll(() => page.evaluate(async () => {
+      const a = (window as unknown as { __daw: Daw }).__daw.autosave;
+      await a.flush();
+      return a.lastSaved;
+    }), { timeout: 15_000 })
+    .not.toBeNull();
+  // Reload; click start and New at once: New runs in the very task that
+  // wired the engine (before any start-up check after audio could finish).
+  await page.goto('/');
+  await page.evaluate(() => {
+    const w = window as unknown as { __daw: Daw & { engine: unknown } };
+    const d = w.__daw;
+    let e: unknown = null;
+    Object.defineProperty(d, 'engine', {
+      configurable: true,
+      get: () => e,
+      set: (v) => {
+        e = v;
+        if (v) queueMicrotask(() => void d.newProject());
+      },
+    });
+    document.querySelector<HTMLButtonElement>('button.overlay')!.click();
+  });
+  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length)).toBe(1);
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId('restore')).toBeHidden(); // no offer of the session New discarded
+  // After another reload no restore offer shows: the autosave is gone.
+  await startAudio(page);
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId('restore')).toBeHidden();
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for (const x of ['autosave', 'autosave.tmp']) await root.removeEntry(x, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  });
 });
 
 test('a second tab neither autosaves nor offers the first tab\'s session', async ({ page, context }) => {

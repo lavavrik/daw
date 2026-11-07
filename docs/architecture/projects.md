@@ -122,6 +122,14 @@ over (so a restart never leaves kit rows asking to "drop it again"); if
 the retry is refused too, the banner says to drag it in from the Browser's
 Starter kit.
 
+The wait is a signal, not a timer (`state/idle.ts`): `p.loading` /
+`p.restarting` change only through `markBusy` / `markIdle` (load.ts
+`loadProject`, the restore read in `session.ts`, `restartAudio`), and the
+kit awaits `whenIdle(p)`, which resolves on the next transition to idle (at
+once if already idle) and never if `p.generation` moved meanwhile — the kit
+load then just ends. A restore stays busy from its read straight through
+its load, so the kit never retries into the gap between them.
+
 ## Validation (`validate`)
 
 Never throws, never lets an out-of-range value through. Unknown fields are
@@ -278,11 +286,14 @@ synchronously at the start of a write, so no edit can interleave with it.
   one tab's sweep can never remove a sample another tab's write is about to
   list;
 - only the tab holding `daw-autosave-owner` (requested with `ifAvailable`
-  when audio starts, kept for the tab's lifetime) autosaves or offers a
-  restore. Any other tab shows the hint "Autosave is off — this project is
-  open in another tab" and never writes, so it cannot offer (or "Start
-  fresh" away) the first tab's live session. Without Web Locks a tab
-  assumes it is alone.
+  at App mount — `createOwnerClaim`, before the start overlay is clicked:
+  Web Locks need no audio — and kept for the tab's lifetime) autosaves,
+  offers a restore or deletes the autosave. Its outcome is therefore
+  settled before any New can run, so a New clicked right after start still
+  deletes the discarded session's autosave. Any other tab shows the hint
+  "Autosave is off — this project is open in another tab" (at mount) and
+  never writes, so it cannot offer (or "Start fresh" away) the first tab's
+  live session. Without Web Locks a tab assumes it is alone.
 
 **Failures** (e.g. `QuotaExceededError`): one error banner "Autosave failed:
 <reason>" (not repeated until a write succeeds, which clears it). The write
@@ -296,7 +307,10 @@ edits can land meanwhile. `savedFingerprint` is the written state (those
 edits stay "● unsaved"), the last explicit save is recorded as `t`, and
 the pending autosave is dropped only if `p.version` is unchanged.
 
-**Restore on start:** after audio starts, App peeks the marker. If it is
+**Restore on start:** after audio starts (a restore needs the engine) and
+once the owner claim settled, App peeks the marker; a New / Open that ran
+meanwhile (`p.generation` moved) answered the question, so nothing is
+offered. If it is
 newer than the **last explicit save** (Save / Save As record `Date.now()` in
 `localStorage["daw.lastExplicitSave"]`; none recorded = any autosave
 counts), an inline banner above the editors offers **Restore last session**

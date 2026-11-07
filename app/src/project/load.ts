@@ -22,14 +22,18 @@
 // replayInto (below) is the audio restart's variant (audio/restart.ts): the
 // project is already in memory, so steps 1 and 3 fall away -- no file to
 // validate, no UI state to blank, no RESET_ALL (the engine is brand new) --
-// and steps 2, 4 and 5 run on `p` itself: every p.sampleFiles entry decoded
-// with the new context and uploaded at its OWN id, then projectCommands of
-// serialize(p).
+// and steps 2, 4 and 5 run on `p` itself: the samples the project uses
+// decoded with the new context and uploaded at their OWN ids, then
+// projectCommands of serialize(p); the unused ones follow later (`rest`).
+//
+// p.loading is set through state/idle.ts markBusy / markIdle (a default-kit
+// import waiting for the load to end awaits that signal).
 import { Err, Op } from '../audio/protocol';
 import { decodeBytes, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
 import { mixParam } from '../audio/mixerCatalog';
 import type { CommandSink } from '../state/actions';
+import { markBusy, markIdle } from '../state/idle';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
 import type { ChannelState, Project, SampleFile, Track } from '../state/project.svelte';
 import { sampleFile } from '../state/sampleFiles';
@@ -82,7 +86,7 @@ export async function loadProject(
   const proj = v.project;
   const warnings = [...v.warnings];
 
-  p.loading = true;
+  markBusy(p);
   try {
     const decoded: { oldId: number; file: SampleFile; channels: Float32Array[] }[] = [];
     for (const s of proj.samples) {
@@ -131,9 +135,47 @@ export async function loadProject(
       throw e;
     }
   } finally {
-    p.loading = false;
+    markIdle(p);
   }
   return warnings;
+}
+
+/**
+ * The sample ids the project uses now (serialize(p).samples: rows,
+ * SamplePlayers, clips), plus `also` (the audio restart adds the ids of
+ * deferred loads still waiting for Stop, sampleLoads.ts: they are attached
+ * when they settle, so they count as used).
+ */
+export function usedSampleIds(p: Project, also: Iterable<number> = []): Set<number> {
+  const used = new Set(serialize(p).samples.map((s) => s.id));
+  for (const id of also) if (p.sampleFiles.has(id)) used.add(id);
+  return used;
+}
+
+/** The original (encoded) bytes of those samples: what the restart's replay timeout scales with. */
+export function sampleBytes(p: Project, ids: Iterable<number>): number {
+  let n = 0;
+  for (const id of ids) n += p.sampleFiles.get(id)?.bytes.byteLength ?? 0;
+  return n;
+}
+
+/** What replayInto resolves with. */
+export interface Replayed {
+  /** Samples that could not be decoded or uploaded, and projectCommands' warnings. */
+  warnings: string[];
+  /** Each used sample's upload result (Err.OK, or why it failed); a sample that could not be decoded has none. */
+  codes: Map<number, number>;
+  /**
+   * Decode and upload the samples the project does not use now (only an
+   * undo can bring one back: snapshots name samples by id). Call it once
+   * the new engine is wired; it is not part of the restart's timeout.
+   * Resolves with warnings (never rejects). A refusal for memory is no
+   * warning (that sample is only needed if an undo brings it back, and then
+   * plays nothing). Stops as soon as the session is replaced (p.generation:
+   * its ids are someone else's now), another restart starts or succeeds, or
+   * the sample left p.sampleFiles.
+   */
+  rest(): Promise<string[]>;
 }
 
 /**
@@ -141,47 +183,75 @@ export async function loadProject(
  * live project `p`, which is not changed at all: same track ids, selection,
  * name, folder, dirty mark, version and undo history.
  *
- * Every sample in p.sampleFiles is decoded from its in-memory original
- * bytes with `ctx` (the new context: it resamples to the new rate) and
- * uploaded at the id it already has -- the ones the project uses first (if
- * the arena runs out, what is heard now wins), then the unused ones, since
- * an undo may bring one back and undo snapshots name samples by id. Then the
+ * The samples the project uses (`used`, usedSampleIds) are decoded from
+ * their in-memory original bytes with `ctx` (the new context: it resamples
+ * to the new rate) and uploaded at the ids they already have, then the
  * commands of projectCommands(serialize(p)) are sent, synchronously, after
  * the last upload (a row's sample must be in the arena before
  * SET_ROW_SAMPLE). No RESET_ALL: a new engine is blank (and a reset would
- * need a running context to be acknowledged).
+ * need a running context to be acknowledged). The unused p.sampleFiles
+ * entries are left to `rest` (see Replayed), so a large unused sample
+ * never holds up (or times out) the switch.
  *
- * `codes`: each uploaded sample's result (Err.OK, or why it failed); a
- * sample that could not be decoded has none. A sample that did not make it
- * is a warning; the UI keeps it (a Save still writes its bytes), only the
- * engine plays nothing for it.
+ * A used sample that did not make it is a warning; the UI keeps it (a Save
+ * still writes its bytes), only the engine plays nothing for it.
  */
 export async function replayInto(
-  p: Project, engine: LoadEngine, ctx: SampleDecoder,
-): Promise<{ warnings: string[]; codes: Map<number, number> }> {
+  p: Project, engine: LoadEngine, ctx: SampleDecoder, used: Set<number> = usedSampleIds(p),
+): Promise<Replayed> {
   const warnings: string[] = [];
   const codes = new Map<number, number>();
-  const used = new Set(serialize(p).samples.map((s) => s.id));
-  const files = [...p.sampleFiles].sort((a, b) => Number(used.has(b[0])) - Number(used.has(a[0])) || a[0] - b[0]);
-  const decoded: { id: number; name: string; channels: Float32Array[] }[] = [];
+  const files = [...p.sampleFiles].sort((a, b) => a[0] - b[0]);
+  const ids = new Map<number, number>();
   for (const [id, f] of files) {
+    if (!used.has(id)) continue;
+    let channels: Float32Array[];
     try {
-      decoded.push({ id, name: f.name, channels: await decodeBytes(f.bytes.slice(0), f.name, ctx) });
+      channels = await decodeBytes(f.bytes.slice(0), f.name, ctx);
     } catch {
       warnings.push(`Sample "${f.name}" could not be decoded again`);
+      continue;
     }
-  }
-  const ids = new Map<number, number>();
-  for (const d of decoded) {
-    const c = await engine.loadSample(d.id, d.channels);
-    codes.set(d.id, c);
-    if (c === Err.OK || c === Err.DEFERRED) ids.set(d.id, d.id);
-    else warnings.push(`Sample "${d.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
+    const c = await engine.loadSample(id, channels);
+    codes.set(id, c);
+    if (c === Err.OK || c === Err.DEFERRED) ids.set(id, id);
+    else warnings.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
   }
   const pc = projectCommands(serialize(p), ids);
   warnings.push(...pc.warnings);
   for (const c of pc.commands) engine.send(c[0], c[1], c[2], c[3], c[4]);
-  return { warnings, codes };
+
+  const unused = files.filter(([id]) => !used.has(id));
+  const rest = async (): Promise<string[]> => {
+    const out: string[] = [];
+    const gen = p.generation;
+    const restarts = p.audioRestarts;
+    const current = (id: number, f: SampleFile) =>
+      p.generation === gen && p.audioRestarts === restarts && !p.restarting && p.sampleFiles.get(id) === f;
+    for (const [id, f] of unused) {
+      if (!current(id, f)) continue;
+      let channels: Float32Array[];
+      try {
+        channels = await decodeBytes(f.bytes.slice(0), f.name, ctx);
+      } catch {
+        if (current(id, f)) out.push(`Sample "${f.name}" could not be decoded again`);
+        continue;
+      }
+      if (!current(id, f)) continue; // checked right before the upload is posted
+      let c: number;
+      try {
+        c = await engine.loadSample(id, channels);
+      } catch (e) {
+        if (current(id, f)) out.push(`Sample "${f.name}" could not be reloaded — ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
+      if (c !== Err.OK && c !== Err.DEFERRED && c !== Err.OUT_OF_MEMORY && current(id, f)) {
+        out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
+      }
+    }
+    return out;
+  };
+  return { warnings, codes, rest };
 }
 
 /** The UI state of a blank engine session (what RESET_ALL leaves). */

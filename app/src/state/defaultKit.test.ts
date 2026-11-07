@@ -1,7 +1,7 @@
 // The built-in default kit (plan 8 Task 4): a fresh session's drum track is
 // the starter kit's eight rows, filled asynchronously without marking the
 // project dirty, bumping its version (autosave) or creating an undo entry.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Err } from '../audio/protocol';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -13,6 +13,7 @@ import { projectFingerprint, serialize } from '../project/serialize';
 import { fakeAudio, fakeDecoder } from '../project/testFixture';
 import { toggleStep } from './actions';
 import { commandEdits } from './edits';
+import { markBusy, markIdle } from './idle';
 import { DEFAULT_KIT, addDefaultDrumTrack, defaultKitRows, loadDefaultKit, withRowSample } from './defaultKit';
 import type { KitDeps } from './defaultKit';
 import { Project, currentPattern } from './project.svelte';
@@ -249,10 +250,10 @@ describe('loadDefaultKit', () => {
   it('an autosave restore still reading (p.loading) when a row imports: retried once it is over (final M4)', async () => {
     const { p, t, engine, v0 } = fresh();
     const { d, errors } = deps();
-    p.loading = true; // session.restore reading the autosave (generation unchanged until it loads)
+    markBusy(p); // session.restore reading the autosave (generation unchanged until it loads)
     const loading = loadDefaultKit(p, engine, t.id, d);
     await tick(30);
-    p.loading = false; // the read failed: the fresh session stays
+    markIdle(p); // the read failed: the fresh session stays
     await loading;
     expect(errors).toEqual([]);
     expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
@@ -262,12 +263,12 @@ describe('loadDefaultKit', () => {
   it('a restore that replaced the session during that wait: nothing lands (final M4)', async () => {
     const { p, t, engine } = fresh();
     const { d, errors } = deps();
-    p.loading = true;
-    const loading = loadDefaultKit(p, engine, t.id, d);
+    markBusy(p);
+    void loadDefaultKit(p, engine, t.id, d); // ends without resolving: whenIdle never fires for an old session
     await tick(30);
     p.generation++; // the restore loaded
-    p.loading = false;
-    await loading;
+    markIdle(p);
+    await tick(30);
     expect(errors).toEqual([]);
     expect(rowsOf(p).every((r) => r.sampleId === null)).toBe(true);
   });
@@ -275,14 +276,47 @@ describe('loadDefaultKit', () => {
   it('an audio restart during the kit load: the rows load after it, no "drop it again" (final P4)', async () => {
     const { p, t, engine } = fresh();
     const { d, errors } = deps();
-    p.loading = p.restarting = true; // audio/restart.ts
+    markBusy(p, { restarting: true }); // audio/restart.ts
     const loading = loadDefaultKit(p, engine, t.id, d);
     await tick(30);
-    p.loading = p.restarting = false;
     p.audioRestarts++;
+    markIdle(p);
     await loading;
     expect(errors).toEqual([]);
     expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
     expect(p.dirty).toBe(false);
+  });
+  describe('waiting for idle', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('busy kit import retries on the idle signal, no polling', async () => {
+      // Only timers are faked: setImmediate (below) waits for the real async
+      // work (hashing) without scheduling a timer of its own.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      const { p, t, engine } = fresh();
+      const decodes: number[] = []; // frames = 10 + row index (deps below)
+      engine.context = {
+        decodeAudioData: (buf: ArrayBuffer) => {
+          decodes.push(new Uint8Array(buf)[0]);
+          return fakeDecoder.decodeAudioData(buf);
+        },
+      };
+      const { d, errors } = deps();
+      const spin = async (n = 200) => {
+        for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
+      };
+      markBusy(p); // a restore still reading
+      const loading = loadDefaultKit(p, engine, t.id, d);
+      await spin();
+      expect(decodes).toEqual([10]); // row 0 imported once, refused as busy
+      expect(vi.getTimerCount()).toBe(0); // waiting on the signal, not a timer
+      await spin();
+      expect(decodes).toEqual([10]);
+      markIdle(p);
+      await loading;
+      expect(decodes.filter((x) => x === 10)).toHaveLength(2); // exactly one retry
+      expect(errors).toEqual([]);
+      expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
+    });
   });
 });

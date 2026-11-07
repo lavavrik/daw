@@ -8,6 +8,7 @@
 // failure; the menu commands wrap them with the picker and the banners.
 import { addDefaultDrumTrack } from '../state/defaultKit';
 import { banners, flashHint } from '../state/banners.svelte';
+import { markBusy, markIdle } from '../state/idle';
 import { Project } from '../state/project.svelte';
 import { folderInUse, pickProjectFolder, readProject, writeProject } from './fsFolder';
 import { loadProject } from './load';
@@ -157,16 +158,19 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
   }
 
   async function restore(read: () => Promise<{ json: unknown; files: Map<string, ArrayBuffer> }>): Promise<string[]> {
-    let saved: { json: unknown; files: Map<string, ArrayBuffer> };
     // Reading big samples takes a while: block the editors meanwhile, like
-    // the load itself does (loadProject sets loading again and clears it).
-    p.loading = true;
+    // the load itself does. Busy from the read straight through the load
+    // (loadProject marks busy again and idle when done), with no idle moment
+    // between them: a default-kit import waiting for idle (state/idle.ts)
+    // would otherwise retry into the load's decode and fail as busy again.
+    let warnings: string[];
+    markBusy(p);
     try {
-      saved = await read();
+      const saved = await read();
+      warnings = await replace(saved.json, saved.files);
     } finally {
-      p.loading = false;
+      if (p.loading) markIdle(p); // the read (or validation) failed: loadProject never cleared it
     }
-    const warnings = await replace(saved.json, saved.files);
     // No folder (the handle is not kept in an autosave) and never saved:
     // NEVER_SAVED matches no fingerprint, so the idle dirty check keeps the
     // "● unsaved" mark until a Save.

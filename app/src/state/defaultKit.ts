@@ -38,7 +38,9 @@
 // An import that only failed because the project was busy (an audio
 // restart, or an autosave restore still reading: sampleImport `busy`) is
 // retried once that is over, so a restart never leaves kit rows asking to
-// "drop it again".
+// "drop it again". It waits on the busy / idle signal (state/idle.ts
+// whenIdle), not a timer; if the session is replaced meanwhile the signal
+// never comes for it and the load just ends there.
 import { starterSample } from '../library/starter';
 import type { ProjectJson, SampleJson } from '../project/schema';
 import { fingerprintOf, serialize } from '../project/serialize';
@@ -46,6 +48,7 @@ import { addDrumTrack, setRowSample } from './actions';
 import type { CommandSink } from './actions';
 import { banners } from './banners.svelte';
 import { markEdited } from './edits';
+import { whenIdle } from './idle';
 import { MAX_ROWS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
 import { importSample } from './sampleImport';
@@ -114,14 +117,6 @@ export const appKitDeps: KitDeps = {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** How often a kit import waiting for a busy project checks again. */
-export const KIT_RETRY_POLL_MS = 50;
-
-/** Resolves once no load / restore read / audio restart is running. */
-async function untilIdle(p: Project) {
-  while (p.loading || p.restarting) await new Promise((r) => setTimeout(r, KIT_RETRY_POLL_MS));
-}
-
 function emptyRow(p: Project, trackId: string, rowId: string): boolean {
   const t = p.tracks.find((x) => x.id === trackId);
   return t?.kind === 'drum' && t.rows.some((r) => r.id === rowId && r.sampleId === null);
@@ -152,8 +147,9 @@ export async function loadDefaultKit(p: Project, engine: ImportEngine & CommandS
     let r = await importSample(p, engine, got.file, empty);
     if (!r.ok && r.busy) {
       // An audio restart or an autosave restore's read: the session may well
-      // outlive it. Try once more after it (the live engine by then).
-      await untilIdle(p);
+      // outlive it. Try once more after it (the live engine by then). A
+      // session replaced meanwhile never signals: this load ends here.
+      await whenIdle(p);
       if (p.generation !== gen) return;
       if (!empty()) continue;
       r = await importSample(p, engine, got.file, empty);

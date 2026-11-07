@@ -30,7 +30,7 @@
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners, flashHint } from './state/banners.svelte';
-  import { installSampleLoads, rebindSampleLoads } from './state/sampleLoads';
+  import { installSampleLoads, pendingSampleIds, rebindSampleLoads } from './state/sampleLoads';
   import { createProjectSession, markSaved, warningsText } from './project/session';
   import { warnOnUnload } from './project/discard';
   import type { ProjectSession, SessionEngine } from './project/session';
@@ -38,10 +38,10 @@
   import { commandEdits } from './state/edits';
   import { releaseHeldKeys } from './input/shortcuts';
   import {
-    claimAutosaveOwner, createAutosave, discardAutosave, lastExplicitSave, offersRestore, opfsRoot, peekAutosave,
+    createAutosave, createOwnerClaim, discardAutosave, lastExplicitSave, offersRestore, opfsRoot, peekAutosave,
     readAutosave, withAutosaveLock,
   } from './project/autosave';
-  import type { AutosaveInfo, LockManagerLike } from './project/autosave';
+  import type { AutosaveInfo, LockManagerLike, OwnerClaim } from './project/autosave';
   import { createHistory } from './history/history';
   import type { History } from './history/history';
   import { diffApply } from './history/diffApply';
@@ -141,21 +141,33 @@
   /** An autosave newer than the last explicit save, offered in an inline banner (never confirm()). */
   let restoreOffer = $state<AutosaveInfo | null>(null);
   let restoring = false;
-  /** This tab holds the autosave owner lock (only then may it delete the autosave). */
-  let ownsAutosave = false;
-
-  async function checkAutosave() {
-    if (!(await claimAutosaveOwner(locks))) {
+  /**
+   * The autosave owner lock (only its holder autosaves, offers a restore or
+   * deletes the autosave). Claimed at mount, before the start overlay is
+   * clicked (Web Locks need no audio), so `ownerClaim.owns` is settled
+   * before any New can run; a tab that is not the owner says so at once.
+   */
+  let ownerClaim: OwnerClaim | null = null;
+  onMount(() => {
+    ownerClaim = createOwnerClaim(locks, {
       // Another tab autosaves (and would offer / discard that session): this
       // one must not overwrite it, nor offer the other tab's live work.
-      autosave.disable();
-      flashHint('Autosave is off — this project is open in another tab', 10_000);
-      return;
-    }
-    ownsAutosave = true;
+      onNotOwner: () => {
+        autosave.disable();
+        flashHint('Autosave is off — this project is open in another tab', 10_000);
+      },
+    });
+  });
+
+  /** After audio started (a restore needs the engine): offer the autosave if it is newer than the last save. */
+  async function checkAutosave() {
+    const gen = project.generation; // the session audio started with (before any await)
+    if (!ownerClaim || !(await ownerClaim.settled)) return;
     try {
       const info = await locked(peekAutosave);
-      if (offersRestore(info, lastExplicitSave())) {
+      // A New / Open meanwhile (it already dropped or deleted that autosave)
+      // answered the question: offer nothing.
+      if (project.generation === gen && offersRestore(info, lastExplicitSave())) {
         restoreOffer = info;
         return; // stays held until answered
       }
@@ -222,7 +234,7 @@
    */
   function onFresh(trackId: string) {
     autosave.cancel();
-    if (ownsAutosave) void deleteAutosave();
+    if (ownerClaim?.owns) void deleteAutosave();
     void loadDefaultKit(project, live, trackId, kitDeps);
   }
 
@@ -283,6 +295,8 @@
   // Project save/load with any directory handle (e2e: OPFS). Same code as the Project menu.
   saveTo: (dir) => (session ? session.saveTo(dir) : Promise.reject(new Error('audio not started'))),
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
+  // Project ▸ New without the menu (e2e: New in the very task audio started).
+  newProject: () => (session ? session.newProject() : Promise.reject(new Error('audio not started'))),
   autosave,
   history: null,
   // The project as undo / save see it (e2e: the restart's serialize-equality check).
@@ -546,6 +560,8 @@
           prepare: (e) => (preparedStalls = watchStalls(e)),
           unwire: unwireEngine,
           wire: (e, codes) => wireEngine(e, codes),
+          // Deferred loads still waiting: uploaded with the used samples, settled at wire.
+          inFlight: pendingSampleIds,
         }),
       );
       if (res === undefined || res === null) return 'Busy with a project load or save — Apply again when it is done';
@@ -562,6 +578,14 @@
       refreshRec();
       banners.load = res.warnings.length ? warningsText('Audio restarted — skipped or changed', res.warnings) : null;
       if (!res.warnings.length) flashHint(`Audio restarted (${hintLabel(res.hint)})`);
+      // The unused samples upload after the switch (undo may need them): their
+      // warnings join the same banner, unless the session was replaced meanwhile.
+      const gen = project.generation;
+      void res.later.then((w) => {
+        if (w.length && project.generation === gen) {
+          banners.load = warningsText('Audio restarted — skipped or changed', [...res.warnings, ...w]);
+        }
+      });
       return null;
     } catch (e) {
       // Not an audio failure (restartAudio reports those): a bug. Say so; the

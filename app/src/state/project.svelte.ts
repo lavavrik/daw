@@ -191,6 +191,8 @@ export class Project {
   /**
    * A load / New is replacing the session (project/load.ts): edits, drops,
    * shortcuts and the transport are ignored and App shows "Loading…".
+   * Set and cleared through state/idle.ts markBusy / markIdle (whenIdle
+   * waits for the clear).
    */
   loading = $state(false);
   /**
@@ -202,7 +204,8 @@ export class Project {
   /**
    * An audio restart (audio/restart.ts) is running; `loading` is set too.
    * Lets a sample import tell it apart from a project load ("drop it again"
-   * rather than a silent drop). Not reactive.
+   * rather than a silent drop). Not reactive. Set by markBusy(p,
+   * { restarting: true }), cleared by markIdle (state/idle.ts).
    */
   restarting = false;
   /**

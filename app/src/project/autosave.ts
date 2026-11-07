@@ -82,6 +82,39 @@ export function claimAutosaveOwner(locks: LockManagerLike | undefined = defaultL
   });
 }
 
+/** The tab's owner claim, as App holds it (createOwnerClaim). */
+export interface OwnerClaim {
+  /** True once this tab holds OWNER_LOCK; false before the claim settled and if another tab holds it. */
+  readonly owns: boolean;
+  /** Settles with the claim's outcome (never rejects). */
+  readonly settled: Promise<boolean>;
+}
+
+/**
+ * Claim OWNER_LOCK now. App calls it at mount, before the start overlay is
+ * clicked: Web Locks need no audio, so whether this tab may delete the
+ * autosave (Project ▸ New, Start fresh) is settled before any New can run.
+ * The restore check (peek) still waits for audio, since a restore needs the
+ * engine; it awaits `settled` first. `onNotOwner` runs once if another tab
+ * owns the autosave (App: disable this tab's autosave and show its hint).
+ */
+export function createOwnerClaim(
+  locks: LockManagerLike | undefined = defaultLocks(), opts: { onNotOwner?: () => void } = {},
+): OwnerClaim {
+  let owns = false;
+  const settled = claimAutosaveOwner(locks).then((own) => {
+    owns = own;
+    if (!own) opts.onNotOwner?.();
+    return own;
+  });
+  return {
+    get owns() {
+      return owns;
+    },
+    settled,
+  };
+}
+
 /** What the start-up check needs (the marker only; no samples read). */
 export interface AutosaveInfo {
   /** Date.now() when the autosaved state was taken. */

@@ -1,79 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { readProject, writeProject } from './fsFolder';
+import { folderInUse, readProject, writeProject } from './fsFolder';
+import { FakeDir, asDir, bytes } from './fakeDir';
 
-// A minimal in-memory FileSystemDirectoryHandle (the parts fsFolder uses),
-// logging every completed write / move / remove in order.
-class FakeFile {
-  readonly kind = 'file';
-  constructor(public name: string, public parent: FakeDir, public data = new Uint8Array(0)) {}
-  async getFile() {
-    const d = this.data;
-    return { size: d.length, arrayBuffer: async () => d.slice().buffer, text: async () => new TextDecoder().decode(d) };
-  }
-  async createWritable() {
-    const chunks: Uint8Array[] = [];
-    const root = this.parent.root();
-    return {
-      write: async (v: ArrayBuffer | string | Uint8Array) => {
-        if (root.failOn && this.name === root.failOn) throw new Error(`disk full writing ${this.name}`);
-        chunks.push(typeof v === 'string' ? new TextEncoder().encode(v) : new Uint8Array(v instanceof Uint8Array ? v : v));
-      },
-      close: async () => {
-        const n = chunks.reduce((s, c) => s + c.length, 0);
-        const out = new Uint8Array(n);
-        let o = 0;
-        for (const c of chunks) (out.set(c, o), (o += c.length));
-        this.data = out;
-        root.log.push(`write ${this.parent.path()}${this.name}`);
-      },
-    };
-  }
-  async move(dir: FakeDir, name: string) {
-    if (this.parent.root().noMove) throw Object.assign(new Error('move not supported'), { name: 'NotSupportedError' });
-    this.parent.files.delete(this.name);
-    dir.files.set(name, this);
-    this.parent.root().log.push(`move ${this.name} -> ${name}`);
-    this.name = name;
-    this.parent = dir;
-  }
-}
-
-class FakeDir {
-  readonly kind = 'directory';
-  files = new Map<string, FakeFile | FakeDir>();
-  log: string[] = [];
-  failOn: string | null = null;
-  noMove = false;
-  constructor(public name = 'proj', public parentDir: FakeDir | null = null) {}
-  root(): FakeDir {
-    return this.parentDir ? this.parentDir.root() : this;
-  }
-  path(): string {
-    return this.parentDir ? `${this.parentDir.path()}${this.name}/` : '';
-  }
-  async getDirectoryHandle(name: string, o: { create?: boolean } = {}) {
-    let d = this.files.get(name);
-    if (!d && o.create) this.files.set(name, (d = new FakeDir(name, this)));
-    if (!(d instanceof FakeDir)) throw Object.assign(new Error(`no dir ${name}`), { name: 'NotFoundError' });
-    return d;
-  }
-  async getFileHandle(name: string, o: { create?: boolean } = {}) {
-    let f = this.files.get(name);
-    if (!f && o.create) this.files.set(name, (f = new FakeFile(name, this)));
-    if (!(f instanceof FakeFile)) throw Object.assign(new Error(`no file ${name}`), { name: 'NotFoundError' });
-    return f;
-  }
-  async removeEntry(name: string) {
-    this.files.delete(name);
-    this.root().log.push(`remove ${this.path()}${name}`);
-  }
-  async *entries(): AsyncGenerator<[string, FakeFile | FakeDir]> {
-    for (const e of [...this.files.entries()]) yield e;
-  }
-}
-
-const asDir = (d: FakeDir) => d as unknown as FileSystemDirectoryHandle;
-const bytes = (...v: number[]) => new Uint8Array(v).buffer;
 const json1 = { schemaVersion: 1, name: 'A', samples: [{ id: 0, file: 'samples/0-kick.wav' }] };
 
 describe('fsFolder', () => {
@@ -121,5 +49,37 @@ describe('fsFolder', () => {
     await w.write('{nope');
     await w.close();
     await expect(readProject(asDir(dir))).rejects.toThrow(/not valid JSON/);
+  });
+
+  it('never removes files the previous project did not list (fix 2)', async () => {
+    const dir = new FakeDir();
+    const samples = await dir.getDirectoryHandle('samples', { create: true });
+    samples.put('my-library-kick.wav', [7, 7]); // the user's own file, no project here
+    await writeProject(asDir(dir), json1, new Map([['samples/0-kick.wav', bytes(1)]]));
+    expect(samples.files.has('my-library-kick.wav')).toBe(true);
+    // Saving again with other samples removes only what project.json listed.
+    const json2 = { schemaVersion: 1, name: 'B', samples: [{ id: 0, file: 'samples/0-snare.wav' }] };
+    await writeProject(asDir(dir), json2, new Map([['samples/0-snare.wav', bytes(2)]]));
+    expect([...samples.files.keys()].sort()).toEqual(['0-snare.wav', 'my-library-kick.wav']);
+  });
+
+  it('folderInUse: a project.json or a non-empty samples/ (fix 2)', async () => {
+    expect(await folderInUse(asDir(new FakeDir()))).toBe(false);
+    const a = new FakeDir();
+    await a.getDirectoryHandle('samples', { create: true });
+    expect(await folderInUse(asDir(a))).toBe(false);
+    (await a.getDirectoryHandle('samples')).put('x.wav', [1]);
+    expect(await folderInUse(asDir(a))).toBe(true);
+    const b = new FakeDir();
+    b.put('project.json', '{}');
+    expect(await folderInUse(asDir(b))).toBe(true);
+  });
+
+  it('readProject reads only the samples project.json lists (fix 6)', async () => {
+    const dir = new FakeDir();
+    await writeProject(asDir(dir), json1, new Map([['samples/0-kick.wav', bytes(1)]]));
+    (await dir.getDirectoryHandle('samples')).put('huge-unrelated.wav', [1, 2, 3]);
+    const back = await readProject(asDir(dir));
+    expect([...back.files.keys()]).toEqual(['samples/0-kick.wav']);
   });
 });

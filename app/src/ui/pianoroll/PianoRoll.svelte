@@ -49,6 +49,7 @@
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { currentPattern } from '../../state/project.svelte';
+  import { clearPatternText } from '../../state/confirmText';
   import {
     BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
     snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
@@ -751,7 +752,7 @@
   }
   function clearAll() {
     if (!notes.length) return;
-    if (confirmReleasingKeys(`Clear all ${notes.length} notes from "${track.name}"? This cannot be undone.`)) {
+    if (confirmReleasingKeys(clearPatternText(track, notes.length))) {
       clearPattern(p, engine, track.id);
       selected = new Set();
     }

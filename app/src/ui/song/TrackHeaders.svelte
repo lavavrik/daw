@@ -7,15 +7,17 @@
   // hover/focus and asks first (confirmReleasingKeys: a piano key held during
   // the dialog would hang).
   import type { CommandSink } from '../../state/actions';
-  import type { Project } from '../../state/project.svelte';
+  import type { Project, Track } from '../../state/project.svelte';
+  import { removeTrackText } from '../../state/confirmText';
   import { removeTrack, selectTrack } from '../../state/actions';
   import { confirmReleasingKeys } from '../../input/shortcuts';
   import { LANE_H } from './tlMath';
 
   let { p, engine }: { p: Project; engine: CommandSink } = $props();
 
-  function remove(id: string, name: string) {
-    if (confirmReleasingKeys(`Remove track "${name}"?`)) removeTrack(p, engine, id);
+  function remove(t: Track) {
+    // Says that the track's patterns and clips go with it (confirmText.ts).
+    if (confirmReleasingKeys(removeTrackText(t))) removeTrack(p, engine, t.id);
   }
 </script>
 
@@ -41,7 +43,7 @@
           {/if}
         </span>
       </button>
-      <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={() => remove(t.id, t.name)}>×</button>
+      <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={() => remove(t)}>×</button>
     </div>
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet</p>{/if}

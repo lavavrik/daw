@@ -430,10 +430,12 @@ test('selecting drums keeps keys on the last synth', async ({ page }) => {
 test('removing the synth track silences it and keys show no synth', async ({ page }) => {
   await startAudio(page);
   await page.getByTestId('add-synth-track').click();
-  page.once('dialog', (d) => d.accept());
+  let asked = '';
+  page.once('dialog', (d) => { asked = d.message(); void d.accept(); });
   await page.getByTestId('track-1').hover();
   await page.getByRole('button', { name: 'Remove track Synth' }).click();
   await expect(page.getByTestId('track-1')).toHaveCount(0);
+  expect(asked).toBe('Remove track "Synth" and its 1 pattern? This cannot be undone.');
   await expect(page.getByTestId('keys-target')).not.toContainText('Synth');
   await page.keyboard.down('KeyA');
   await page.waitForTimeout(300);

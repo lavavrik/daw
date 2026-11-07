@@ -1,13 +1,14 @@
 # Audio path
 
 How sound gets from a click in the UI to the speakers, and the rules that keep
-it glitch-free. Code: `app/src/audio/{engine,worklet,ring,protocol}.ts`,
+it glitch-free. Code: `app/src/audio/{engine,sendQueue,worklet,ring,protocol}.ts`,
 `engine/src/ffi.rs`.
 
 ```
  main thread                         audio thread (AudioWorkletGlobalScope)
  ───────────                         ──────────────────────────────────────
- UI ── AudioEngine.send(op,a..d) ──► CommandRing (SAB) ──┐
+ UI ── AudioEngine.send(op,a..d)
+    └─ FIFO backlog if full ───────► CommandRing (SAB) ──┐
                                                          ▼  process(), every 128 frames
                                      DawEngineProcessor: 1 drain ring -> engine_command
                                                          2 engine_process(128)
@@ -38,6 +39,29 @@ makes `SharedArrayBuffer` available at all.
 | `process()` never throws; the engine never panics | A thrown exception or WASM trap kills the node: silence until reload. Every command is validated in Rust and bad ones return an `Err` code (also recorded in telemetry slot 7); `process()` and the port handler are additionally wrapped in try/catch (see *When the engine fails*). |
 | WASM memory grows only while stopped | `memory.grow` is slow and detaches every typed-array view. The engine reserves a 128 MB sample arena up front and refuses to grow while playing (`Err.DEFERRED`). The worklet rebuilds its views whenever `memory.buffer` changes identity. |
 | Telemetry is a plain overwrite, never a queue | The UI just samples the latest values; nothing can back up. |
+
+## When the command ring is full
+
+The ring holds `RING_CAPACITY - 1` = 1023 records and the worklet drains all of
+it every block, so it only fills when one task sends more than that (a bulk
+note edit, undoing a big take) or when the audio thread is not running.
+A dropped command would leave the engine out of step with the UI state for
+good, so `AudioEngine.send` never drops (`app/src/audio/sendQueue.ts`):
+
+- While nothing is waiting, a command goes straight into the ring.
+- Otherwise it joins a main-thread FIFO *backlog*. New commands queue behind a
+  non-empty backlog even if the ring has room, so order is always preserved.
+- A `setTimeout(0)` flush moves backlog records into the ring as the worklet
+  frees space and re-arms until the backlog is empty (a 3000-command burst
+  takes about three blocks).
+- If the backlog has existed for more than 2 s, or exceeds 65536 records,
+  `onCommandStall(message)` fires once (App shows it as the red error banner);
+  `onCommandStall(null)` when it drains again clears it. Still nothing is
+  dropped.
+- Once the engine has failed, `send` returns false and the backlog is cleared
+  (nothing will ever drain it).
+
+`AudioEngine.commandBacklog` is the number of waiting records (0 normally).
 
 CPU (slot 3) is time spent in `process()` divided by wall time, published once a
 second; overruns (slot 4) count blocks that took longer than `128/sampleRate`,

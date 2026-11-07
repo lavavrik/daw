@@ -105,6 +105,12 @@
   function onstarted(e: AudioEngine) {
     engine = e;
     window.__daw.engine = e;
+    // A ring backlog that does not drain means UI and engine disagree until it does.
+    let stallMsg: string | null = null;
+    e.onCommandStall = (m) => {
+      if (m !== null) banners.error = stallMsg = m;
+      else if (banners.error === stallMsg) banners.error = null;
+    };
     clock = createAudioClock(e, () => project.tempo);
     window.__daw.clock = clock;
     const r = recorderFor(project, e, clock, () => {

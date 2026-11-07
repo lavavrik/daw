@@ -1,6 +1,7 @@
 // Main-thread handle to the audio engine running inside the 'daw-engine'
 // AudioWorklet (worklet.ts). Commands go through a lock-free SharedArrayBuffer
-// ring (never postMessage, which allocates and is not real-time safe);
+// ring (never postMessage, which allocates and is not real-time safe), fronted
+// by a main-thread backlog (sendQueue.ts) so a full ring never drops one;
 // telemetry comes back through a second SAB that the worklet overwrites every
 // block. Only sample uploads use the MessagePort. See docs/architecture/audio-path.md.
 //
@@ -11,6 +12,7 @@
 
 import workletUrl from './worklet.ts?worker&url';
 import { CommandRing, createRingBuffer } from './ring';
+import { CommandSender } from './sendQueue';
 import { Err, HostErr, TELEMETRY, TELEMETRY_LEN } from './protocol';
 import type { ProcessorOptions } from './worklet';
 
@@ -33,8 +35,14 @@ export class AudioEngine {
   onSampleLoaded?: (id: number, code: number) => void;
   /** Fires once if the engine stops working after start (see `failure`). */
   onError?: (message: string) => void;
+  /**
+   * Commands have been waiting > 2 s for room in the ring, or the backlog is
+   * huge (message), or it drained again (null). Nothing is dropped.
+   */
+  onCommandStall?: (message: string | null) => void;
 
   private readonly ring: CommandRing;
+  private readonly sender: CommandSender;
   private readonly tele: Float64Array;
   /** FIFO of loadSample resolvers per sample id (the worklet replies in order). */
   private readonly waiting = new Map<number, ((code: number) => void)[]>();
@@ -50,6 +58,16 @@ export class AudioEngine {
   ) {
     this.sampleRate = ctx.sampleRate;
     this.ring = new CommandRing(ringSab);
+    const ring = this.ring;
+    this.sender = new CommandSender({
+      push: (op, a, b, c, d) => ring.push(op, a, b, c, d),
+      schedule: (fn) => void setTimeout(fn, 0),
+      now: () => performance.now(),
+      onStall: (m) => {
+        if (m !== null) console.warn(m);
+        this.onCommandStall?.(m);
+      },
+    });
     this.tele = new Float64Array(telemetrySab, 0, TELEMETRY_LEN);
     this.ready = new Promise((resolve, reject) => {
       // Before 'ready' a failure rejects start(); after it, it's reported via onError.
@@ -87,6 +105,7 @@ export class AudioEngine {
   private fail(message: string): void {
     if (this.failMsg !== null) return;
     this.failMsg = message;
+    this.sender.clear(); // nothing drains the ring any more
     console.error(`daw-engine stopped: ${message}`);
     // Nothing will answer pending uploads any more (or answers are moot).
     for (const q of this.waiting.values()) for (const done of q) done(HostErr.ENGINE_STOPPED);
@@ -132,11 +151,20 @@ export class AudioEngine {
     }
   }
 
-  /** Queue a command for the next audio block. False (and a warning) if the ring is full. */
+  /**
+   * Queue a command for the audio thread, after every earlier one. Never
+   * drops: if the ring is full it waits in the backlog (see sendQueue.ts).
+   * False only once the engine has failed (the command goes nowhere).
+   */
   send(op: number, a = 0, b = 0, c = 0, d = 0): boolean {
-    const ok = this.ring.push(op, a, b, c, d);
-    if (!ok) console.warn(`command ring full, dropped op ${op}`);
-    return ok;
+    if (this.failMsg !== null) return false;
+    this.sender.send(op, a, b, c, d);
+    return true;
+  }
+
+  /** Commands waiting for room in the ring (0 normally). */
+  get commandBacklog(): number {
+    return this.sender.backlog;
   }
 
   /**

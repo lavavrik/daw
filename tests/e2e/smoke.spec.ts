@@ -311,6 +311,32 @@ test('engine failure is shown prominently and loads settle', async ({ page }) =>
   expect(await maxPeak(page, 500)).toBe(0);
 });
 
+test('a command burst larger than the ring is delivered, in order, nothing dropped', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click(); // live input
+  const backlog = await page.evaluate(() => {
+    const { engine, Op } = (window as unknown as DawWindow).__daw!;
+    // 3001 commands in one task (the ring holds 1023): only the last NOTE_ON
+    // leaves a note sounding, so a dropped or reordered tail means silence.
+    for (let i = 0; i < 1500; i++) {
+      engine!.send(Op.NOTE_ON, 69, 100);
+      engine!.send(Op.NOTE_OFF, 69);
+    }
+    engine!.send(Op.NOTE_ON, 69, 100);
+    return (engine as unknown as { commandBacklog: number }).commandBacklog;
+  });
+  expect(backlog).toBeGreaterThan(0);
+  await expect
+    .poll(() => page.evaluate(() => ((window as unknown as DawWindow).__daw!.engine as unknown as { commandBacklog: number }).commandBacklog))
+    .toBe(0);
+  await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05);
+  await expect(page.getByRole('alert')).toBeHidden(); // no stall banner
+  await page.evaluate(() => {
+    const { engine, Op } = (window as unknown as DawWindow).__daw!;
+    engine!.send(Op.NOTE_OFF, 69);
+  });
+});
+
 /** Fill the 32 Mi-float arena (stopped) so any further load needs growth. */
 async function fillArena(page: Page, leave: number) {
   const code = await page.evaluate(

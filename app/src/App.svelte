@@ -157,7 +157,7 @@
       <Browser />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} /></div>
-        <div class="bottom"><BottomPanel p={project} {engine} {clock} /></div>
+        <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} {recorder} {rec} /></div>
       </div>
     </div>
   {/if}

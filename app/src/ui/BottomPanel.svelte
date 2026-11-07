@@ -1,17 +1,37 @@
+<script module lang="ts">
+  /** Synth tab chosen last; kept for the session (module scope), default Piano roll. */
+  let lastSynthTab: 'pianoroll' | 'instrument' = 'pianoroll';
+</script>
+
 <script lang="ts">
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
+  import PianoRoll from './pianoroll/PianoRoll.svelte';
+  import type { NoteInput } from '../input/noteInput';
+  import type { Recorder, RecStatus } from '../state/recorder';
   import { banners } from '../state/banners.svelte';
 
-  let { p, engine, clock }: { p: Project; engine: AudioEngine; clock: AudioClock | null } = $props();
+  let { p, engine, clock, noteInput = null, recorder = null, rec = { armed: false, state: 'off', takeNotes: 0 } }: {
+    p: Project;
+    engine: AudioEngine;
+    clock: AudioClock | null;
+    /** Played-note bus (the piano roll's keyboard auditions through it). */
+    noteInput?: NoteInput | null;
+    recorder?: Recorder | null;
+    rec?: RecStatus;
+  } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   const later = 'Coming in a later milestone';
-  // Which tab is shown follows the selected track's kind: drum -> Step grid,
-  // synth -> Instrument (the only tab each kind has so far).
-  const active = $derived(track?.kind === 'synth' ? 'instrument' : track?.kind === 'drum' ? 'step' : null);
+  // Which tab is shown follows the selected track's kind: drum -> Step grid;
+  // synth -> Piano roll or Instrument, whichever was picked last this session.
+  let synthTab = $state(lastSynthTab);
+  const active = $derived(track?.kind === 'synth' ? synthTab : track?.kind === 'drum' ? 'step' : null);
+  function pickSynthTab(t: 'pianoroll' | 'instrument') {
+    synthTab = lastSynthTab = t;
+  }
 
   // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
@@ -26,8 +46,8 @@
     {/if}
     <span class="tabs">
       <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'}>Step grid</button>
-      <button class="tab" disabled title={later}>Piano roll</button>
-      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'}>Instrument</button>
+      <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
+      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
       <button class="tab" disabled title={later}>Mixer</button>
     </span>
   </div>
@@ -44,6 +64,8 @@
     {/if}
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
+    {:else if track && track.kind === 'synth' && active === 'pianoroll'}
+      {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} {recorder} {rec} />{/key}
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} />{/key}
     {/if}

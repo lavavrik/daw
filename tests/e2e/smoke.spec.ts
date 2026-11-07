@@ -333,7 +333,7 @@ test('deferred drop while playing: notice, loads on Stop, no dropouts', async ({
   // Select a synth track first: the step grid unmounts, but the pending load
   // is session state (state/sampleLoads.ts) and must still land on Stop.
   await page.getByTestId('add-synth-track').click();
-  await expect(page.getByTestId('rack')).toBeVisible();
+  await expect(page.getByTestId('pianoroll')).toBeVisible();
   await expect(page.getByTestId('row-0')).toHaveCount(0);
   await page.keyboard.press('Space'); // Stop -> retry (grows memory)
   await expect(page.getByTestId('notice')).toBeHidden();
@@ -369,6 +369,10 @@ test('add synth track, it plays from the keyboard', async ({ page }) => {
   await expect(row).toContainText('Synth · Deep Bass');
   await expect(row).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
+  // Synth tracks open on the Piano roll (default); the rack is one tab away.
+  await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
+  await expect(page.getByTestId('pianoroll')).toBeVisible();
+  await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
   await expect(page.getByTestId('rack')).toBeVisible();
   await page.keyboard.down('KeyA');
@@ -434,6 +438,7 @@ async function holdPeak(page: Page, keys: string[], ms = 700) {
 async function addSynth(page: Page) {
   await startAudio(page);
   await page.getByTestId('add-synth-track').click();
+  await page.getByRole('button', { name: 'Instrument' }).click(); // default tab is the Piano roll
   await expect(page.getByTestId('rack')).toBeVisible();
 }
 

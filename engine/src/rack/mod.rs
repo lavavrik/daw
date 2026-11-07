@@ -919,6 +919,58 @@ mod tests {
         m
     }
 
+    /// Plan 11 review: mono MIDI In `vel` feeds an ADSR `vel`, which latches
+    /// it on the gate's rising sample. A note from silence must deliver its
+    /// own velocity at once (not glide in from the previous note's); a
+    /// legato note keeps the ADSR's latched velocity while MIDI `vel` glides.
+    #[test]
+    fn mono_velocity_reaches_adsr_on_fresh_notes() {
+        use super::modules::NoteEvent;
+        let fx = &mut FxPool::empty();
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::MidiIn, fx), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Adsr, fx), OK);
+        assert_eq!(r.add_module(2, ModuleKind::Out, fx), OK);
+        assert_eq!(r.set_param(0, 1, 1.0), OK); // mono
+        assert_eq!(r.set_param(1, 0, 0.001), OK); // attack
+        assert_eq!(r.set_param(1, 2, 1.0), OK); // sustain
+        assert_eq!(r.set_param(1, 3, 0.005), OK); // release
+        assert_eq!(r.set_param(1, 5, 1.0), OK); // vel_amt
+        assert_eq!(r.set_param(2, 0, 1.0), OK); // Out level
+        assert_eq!(r.connect((0, 1), (1, 0)), OK); // gate
+        assert_eq!(r.connect((0, 2), (1, 1)), OK); // vel -> adsr vel
+        assert_eq!(r.connect((1, 0), (2, 0)), OK); // env -> l
+        assert_eq!(r.connect((0, 2), (2, 1)), OK); // MIDI vel -> r
+        let mut block = |r: &mut Rack, n: usize| {
+            let (mut l, mut rr) = (Vec::new(), Vec::new());
+            for _ in 0..n {
+                let (mut bl, mut br) = ([0.0f32; 128], [0.0f32; 128]);
+                r.render_add(&ctx(), fx, SampleView::NONE, &mut bl, &mut br);
+                l.extend_from_slice(&bl);
+                rr.extend_from_slice(&br);
+            }
+            (l, rr)
+        };
+        block(&mut r, 10);
+        for vel in [127u8, 40, 100, 1] {
+            r.note(NoteEvent::On { note: 60, vel });
+            let (l, _) = block(&mut r, 20);
+            let want = vel as f32 / 127.0;
+            assert!((l.last().unwrap() - want).abs() < 1e-4, "vel {vel}: env {} want {want}", l.last().unwrap());
+            r.note(NoteEvent::Off { note: 60 });
+            block(&mut r, 20);
+        }
+        // Legato: 62 (vel 127) over a held 60 (vel 40): no new edge, so the
+        // ADSR keeps 40; MIDI vel itself glides (not a step) to 127.
+        r.note(NoteEvent::On { note: 60, vel: 40 });
+        let (_, before) = block(&mut r, 20);
+        r.note(NoteEvent::On { note: 62, vel: 127 });
+        let (l, rr) = block(&mut r, 20);
+        assert!(l.iter().all(|&e| (e - 40.0 / 127.0).abs() < 1e-4), "legato keeps the first velocity");
+        assert!(rr[0] - before.last().unwrap() < 0.1, "MIDI vel glides on legato: {}", rr[0]);
+        assert!((rr.last().unwrap() - 1.0).abs() < 1e-4);
+    }
+
     #[test]
     fn lfo_through_vca_to_out_renders() {
         let mut r = Rack::new(SR);

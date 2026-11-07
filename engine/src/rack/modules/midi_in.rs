@@ -24,7 +24,9 @@
 //! # Mono
 //! * Last-note priority on 1 channel. Legato: a note pressed while another is
 //!   held keeps the gate high (no retrigger). Releasing returns to the
-//!   previous held note. `vel` follows the most recent note-on (smoothed 5 ms).
+//!   previous held note. `vel` follows the most recent note-on: it jumps to
+//!   a note started from silence (an ADSR `vel` latches it on the rising
+//!   gate) and glides 5 ms on a legato note.
 //! * `glide` moves the pitch exponentially toward the target. Convention
 //!   (same as the ADSR): the remaining distance is 1% after `glide` seconds,
 //!   i.e. `tau = glide / ln(100)`. Poly mode ignores glide. `glide` 0 = off.
@@ -288,6 +290,9 @@ impl MidiIn {
             // Fresh press from silence (not legato).
             v.retrig |= v.emitted;
             v.gate = true;
+            // An ADSR latches `vel` on this note's rising gate sample: it
+            // must read this note's velocity, not a glide from the last one.
+            self.mono_vel.snap();
         }
         v.vel = vel;
         v.down = true;

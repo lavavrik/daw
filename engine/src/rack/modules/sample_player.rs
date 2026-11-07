@@ -217,6 +217,12 @@ impl SamplePlayer {
                     self.trigger(ch, sample, start, smp);
                 }
                 self.gate[ch] = on;
+                // A silent channel (no live or fading voice) costs no exp2
+                // and no sample lookup.
+                if !self.active[ch].live && !self.fading[ch].live {
+                    out.data[ch][i] = 0.0;
+                    continue;
+                }
                 let rate = if track {
                     let oct = pitch.map_or(0.0, |p| p.get(ch, i)) - root_oct;
                     let oct = if oct.is_finite() { oct.clamp(-MAX_OCTAVES, MAX_OCTAVES) } else { 0.0 };

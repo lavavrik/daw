@@ -9,6 +9,11 @@
 // worklet goes silent for good and `onError` fires once; `failure` keeps the
 // message. Every loadSample() promise always settles (pending ones resolve
 // with HostErr.ENGINE_STOPPED).
+//
+// Lifetime: one engine per AudioContext. The audio settings (audio/restart.ts)
+// close() this one and start() another with a new latency hint; close()
+// settles everything pending and turns send() into a no-op, so a late
+// command to the old engine goes nowhere (and marks no edit).
 
 import workletUrl from './worklet.ts?worker&url';
 import { CommandRing, createRingBuffer } from './ring';
@@ -29,8 +34,23 @@ type WorkletMessage =
 /** Chrome's AudioContext.playbackStats (not in lib.dom; feature-detected). */
 type WithPlaybackStats = { playbackStats?: { underrunEvents?: number } };
 
+/** AudioContextOptions.latencyHint: a category, or a buffer length in seconds. */
+export type LatencyHint = AudioContextLatencyCategory | number;
+
+/** The output path's latency as the context reports it (Settings readout). */
+export interface LatencyInfo {
+  sampleRate: number;
+  /** AudioContext.baseLatency: the context's own buffering. */
+  baseMs: number;
+  /** AudioContext.outputLatency: device + OS (0 until Chrome knows it). */
+  outputMs: number;
+  totalMs: number;
+}
+
 export class AudioEngine {
   readonly sampleRate: number;
+  /** The latency hint this engine's AudioContext was created with. */
+  readonly latencyHint: LatencyHint;
   /**
    * Fires when a load that first resolved with Err.DEFERRED finishes: code is
    * Err.OK (now playable) or the failure (an Err / HostErr code).
@@ -66,6 +86,7 @@ export class AudioEngine {
   private readonly ready: Promise<void>;
   private started = false;
   private failMsg: string | null = null;
+  private closed = false;
 
   private constructor(
     private readonly ctx: AudioContext,
@@ -73,8 +94,10 @@ export class AudioEngine {
     ringSab: SharedArrayBuffer,
     telemetrySab: SharedArrayBuffer,
     metersSab: SharedArrayBuffer,
+    latencyHint: LatencyHint,
   ) {
     this.sampleRate = ctx.sampleRate;
+    this.latencyHint = latencyHint;
     this.ring = new CommandRing(ringSab);
     const ring = this.ring;
     this.sender = new CommandSender({
@@ -137,9 +160,15 @@ export class AudioEngine {
     this.onError?.(message);
   }
 
-  /** Must be called from a user gesture (it creates/resumes the AudioContext). */
-  static async start(): Promise<AudioEngine> {
-    const ctx = new AudioContext({ latencyHint: 'interactive' });
+  /**
+   * Must be called from a user gesture (it creates/resumes the AudioContext).
+   * `latencyHint`: the context's buffer size request (Settings; default
+   * 'interactive', the lowest). The browser may round it; latencyInfo()
+   * reports what it chose.
+   */
+  static async start(opts: { latencyHint?: LatencyHint } = {}): Promise<AudioEngine> {
+    const latencyHint = opts.latencyHint ?? 'interactive';
+    const ctx = new AudioContext({ latencyHint });
     // Resume synchronously inside the gesture, before any await.
     const resumed = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
     try {
@@ -166,7 +195,7 @@ export class AudioEngine {
         outputChannelCount: [2],
         processorOptions,
       });
-      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab);
+      const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab, latencyHint);
       await engine.ready;
       node.connect(ctx.destination);
       await resumed;
@@ -183,7 +212,7 @@ export class AudioEngine {
    * False only once the engine has failed (the command goes nowhere).
    */
   send(op: number, a = 0, b = 0, c = 0, d = 0): boolean {
-    if (this.failMsg !== null) return false;
+    if (this.failMsg !== null || this.closed) return false;
     this.onCommand?.(op);
     this.sender.send(op, a, b, c, d);
     return true;
@@ -198,10 +227,33 @@ export class AudioEngine {
    * `timeoutMs`; HostErr.ENGINE_STOPPED once the engine has failed.
    */
   resetAll(timeoutMs = 2000): Promise<number> {
-    if (this.failMsg !== null) return Promise.resolve(HostErr.ENGINE_STOPPED);
+    if (this.failMsg !== null || this.closed) return Promise.resolve(HostErr.ENGINE_STOPPED);
     const done = this.resetAcks.wait(timeoutMs);
     this.send(Op.RESET_ALL);
     return done;
+  }
+
+  /**
+   * Stop this engine for good (audio restart): the worklet is disconnected
+   * and the AudioContext closed. Pending uploads and reset waits settle with
+   * HostErr.ENGINE_STOPPED; later send() / loadSample() do nothing. onError
+   * does not fire (this is not a failure). Idempotent.
+   */
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.sender.clear();
+    this.node.port.onmessage = null;
+    this.node.onprocessorerror = null;
+    for (const q of this.waiting.values()) for (const done of q) done(HostErr.ENGINE_STOPPED);
+    this.waiting.clear();
+    this.resetAcks.failAll(HostErr.ENGINE_STOPPED);
+    try {
+      this.node.disconnect();
+    } catch {
+      // already disconnected
+    }
+    await this.ctx.close().catch(() => {});
   }
 
   /** Commands waiting for room in the ring (0 normally). */
@@ -216,7 +268,7 @@ export class AudioEngine {
    * once stopped and then calls `onSampleLoaded(id, code)`. Always settles.
    */
   loadSample(id: number, channels: Float32Array[]): Promise<number> {
-    if (this.failMsg !== null) return Promise.resolve(HostErr.ENGINE_STOPPED);
+    if (this.failMsg !== null || this.closed) return Promise.resolve(HostErr.ENGINE_STOPPED);
     // The worklet matches replies by id, so only post ids it can echo as u32.
     if (!Number.isInteger(id) || id < 0 || id > 0xffffffff) return Promise.resolve(Err.BAD_INDEX);
     const frames = channels[0]?.length ?? 0;
@@ -299,6 +351,13 @@ export class AudioEngine {
   }
 
   latencyMs(): number {
-    return (this.ctx.baseLatency + (this.ctx.outputLatency || 0)) * 1000;
+    return this.latencyInfo().totalMs;
+  }
+
+  /** Sample rate and the context's base + output latency (Settings readout). */
+  latencyInfo(): LatencyInfo {
+    const baseMs = (this.ctx.baseLatency || 0) * 1000;
+    const outputMs = (this.ctx.outputLatency || 0) * 1000;
+    return { sampleRate: this.ctx.sampleRate, baseMs, outputMs, totalMs: baseMs + outputMs };
   }
 }

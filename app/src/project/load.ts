@@ -18,6 +18,13 @@
 //      off / metronome off / no input track, so these are always sent) --
 //      and the normalized project the UI state (projectState) is built from.
 // The rack goes through patchRack, the same builder loadPatch uses.
+//
+// replayInto (below) is the audio restart's variant (audio/restart.ts): the
+// project is already in memory, so steps 1 and 3 fall away -- no file to
+// validate, no UI state to blank, no RESET_ALL (the engine is brand new) --
+// and steps 2, 4 and 5 run on `p` itself: every p.sampleFiles entry decoded
+// with the new context and uploaded at its OWN id, then projectCommands of
+// serialize(p).
 import { Err, Op } from '../audio/protocol';
 import { decodeBytes, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
@@ -27,6 +34,7 @@ import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte'
 import type { ChannelState, Project, SampleFile, Track } from '../state/project.svelte';
 import { sampleFile } from '../state/sampleFiles';
 import { projectCommands, trackState } from './commands';
+import { serialize } from './serialize';
 import { validate } from './schema';
 import type { MixParamsJson, ProjectJson } from './schema';
 
@@ -126,6 +134,52 @@ export async function loadProject(
     p.loading = false;
   }
   return warnings;
+}
+
+/**
+ * Rebuild a FRESH engine (a new AudioContext: the audio restart) from the
+ * live project `p`, which is not changed at all: same track ids, selection,
+ * name, folder, dirty mark, version and undo history.
+ *
+ * Every sample in p.sampleFiles is decoded from its in-memory original
+ * bytes with `ctx` (the new context: it resamples to the new rate) and
+ * uploaded at the id it already has -- used or not, since an undo may bring
+ * an unused one back, and undo snapshots name samples by id. Then the
+ * commands of projectCommands(serialize(p)) are sent, synchronously, after
+ * the last upload (a row's sample must be in the arena before
+ * SET_ROW_SAMPLE). No RESET_ALL: a new engine is blank (and a reset would
+ * need a running context to be acknowledged).
+ *
+ * `codes`: each uploaded sample's result (Err.OK, or why it failed); a
+ * sample that could not be decoded has none. A sample that did not make it
+ * is a warning; the UI keeps it (a Save still writes its bytes), only the
+ * engine plays nothing for it.
+ */
+export async function replayInto(
+  p: Project, engine: LoadEngine, ctx: SampleDecoder,
+): Promise<{ warnings: string[]; codes: Map<number, number> }> {
+  const warnings: string[] = [];
+  const codes = new Map<number, number>();
+  const files = [...p.sampleFiles].sort((a, b) => a[0] - b[0]);
+  const decoded: { id: number; name: string; channels: Float32Array[] }[] = [];
+  for (const [id, f] of files) {
+    try {
+      decoded.push({ id, name: f.name, channels: await decodeBytes(f.bytes.slice(0), f.name, ctx) });
+    } catch {
+      warnings.push(`Sample "${f.name}" could not be decoded again`);
+    }
+  }
+  const ids = new Map<number, number>();
+  for (const d of decoded) {
+    const c = await engine.loadSample(d.id, d.channels);
+    codes.set(d.id, c);
+    if (c === Err.OK || c === Err.DEFERRED) ids.set(d.id, d.id);
+    else warnings.push(`Sample "${d.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
+  }
+  const pc = projectCommands(serialize(p), ids);
+  warnings.push(...pc.warnings);
+  for (const c of pc.commands) engine.send(c[0], c[1], c[2], c[3], c[4]);
+  return { warnings, codes };
 }
 
 /** The UI state of a blank engine session (what RESET_ALL leaves). */

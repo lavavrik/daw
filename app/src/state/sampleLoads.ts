@@ -39,23 +39,48 @@ let sink: SampleLoadEngine | null = null;
 export function installSampleLoads(p: Project, engine: SampleLoadEngine): () => void {
   pending.clear();
   project = p;
-  sink = engine;
-  engine.onSampleLoaded = (id, code) => {
-    const w = pending.get(id);
-    if (!w) return;
-    pending.delete(id);
-    // The track or row may have been removed meanwhile; setRowSample is a no-op then.
-    // RESET: dropped by an engine reset (project load); its session is gone.
-    if (code === Err.OK) w.attach(id);
-    else if (code !== HostErr.RESET) banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`;
-    if (pending.size === 0) banners.notice = null;
-  };
+  bind(engine);
   return () => {
-    engine.onSampleLoaded = undefined;
+    if (sink) sink.onSampleLoaded = undefined;
     pending.clear();
     project = null;
     sink = null;
   };
+}
+
+/** The settle handler on `engine` (and row attaches through it). */
+function bind(engine: SampleLoadEngine) {
+  sink = engine;
+  engine.onSampleLoaded = (id, code) => settle(id, code, engine.sampleRate);
+}
+
+function settle(id: number, code: number, sampleRate: number) {
+  const w = pending.get(id);
+  if (!w) return;
+  pending.delete(id);
+  // The track or row may have been removed meanwhile; setRowSample is a no-op then.
+  // RESET: dropped by an engine reset (project load); its session is gone.
+  if (code === Err.OK) w.attach(id);
+  else if (code !== HostErr.RESET) banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, sampleRate)}`;
+  if (pending.size === 0) banners.notice = null;
+}
+
+/**
+ * Audio restart (audio/restart.ts): the old engine is closed with loads
+ * still waiting for Stop. Move the handler to `engine` and settle each
+ * waiting load from the new engine's upload results (`codes`, from
+ * replayInto: the restart re-uploaded every kept sample at its own id); a
+ * load the new engine never got (its bytes were not kept) is dropped.
+ */
+export function rebindSampleLoads(engine: SampleLoadEngine, codes: Map<number, number>) {
+  if (sink && sink !== engine) sink.onSampleLoaded = undefined;
+  bind(engine);
+  for (const id of [...pending.keys()]) {
+    const code = codes.get(id);
+    if (code === undefined) pending.delete(id);
+    else if (code !== Err.DEFERRED) settle(id, code, engine.sampleRate); // DEFERRED: the new engine settles it
+  }
+  if (pending.size === 0) banners.notice = null;
 }
 
 /**

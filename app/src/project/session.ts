@@ -37,6 +37,12 @@ export interface ProjectSession {
    * (nothing done).
    */
   restore(read: () => Promise<{ json: unknown; files: Map<string, ArrayBuffer> }>): Promise<string[] | null>;
+  /**
+   * Run `fn` as one more operation under the same one-at-a-time guard (the
+   * audio restart, audio/restart.ts: it must not interleave with an Open
+   * still reading its folder). Undefined (fn not run) while another runs.
+   */
+  exclusive<T>(fn: () => Promise<T>): Promise<T | undefined>;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -207,6 +213,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
   return {
     saveTo,
     openFrom,
+    exclusive: (fn) => once(fn),
     restore: async (read) => (await once(() => restore(read))) ?? null,
     saveAs: () => once(saveAs),
     save: () => once(() => (p.folder ? saveInto(p.folder, p.name) : saveAs())),

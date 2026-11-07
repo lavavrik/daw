@@ -166,4 +166,23 @@ describe('project session', () => {
     expect(p.loading).toBe(false);
     expect(p.name).toBe('Mine');
   });
+  it('exclusive (audio restart) never runs while an Open is still reading its folder', async () => {
+    const { p } = await buildFixture();
+    let release!: (d: FileSystemDirectoryHandle | null) => void;
+    const s = createProjectSession(p, engine(), { pick: () => new Promise((r) => (release = r)) });
+    const opening = s.open(); // waiting in the picker: the guard is held
+    let ran = false;
+    expect(await s.exclusive(async () => (ran = true))).toBeUndefined();
+    expect(ran).toBe(false);
+    release(null); // picker cancelled
+    await opening;
+    expect(await s.exclusive(async () => 'restarted')).toBe('restarted');
+    // ...and holds the guard itself: an Open meanwhile is a no-op.
+    let pickerOpened = false;
+    const s2 = createProjectSession(p, engine(), { pick: async () => ((pickerOpened = true), null) });
+    await s2.exclusive(async () => {
+      await s2.open();
+    });
+    expect(pickerOpened).toBe(false);
+  });
 });

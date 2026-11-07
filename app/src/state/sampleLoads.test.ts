@@ -4,7 +4,7 @@ import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { banners } from './banners.svelte';
 import { Project } from './project.svelte';
-import { deferSampleAssign, deferSampleLoad, installSampleLoads, pendingSampleLoads } from './sampleLoads';
+import { deferSampleAssign, deferSampleLoad, installSampleLoads, pendingSampleLoads, rebindSampleLoads } from './sampleLoads';
 
 function fakeEngine() {
   const sent: number[][] = [];
@@ -89,5 +89,35 @@ describe('deferred sample assign (any target)', () => {
     expect(banners.error).toMatch(/Couldn't load "bad"/);
     banners.error = null;
     undo();
+  });
+});
+
+describe('deferred sample loads across an audio restart', () => {
+  it('rebind moves the handler to the new engine and settles waiting loads from its upload results', () => {
+    const p = new Project();
+    const { e: old } = fakeEngine();
+    const undo = installSampleLoads(p, old);
+    const t = addDrumTrack(p, old)!;
+    banners.error = null;
+    deferSampleLoad(4, t.id, t.rows[0].id, 'kick');
+    deferSampleLoad(5, t.id, t.rows[1].id, 'snare');
+    deferSampleLoad(6, t.id, t.rows[2].id, 'gone'); // its bytes were not re-uploaded
+    const { e: next, sent } = fakeEngine();
+    rebindSampleLoads(next, new Map([[4, Err.OK], [5, Err.OUT_OF_MEMORY]]));
+    expect(old.onSampleLoaded).toBeUndefined();
+    // Uploaded to the new engine: attached through it.
+    expect(t.rows[0].sampleId).toBe(4);
+    expect(sent).toEqual([[Op.SET_ROW_SAMPLE, t.slot, 0, 4, 0]]);
+    expect(banners.error).toMatch(/snare/);
+    // Not uploaded at all: dropped (an engine restart never had it).
+    expect(t.rows[2].sampleId).toBeNull();
+    expect(pendingSampleLoads()).toBe(0);
+    expect(banners.notice).toBeNull();
+    // Later settles arrive on the new engine.
+    deferSampleLoad(8, t.id, t.rows[3].id, 'hat');
+    next.onSampleLoaded!(8, Err.OK);
+    expect(t.rows[3].sampleId).toBe(8);
+    undo();
+    expect(next.onSampleLoaded).toBeUndefined();
   });
 });

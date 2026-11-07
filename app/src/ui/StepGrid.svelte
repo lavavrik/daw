@@ -35,6 +35,8 @@
   // ---- painting -------------------------------------------------------
   // pointerdown decides the target (on->off, off->on at 100, Alt = 60);
   // entering other cells with the button held applies the same value.
+  // Keyboard: Enter on a focused cell is a click with detail 0 (a mouse
+  // click has detail >= 1 and was already handled on pointerdown).
   let paintVel: number | null = null;
 
   function down(e: PointerEvent, rowId: string, step: number, cur: number) {
@@ -200,6 +202,7 @@
             aria-pressed={v > 0}
             onpointerdown={(e) => down(e, row.id, s, v)}
             onpointerenter={() => enter(row.id, s)}
+            onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
           ></button>
         {/each}
       </div>

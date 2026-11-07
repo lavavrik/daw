@@ -972,3 +972,16 @@ test('BPM: Enter sends SET_TEMPO once and gives the keys back to the piano', asy
   await page.waitForTimeout(100);
   expect(await page.evaluate(() => (window as any).__daw.tempoSends)).toBe(1);
 });
+
+test('step cells toggle from the keyboard (Enter), as a press does', async ({ page }) => {
+  await startAudio(page);
+  const cell = page.getByTestId('step-0-2');
+  await cell.focus();
+  await page.keyboard.press('Enter');
+  await expect(cell).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Enter');
+  await expect(cell).toHaveAttribute('aria-pressed', 'false');
+  // A mouse click still toggles exactly once.
+  await cell.click();
+  await expect(cell).toHaveAttribute('aria-pressed', 'true');
+});

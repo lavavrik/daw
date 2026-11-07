@@ -2,7 +2,9 @@
   // One mixer strip: a track, a return (Reverb / Delay) or the Master.
   // Top to bottom (anti-goal: never guess what a control is or what it is set
   // to — every control is labelled and shows its value):
-  //   name (track colour; click selects the track) · M / S ·
+  //   name (track colour; click selects the track) · M / S · ∿ (show this
+  //   strip in the analyser; tracks and returns, one at a time, again = back
+  //   to the Master; view state owned by ui/vis/analyserBus.ts) ·
   //   EQ (collapsed, "on" toggle in its header) ·
   //   Comp (tracks; collapsed, "on" toggle, the sidechain source always shown
   //   as "SC: Drums · kick", live gain reduction) ·
@@ -28,6 +30,7 @@
   import { useAutoBus } from '../autoBus';
   import type { MeterBus } from './meterBus';
   import { SCALE_TICKS, delayClampNote, faderPos, formatDb } from './mixMath';
+  import { analyserBus } from '../vis/analyserBus';
 
   let { p, engine, bus, target, kind, channel, name, color = null, subtitle = '', selected = false, onselect }: {
     p: Project;
@@ -107,6 +110,14 @@
     grEl.dataset.grDb = r.toFixed(1);
   }));
 
+  // ---- ∿: show this strip in the mixer analyser ----------------------------
+  let analysed = $state(false);
+  $effect(() => {
+    if (kind === 'master') return;
+    const ch = channel;
+    return analyserBus().onSelect((s) => (analysed = s === ch));
+  });
+
   const muted = $derived(val('mute') === 1);
   const soloed = $derived(val('solo') === 1);
   const fader = $derived(val('fader'));
@@ -168,6 +179,9 @@
     {/if}
     {#if kind === 'track'}
       <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloed ? `${name} is soloed — click to unsolo` : `Solo ${name} (other tracks are muted; returns keep playing)`} data-testid="solo" onclick={() => toggleSolo(p, engine, target)}>S</button>
+    {/if}
+    {#if kind !== 'master'}
+      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid="analyse" onclick={() => analyserBus().toggle(channel, target)}>∿</button>
     {/if}
   </div>
 
@@ -272,6 +286,8 @@
   .ms button { width: 26px; height: 18px; font: 600 11px ui-sans-serif, system-ui, sans-serif; border: 1px solid #3a3d47; border-radius: 3px; background: #2a2c33; color: #c9cbd3; cursor: pointer; }
   .ms .m.lit { background: #4dabf7; border-color: #4dabf7; color: #111; }
   .ms .s.lit { background: #ffd43b; border-color: #ffd43b; color: #111; }
+  .ms .an { margin-left: auto; font-size: 13px; line-height: 1; }
+  .ms .an.lit { background: #7fd1ae; border-color: #7fd1ae; color: #111; }
   .ms button:focus-visible { outline: 1px solid #f0a23a; }
   .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: #d7d9e0; }
   .gr { display: block; color: #a3a6b3; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }

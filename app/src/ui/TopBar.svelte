@@ -28,6 +28,10 @@
   // readout moved into the panel (that freed the room for the ⚙); the
   // readout itself turns orange above 40 ms instead.
   //
+  // Master spectrum: a 64 × 18 px, 20-band view of the master (ui/vis/
+  // Spectrum.svelte on the analyser bus, no labels) before the CPU pill; a
+  // click opens the Mixer tab, where the full analyser is.
+  //
   // Layout: one row that never wraps at 1280 px (tight since the Project menu:
   // 4 px gaps, "Metro", narrow BPM field, compact ↶ ↷ and "↶ Take"). Every control is nowrap;
   // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
@@ -38,6 +42,7 @@
   import { BT_LATENCY_MS } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
   import Settings from './Settings.svelte';
+  import Spectrum from './vis/Spectrum.svelte';
   import { setLoop, setMode } from '../state/song-actions';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
@@ -352,8 +357,11 @@
       Audio engine stopped — <button onclick={() => location.reload()}>reload</button>
     </span>
   {/if}
+  <button class="mini" data-testid="mini-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
+    <Spectrum need="mini" width={64} height={18} />
+  </button>
   <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-    CPU {cpu}%<span class="long">{' '}· {dropouts} drop</span>
+    <span class="cpuw">CPU </span>{cpu}%<span class="long">{' '}· {dropouts} drop</span>
   </span>
   <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
     <summary
@@ -378,17 +386,31 @@
      MIDI device) are capped with an ellipsis (full text in the tooltip);
      below 1400 px they shrink further, CPU drops its "· N drop" tail (kept
      while there are dropouts) and "● unsaved" becomes "●" (tooltip: Unsaved
-     changes), leaving ~80 px of slack at 1280 px in the widest state
-     (playing, unsaved); Play/Stop has a fixed width so starting playback
+     changes), leaving ~20 px of slack at 1280 px in the widest state
+     (playing, unsaved) since the 66 px master spectrum came in; to make
+     room below 1400 px the gaps are 3 px, the Keys / MIDI caps tighter, the small and
+     segmented buttons, the BPM field and Metro have less padding, and with
+     dropouts the red pill drops its "CPU " word ("1% · 2 drop", full text in
+     the tooltip), so the dropout tail still fits on one row at 1280 px
+     (a wrap mid-session would move everything under the bar); Play/Stop has
+     a fixed width so starting playback
      never re-flows the bar. If it still doesn't fit, the bar wraps
      onto a second row. overflow-x: clip (not hidden) stays as the last guard:
      it never becomes a scroll container, so the popovers can drop below. */
   .bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
   .pill.keys, .pill.midi { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 1399px) {
-    .pill.keys, .pill.midi { max-width: 110px; }
+    /* 90 / 72: room for the 64 px master spectrum at 1280 px. */
+    .pill.keys { max-width: 90px; }
+    .pill.midi { max-width: 72px; }
     .pill:not(.bad) .long, .unsaved .long { display: none; }
     .proj summary { max-width: 160px; }
+    /* Room for the dropout tail next to the master spectrum at 1280 px. */
+    .bar { gap: 3px; }
+    .small, .seg button:not(.hist button) { padding: 4px 6px; }
+    input { padding: 4px 6px; }
+    .metro { padding: 4px 7px; }
+    .pill.bad .cpuw { display: none; }
   }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
@@ -436,6 +458,8 @@
   .settings summary.bad { color: #f0a23a; }
   /* At the right edge: the panel opens leftwards. */
   .settings .panel { left: auto; right: 0; width: 270px; }
+  .mini { padding: 0; line-height: 0; border-color: #2a2c33; background: #15161a; }
+  .mini:hover { border-color: #4a4f63; background: #15161a; }
   .fatal { background: #c92a2a; color: #fff; font-weight: 700; padding: 4px 10px; border-radius: 4px; }
   .fatal button { background: #fff; color: #c92a2a; border-color: #fff; font-weight: 700; padding: 1px 8px; }
 </style>

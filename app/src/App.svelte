@@ -51,6 +51,7 @@
   import { serialize } from './project/serialize';
   import { createAutoBus, provideAutoBus } from './ui/autoBus';
   import { frameLoop } from './ui/vis/frameLoop';
+  import { analyserBus } from './ui/vis/analyserBus';
   import AutoMenu from './ui/AutoMenu.svelte';
   import { laneView } from './ui/song/laneView.svelte';
 
@@ -450,6 +451,8 @@
     window.__daw.engine = e;
     // The one frame loop for every visual serves this engine's visSab.
     frameLoop().attach(e);
+    // The analysers follow its sample rate (the loop re-sends their strip tap).
+    analyserBus().attach(e);
     unwatchStalls = preparedStalls ?? watchStalls(e);
     preparedStalls = null;
     // Telemetry history (heard time) is per engine: a new clock, which the
@@ -473,6 +476,7 @@
   /** Detach the per-engine loops from an engine about to close (audio restart). */
   function unwireEngine() {
     frameLoop().attach(null);
+    analyserBus().attach(null);
     stopWatch?.();
     stopWatch = null;
     unwatchStalls?.();

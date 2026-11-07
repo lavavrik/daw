@@ -185,6 +185,14 @@ same `l`/`r` values `mix_out` adds to the master bus, so its peaks equal the
 strip's meter exactly and the mix is unchanged. Off (−1) costs nothing. See
 `docs/architecture/visuals.md`.
 
+The **analyser** (plan 12 Task 3) sits right of the Master strip. Each track
+and return strip has a "∿" toggle (*Show in analyser*): one at a time,
+pressing it again goes back to the Master; view state, not saved, not an
+edit. The analyser bus sends the choice as `OP_VIS_TAP` (only while the
+panel is mounted), re-sends it after an audio restart, and falls back to the
+Master when the track is removed. See *Analyser* in
+`docs/architecture/visuals.md`.
+
 ## Engine reset
 
 `OP_RESET_ALL` calls `Mixer::reset_all`: every strip is rebuilt in place

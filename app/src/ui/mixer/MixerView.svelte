@@ -10,6 +10,12 @@
   // consumer with want 0 (the meters have their own SAB), watching the mixer
   // element: it stops while the mixer is off screen or the tab is hidden, and
   // is removed when the view is destroyed (switching tabs).
+  //
+  // The analyser (AnalyserPanel, right of the Master; plan 12 Task 3) shows
+  // the Master or the strip whose ∿ toggle is on: the analyser bus
+  // (ui/vis/analyserBus.ts) owns that choice and the strip tap (OP_VIS_TAP);
+  // the effect below tells it which strips exist, so a removed track's
+  // selection falls back to the Master.
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_DELAY, MIX_MASTER, MIX_REVERB } from '../../audio/protocol';
@@ -18,12 +24,19 @@
   import { createMeterBus } from './meterBus';
   import { frameLoop } from '../vis/frameLoop';
   import Strip from './Strip.svelte';
+  import AnalyserPanel from './AnalyserPanel.svelte';
+  import { analyserBus } from '../vis/analyserBus';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
 
   const bus = createMeterBus();
   let mixerEl: HTMLDivElement;
   onMount(() => frameLoop().add({ want: 0, el: mixerEl, frame: (now) => bus.tick(engine.meters(), now) }));
+  $effect(() => analyserBus().sync([
+    ...p.tracks.map((t) => ({ ch: t.slot, key: t.id })),
+    { ch: MIX_REVERB, key: 'reverb' },
+    { ch: MIX_DELAY, key: 'delay' },
+  ]));
 </script>
 
 <div class="mixer" data-testid="mixer" bind:this={mixerEl}>
@@ -45,6 +58,7 @@
   <Strip {p} {engine} {bus} target="reverb" kind="return" channel={MIX_REVERB} name="Reverb" subtitle="Return (send A)" />
   <Strip {p} {engine} {bus} target="delay" kind="return" channel={MIX_DELAY} name="Delay" subtitle="Return (send B)" />
   <Strip {p} {engine} {bus} target="master" kind="master" channel={MIX_MASTER} name="Master" subtitle="Limiter → output" />
+  <AnalyserPanel {p} />
 </div>
 
 <style>

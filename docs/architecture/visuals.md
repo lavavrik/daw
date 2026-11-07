@@ -7,7 +7,9 @@ the data path every visual shares; later sections describe each visual.
 Code: `engine/src/vis.rs`, `engine/src/mixer/mod.rs` (the tap),
 `engine/src/rack/{mod.rs,modules/out.rs}` and `engine/src/synth.rs` (voice
 activity), `app/src/audio/{visLayout,visCopy,worklet,engine}.ts`,
-`app/src/ui/vis/frameLoop.ts`.
+`app/src/ui/vis/frameLoop.ts`; the analyser: `app/src/ui/vis/{fft,spectrum,
+stereo,analyserBus}.ts`, `{Spectrum,Goniometer}.svelte`,
+`app/src/ui/mixer/AnalyserPanel.svelte`.
 
 ## Data path
 
@@ -47,7 +49,7 @@ fixed-address `VisBlock` (`vis.rs`):
   is view state: not an edit (`NON_EDIT_OPS`), never in `projectCommands`,
   kept across `RESET_ALL`; a new engine (audio restart) starts with it off,
   so the UI sets it through `frameLoop().setTap(ch)`, which re-sends it on
-  every `attach`.
+  every `attach`. The analyser bus is the one caller (*Analyser* below).
 - *Voice activity.* Each rack Out records its input channels' peaks beside
   its (unchanged) sum; the rack keeps the max over its Outs and the gates of
   its first MIDI In; once per block `Synths::write_voices` writes level and
@@ -104,3 +106,101 @@ MeterBus tick with want 0 (the meters have their own SAB) and the mixer
 element, instead of running its own rAF. A paused loop reads nothing, so the
 mixer's clip / LIMIT lights do not latch an over that happened (and fell
 away) while the mixer was off screen or the tab hidden.
+
+## Analyser
+
+The mixer's analyser and the top bar's master spectrum (plan 12 Task 3).
+
+```
+ master ring ─┐                               ┌─► top bar: 64 × 18, 20 bands
+ tap ring  ───┼─► analyserBus (ONE 30 Hz ─────┼─► AnalyserPanel spectrum:
+ SAB [3]   ───┘    frame-loop consumer)       │     320 × 140, 60 bands
+                   newest frames → (L+R)/2 →  └─► Goniometer + correlation
+                   Hann → FFT 4096 → bands →        (Master only)
+                   ballistics; correlation,
+                   goniometer points
+```
+
+**Where.** `AnalyserPanel` sits right of the Master strip (340 px; it
+scrolls with the strips): a header "Analyser · Master" or "· <strip>" in the
+strip's colour, the spectrum, and for the Master a 120 × 120 goniometer and
+a correlation bar. Each track and return strip has a "∿" toggle (*Show in
+analyser*): one strip at a time, pressing it again goes back to the Master.
+The choice is view state (not saved, not an edit). The top bar's 64 × 18
+master spectrum (20 bands, no labels) sits before the CPU pill; a click
+opens the Mixer tab.
+
+**Analysis** (`spectrum.ts`, `fft.ts`):
+
+- input: the mono sum `(L+R)/2` of the newest 4096 frames of the ring;
+- an in-place radix-2 real FFT (one complex 2048-point FFT, split), Hann
+  window, twiddles and every buffer allocated once per instance;
+- level: dB with the Hann coherent gain (0.5) corrected, so a full-scale
+  sine reads 0 dB; display range −90..+6 dB, gridlines at
+  30/50/100/200/500/1k/2k/5k/10k/20k Hz and 0/−12/−24/−48/−72 dB on a log10
+  axis (`freqToX(f) = log10(f/20)/3`, 1 kHz at 0.566);
+- **bands**, log-spaced 20 Hz–20 kHz: 60 (1/6 octave) for the panel, 20
+  (1/2 octave) for the top bar. Between bins the spectrum is a parabola (in
+  dB) through the taller of the two neighbouring bins and its neighbours —
+  the classic peak interpolation, which undoes the Hann scalloping (up to
+  −1.4 dB halfway between bins). A band takes the max of that curve over
+  its span: a band wider than a bin is the max of its bins (or a peak's
+  parabola top in the band); a band narrower than a bin (below ~100 Hz in
+  the panel: a bin is 11.7 Hz at 48 kHz) is interpolated, so the low end is
+  a curve, not a staircase. Measured: a full-scale sine reads within
+  ±0.27 dB in its own band anywhere from 21 Hz to 19.9 kHz, at 44.1 and
+  48 kHz, in both band sets; bands two octaves away read below −60 dB;
+- **ballistics**: instant rise, fall 24 dB/s; peak-hold dots hold 1.0 s,
+  then fall 12 dB/s; no slope tilt (a 3/4.5 dB/oct tilt is a follow-up);
+- hover readout "55 Hz · A1 · −8.2 dB": the frequency under the pointer,
+  its nearest note (A4 = 440 Hz), the level of its band — for tuning kick
+  and bass.
+
+**Stereo** (`stereo.ts`, Master only): correlation `Σ LR / √(Σ L² Σ R²)`
+over the newest 4800 frames (100 ms), smoothed by a 300 ms one-pole;
+silence (either side) reads 0, never NaN, so sparse material (a lone
+click) drifts toward 0 between hits. The goniometer draws the newest 2048
+frames as dots at `x = (R − L)/√2`, `y = (L + R)/√2`: mono is vertical,
+an inverted side horizontal. The scale is fixed with full scale at the
+radius (|(L, R)| ≤ √2 for samples within ±1 maps to the circle).
+
+**The bus** (`analyserBus.ts`) is one 30 Hz frame-loop consumer; views
+subscribe (`mini`, `panel`, `stereo`, each with its canvas as `el`, watched
+by the bus's own IntersectionObserver) and draw from its arrays after each
+analysis, so there is never a per-view FFT:
+
+- it wants the master ring (bit 1) while any master view is on screen —
+  the top bar, the goniometer, or the panel showing the Master — and the
+  tap ring (bit 2) only while the panel is on screen showing a strip; it
+  re-registers on the loop when those bits change and unregisters while
+  nothing is on screen;
+- it owns the tap choice: `select(ch | 'master')` / `toggle(ch)`; the
+  engine taps the selected strip while a panel is mounted, else −1,
+  through `frameLoop().setTap`, which re-sends it on every `attach` (App
+  attaches the loop and the bus, for its sample rate, to each engine);
+  `sync(strips)` (MixerView) falls back to the Master when the selected
+  track is removed or its slot now holds another track;
+- a change of the tapped channel (the SAB's `[3]`) resets the panel's
+  history, and until `[3]` equals the selection the panel reads silence;
+  frames from before a ring stood still (its bit off, the loop paused:
+  it moved less than half the frames the elapsed time should have
+  brought) read as silence, so old audio never shows as current, while a
+  slow frame rate (a throttled tab) is not mistaken for a pause;
+- at most 30 analyses a second (the loop's `hz: 30` and a 29 ms guard
+  against re-registration); nothing allocates per frame.
+
+**The master includes the click**, as the master meter does: the master
+ring is the engine output, metronome included.
+
+**Why on the main thread.** The worklet already does the one cheap thing
+(copy the frames it is asked for); an FFT there would cost the audio
+thread on every block whether anyone looks or not, and a Worker would
+need a second copy and a message per frame. On the main thread the
+analysis runs only while a view is on screen, at 30 Hz: a 4096-point FFT
+plus 80 bands takes ~0.05 ms (Node), and digital silence (a stopped
+transport) skips the FFT. Measured in headless Chromium while playing
+(`window.__daw.vis.stats()`, every frame-loop visual together): top bar
+only 0.33 % of the main thread; mixer + analyser on the Master (goniometer
+included) + top bar 1.5 %; the same on a strip 0.8 % — within the 5 %
+budget.
+

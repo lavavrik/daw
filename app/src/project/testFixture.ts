@@ -102,7 +102,9 @@ export type LogEntry = { op: number; args: number[] } | { sample: number };
 export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) => number; audioRunning?: boolean } = {}) {
   const log: LogEntry[] = [];
   let release: ((code: number) => void) | null = null;
-  const engine: LoadEngine & { log: LogEntry[]; ack: (code?: number) => void } = {
+  let resetSent!: () => void;
+  const resetCalled = new Promise<void>((r) => (resetSent = r));
+  const engine: LoadEngine & { log: LogEntry[]; ack: (code?: number) => void; untilReset: (timeoutMs?: number) => Promise<void> } = {
     log,
     sampleRate: 48000,
     send(op: number, a = 0, b = 0, c = 0, d = 0) {
@@ -111,6 +113,7 @@ export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) =
     },
     resetAll() {
       engine.send(Op.RESET_ALL);
+      resetSent();
       if (!o.holdReset) return Promise.resolve(0);
       return new Promise<number>((r) => (release = r));
     },
@@ -121,6 +124,16 @@ export function fakeEngine(o: { holdReset?: boolean; sampleCode?: (id: number) =
     },
     ack(code = 0) {
       release?.(code);
+    },
+    /**
+     * Resolves once a load has sent RESET_ALL (after its async decode, hash
+     * and ensureRunning steps): wait on this, never on a fixed number of
+     * ticks. Rejects after `timeoutMs`.
+     */
+    untilReset(timeoutMs = 2000) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Error('RESET_ALL was never sent')), timeoutMs)));
+      return Promise.race([resetCalled, timeout]).finally(() => clearTimeout(timer));
     },
   };
   return engine;

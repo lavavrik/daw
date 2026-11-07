@@ -72,8 +72,7 @@ describe('loadProject', () => {
     const json = roundJson(serialize(src));
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
-    for (let i = 0; i < 10; i++) await Promise.resolve(); // let decoding finish
-    await new Promise((r) => setTimeout(r, 0));
+    await e.untilReset(); // decoding, hashing and ensureRunning are done
     expect(e.log.some((x) => 'sample' in x)).toBe(false);
     expect(e.log.some((x) => 'op' in x && x.op === Op.RESET_ALL)).toBe(true);
     e.ack(0);
@@ -88,7 +87,7 @@ describe('loadProject', () => {
     const json = roundJson(serialize(src));
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(new Project(), e, json, filesOf(json, src), fakeDecoder);
-    await new Promise((r) => setTimeout(r, 0));
+    await e.untilReset();
     e.ack(-3);
     await expect(done).rejects.toBeInstanceOf(ProjectLoadError);
     expect(e.log.some((x) => 'sample' in x)).toBe(false);
@@ -205,7 +204,7 @@ describe('loadProject', () => {
     p.folder = { name: 'Old Song' } as FileSystemDirectoryHandle;
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(p, e, json, filesOf(json, src), fakeDecoder);
-    await new Promise((r) => setTimeout(r, 0));
+    await e.untilReset();
     e.ack(-3);
     await expect(done).rejects.toBeInstanceOf(ProjectLoadError);
     expect(p.folder).toBeNull();
@@ -223,7 +222,7 @@ describe('loadProject', () => {
     const p = new Project();
     const e = fakeEngine({ holdReset: true });
     const done = loadProject(p, e, json, filesOf(json, src), fakeDecoder);
-    await new Promise((r) => setTimeout(r, 0));
+    await e.untilReset();
     expect(p.loading).toBe(true);
     e.ack(0);
     await done;

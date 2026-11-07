@@ -4,7 +4,7 @@ import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from '
 import { createNoteInput } from './noteInput';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void } = {}) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void } = {}, project: object = { playing: false }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -15,7 +15,7 @@ const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?
     sustain: (...a) => void heard.push(['sustain', ...a]),
   };
   const sink = { send: (...a: number[]) => (sent.push(a), true) };
-  const h = createShortcutHandlers({ playing: false } as any, sink, createNoteInput(sink, listener), {
+  const h = createShortcutHandlers(project as any, sink, createNoteInput(sink, listener), {
     onOctave: (o) => octs.push(o),
     ...opts,
   });
@@ -24,6 +24,18 @@ const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?
 const key = (code: string, extra: object = {}) => ({ code, target: null, repeat: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, ...extra }) as unknown as KeyboardEvent;
 
 describe('shortcut handlers', () => {
+  it('while a project loads every shortcut is ignored (fix 3)', () => {
+    const calls: string[] = [];
+    const { sent, h } = mk({ onTogglePlay: () => calls.push('play'), onSave: () => calls.push('save'), onToggleArm: () => calls.push('arm') }, { playing: false, loading: true });
+    let prevented = 0;
+    h.onKeyDown(key('Space', { preventDefault: () => prevented++ }));
+    h.onKeyDown(key('KeyR'));
+    h.onKeyDown(key('KeyA'));
+    h.onKeyDown(key('KeyS', { metaKey: true, preventDefault: () => prevented++ }));
+    expect(calls).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(prevented).toBe(2); // no page scroll / browser Save dialog either
+  });
   it('Cmd/Ctrl+S saves, Cmd/Ctrl+Shift+S saves as, Cmd/Ctrl+O opens (even while typing; default prevented)', () => {
     const calls: string[] = [];
     const { sent, h } = mk({ onSave: () => calls.push('save'), onSaveAs: () => calls.push('as'), onOpen: () => calls.push('open') });

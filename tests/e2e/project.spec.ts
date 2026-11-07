@@ -117,7 +117,9 @@ test('save then load reproduces the beat', async ({ page }) => {
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
-  expect(listing).toEqual({ names: ['0-kick.wav'], version: 1, tmp: false });
+  expect(listing).toMatchObject({ version: 1, tmp: false });
+  expect(listing.names).toHaveLength(1);
+  expect(listing.names[0]).toMatch(/^0-[0-9a-f]{8}-kick\.wav$/); // <id>-<content hash>-<name>
 
   // A new session: reload, start audio, open the folder.
   await startAudio(page);

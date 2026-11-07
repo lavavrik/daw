@@ -27,7 +27,8 @@
   import { installSampleLoads } from './state/sampleLoads';
   import { createProjectSession, markSaved } from './project/session';
   import type { ProjectSession } from './project/session';
-  import { projectFingerprint } from './project/serialize';
+  import { createDirtyCheck } from './project/dirtyCheck';
+  import { commandEdits } from './state/edits';
   import { releaseHeldKeys } from './input/shortcuts';
 
   const project = new Project();
@@ -45,11 +46,14 @@
   let stopWatch: (() => void) | null = null;
   let session = $state.raw<ProjectSession | null>(null);
 
-  // "● unsaved": the project differs from what was last saved/loaded/new.
-  // (Task 4's autosave will hang off the same change signal.)
+  // "● unsaved": every edit command sets project.dirty and bumps
+  // project.version (state/edits.ts, via engine.onCommand); once edits pause,
+  // the debounced fingerprint check clears it again if the project is back
+  // to its saved state. Task 4's autosave subscribes to project.version.
+  const dirtyCheck = createDirtyCheck(project);
   $effect(() => {
-    const fp = projectFingerprint(project);
-    project.dirty = project.savedFingerprint !== null && fp !== project.savedFingerprint;
+    void project.version;
+    dirtyCheck.poke();
   });
   $effect(() => {
     document.title = `${project.dirty ? '● ' : ''}${project.name} — DAW`;
@@ -85,7 +89,7 @@
    * the user stopped.
    */
   function transportToggle() {
-    if (!engine || !recorder || !clock) return;
+    if (!engine || !recorder || !clock || project.loading) return;
     if (project.playing) {
       recorder.onTransport(false, clock.heardTicks());
       stop(project, engine);
@@ -113,6 +117,7 @@
 
   /** R / Rec button. Song mode can't arm (recording is Pattern-mode only): say so briefly. */
   function toggleArm() {
+    if (project.loading) return;
     if (recorder && project.mode === 'song' && !recorder.armed) {
       flashHint('Recording works in Pattern mode (Shift+L)');
       return;
@@ -183,9 +188,25 @@
     markSaved(project); // a fresh session has nothing to save yet
     // New / Open replace the session: stop through the normal path first (the
     // recorder closes held notes at the heard tick) and release held keys.
-    const s = createProjectSession(project, e, () => {
-      if (project.playing) transportToggle();
-      releaseHeldKeys();
+    e.onCommand = (op) => commandEdits(project, op);
+    const s = createProjectSession(project, e, {
+      // Right before the engine is reset (after the file validated and the
+      // samples decoded): stop like the Stop button does, so the recorder
+      // closes held notes at the heard tick; release held piano keys.
+      beforeLoad: () => {
+        if (project.playing) {
+          r.onTransport(false, c.heardTicks());
+          stop(project, e);
+        }
+        releaseHeldKeys();
+      },
+      // The live input and the tracks changed under the recorder: retarget
+      // now (Undo take follows), and disarm if the project opened in Song mode.
+      afterLoad: () => {
+        r.onInputChanged(c.heardTicks());
+        if (project.mode === 'song' && r.armed) r.toggleArm();
+        refreshRec();
+      },
     });
     session = s;
     uninstall = installShortcuts(project, e, input, {
@@ -201,6 +222,7 @@
   }
 
   onDestroy(() => {
+    dirtyCheck.dispose();
     stopWatch?.();
     uninstall?.();
     uninstallMidi?.();
@@ -248,6 +270,14 @@
 {#if !engine}
   <StartOverlay {onstarted} />
 {/if}
+{#if project.loading}
+  <!-- A New / Open is replacing the session: no clicks, drags or drops reach
+       the editors until it is done (keys are ignored in shortcuts.ts). -->
+  <div
+    class="loading" data-testid="loading" role="status" aria-live="polite"
+    ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()}
+  >Loading…</div>
+{/if}
 
 <style>
   :global(html, body) { margin: 0; height: 100%; background: #16171b; color: #c9cbd3; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
@@ -257,4 +287,5 @@
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
   .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
+  .loading { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #16171b99; color: #e4e5ea; font-size: 14px; cursor: progress; }
 </style>

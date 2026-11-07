@@ -102,6 +102,8 @@
     } catch {
       return fail();
     }
+    // A project load started meanwhile: this drop belonged to the old session.
+    if (p.loading || !p.tracks.some((t) => t.id === tid)) return;
     const name = baseName(file.name);
     if (p.nextSampleId >= MAX_SAMPLES) return onerror(`Sample limit reached (${MAX_SAMPLES} loads per session)`);
     const id = p.nextSampleId++;

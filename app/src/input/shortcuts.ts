@@ -88,6 +88,12 @@ export function createShortcutHandlers(
   return {
     onKeyDown(e) {
       if (e.metaKey) releaseAll(); // before the typing/modifier bail-out below
+      if (p.loading) {
+        // A project is replacing the session: no edits, transport or notes.
+        // Still swallow Space / Cmd+S / Cmd+O so the browser does nothing.
+        if (e.code === 'Space' || ((e.metaKey || e.ctrlKey) && (e.code === 'KeyS' || e.code === 'KeyO'))) e.preventDefault();
+        return;
+      }
       // Project shortcuts work even in a text field (like any app's Save);
       // the browser's own Save page / Open file are suppressed.
       if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.code === 'KeyS' || e.code === 'KeyO')) {

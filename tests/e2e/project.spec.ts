@@ -465,3 +465,80 @@ test('v1 project opens in v3', async ({ page }) => {
     for (const n of names) await root.removeEntry(n, { recursive: true }).catch(() => {});
   }, [src, dst]);
 });
+
+// Plan 10 Task 5: the checked-in plan-9 save (schema 2, with Audio tracks)
+// opens with no warnings, plays its Audio tracks, and saves as v3 with every
+// v2 field unchanged: the only addition is the empty lanes.
+test('v2 project opens in v3', async ({ page }) => {
+  test.setTimeout(30_000);
+  const v2 = JSON.parse(readFileSync(new URL('../../app/src/project/testdata/v2-fixture.json', import.meta.url), 'utf8'));
+  expect(v2.schemaVersion).toBe(2);
+  const audioIds = new Set(
+    (v2.tracks as { kind: string; clips: { sample: number | null }[] }[]).filter((t) => t.kind === 'audio').flatMap((t) => t.clips.map((c) => c.sample)).filter((x) => x !== null),
+  );
+  expect(audioIds.size).toBe(2); // and one clip without a sample
+  await startAudio(page);
+  const w = test.info().workerIndex;
+  const src = `e2e-v2-${w}`;
+  const dst = `e2e-v2-saved-${w}`;
+  // The audio clips' files are long enough for their offsets and lengths (2 s); the drum rows' are short.
+  const files = (v2.samples as { id: number; file: string }[]).map((s, i) => ({
+    file: s.file.split('/')[1],
+    bytes: [...makeWav(100 + 50 * i, audioIds.has(s.id) ? 2000 : 80)],
+  }));
+  const warnings = await page.evaluate(
+    async ({ src, dst, json, files }) => {
+      const root = await navigator.storage.getDirectory();
+      for (const n of [src, dst]) await root.removeEntry(n, { recursive: true }).catch(() => {});
+      const dir = await root.getDirectoryHandle(src, { create: true });
+      const put = async (d: FileSystemDirectoryHandle, name: string, data: FileSystemWriteChunkType) => {
+        const wr = await (await d.getFileHandle(name, { create: true })).createWritable();
+        await wr.write(data);
+        await wr.close();
+      };
+      await put(dir, 'project.json', json);
+      const samples = await dir.getDirectoryHandle('samples', { create: true });
+      for (const f of files) await put(samples, f.file, new Uint8Array(f.bytes));
+      return (window as unknown as { __daw: Daw }).__daw.openFrom(dir);
+    },
+    { src, dst, json: JSON.stringify(v2), files },
+  );
+  expect(warnings).toEqual([]);
+  await expect(page.getByTestId('banner')).toBeHidden();
+  await expect(page.getByTestId('project-name')).toContainText('Fixture');
+  const tracks = await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.map((t) => ({ kind: t.kind, name: t.name, slot: t.slot })));
+  expect(tracks.map((t) => [t.kind, t.name])).toEqual((v2.tracks as { kind: string; name: string }[]).map((t) => [t.kind, t.name]));
+  // The opened project has no lanes, and its Audio tracks are heard in Song mode.
+  await expect(page.locator('[data-testid^="auto-lane-"]')).toHaveCount(0);
+  const audioSlots = tracks.filter((t) => t.kind === 'audio').map((t) => t.slot);
+  await page.getByTestId('mode-song').click();
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.seek(0));
+  await page.getByTestId('play').click();
+  await expect.poll(async () => Math.min(...(await stripPeaks(page, audioSlots, 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await page.getByTestId('play').click();
+
+  const out = await page.evaluate(async (dst) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(dst, { create: true });
+    await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
+    return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+  }, dst);
+  expect(out.schemaVersion).toBe(3);
+  // Everything but the version, the sample file names (they carry the content
+  // hash), the mode (Song, switched above to listen) and the empty lanes is as saved in v2.
+  const strip = (j: { schemaVersion: number; mode: string; samples: { file: string }[] }) => ({
+    ...j,
+    schemaVersion: 0,
+    mode: '',
+    samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })),
+  });
+  const v3 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...t, automation: [] })), mixer: { ...v2.mixer, automation: [] } };
+  expect(out.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips)).toEqual(
+    v2.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips),
+  );
+  expect(strip(out)).toEqual(strip(v3));
+
+  await page.evaluate(async (names) => {
+    const root = await navigator.storage.getDirectory();
+    for (const n of names) await root.removeEntry(n, { recursive: true }).catch(() => {});
+  }, [src, dst]);
+});

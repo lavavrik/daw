@@ -146,6 +146,8 @@
   // ---- state -------------------------------------------------------------
   let root = $state<HTMLDivElement | null>(null);
   let lanesEl = $state<HTMLDivElement | null>(null);
+  /** The vertical scroll container (AutoLane draws only the lanes in its view). */
+  let scrollEl = $state<HTMLDivElement | null>(null);
   let canvas = $state<HTMLCanvasElement | null>(null);
   /** Transparent canvas over the lanes: the playhead only (drawPlayhead). */
   let ovCanvas = $state<HTMLCanvasElement | null>(null);
@@ -1318,7 +1320,7 @@
   style:--lane-h="{LANE_H}px"
 >
   <!-- Sample drops anywhere over the timeline (AUDIO LANES at the top). -->
-  <div class="scroll" role="presentation" ondragenter={dragOver} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}>
+  <div class="scroll" bind:this={scrollEl} role="presentation" ondragenter={dragOver} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}>
     <div class="grid">
       <div class="corner">Tracks</div>
       <div class="ruler-wrap">
@@ -1408,7 +1410,7 @@
           {:else if view}
             <AutoLane
               {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y}
-              testid="auto-lane-{a.key}-{a.k}" label={a.label} suspended={laneView.suspended.has(a.lane.id)} onhint={flashHint}
+              testid="auto-lane-{a.key}-{a.k}" label={a.label} suspended={laneView.suspended.has(a.lane.id)} root={scrollEl} onhint={flashHint}
             />
           {/if}
         {/each}

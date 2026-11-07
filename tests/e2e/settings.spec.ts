@@ -116,7 +116,19 @@ test('restart keeps project and handles', async ({ page }) => {
     const synth = a.addSynthTrack('Chord Stab');
     for (const pitch of [48, 52, 55]) a.addNote(synth.id, { pitch, start: 0, len: 15360, vel: 100 });
     a.setSidechain(synth.id, { trackId: d.id, row: 0 });
+    // Automation (plan 10): a cutoff sweep on the synth, a pan ride on the drums and a Master row lane.
+    const sweep = a.addLane(synth.id, { kind: 'rack', module: 2, param: 'cutoff' }) // Chord Stab's Filter;
+    a.drawLane(sweep, [{ tick: 0, value: 200 }, { tick: 3840, value: 4000 }, { tick: 7680, value: 300 }]);
+    a.drawLane(a.addLane(d.id, { kind: 'mix', param: 'pan' }), [{ tick: 0, value: -0.5 }, { tick: 1920, value: 0.5 }]);
+    const ceiling = a.addLane('master', { kind: 'mix', param: 'limiter_ceiling' });
+    a.drawLane(ceiling, [{ tick: 0, value: -3 }, { tick: 3840, value: 0 }]);
+    a.setLaneEnabled(ceiling, false);
   });
+  const laneCount = (j: string) => {
+    const x = JSON.parse(j) as { tracks: { automation: { points: unknown[] }[] }[]; mixer: { automation: { enabled: boolean }[] } };
+    return [x.tracks.map((t) => t.automation.map((l) => l.points.length)), x.mixer.automation.map((l) => l.enabled)];
+  };
+  expect(laneCount(await snapshot(page))).toEqual([[[2], [3]], [false]]);
   // Saved to a project folder, then edited again: a folder handle and the "unsaved" mark.
   await page.evaluate(async (n) => {
     const root = await navigator.storage.getDirectory();
@@ -161,7 +173,8 @@ test('restart keeps project and handles', async ({ page }) => {
 
   // The project is exactly what it was: serialize equality, same edit count,
   // still unsaved, and the undo history survived.
-  expect(await snapshot(page)).toBe(before);
+  expect(await snapshot(page)).toBe(before); // the lanes included
+  expect(laneCount(before)).toEqual([[[2], [3]], [false]]);
   expect(await page.evaluate(() => (window as unknown as W).__daw.project.version)).toBe(version);
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);

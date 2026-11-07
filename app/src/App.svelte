@@ -20,6 +20,7 @@
   import { library } from './library/library.svelte';
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
+  import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
   import { STARTER_PATCHES } from './state/patches';
   import { installShortcuts, type PanelTab } from './input/shortcuts';
   import { connectMidi } from './input/midi';
@@ -323,6 +324,11 @@
     setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
     setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
     loadPatch: (trackId, patch) => (engine ? loadPatch(project, engine, trackId, patch) : []),
+    // Automation lanes (plan 10 Task 5: the lanes perf scenario and the restart e2e), as the
+    // lane header's "+ Lane", a Cmd/Ctrl-drag stroke and the lane's on/off dot do. Returns the lane's id.
+    addLane: (owner, target) => (engine ? addLane(project, engine, owner, target)?.id ?? null : null),
+    drawLane: (laneId, samples) => engine && drawPoints(project, engine, laneId, samples),
+    setLaneEnabled: (laneId, on) => engine && setLaneEnabled(project, engine, laneId, on),
   },
   // The Browser's library (e2e: attach an OPFS folder as start-up would a stored one).
   library,

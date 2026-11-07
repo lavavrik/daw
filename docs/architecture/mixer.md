@@ -265,12 +265,42 @@ Measured on the dev Mac (Apple M5 Pro; native in release, browser on the dev ser
 | Spec 6, Pattern mode | 8.1–8.2% | 16.8–18.8% (max 20.6%) |
 | Spec 6, Song mode | 8.4–8.5% | 14.6% (no Audio tracks, one-off probe) |
 | Spec 6, Song mode + 4 Audio tracks | 8.5–8.6% | 10.1–15.0% (max 16.7%) |
-| Same + 64 automation lanes (32 applying, plan 10) | 8.2% (8.1% without the lanes, same run) | — (plan 10, Task 5) |
+| Same + 64 automation lanes (32 applying, plan 10) | 8.2% (8.1% without the lanes, same run); 9.1% in the plan 10 Task 5 run (9.0% without) | 6.0–8.4% (max 9.0%). In one run, 7.3% without the lanes; in the full `npm run test:e2e` run, 6.0% while the two scenarios without lanes read 16–18%, so the run-to-run drift is larger than the lanes' cost |
 
 Audio clips cost almost nothing: a voice reads frames from the arena and
 scales them by its envelope, with no interpolation or time-stretch. The
 browser figures drift by a few points between runs, more than the Audio tracks
 add, so only the 0.6 budget is asserted.
+
+Plan 10 adds automation to both scenarios (Global Constraints: Audio tracks
+and 64 lanes together):
+
+- **Native:** `spec6_mix_with_audio_and_automation_renders_under_budget`
+  (64 lanes × 512 points; 32 apply, 16 mixer and 16 rack, and 32 are
+  disabled). no_alloc `automation_does_not_allocate` builds the same kind of
+  set: Synth, Audio and drum tracks with 64 full lanes.
+- **Browser:** `spec 6 mix plus audio tracks and 64 automation lanes` is the
+  Audio-track scenario plus 64 lanes built through the app's own actions
+  (`__daw.actions.addLane` / `drawLane`). 32 lanes apply: a fader ride on all
+  12 tracks, pan on the 4 synths, and Filter cutoff, Filter reso, ADSR decay
+  and Out level on each synth. The other 32 are disabled: both sends on every
+  track, and EQ mid gain on the drums and synths. Each lane is a zig-zag with
+  a corner every 1/16, so 257 points over 16 bars. It runs in Song mode, with
+  the same budgets.
+  - **The UI is measured too.** Every track's lanes are open and the mixer is
+    open, so its faders and knobs follow their lanes. While playing, the rAF
+    intervals stayed at 16.7 ms (p95 and max) with no long tasks.
+  - **A timeline scroll step** (wheel to the next frame) cost 16.7 ms with
+    the lanes closed. With all 64 open it cost **78 ms**, because every lane
+    canvas redrew on every view change, including the ~60 out of view. Now
+    only the lanes in (or 2 rows around) the timeline's scroll view draw
+    (`AutoLane` with an IntersectionObserver; `data-shown`). An out-of-view
+    lane frees its canvas backing store and redraws at the current view when
+    it scrolls in. That brought a step back to 16.6–19 ms (20 ms while
+    playing), and the backing stores from 2.7 to 0.3 Mpx at dpr 1. The test
+    asserts that a step costs less than the closed case + 25 ms, and that a
+    lane scrolled in after a view change has drawn. Across four runs, a step
+    with all 64 lanes open cost 16.1–19.1 ms.
 
 ## Plan 6: reuse as rack modules
 

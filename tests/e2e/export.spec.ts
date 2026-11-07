@@ -309,3 +309,207 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
     localStorage.removeItem('daw.latencyHint');
   }, dirName);
 });
+
+// Plan 10 Task 5: automation lanes through every pipeline that replays the
+// project (save, undo, the audio restart, open, export), in one session.
+// Tempo 240 (one bar = 1 s). A synth holds a low note for two bars; its
+// filter cutoff is swept up over bar 1 with a Cmd/Ctrl-drag stroke, and its
+// fader holds 0 dB until 1.5 bars, then drops to −∞ (a hold point).
+
+/** The lanes as saved: per track (by slot), points sorted by tick. */
+type SavedLane = { target: unknown; enabled: boolean; points: [number, number, 0 | 1][] };
+const DROP = BAR + BAR / 2;
+const LANE_PAD = 6;
+const LANE_H = 48;
+
+test('automation round-trips through save, undo, restart and export', async ({ page }) => {
+  test.setTimeout(90_000);
+  await fakeSavePicker(page);
+  await page.goto('/');
+  await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
+  await startAudio(page);
+  await expect(page.getByTestId('tl-lane-0')).toBeVisible();
+  const bpm = page.getByLabel('BPM');
+  await bpm.fill('240');
+  await bpm.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as unknown as Win).__daw.project.tempo)).toBe(240);
+
+  await page.getByTestId('add-synth-track').click();
+  const synth = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as Win).__daw;
+    const t = project.tracks.at(-1)!;
+    a.addNote(t.id, { pitch: 36, start: 0, len: 2 * 3840, vel: 110 });
+    a.addClip(t.id, { start: 0, len: 2 * 3840 });
+    return { id: t.id, slot: t.slot, kind: t.kind };
+  });
+  expect(synth.kind).toBe('synth');
+  const slot = synth.slot;
+
+  const lanes = async (): Promise<SavedLane[]> => {
+    const ls: SavedLane[] = await page.evaluate(
+      (slot) => ((window as unknown as Win).__daw as unknown as { snapshot(): { tracks: { slot: number; automation: SavedLane[] }[] } }).snapshot().tracks.find((t) => t.slot === slot)!.automation,
+      slot,
+    );
+    return ls.map((l) => ({ ...l, points: [...l.points].sort((a, b) => a[0] - b[0]) }));
+  };
+  /** Page point of song tick `tick` at knob position `pos` (0 bottom .. 1 top) in lane `testid`. */
+  const lanePt = async (testid: string, tick: number, pos: number) => {
+    const v = JSON.parse((await page.getByTestId('timeline').getAttribute('data-view'))!) as { ticksPerPx: number; scrollTick: number };
+    await page.getByTestId(testid).evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    const b = (await page.getByTestId(testid).boundingBox())!;
+    return { x: b.x + (tick - v.scrollTick) / v.ticksPerPx, y: b.y + LANE_PAD + (1 - pos) * (LANE_H - 2 * LANE_PAD) };
+  };
+  const addLane = async (label: string, k: number) => {
+    const toggle = page.getByTestId(`track-auto-${slot}`);
+    if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
+    await page.getByTestId(`auto-add-${slot}`).last().selectOption({ label });
+    await expect(page.getByTestId(`auto-lane-${slot}-${k}`)).toBeVisible();
+    return `auto-lane-${slot}-${k}`;
+  };
+
+  // 1. The cutoff sweep: one Cmd/Ctrl-drag stroke from low at 0 to high at bar 1.
+  const cutoff = await addLane('Filter · Cutoff', 0);
+  const a = await lanePt(cutoff, 0, 0.15);
+  const b = await lanePt(cutoff, BAR, 0.95);
+  await page.keyboard.down('ControlOrMeta');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(b.x, b.y, { steps: 24 });
+  await page.mouse.up();
+  await page.keyboard.up('ControlOrMeta');
+  // The fader drop: 0 dB (hold) at 0, −∞ at 1.5 bars.
+  const fader = await addLane('Fader', 1);
+  const p0 = await lanePt(fader, 0, 60 / 66);
+  await page.mouse.click(p0.x, p0.y);
+  const p1 = await lanePt(fader, DROP, 0);
+  await page.mouse.click(p1.x, p1.y);
+  await page.mouse.click(p0.x, p0.y, { button: 'right' });
+  await page.getByTestId('auto-menu-hold').click();
+  await expect(page.getByTestId('auto-menu')).toBeHidden();
+
+  const want = await lanes();
+  expect(want.map((l) => l.target)).toEqual([{ rack: [4, 'cutoff'] }, { mix: 'fader' }]);
+  expect(want.every((l) => l.enabled)).toBe(true);
+  expect(want[0].points.length).toBeGreaterThanOrEqual(2);
+  expect(want[0].points[0][1]).toBeLessThan(want[0].points.at(-1)![1]); // a sweep up
+  expect(want[1].points.map(([t, , h]) => [t, h])).toEqual([[0, 1], [DROP, 0]]);
+  expect(want[1].points[0][1]).toBeCloseTo(0, 1); // 0 dB (a click: within a pixel)
+  expect(want[1].points[1][1]).toBe(-60); // −∞
+
+  const dirName = `e2e-auto-roundtrip-${test.info().workerIndex}`;
+  const saved = await page.evaluate(
+    async ({ n, slot }) => {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry(n, { recursive: true }).catch(() => {});
+      const dir = await root.getDirectoryHandle(n, { create: true });
+      await (window as unknown as Win).__daw.saveTo(dir);
+      const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+      return { version: json.schemaVersion, lanes: json.tracks.find((t: { slot: number }) => t.slot === slot).automation };
+    },
+    { n: dirName, slot },
+  );
+  expect(saved.version).toBe(3);
+  expect(saved.lanes.map((l: SavedLane) => ({ ...l, points: [...l.points].sort((x, y) => x[0] - y[0]) }))).toEqual(want);
+
+  // 2. Remove each lane with its header's ×, then undo: both come back as they were.
+  await page.getByTestId(`auto-remove-${slot}-0`).click();
+  await expect.poll(async () => (await lanes()).map((l) => l.target)).toEqual([{ mix: 'fader' }]);
+  await page.getByTestId(`auto-remove-${slot}-0`).click();
+  await expect.poll(lanes).toEqual([]);
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(lanes).toEqual(want);
+
+  /** Song mode from 0: the master peak (telemetry) by song tick over `ms`. */
+  const playSong = async (ms: number) => {
+    await page.getByTestId('mode-song').click();
+    await page.evaluate(() => (window as unknown as Win).__daw.actions.seek(0));
+    await page.getByTestId('play').click();
+    const rec = await page.evaluate(
+      (ms) =>
+        new Promise<{ t: number; peak: number }[]>((resolve) => {
+          const eng = (window as unknown as { __daw: { engine: { telemetry(): Float64Array } } }).__daw.engine;
+          const out: { t: number; peak: number }[] = [];
+          const t0 = performance.now();
+          const id = setInterval(() => {
+            const tele = eng.telemetry();
+            out.push({ t: tele[2], peak: Math.max(tele[5], tele[6]) });
+            if (performance.now() - t0 > ms) (clearInterval(id), resolve(out));
+          }, 4);
+        }),
+      ms,
+    );
+    await page.getByTestId('play').click();
+    return rec;
+  };
+  const peakIn = (rec: { t: number; peak: number }[], from: number, to: number) => Math.max(0, ...rec.filter((r) => r.t >= from && r.t < to).map((r) => r.peak));
+
+  // 3. Another latency hint: an audio restart. The lanes are unchanged and drive the new engine: the drop is heard.
+  await page.evaluate(() => ((window as unknown as { __oldEngine: unknown }).__oldEngine = (window as unknown as Win).__daw.engine));
+  await page.getByTestId('settings-button').click();
+  const settings = page.getByTestId('settings');
+  await settings.getByTestId('latency-hint').selectOption('playback');
+  await settings.getByTestId('settings-apply').click();
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as Win).__daw.engine !== (window as unknown as { __oldEngine: unknown }).__oldEngine && !document.querySelector('[data-testid="loading"]')), { timeout: 10_000 })
+    .toBe(true);
+  await page.keyboard.press('Escape'); // close the settings popover
+  expect(await lanes()).toEqual(want);
+  const rec = await playSong(2000);
+  const ms10 = BAR / 100; // ticks in 10 ms (1 bar = 1 s)
+  const before = peakIn(rec, BAR, DROP - ms10);
+  const after = rec.filter((r) => r.t >= DROP + ms10 && r.t < 2 * BAR);
+  console.log(`after restart: ${before.toFixed(3)} before the drop, ${Math.max(...after.map((r) => r.peak)).toExponential(1)} after (${after.length} frames)`);
+  expect(before).toBeGreaterThan(0.05);
+  expect(after.length).toBeGreaterThan(3);
+  expect(Math.max(...after.map((r) => r.peak))).toBeLessThan(0.001);
+
+  // 4. Open the saved folder (a fresh replay into the restarted engine).
+  const warnings = await page.evaluate(async (n) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
+    return (window as unknown as Win).__daw.openFrom(dir);
+  }, dirName);
+  expect(warnings).toEqual([]);
+  expect(await lanes()).toEqual(want);
+
+  // 5. Export: the sweep brightens bar 1; the file is silent (−60 dBFS) from 10 ms after the drop to its end.
+  await exportFromMenu(page);
+  await expect(page.getByTestId('notice')).toContainText('Exported', { timeout: 20_000 });
+  expect(await lanes()).toEqual(want);
+  const r = await page.evaluate(async (dropSecs) => {
+    const w = window as unknown as Win;
+    const sr = w.__daw.engine!.sampleRate;
+    const buf = await new OfflineAudioContext(2, 1, sr).decodeAudioData(await w.__exported!.arrayBuffer());
+    const chans = [buf.getChannelData(0), buf.getChannelData(1)];
+    const peak = (from: number, to: number) => {
+      let m = 0;
+      for (const c of chans) for (let i = Math.round(from * sr); i < Math.min(c.length, Math.round(to * sr)); i++) m = Math.max(m, Math.abs(c[i]));
+      return m;
+    };
+    /** Brightness: RMS of the first difference over the RMS (rises with the cutoff). */
+    const bright = (from: number, to: number) => {
+      const c = chans[0];
+      let d = 0;
+      let e = 0;
+      for (let i = Math.round(from * sr) + 1; i < Math.round(to * sr); i++) (d += (c[i] - c[i - 1]) ** 2), (e += c[i] ** 2);
+      return Math.sqrt(d / e);
+    };
+    return {
+      secs: buf.length / sr,
+      heard: peak(0.2, dropSecs - 0.01),
+      after: peak(dropSecs + 0.01, buf.length / sr),
+      early: bright(0.1, 0.3),
+      late: bright(0.8, 1.0),
+    };
+  }, DROP / BAR);
+  console.log(`export: ${r.secs.toFixed(2)} s, ${r.heard.toFixed(3)} before the drop, ${r.after.toExponential(1)} after; brightness ${r.early.toFixed(4)} -> ${r.late.toFixed(4)}`);
+  expect(r.secs).toBeCloseTo(2 + 2, 1); // two bars + the 2 s tail
+  expect(r.heard).toBeGreaterThan(0.05);
+  expect(r.after).toBeLessThan(0.001); // −60 dBFS
+  expect(r.late).toBeGreaterThan(r.early * 1.5); // the cutoff sweep is in the file
+
+  await page.evaluate(async (n) => {
+    await (await navigator.storage.getDirectory()).removeEntry(n, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.latencyHint');
+  }, dirName);
+});

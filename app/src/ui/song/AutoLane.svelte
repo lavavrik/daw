@@ -56,7 +56,7 @@
   import type { TlView } from './tlMath';
 
   let {
-    p, engine, lane, owner, def, color, view, width, dpr, top, testid, label, suspended = false, onhint,
+    p, engine, lane, owner, def, color, view, width, dpr, top, testid, label, suspended = false, root = null, onhint,
   }: {
     p: Project;
     engine: CommandSink;
@@ -72,6 +72,8 @@
     testid: string;
     label: string;
     suspended?: boolean;
+    /** The timeline's vertical scroll container: only lanes in (or near) its view draw. */
+    root?: Element | null;
     onhint: (text: string) => void;
   } = $props();
 
@@ -188,7 +190,30 @@
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
   }
+  // Only a lane in (or within VIEW_MARGIN of) the timeline's view draws. Every
+  // lane redraws on each view change (a scroll or zoom step), and with all 64
+  // lanes open that cost ~60 ms per wheel step (plan 10 Task 5, the serial
+  // perf e2e); out of view a lane also gives back its canvas backing store
+  // (64 retina-wide lanes would hold ~90 MB). An off-screen lane draws again,
+  // at the current view, when it scrolls into the margin. A lane under a
+  // gesture (or holding the pointer) is in view by definition.
+  const VIEW_MARGIN = 2 * H;
+  let shown = $state(false);
   $effect(() => {
+    const e = el;
+    if (!e || typeof IntersectionObserver === 'undefined') {
+      shown = true;
+      return;
+    }
+    const io = new IntersectionObserver((xs) => (shown = xs[xs.length - 1].isIntersecting), { root, rootMargin: `${VIEW_MARGIN}px 0px` });
+    io.observe(e);
+    return () => io.disconnect();
+  });
+  $effect(() => {
+    if (!shown) {
+      if (cv && cv.width) (cv.width = 0), (cv.height = 0); // free the backing store
+      return;
+    }
     // Every point field the drawing shows (the proxies are read in draw too, but be explicit).
     for (const x of lane.points) void (x.tick + x.value + (x.hold ? 1 : 0));
     void lane.enabled;
@@ -459,6 +484,7 @@
   data-lane={lane.lane}
   data-points={lane.points.length}
   data-selected={sel.length}
+  data-shown={shown ? 1 : 0}
   style:top="{top}px"
   style:height="{H}px"
   style:cursor

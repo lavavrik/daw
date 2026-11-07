@@ -313,6 +313,16 @@ changes nothing and sends nothing.
   disabled lane dimmed, a suspended one grey (`laneView.suspended`, set by
   Task 4), an empty lane's base value dashed. Point hit tests:
   `tlMath.pointHit` / `pointBox`.
+- **Only lanes in view draw** (plan 10 Task 5). Every lane redraws on each
+  view change (a scroll or zoom step). With all 64 lanes open that was
+  ~60 ms per wheel step, so an `IntersectionObserver` on the timeline's
+  vertical scroll container (`root`, with a 2-row margin) sets `shown`
+  (mirrored as `data-shown`).
+  - An out-of-view lane skips `draw()` and frees its canvas backing store
+    (width/height 0).
+  - When it comes within the margin it draws at the current view.
+  - Measured in the serial perf e2e (docs/architecture/mixer.md,
+    *Performance*).
 - **Gestures.** Click adds a point (1/16, Alt free) and keeps dragging it;
   a point drag calls `movePoints` with the gesture's `origin` and the
   cumulative deltas, at most once per animation frame; Cmd/Ctrl-drag

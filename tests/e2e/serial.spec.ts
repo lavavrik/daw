@@ -340,3 +340,161 @@ test('spec 6 mix plus 4 audio tracks with long clips stays under the browser CPU
   for (const p of run.strips) expect(p).toBeGreaterThan(0.05);
   await page.keyboard.press('Space');
 });
+
+/**
+ * Spec §6 plus the 4 Audio tracks plus 64 automation lanes (plan 10 Task 5;
+ * the native perf test's mix): 32 apply (a fader ride on every track, pan on
+ * the synths, and four rack params on each synth, zig-zagging every 1/16 over
+ * 16 bars: 257 points each) and 32 are disabled (both sends on every track,
+ * the EQ mid gain on the drums and synths). Song mode, same engine budget.
+ *
+ * The UI is measured too, with every track's lanes open in the timeline
+ * (most of the 64 lane canvases are scrolled out of view) and the mixer open
+ * (its faders and knobs follow their lanes, ui/autoBus.ts): the frame
+ * intervals while playing, and what a timeline scroll costs (every lane
+ * canvas redraws on a view change).
+ */
+test('spec 6 mix plus audio tracks and 64 automation lanes stays under the browser CPU budget', async ({ page }) => {
+  test.setTimeout(180_000);
+  await startAudio(page);
+  await expect(page.getByTestId('tl-lane-0')).toBeVisible();
+  const audio: number[] = [];
+  for (const [i, f] of [110, 165, 220, 330].entries()) audio.push(await dropLongAudio(page, `stem-${i}`, 120, f));
+  const { synths } = await buildSpec6(page);
+  const built = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    let clips = 0;
+    for (const t of project.tracks.filter((t) => t.kind !== 'audio')) {
+      for (let start = 0; start < 16 * 3840; ) {
+        const c = a.addClip(t.id, { start });
+        if (!c) return { error: 'clip' };
+        start += c.len;
+        clips++;
+      }
+    }
+    /** A zig-zag between lo and hi, a corner every 1/16 over 16 bars (257 points, none thinned away). */
+    const zig = (lo: number, hi: number) => Array.from({ length: 257 }, (_, i) => ({ tick: i * 240, value: i % 2 ? hi : lo }));
+    const lane = (owner: string, target: object, lo: number, hi: number, on: boolean) => {
+      const id = a.addLane(owner, target);
+      if (!id || !a.drawLane(id, zig(lo, hi))) return false;
+      return on || a.setLaneEnabled(id, false);
+    };
+    const mix = (param: string) => ({ kind: 'mix', param });
+    const rack = (module: number, param: string) => ({ kind: 'rack', module, param });
+    let applying = 0;
+    let disabled = 0;
+    for (const t of project.tracks) {
+      if (!lane(t.id, mix('fader'), -9, -3, true)) return { error: `fader ${t.kind}` };
+      applying++;
+      for (const s of ['send_a', 'send_b']) {
+        if (!lane(t.id, mix(s), -24, -12, false)) return { error: `${s} ${t.kind}` };
+        disabled++;
+      }
+      if (t.kind !== 'audio') {
+        if (!lane(t.id, mix('eq_mid_gain'), -6, 0, false)) return { error: 'eq' };
+        disabled++;
+      }
+      if (t.kind === 'synth') {
+        if (!lane(t.id, mix('pan'), -0.5, 0.5, true)) return { error: 'pan' };
+        // Chord Stab: Filter (2) cutoff and reso, ADSR (3) decay, Out (5) level.
+        for (const [m, p, lo, hi] of [[2, 'cutoff', 300, 3000], [2, 'reso', 0.1, 0.5], [3, 'decay', 0.1, 0.3], [5, 'level', 0.3, 0.4]] as const) {
+          if (!lane(t.id, rack(m, p), lo, hi, true)) return { error: `${p}` };
+        }
+        applying += 5;
+      }
+    }
+    return { clips, applying, disabled };
+  });
+  expect(built).toEqual({ clips: expect.any(Number), applying: 32, disabled: 32 });
+  expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
+  await page.keyboard.press('Shift+L');
+  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
+
+  /** What a timeline scroll costs: 20 wheel steps, each until the next frame has run (ms per step). */
+  const scrollCost = async (label: string) => {
+    const r = await page.evaluate(async () => {
+      const el = document.querySelector('[data-testid="tl-canvas"]')!;
+      const b = el.getBoundingClientRect();
+      const t: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        const t0 = performance.now();
+        el.dispatchEvent(new WheelEvent('wheel', { deltaX: i % 2 ? -40 : 40, bubbles: true, cancelable: true, clientX: b.x + 100, clientY: b.y + 10 }));
+        await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
+        t.push(performance.now() - t0);
+      }
+      t.sort((a, b) => a - b);
+      return { p50: t[10], max: t[19] };
+    });
+    console.log(`PERF timeline scroll, ${label}: p50 ${r.p50.toFixed(1)} ms, max ${r.max.toFixed(1)} ms per step`);
+    return r;
+  };
+  await page.getByTestId('mixer-tab').click();
+  const closed = await scrollCost('lanes closed');
+
+  // Every track's lanes open (A), and the mixer.
+  for (const t of await page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks.map((t) => t.slot))) {
+    await page.getByTestId(`track-auto-${t}`).click();
+  }
+  await expect(page.locator('[data-testid^="auto-lane-"]')).toHaveCount(64);
+  await expect(page.locator('[data-auto="on"]').first()).toBeVisible();
+  const canvases = await page.evaluate(() => {
+    const scroll = document.querySelector('[data-testid="timeline"] .scroll')!.getBoundingClientRect();
+    const cvs = [...document.querySelectorAll('[data-testid^="auto-lane-"] canvas')] as HTMLCanvasElement[];
+    const shown = cvs.filter((c) => {
+      const r = c.getBoundingClientRect();
+      return r.bottom > scroll.top && r.top < scroll.bottom;
+    }).length;
+    return { n: cvs.length, shown, mpx: cvs.reduce((s, c) => s + c.width * c.height, 0) / 1e6 };
+  });
+  console.log(`PERF lane canvases: ${canvases.n} (${canvases.shown} in view), ${canvases.mpx.toFixed(1)} Mpx backing`);
+  // Only the lanes in (or near) view draw and keep a canvas backing store (AutoLane: data-shown).
+  const drawn = await page.locator('[data-testid^="auto-lane-"][data-shown="1"]').count();
+  expect(drawn).toBeGreaterThanOrEqual(canvases.shown);
+  expect(drawn).toBeLessThanOrEqual(canvases.shown + 12); // + the margin rows above and below
+  const open = await scrollCost('64 lanes open');
+  expect(open.p50).toBeLessThan(closed.p50 + 25); // a scroll stays about a frame
+
+  // The UI's frames while the engine is measured: rAF intervals and long tasks.
+  await page.evaluate(() => {
+    const w = window as unknown as { __frames: number[]; __long: number[]; __stop: boolean };
+    w.__frames = [];
+    w.__long = [];
+    w.__stop = false;
+    new PerformanceObserver((l) => l.getEntries().forEach((e) => w.__long.push(e.duration))).observe({ type: 'longtask' });
+    let last = performance.now();
+    const step = (now: number) => {
+      w.__frames.push(now - last);
+      last = now;
+      if (!w.__stop) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks + 64 lanes browser', synths[0], audio);
+  for (const p of run.strips) expect(p).toBeGreaterThan(0.05);
+  const ui = await page.evaluate(() => {
+    const w = window as unknown as { __frames: number[]; __long: number[]; __stop: boolean };
+    w.__stop = true;
+    const f = w.__frames.slice(5).sort((a, b) => a - b);
+    const q = (x: number) => f[Math.min(f.length - 1, Math.floor(x * f.length))];
+    return { n: f.length, p50: q(0.5), p95: q(0.95), max: f[f.length - 1], slow: f.filter((x) => x > 50).length, long: w.__long.length, longMax: Math.max(0, ...w.__long) };
+  });
+  console.log(`PERF UI while playing: ${ui.n} frames, p50 ${ui.p50.toFixed(1)} ms, p95 ${ui.p95.toFixed(1)} ms, max ${ui.max.toFixed(1)} ms, ${ui.slow} over 50 ms; ${ui.long} long tasks (max ${ui.longMax.toFixed(0)} ms)`);
+  await scrollCost('64 lanes open, playing');
+  await page.keyboard.press('Space');
+
+  // A lane that was out of view while the view moved draws at the new view once scrolled in.
+  const last = page.locator('[data-testid^="auto-lane-"]').last();
+  await expect(last).toHaveAttribute('data-shown', '0');
+  await last.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await expect(last).toHaveAttribute('data-shown', '1');
+  const ink = await last.evaluate((el) => {
+    // The lane's curve at the left edge of the view: some opaque pixels in the leftmost 4 columns.
+    const c = el.querySelector('canvas')!;
+    const d = c.getContext('2d')!.getImageData(0, 0, 4, c.height).data;
+    let n = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+    return { n, w: c.width };
+  });
+  expect(ink.w).toBeGreaterThan(0);
+  expect(ink.n).toBeGreaterThan(0);
+});

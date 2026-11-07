@@ -29,6 +29,11 @@
 //! cargo test --release -p daw-engine --test perf -- --ignored --nocapture
 //! ```
 //!
+//! The plan-9 variant ([`spec6_with`]) adds 4 Audio tracks to the Song-mode
+//! mix, each playing its own 3-minute stereo file (276 MB of samples, so the
+//! arena grows past its reserve) through one long clip with gain and fades;
+//! every loop pass chases all four. Same 40% budget.
+//!
 //! The rack-effects case ([`fx_chain_track_renders_under_budget`], plan 6)
 //! is one synth track running MIDI In → Osc → Filter → Chorus → Delay →
 //! Reverb → Out with 8 voices held: the per-voice part (Osc, Filter) runs 8
@@ -181,6 +186,18 @@ const DRUMS: usize = 4;
 /// sound: twice the note events) with a 4-bar loop; otherwise pattern 0
 /// loops.
 fn spec6(song: bool) -> Engine {
+    spec6_with(song, false)
+}
+
+/// Audio tracks of the plan-9 variant: slots after the drum tracks.
+const AUDIO: usize = 4;
+/// Length of each audio track's file (seconds): a 3-minute stereo stem.
+const AUDIO_SECONDS: usize = 180;
+
+/// [`spec6`], plus (with `audio`) [`AUDIO`] Audio tracks, each playing its
+/// own 3-minute stereo file (four distinct samples, 276 MB: the arena grows
+/// past its 128 MB reserve) through one long clip with gain and fades.
+fn spec6_with(song: bool, audio: bool) -> Engine {
     let mut e = Engine::new(SR);
     let ok = |code: i32| assert_eq!(code, OK);
     let max_notes = daw_engine::MAX_NOTES as f64;
@@ -269,6 +286,29 @@ fn spec6(song: bool) -> Engine {
         ok(e.command(OP_SET_LOOP, 0., 4. * 3840., 0., 0.)); // 10 s at 124 bpm is ~5.2 bars
         ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
     }
+    if audio {
+        let frames = AUDIO_SECONDS * SR as usize;
+        for k in 0..AUDIO {
+            let (slot, id) = (TRACKS + DRUMS + k, 1 + k as u32);
+            let p = e.sample_alloc(id, frames as u32, 2).expect("grows while stopped");
+            // A cheap, non-repeating signal (an LCG), so reads are not cached.
+            let mut x = 0x9e37_79b9u32.wrapping_mul(id);
+            for v in unsafe { std::slice::from_raw_parts_mut(p, frames * 2) } {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *v = (x >> 9) as f32 / (1u32 << 23) as f32 * 0.2 - 0.1;
+            }
+            ok(e.sample_ready(id));
+            ok(e.command(OP_ADD_AUDIO_TRACK, slot as f64, 0., 0., 0.));
+            let a = (slot * daw_engine::MAX_CLIPS) as f64;
+            // Starts 0.25 s into the file (every loop pass chases with a fade).
+            ok(e.command(OP_AUDIO_CLIP_SOURCE, a, id as f64, 0.25, 0.));
+            ok(e.command(OP_AUDIO_CLIP_GAIN, a, 0.7, 240., 240.));
+            ok(e.command(OP_AUDIO_CLIP_SET, a, 0., 90. * 3840., 0.)); // ~3 min at 124 bpm
+            mix(&mut e, slot, P_EQ_ON, 1.);
+            mix(&mut e, slot, P_SEND_A, -12.);
+            mix(&mut e, slot, P_FADER, -6.);
+        }
+    }
     ok(e.command(OP_SET_TEMPO, 124., 0., 0., 0.));
     ok(e.command(OP_SET_METRONOME, 1., 0., 0., 0.));
     ok(e.command(OP_PLAY, 0., 0., 0., 0.));
@@ -326,6 +366,25 @@ fn spec6_mix_song_mode_renders_under_budget() {
     assert!(wrapped, "the loop must wrap during the run");
     assert!(peak > 0.0 && peak.is_finite(), "song must sound (peak {peak})");
     assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn spec6_mix_with_audio_tracks_renders_under_budget() {
+    let mut e = spec6_with(true, true);
+    let (ratio, peak, wrapped, gr) = run(&mut e);
+    println!(
+        "perf (spec 6, song + {AUDIO} audio tracks): the song-mode mix plus {AUDIO} Audio tracks, each a {AUDIO_SECONDS} s stereo clip: {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(wrapped, "the loop must wrap during the run");
+    assert!(peak > 0.0 && peak.is_finite(), "must sound (peak {peak})");
+    assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    for k in 0..AUDIO {
+        let m = e.meters()[(TRACKS + DRUMS + k) * daw_engine::MIX_METER_STRIDE];
+        assert!(m > 0.0 && m.is_finite(), "audio track {k} sounds (meter {m})");
+    }
     assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
 }
 

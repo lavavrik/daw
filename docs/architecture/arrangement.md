@@ -62,15 +62,64 @@ clip's `Off` can cut the same pitch from another (accepted, FL-like) but never
 strands a note. Drums have nothing to release: hits stop retriggering and ring
 out.
 
+## Audio tracks
+Plan 9 (spec addendum §3.1); engine side in `engine/src/audio_track.rs`.
+
+- **Model.** An Audio track (`SlotKind::Audio`, `OP_ADD_AUDIO_TRACK` = 45)
+  uses one of the 32 track slots, so it has its own mixer strip, meters and
+  can be a whole-track sidechain key. It has no patterns, rows or rack:
+  pattern, drum, note, rack and pattern-clip commands on it return
+  `BAD_INDEX`. Its lane holds up to 256 audio clips
+  `{sample, start, len, offset, loop, gain, fadeIn, fadeOut}`: `start`,
+  `len` and the fades are ticks, `offset` is the trim start (seconds on the
+  wire, frames in the engine at its own rate), `gain` is linear 0..4.
+- **Edits apply as a whole.** `AUDIO_CLIP_SOURCE` (46: sample, offset, loop)
+  and `AUDIO_CLIP_GAIN` (47: gain, fades) only stage; `AUDIO_CLIP_SET` (48:
+  start, len) commits both with the position. `CLIP_REMOVE` / `CLIP_CLEAR`
+  remove audio clips; every `ADD_*_TRACK` and `REMOVE_TRACK` clears a
+  slot's audio clips with a 2 ms fade.
+- **Playback.** Song mode only (silent in Pattern mode; a mode switch fades
+  the voices out). At tick `t` the file plays frame
+  `offset + (t − start) × framesPerTick`, modulo the file length with
+  `loop` on; a one-shot clip is silent after the file ends. Native speed, no
+  interpolation; a mono file plays on L and R; overlapping clips all play.
+- **A voice advances by frames, never by ticks**, so a tempo change never
+  makes it jump (a clip keeps its length in ticks: its audio ends early or
+  is cut at the clip end). A one-shot file that ended stays silent until a
+  jump, even if a faster tempo maps the playhead back inside it.
+- **Chase.** On Play, a seek, a loop wrap, a loop set behind the playhead, a
+  mode switch, an edit that changes the sample, offset, loop or start, and a
+  sample that becomes ready (or is replaced) while the playhead is inside the
+  clip, the voice restarts at the file frame for the current tick. Changing
+  only the length, gain or fades keeps the voice; the gain ramps over 5 ms.
+- **Fades** (2 ms, `CLIP_FADE_SECONDS`):
+  - a start at file position 0 is unfaded (keeps the transient); any other
+    start (chase, trimmed clip, late sample) fades in;
+  - every clip end fades out, ending exactly at the clip end; a one-shot
+    file's last 2 ms fade out too;
+  - a cut voice (jump, Stop, removal, a new sample generation, its clip moved
+    off the playhead) holds its last sample and fades it out; a chase into
+    the same clip fades in meanwhile (a linear cross-over);
+  - the user's fade-in / fade-out are linear and multiply with all of these;
+  - a loop clip's repeat seam is not faded.
+- **Safety.** A voice plays only while the sample keeps the generation it
+  captured, so a replaced, reset or late sample is never read stale (see
+  `audio-path.md`, "Sample generations").
+
 ## Limits
 | What | Limit |
 |---|---|
 | Patterns per track | 16 |
-| Clips per track | 256 |
+| Clips per track | 256 (pattern clips, or audio clips on an Audio track) |
 | Song length | 999 bars |
 | Drum hits per track per rendered piece | 32 (extra hits dropped) |
 | Synth events per track per piece | 256 (Offs never lost) |
 | Pattern length | 16 bars (synth), 64 steps (drum) |
+| Audio-clip gain | 0..4 linear (`MAX_CLIP_GAIN`, +12 dB) |
+| Audio-clip fades | `fadeIn + fadeOut <= len` (ticks) |
+| Audio-clip offset | `<= MAX_SAMPLE_FLOATS` frames |
+| Declick fade / gain ramp | 2 ms / 5 ms |
+| Sample memory | 1 GiB (`MAX_ARENA_FLOATS`), 256 MB per file |
 
 Known gaps are tracked in `docs/followups/plan-3.md` (Song-mode perf with many
 clips, `set_bars` releasing every pitch).

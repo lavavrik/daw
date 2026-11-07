@@ -13,7 +13,7 @@ use crate::mixer::Key;
 use crate::rack::catalog::ModuleKind;
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
-    BAR_TICKS, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
+    BAR_TICKS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
     MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS,
 };
 
@@ -76,13 +76,22 @@ pub const OP_MIX_SET_KEY: u32 = 42; // a=track channel 0..31 b=key: -1 none, slo
 pub const OP_MIX_RESET: u32 = 43; // a=channel 0..34: every param to its default, key none
 // Engine reset (project load): stopped only (ERR_BAD_VALUE while playing).
 pub const OP_RESET_ALL: u32 = 44; // no args: every track, sample, mixer setting and FX slot back to a blank session
+// Audio tracks (audio_track.rs). An audio clip is addressed like a clip,
+// `slot * MAX_CLIPS + idx`. SOURCE and GAIN stage a change; SET commits the
+// staged source and gain with the clip's position and activates it, so a
+// clip never plays a half-applied edit. On a non-Audio slot: ERR_BAD_INDEX.
+pub const OP_ADD_AUDIO_TRACK: u32 = 45; // a=slot
+pub const OP_AUDIO_CLIP_SOURCE: u32 = 46; // a=slot*MAX_CLIPS+idx b=sample id or -1 c=offset seconds (>= 0) d=loop 0/1
+pub const OP_AUDIO_CLIP_GAIN: u32 = 47; // a=slot*MAX_CLIPS+idx b=gain 0..MAX_CLIP_GAIN (linear) c=fade-in ticks d=fade-out ticks
+pub const OP_AUDIO_CLIP_SET: u32 = 48; // a=slot*MAX_CLIPS+idx b=start ticks c=length ticks (fadeIn+fadeOut <= len)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
 pub const ERR_BAD_INDEX: i32 = -2;
 pub const ERR_BAD_VALUE: i32 = -3;
 pub const ERR_DEFERRED: i32 = -4;
-/// Sample alloc only: growing the arena failed (WASM memory at its max).
+/// Sample alloc: the sample budget (`MAX_ARENA_FLOATS`) would be passed, or
+/// growing the arena failed (WASM memory at its max). Also a full rack FX pool.
 pub const ERR_OUT_OF_MEMORY: i32 = -5;
 
 /// A decoded, range-checked command. Indices are guaranteed in range for
@@ -152,6 +161,15 @@ pub enum Command {
     MixReset { channel: usize },
     /// Back to a blank session (see `Engine` docs, "Engine reset").
     ResetAll,
+    /// Make `slot` an Audio track (its old track and clips fade out).
+    AddAudioTrack { slot: usize },
+    /// Stage audio clip `idx`'s source: `offset` is in seconds (finite,
+    /// >= 0; the engine converts it to frames at its own rate).
+    AudioClipSource { slot: usize, idx: usize, sample: Option<u32>, offset: f64, looped: bool },
+    /// Stage audio clip `idx`'s gain (linear) and fades (ticks).
+    AudioClipGain { slot: usize, idx: usize, gain: f32, fade_in: u32, fade_out: u32 },
+    /// Commit the staged source and gain at `start` / `len` (ticks).
+    AudioClipSet { slot: usize, idx: usize, start: u32, len: u32 },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -289,6 +307,23 @@ fn clip(op: f64, start: f64, len: f64) -> Result<Clip, i32> {
         len,
         offset: op / MAX_PATTERNS as u32,
     })
+}
+
+/// A clip span: integral `start` and `len >= 1` with `start + len <=
+/// MAX_SONG_TICKS`; else `ERR_BAD_VALUE`.
+fn span(start: f64, len: f64) -> Result<(u32, u32), i32> {
+    let song = MAX_SONG_TICKS as u32;
+    let start = int_in(start, 0, song - 1)?;
+    Ok((start, int_in(len, 1, song - start)?))
+}
+
+/// A trim offset in seconds: finite and >= 0; else `ERR_BAD_VALUE`.
+fn offset_secs(v: f64) -> Result<f64, i32> {
+    if v.is_finite() && v >= 0.0 {
+        Ok(v.abs()) // -0.0 -> 0.0
+    } else {
+        Err(ERR_BAD_VALUE)
+    }
 }
 
 /// Sidechain key code: −1 is none, `slot * 32` is track `slot` and
@@ -444,6 +479,27 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_MIX_SET_KEY => Command::MixSetKey { channel: index(a, MAX_TRACKS)?, key: key_code(b)? },
         OP_MIX_RESET => Command::MixReset { channel: index(a, MIX_CHANNELS)? },
         OP_RESET_ALL => Command::ResetAll,
+        OP_ADD_AUDIO_TRACK => Command::AddAudioTrack { slot: index(a, MAX_TRACKS)? },
+        OP_AUDIO_CLIP_SOURCE => {
+            let (slot, idx) = clip_addr(a)?;
+            Command::AudioClipSource { slot, idx, sample: sample_id(b)?, offset: offset_secs(c)?, looped: flag(d)? }
+        }
+        OP_AUDIO_CLIP_GAIN => {
+            let (slot, idx) = clip_addr(a)?;
+            let song = MAX_SONG_TICKS as u32;
+            Command::AudioClipGain {
+                slot,
+                idx,
+                gain: ranged(b, 0.0, MAX_CLIP_GAIN as f64)?,
+                fade_in: int_in(c, 0, song)?,
+                fade_out: int_in(d, 0, song)?,
+            }
+        }
+        OP_AUDIO_CLIP_SET => {
+            let (slot, idx) = clip_addr(a)?;
+            let (start, len) = span(b, c)?;
+            Command::AudioClipSet { slot, idx, start, len }
+        }
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -507,7 +563,7 @@ mod tests {
     #[test]
     fn decode_never_panics_on_garbage() {
         let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -3e9];
-        for op in 0..48u32 {
+        for op in 0..52u32 {
             for &v in &vals {
                 let _ = decode(op, v, v, v, v);
             }
@@ -670,6 +726,46 @@ mod tests {
             assert_eq!(decode(OP_SET_LOOP, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
             assert_eq!(decode(OP_SET_LOOP, 0., bad, 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
             assert_eq!(decode(OP_SEEK, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
+        }
+    }
+    #[test]
+    fn decode_audio_clip_commands() {
+        let song = MAX_SONG_TICKS as f64;
+        let a = 3. * 256. + 255.;
+        assert_eq!(decode(OP_ADD_AUDIO_TRACK, 31., 0., 0., 0.), Ok(Command::AddAudioTrack { slot: 31 }));
+        assert_eq!(decode(OP_ADD_AUDIO_TRACK, 32., 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(
+            decode(OP_AUDIO_CLIP_SOURCE, a, 7., 1.5, 1.),
+            Ok(Command::AudioClipSource { slot: 3, idx: 255, sample: Some(7), offset: 1.5, looped: true })
+        );
+        assert_eq!(
+            decode(OP_AUDIO_CLIP_SOURCE, 0., -1., 0., 0.),
+            Ok(Command::AudioClipSource { slot: 0, idx: 0, sample: None, offset: 0.0, looped: false })
+        );
+        assert_eq!(
+            decode(OP_AUDIO_CLIP_GAIN, a, 4., 0., song),
+            Ok(Command::AudioClipGain { slot: 3, idx: 255, gain: 4.0, fade_in: 0, fade_out: MAX_SONG_TICKS as u32 })
+        );
+        assert_eq!(
+            decode(OP_AUDIO_CLIP_SET, a, 7680., 9600., 0.),
+            Ok(Command::AudioClipSet { slot: 3, idx: 255, start: 7680, len: 9600 })
+        );
+        for op in [OP_AUDIO_CLIP_SOURCE, OP_AUDIO_CLIP_GAIN, OP_AUDIO_CLIP_SET] {
+            for bad_a in [-1., 32. * 256., 0.5, f64::NAN] {
+                assert_eq!(decode(op, bad_a, 0., 0., 1.), Err(ERR_BAD_INDEX), "op {op} a {bad_a}");
+            }
+        }
+        for (b, c, d) in [(256., 0., 0.), (-2., 0., 0.), (0.5, 0., 0.)] {
+            assert_eq!(decode(OP_AUDIO_CLIP_SOURCE, 0., b, c, d), Err(ERR_BAD_INDEX), "{b} {c} {d}");
+        }
+        for (b, c, d) in [(0., -0.1, 0.), (0., f64::NAN, 0.), (0., f64::INFINITY, 0.), (0., 0., 2.), (0., 0., 0.5)] {
+            assert_eq!(decode(OP_AUDIO_CLIP_SOURCE, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
+        }
+        for (b, c, d) in [(4.001, 0., 0.), (-0.1, 0., 0.), (f64::NAN, 0., 0.), (1., -1., 0.), (1., 0., song + 1.), (1., 0.5, 0.)] {
+            assert_eq!(decode(OP_AUDIO_CLIP_GAIN, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
+        }
+        for (b, c) in [(song, 1.), (0., 0.), (1., song), (0.5, 1.), (0., f64::INFINITY)] {
+            assert_eq!(decode(OP_AUDIO_CLIP_SET, 0., b, c, 0.), Err(ERR_BAD_VALUE), "{b} {c}");
         }
     }
     #[test]

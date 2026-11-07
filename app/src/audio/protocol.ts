@@ -94,6 +94,25 @@ export const Op = {
    *  the metronome. Stopped only (BAD_VALUE while playing: send STOP first, the
    *  same batch is fine). Applies at once; the output fades over 5 ms. */
   RESET_ALL: 44,
+  // Audio tracks (engine/src/audio_track.rs). An audio clip is addressed like
+  // a clip, slot*MAX_CLIPS+idx; every audio-clip op on a non-Audio slot is
+  // BAD_INDEX. One edit is SOURCE + GAIN (staged) then SET (commits both
+  // with the position), so the engine never plays a half-applied edit.
+  /** a=slot: an Audio track (no patterns or rack; its own mixer strip). The
+   *  old track and every clip there fade out over 2 ms. */
+  ADD_AUDIO_TRACK: 45,
+  /** a=slot*MAX_CLIPS+idx b=sample id or -1 c=offset in seconds (>= 0; the
+   *  engine converts to frames at its rate, BAD_VALUE past MAX_SAMPLE_FLOATS
+   *  frames) d=loop 0/1. Stages the change. */
+  AUDIO_CLIP_SOURCE: 46,
+  /** a=slot*MAX_CLIPS+idx b=gain 0..MAX_CLIP_GAIN (linear) c=fade-in ticks
+   *  d=fade-out ticks. Stages the change. */
+  AUDIO_CLIP_GAIN: 47,
+  /** a=slot*MAX_CLIPS+idx b=start ticks c=length ticks (len >= 1, start+len
+   *  <= MAX_SONG_TICKS, fadeIn+fadeOut <= len else BAD_VALUE): commits the
+   *  staged source and gain and activates the clip. CLIP_REMOVE / CLIP_CLEAR
+   *  remove audio clips too. */
+  AUDIO_CLIP_SET: 48,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -125,6 +144,14 @@ export const HostErr = {
 export const MAX_BLOCK = 1024;
 /** Per-sample cap, frames * channels (lib.rs MAX_SAMPLE_FLOATS). */
 export const MAX_SAMPLE_FLOATS = 64 * 1024 * 1024;
+/** Sample memory budget in floats, 1 GiB: everything uploaded since the last
+ *  RESET_ALL, live and replaced samples together (lib.rs MAX_ARENA_FLOATS).
+ *  The engine refuses past it with Err.OUT_OF_MEMORY, playing or not. */
+export const MAX_ARENA_FLOATS = 256 * 1024 * 1024;
+/** Largest audio-clip gain, linear (+12 dB; lib.rs MAX_CLIP_GAIN). */
+export const MAX_CLIP_GAIN = 4.0;
+/** Declick fade of every audio-clip edge, seconds (lib.rs CLIP_FADE_SECONDS). */
+export const CLIP_FADE_SECONDS = 0.002;
 /** Rack sizes (lib.rs MAX_MODULES etc.): module slots per patch, channels per
  *  cable, inputs (and separately outputs) per module, params per module. */
 export const MAX_MODULES = 32;

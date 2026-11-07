@@ -2,6 +2,7 @@
 
 pub mod arena;
 pub mod arrangement;
+pub mod audio_track;
 pub mod drums;
 pub mod dsp;
 pub mod engine;
@@ -25,6 +26,14 @@ pub const MAX_STEPS: usize = 64;
 pub const MAX_SAMPLES: usize = 256;
 /// Per-sample size cap in floats (frames * channels; 256 MB).
 pub const MAX_SAMPLE_FLOATS: usize = 64 * 1024 * 1024;
+/// Sample memory budget in floats (1 GiB): every float the arena has handed
+/// out since the last engine reset, live and leaked samples together
+/// (`arena.rs`). `sample_alloc` refuses past it with `ERR_OUT_OF_MEMORY`.
+pub const MAX_ARENA_FLOATS: usize = 256 * 1024 * 1024;
+/// Largest audio-clip gain (linear; +12 dB).
+pub const MAX_CLIP_GAIN: f32 = 4.0;
+/// Declick fade of every audio-clip edge (seconds; `audio_track.rs`).
+pub const CLIP_FADE_SECONDS: f32 = 0.002;
 /// Frames per rack sub-block. Modules always process exactly this many frames,
 /// so live and sequenced note timing inside a rack resolves to one sub-block.
 pub const RACK_BLOCK: usize = 32;

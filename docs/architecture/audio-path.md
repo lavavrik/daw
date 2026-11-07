@@ -90,6 +90,18 @@ one-off copy, maybe a `memory.grow`, not a steady-state overrun).
 4. Growing the arena is fallible: if `memory.grow` hits the 4 GB maximum the
    engine returns `Err.OUT_OF_MEMORY` instead of aborting (an abort is a WASM
    trap that would kill the engine).
+5. **The budget.** Sample memory is capped at 1 GiB
+   (`MAX_ARENA_FLOATS = 256 Mi` floats, `lib.rs`, mirrored in
+   `protocol.ts`): the floats the arena handed out since the last
+   `RESET_ALL`, live samples and replaced ones together (the arena is a bump
+   allocator, so a replaced sample leaks until the next load or reset). A
+   request that would pass it is `Err.OUT_OF_MEMORY` **whether playing or
+   not** (waiting for Stop cannot help, so it is never `DEFERRED`), and a
+   grown chunk is cut so it never extends past the budget. One file stays
+   capped at `MAX_SAMPLE_FLOATS` (256 MB). `SampleArena::allocated()`
+   reports the total; tests use `SampleArena::with_budget` so they never
+   touch 1 GiB. The UI checks the same budget after decode and before
+   upload (plan 9 Task 4), so the engine's refusal is a backstop.
 
 Every `sample` message gets exactly one `sample-result` that echoes its
 original `id` (replies are matched by id), even for malformed requests
@@ -102,7 +114,7 @@ codes are turned into plain words for the user by `loadErrorText()` in
 
 Each `SamplePool::set` stamps the slot with a new pool-wide generation, and
 `clear()` (engine reset) moves it on as well. Voices (drum rows, the rack's
-Sample Player) capture the generation at trigger and keep reading only while
+Sample Player, audio clips) capture the generation at trigger and keep reading only while
 `playable(id)` reports the same one; otherwise they hold their last output
 and fade it out over 2 ms. This is what makes an arena reset safe: the next
 upload may land on the very same arena slice, but never in the same

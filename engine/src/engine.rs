@@ -2,13 +2,26 @@
 //! `process` is the real-time callback: no allocation, no blocking, no panics.
 //!
 //! # Track slots
-//! Each of the `MAX_TRACKS` slots is empty, a drum track or a synth track
-//! ([`SlotKind`]). Adding one kind over the other first removes the old one
-//! with its own 2 ms fade (drum voices fade in `Drums`, the rack fades in
-//! `Synths`), so a kind swap never hard-cuts audio. Drum commands sent to a
-//! synth slot, and rack commands sent to a non-synth slot, return
-//! `ERR_BAD_INDEX`. Drum row/step edits on an *empty* slot still succeed and
-//! just store state (plan-1 behaviour).
+//! Each of the `MAX_TRACKS` slots is empty, a drum track, a synth track or
+//! an Audio track ([`SlotKind`]). Adding one kind over another first removes
+//! the old one with its own 2 ms fade (drum voices fade in `Drums`, the rack
+//! fades in `Synths`, audio clips in `AudioTracks`), so a kind swap never
+//! hard-cuts audio. Drum commands sent to a synth or Audio slot, and rack
+//! commands sent to a non-synth slot, return `ERR_BAD_INDEX`. Drum row/step
+//! edits on an *empty* slot still succeed and just store state (plan-1
+//! behaviour).
+//!
+//! # Audio tracks
+//! An Audio slot holds audio clips (`audio_track.rs`): `ADD_AUDIO_TRACK`,
+//! the staged `AUDIO_CLIP_SOURCE` / `AUDIO_CLIP_GAIN` and the committing
+//! `AUDIO_CLIP_SET` (`ERR_BAD_INDEX` on any other kind), plus `CLIP_REMOVE`
+//! and `CLIP_CLEAR`. It has no patterns, rows or rack: pattern, drum, note,
+//! rack and pattern-clip (`CLIP_SET`) commands return `ERR_BAD_INDEX`. Its
+//! mixer strip, its use as a whole-track sidechain key and its meters work
+//! like any track's. Clips play in Song mode only; every jump of song time
+//! (Play, seek, loop wrap, loop set behind the playhead, mode switch, Stop)
+//! calls `AudioTracks::jump`, and the next piece chases. Every `ADD_*_TRACK`
+//! and `REMOVE_TRACK` clears the slot's audio clips with a 2 ms fade.
 //!
 //! # Live input
 //! `NOTE_ON`/`NOTE_OFF`/`PITCH_BEND`/`MOD_WHEEL`/`SUSTAIN` go to the input
@@ -104,6 +117,7 @@
 
 use crate::arena::SampleArena;
 use crate::arrangement::{Arrangement, Clip, Timeline};
+use crate::audio_track::AudioTracks;
 use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool, SampleView};
@@ -170,6 +184,7 @@ pub enum SlotKind {
     Empty,
     Drum,
     Synth,
+    Audio,
 }
 
 /// The whole audio engine (see the module docs).
@@ -182,6 +197,8 @@ pub struct Engine {
     samples: SamplePool,
     drums: Drums,
     synths: Synths,
+    /// Every slot's audio clips and their voices (Audio tracks).
+    audio: AudioTracks,
     /// One per slot (`MAX_TRACKS`, heap).
     arrangements: Vec<Arrangement>,
     kinds: [SlotKind; MAX_TRACKS],
@@ -238,6 +255,7 @@ impl Engine {
             samples: SamplePool::new(),
             drums: Drums::new(sample_rate),
             synths: Synths::new(sample_rate),
+            audio: AudioTracks::new(sample_rate),
             arrangements: (0..MAX_TRACKS).map(|_| Arrangement::new()).collect(),
             kinds: [SlotKind::Empty; MAX_TRACKS],
             input: None,
@@ -275,6 +293,7 @@ impl Engine {
         self.reset_fade = ResetFade { l, r, left: self.reset_fade.len, ..self.reset_fade };
         self.drums.reset_all();
         self.synths.reset_all(); // racks hard-cleared, then the FX pool freed
+        self.audio.reset_all();
         for a in self.arrangements.iter_mut() {
             a.clear();
         }
@@ -333,18 +352,27 @@ impl Engine {
         self.kinds.get(slot).copied().unwrap_or(SlotKind::Empty)
     }
 
-    /// Drum commands are refused on synth slots.
+    /// Drum commands are refused on synth and Audio slots.
     fn drum_slot(&self, slot: usize) -> Result<(), i32> {
-        if self.kind(slot) == SlotKind::Synth {
+        if matches!(self.kind(slot), SlotKind::Synth | SlotKind::Audio) {
             Err(protocol::ERR_BAD_INDEX)
         } else {
             Ok(())
         }
     }
 
-    /// Pattern commands are only accepted on synth slots.
+    /// Note-pattern commands are only accepted on synth slots.
     fn synth_slot(&self, slot: usize) -> Result<(), i32> {
         if self.kind(slot) == SlotKind::Synth {
+            Ok(())
+        } else {
+            Err(protocol::ERR_BAD_INDEX)
+        }
+    }
+
+    /// Audio-clip commands are only accepted on Audio slots.
+    fn audio_slot(&self, slot: usize) -> Result<(), i32> {
+        if self.kind(slot) == SlotKind::Audio {
             Ok(())
         } else {
             Err(protocol::ERR_BAD_INDEX)
@@ -432,25 +460,29 @@ impl Engine {
                     self.live_sustained = 0;
                 }
             }
-            SlotKind::Empty => {}
+            SlotKind::Audio | SlotKind::Empty => {}
         }
         self.set_kind(slot, SlotKind::Empty);
     }
 
-    /// Drop every clip of `slot` (its track was added, removed or swapped;
-    /// the track reset releases or clears whatever its clips held).
+    /// Drop every clip of `slot`, pattern and audio clips alike (its track
+    /// was added, removed or swapped; the track reset releases or clears
+    /// whatever its pattern clips held, and audio voices fade over 2 ms).
     fn clear_clips(&mut self, slot: usize) {
         if let Some(a) = self.arrangements.get_mut(slot) {
             a.clear();
         }
+        self.audio.clear_track(slot);
     }
 
-    /// A jump of song time while playing (Play, seek, loop wrap, mode
-    /// switch): every drum clip latches its pending swing at once.
+    /// A jump of song time (Play, seek, loop wrap, mode switch, a loop set
+    /// behind the playhead): every drum clip latches its pending swing at
+    /// once, and every audio voice is cut and chases on the next piece.
     fn latch_all_clips(&mut self) {
         for (slot, a) in self.arrangements.iter().enumerate() {
             self.drums.latch_clips(slot, a.clips());
         }
+        self.audio.jump();
     }
 
     /// Record `slot`'s kind (`get_mut`-guarded: never panics).
@@ -534,6 +566,7 @@ impl Engine {
                 }
                 self.drums.fade_all(); // no hard cuts: 2 ms fade-out
                 self.synths.release_sequenced(); // releases, never AllOff
+                self.audio.jump(); // audio clips: hold-and-fade over 2 ms
                 self.sync_transport_telemetry();
             }
             // Applies from the next block; the playhead position is unchanged.
@@ -543,7 +576,7 @@ impl Engine {
             // track there fades out first).
             Command::AddDrumTrack { slot } => {
                 let was_empty = self.kind(slot) == SlotKind::Empty;
-                if self.kind(slot) == SlotKind::Synth {
+                if matches!(self.kind(slot), SlotKind::Synth | SlotKind::Audio) {
                     self.clear_slot(slot);
                 }
                 self.drums.add_track(slot);
@@ -555,7 +588,7 @@ impl Engine {
             // there is cleared with a fade).
             Command::AddSynthTrack { slot } => {
                 let was_empty = self.kind(slot) == SlotKind::Empty;
-                if self.kind(slot) == SlotKind::Drum {
+                if matches!(self.kind(slot), SlotKind::Drum | SlotKind::Audio) {
                     self.clear_slot(slot);
                 }
                 self.synths.add_track(slot);
@@ -563,7 +596,31 @@ impl Engine {
                 self.clear_clips(slot);
                 self.mixer.slot_added(slot, was_empty);
             }
-            // Works for both kinds (and is a no-op on an empty slot, except
+            // An Audio track: no patterns, rows or rack. The old track (any
+            // kind) and every clip there fade out; so do the audio clips of
+            // an Audio track re-added over itself.
+            Command::AddAudioTrack { slot } => {
+                let was_empty = self.kind(slot) == SlotKind::Empty;
+                self.clear_slot(slot);
+                self.set_kind(slot, SlotKind::Audio);
+                self.clear_clips(slot);
+                self.mixer.slot_added(slot, was_empty);
+            }
+            // Audio clips (Audio slots only): SOURCE and GAIN stage, SET
+            // commits (see `audio_track.rs`).
+            Command::AudioClipSource { slot, idx, sample, offset, looped } => {
+                self.audio_slot(slot)?;
+                self.audio.stage_source(slot, idx, sample, offset, looped)?
+            }
+            Command::AudioClipGain { slot, idx, gain, fade_in, fade_out } => {
+                self.audio_slot(slot)?;
+                self.audio.stage_gain(slot, idx, gain, fade_in, fade_out)?
+            }
+            Command::AudioClipSet { slot, idx, start, len } => {
+                self.audio_slot(slot)?;
+                self.audio.commit(slot, idx, start, len)?
+            }
+            // Works for every kind (and is a no-op on an empty slot, except
             // that drum state is marked inactive as before).
             Command::RemoveTrack { slot } => {
                 self.clear_slot(slot);
@@ -651,21 +708,21 @@ impl Engine {
             Command::SetCurrentPattern { slot, pattern } => match self.kind(slot) {
                 SlotKind::Drum => self.drums.set_current(slot, pattern),
                 SlotKind::Synth => found(self.synths.set_current(slot, pattern))?,
-                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+                SlotKind::Audio | SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
             Command::CopyPattern { slot, from, to } => match self.kind(slot) {
                 SlotKind::Drum => self.drums.copy_pattern(slot, from, to, self.transport.playing),
                 SlotKind::Synth => {
                     found(self.synths.copy_pattern(slot, from, to, clips_of(&self.arrangements, slot)))?
                 }
-                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+                SlotKind::Audio | SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
             Command::ClearPatternData { slot, pattern } => match self.kind(slot) {
                 SlotKind::Drum => self.drums.clear_pattern(slot, pattern),
                 SlotKind::Synth => {
                     found(self.synths.clear_pattern(slot, pattern, clips_of(&self.arrangements, slot)))?
                 }
-                SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+                SlotKind::Audio | SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
             // Clips: drum or synth slots. A clip that keeps its mapping under
             // the playhead (same start / offset / pattern, playing, and the
@@ -680,7 +737,7 @@ impl Engine {
             // owns, and a drum clip latches its swing afresh.
             Command::ClipSet { slot, idx, clip } => {
                 let kind = self.kind(slot);
-                if kind == SlotKind::Empty {
+                if matches!(kind, SlotKind::Empty | SlotKind::Audio) {
                     return Err(protocol::ERR_BAD_INDEX);
                 }
                 let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
@@ -698,8 +755,13 @@ impl Engine {
                 }
             }
             Command::ClipRemove { slot, idx } => {
-                if self.kind(slot) == SlotKind::Empty {
-                    return Err(protocol::ERR_BAD_INDEX);
+                match self.kind(slot) {
+                    SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
+                    SlotKind::Audio => {
+                        self.audio.remove_clip(slot, idx);
+                        return Ok(());
+                    }
+                    SlotKind::Drum | SlotKind::Synth => {}
                 }
                 let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
                 if a.remove(idx) {
@@ -717,6 +779,7 @@ impl Engine {
                 let mode = if song { Mode::Song } else { Mode::Pattern };
                 if mode != self.transport.mode {
                     self.synths.release_sequenced();
+                    self.audio.jump(); // audio tracks: fade out (Pattern), chase (Song)
                     self.transport.mode = mode;
                     match mode {
                         Mode::Song => {
@@ -767,6 +830,7 @@ impl Engine {
                     self.transport.ticks = ticks as f64;
                     self.transport.song_start = ticks as f64;
                     if self.transport.playing {
+                        // Also cuts every audio voice (`latch_all_clips`).
                         self.synths.release_song();
                         self.latch_all_clips();
                     }
@@ -933,6 +997,9 @@ impl Engine {
         };
         let smp = SampleView::new(&self.samples, &self.arena);
         self.rendered |= self.synths.render_add(&ctx, smp, window, timeline, &mut self.tracks, (from, to));
+        // Audio tracks: clips at native speed, chased after any jump
+        // (Song mode only; tails render in either mode).
+        self.rendered |= self.audio.render_add(window, timeline, smp, &mut self.tracks, (from, to));
     }
 
     fn fail(&mut self, code: i32) -> i32 {
@@ -946,8 +1013,10 @@ impl Engine {
     /// and marks it not ready. May grow the heap only while stopped; while
     /// playing and out of room, returns `ERR_DEFERRED` so the caller retries
     /// after stopping; if growing fails (WASM memory exhausted), returns
-    /// `ERR_OUT_OF_MEMORY` instead of trapping. Failures also land in
-    /// `TELEMETRY_LAST_ERROR`.
+    /// `ERR_OUT_OF_MEMORY` instead of trapping. A request that would pass the
+    /// sample budget (`MAX_ARENA_FLOATS` handed out since the last reset,
+    /// leaked samples included) is `ERR_OUT_OF_MEMORY` too, playing or not.
+    /// Failures also land in `TELEMETRY_LAST_ERROR`.
     pub fn sample_alloc(&mut self, id: u32, frames: u32, channels: u32) -> Result<*mut f32, i32> {
         if id as usize >= MAX_SAMPLES {
             return Err(self.fail(protocol::ERR_BAD_INDEX));
@@ -963,6 +1032,11 @@ impl Engine {
         else {
             return Err(self.fail(protocol::ERR_BAD_VALUE));
         };
+        // The sample budget (1 GiB, live and leaked samples together): out
+        // of memory whether playing or not (waiting for Stop cannot help).
+        if self.arena.over_budget(len) {
+            return Err(self.fail(protocol::ERR_OUT_OF_MEMORY));
+        }
         let may_grow = !self.transport.playing;
         let Some(slice) = self.arena.alloc(len, may_grow) else {
             // Without growth the only failure is "no room yet"; with growth
@@ -1024,6 +1098,9 @@ fn render_metronome(metronome: &mut Metronome, window: Option<(f64, f64, f64)>, 
 
 #[cfg(test)]
 mod reset_tests;
+
+#[cfg(test)]
+mod audio_tests;
 
 #[cfg(test)]
 mod tests {

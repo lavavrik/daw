@@ -621,3 +621,95 @@ fn reset_all_does_not_allocate() {
     assert!(peak > 0.05, "sounded before the reset, peak {peak}");
     assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0), "silent after the reset");
 }
+
+/// Audio tracks (plan 9): every new op (`ADD_AUDIO_TRACK`, the staged
+/// `AUDIO_CLIP_SOURCE` / `AUDIO_CLIP_GAIN` and the committing
+/// `AUDIO_CLIP_SET`), playback of loop and one-shot clips (mono and stereo),
+/// chases (Play, seek, loop wraps, mode switches, a source edit, a sample
+/// replaced in place and readied late), gain ramps, resizes, removal,
+/// `CLIP_CLEAR`, kind swaps over an Audio slot and Stop, all with the
+/// counter ARMED.
+#[test]
+fn audio_tracks_and_clip_edits_do_not_allocate() {
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let max_clips = daw_engine::MAX_CLIPS as f64;
+    let a = |slot: f64, idx: f64| slot * max_clips + idx;
+    // Outside the counted region: a stereo and a mono sample.
+    let p = e.sample_alloc(0, 96000, 2).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 192000) }
+        .iter_mut()
+        .enumerate()
+        .for_each(|(i, x)| *x = ((i as f32) * 0.01).sin() * 0.5);
+    ok(e.sample_ready(0));
+    let p = e.sample_alloc(1, 4800, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 4800) }.fill(0.3);
+    ok(e.sample_ready(1));
+
+    arm();
+
+    let clip = |e: &mut Engine, slot: f64, idx: f64, sample: f64, off: f64, lp: f64, gain: f64, start: f64, len: f64| {
+        ok(e.command(OP_AUDIO_CLIP_SOURCE, a(slot, idx), sample, off, lp));
+        ok(e.command(OP_AUDIO_CLIP_GAIN, a(slot, idx), gain, 480., 480.));
+        ok(e.command(OP_AUDIO_CLIP_SET, a(slot, idx), start, len, 0.));
+    };
+    ok(e.command(OP_ADD_AUDIO_TRACK, 0., 0., 0., 0.));
+    ok(e.command(OP_ADD_AUDIO_TRACK, 1., 0., 0., 0.));
+    // 40 overlapping clips per track over 20 bars, loop and one-shot.
+    for i in 0..40u32 {
+        let (start, lp) = (i as f64 * 1920.0, (i % 2) as f64);
+        clip(&mut e, 0., i as f64, 0., (i % 3) as f64 * 0.1, lp, 0.8, start, 7680.);
+        clip(&mut e, 1., i as f64, 1., 0., lp, 1.5, start, 7680.);
+    }
+    clip(&mut e, 1., 255., 7., 0., 0., 1., 0., 3840. * 20.); // sample 7: loaded late
+    ok(e.command(OP_MIX_SET_KEY, 0., 32., 0., 0.)); // track 0 keyed by audio track 1
+    ok(e.command(OP_SET_TEMPO, 170., 0., 0., 0.));
+    ok(e.command(OP_SET_LOOP, 3840., 11520., 0., 0.));
+    ok(e.command(OP_SET_MODE, 1., 0., 0., 0.));
+    ok(e.command(OP_SEEK, 1920., 0., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    let mut peak = 0.0f64;
+    for b in 0..4000u32 {
+        match b {
+            100 => clip(&mut e, 0., 2., 0., 0., 0., 0.4, 3840., 3840.), // gain + length
+            105 => clip(&mut e, 0., 2., 0., 0., 0., 0.4, 3840., 7680.), // lengthen in place
+            110 => clip(&mut e, 0., 3., 0., 0.25, 1., 0.8, 3840., 7680.), // new offset: chase
+            120 => ok(e.command(OP_CLIP_REMOVE, a(0., 4.), 0., 0., 0.)),
+            130 => {
+                // Replace sample 1 in place (fits the arena) and ready it later.
+                e.sample_alloc(1, 4800, 1).unwrap();
+            }
+            140 => ok(e.sample_ready(1)),
+            150 => {
+                let p = e.sample_alloc(7, 48000, 2).unwrap();
+                unsafe { std::slice::from_raw_parts_mut(p, 96000) }.fill(0.1);
+                ok(e.sample_ready(7));
+            }
+            1500 => ok(e.command(OP_SEEK, 9000., 0., 0., 0.)),
+            1700 => ok(e.command(OP_SET_MODE, 0., 0., 0., 0.)),
+            1800 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)),
+            2000 => ok(e.command(OP_SET_LOOP, 4000., 4001., 0., 0.)), // wraps every ~18 frames
+            2100 => ok(e.command(OP_SET_LOOP, 0., 3840., 0., 0.)), // behind the playhead
+            2200 => ok(e.command(OP_SET_TEMPO, 97., 0., 0., 0.)),
+            2600 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            2610 => ok(e.command(OP_CLIP_CLEAR, 0., 0., 0., 0.)),
+            2620 => ok(e.command(OP_PLAY, 0., 0., 0., 0.)),
+            3000 => ok(e.command(OP_CLIP_CLEAR, 1., 0., 0., 0.)), // while sounding
+            3100 => clip(&mut e, 0., 255., 0., 1.9, 1., 4., 0., 3840.),
+            3500 => ok(e.command(OP_ADD_DRUM_TRACK, 0., 0., 0., 0.)), // over an Audio slot
+            3501 => ok(e.command(OP_ADD_AUDIO_TRACK, 0., 0., 0., 0.)), // back again
+            3600 => ok(e.command(OP_REMOVE_TRACK, 1., 0., 0., 0.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        if b < 1500 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "audio tracks allocated");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(peak > 0.05, "audio clips should be audible, peak {peak}");
+}

@@ -3,6 +3,16 @@
 //! and the heap grows only when the caller allows it (transport stopped).
 //! Freed space is reclaimed only by `reset` (engine reset on project load);
 //! removed samples leak until then.
+//!
+//! # Budget
+//! The floats handed out since the last reset ([`allocated`](SampleArena::allocated),
+//! live and leaked samples together) never pass the budget
+//! (`MAX_ARENA_FLOATS`, 1 GiB, in the engine): `alloc` refuses a request
+//! that would, whether or not it may grow, and a grown chunk is cut so it
+//! never extends past the budget either. The engine maps that refusal to
+//! `ERR_OUT_OF_MEMORY` (playing or stopped), checking
+//! [`over_budget`](SampleArena::over_budget) first. Space wasted at the end
+//! of a chunk that a request skipped is not handed out, so it does not count.
 
 /// Handle to a region inside the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,21 +29,46 @@ pub struct SampleArena {
     chunks: Vec<Vec<f32>>,
     /// Bump offset within each chunk (parallel to `chunks`).
     used: Vec<usize>,
+    /// Floats handed out since the last reset.
+    allocated: usize,
+    /// Most floats `allocated` may reach.
+    budget: usize,
 }
 
 impl SampleArena {
-    /// First chunk of `frames` zeroed floats (the pre-reserved arena).
+    /// First chunk of `frames` zeroed floats (the pre-reserved arena), with
+    /// the engine's budget (`MAX_ARENA_FLOATS`).
     pub fn with_capacity(frames: usize) -> Self {
-        SampleArena { chunks: vec![vec![0.0; frames]], used: vec![0] }
+        Self::with_budget(frames, crate::MAX_ARENA_FLOATS)
+    }
+
+    /// [`with_capacity`](Self::with_capacity) with another budget (tests use
+    /// a small one so they never touch 1 GiB).
+    pub fn with_budget(frames: usize, budget: usize) -> Self {
+        SampleArena { chunks: vec![vec![0.0; frames]], used: vec![0], allocated: 0, budget }
+    }
+
+    /// Floats handed out since the last [`reset`](Self::reset).
+    pub fn allocated(&self) -> usize {
+        self.allocated
+    }
+
+    /// Would handing out `len` more floats pass the budget?
+    pub fn over_budget(&self, len: usize) -> bool {
+        self.allocated.checked_add(len).is_none_or(|total| total > self.budget)
     }
 
     /// Bump-allocate `len` floats. A request never straddles chunks: if the
     /// current (last) chunk lacks room, a new chunk of `max(64 MB, len)` is
-    /// added when `may_grow`. Returns `None` (changing nothing) when there is
-    /// no room and `!may_grow`, or when growing fails (out of memory: on WASM
+    /// added when `may_grow` (cut at the budget). Returns `None` (changing
+    /// nothing) when the request would pass the budget, when there is no
+    /// room and `!may_grow`, or when growing fails (out of memory: on WASM
     /// `memory.grow` hit the max). Growth is fallible on purpose: `vec![]`
     /// would abort (a WASM trap that kills the engine) instead.
     pub fn alloc(&mut self, len: usize, may_grow: bool) -> Option<SampleSlice> {
+        if self.over_budget(len) {
+            return None;
+        }
         let last = self.chunks.len() - 1;
         if self.chunks[last].len() - self.used[last] < len {
             if !may_grow {
@@ -41,7 +76,9 @@ impl SampleArena {
             }
             self.chunks.try_reserve(1).ok()?;
             self.used.try_reserve(1).ok()?;
-            let chunk = try_zeroed(GROW_CHUNK.max(len))?; // heap grows here
+            // `budget - allocated >= len` (checked above).
+            let size = GROW_CHUNK.max(len).min(self.budget - self.allocated);
+            let chunk = try_zeroed(size)?; // heap grows here
             self.chunks.push(chunk); // capacity reserved above: cannot fail
             self.used.push(0);
         }
@@ -51,6 +88,7 @@ impl SampleArena {
             return None; // unrepresentable handle; unreachable with real sizes
         }
         self.used[chunk] += len;
+        self.allocated += len;
         Some(SampleSlice { chunk: chunk as u32, start: start as u32, len: len as u32 })
     }
 
@@ -78,6 +116,7 @@ impl SampleArena {
         if let Some(u) = self.used.first_mut() {
             *u = 0;
         }
+        self.allocated = 0;
     }
 }
 
@@ -148,7 +187,8 @@ mod tests {
 
     #[test]
     fn failed_growth_returns_none_instead_of_aborting() {
-        let mut a = SampleArena::with_capacity(1000);
+        // No budget, so the growth itself is what fails.
+        let mut a = SampleArena::with_budget(1000, usize::MAX);
         let s1 = a.alloc(800, true).unwrap();
         // Unallocatable (byte size overflows isize): must not abort the process.
         assert!(a.alloc(usize::MAX / 2, true).is_none());
@@ -158,6 +198,30 @@ mod tests {
         let s2 = a.alloc(200, true).unwrap();
         assert_eq!((s2.chunk, s2.start), (0, 800));
         assert!(a.slice(s1).iter().all(|&x| x == 3.0));
+    }
+
+    #[test]
+    fn arena_budget_refuses_past_the_limit() {
+        let mut a = SampleArena::with_budget(1000, 3000);
+        assert_eq!(a.allocated(), 0);
+        assert!(a.alloc(800, false).is_some());
+        assert_eq!(a.allocated(), 800);
+        // Over the budget: refused even when growing is allowed, and the
+        // refusal consumes nothing.
+        assert!(a.alloc(2201, true).is_none());
+        assert_eq!(a.allocated(), 800);
+        // Up to the budget: a grown chunk never extends past it.
+        let s = a.alloc(2200, true).unwrap();
+        assert_eq!(s.chunk, 1);
+        assert_eq!(a.chunks[1].len(), 2200, "the chunk is cut at the budget, not 64 MB");
+        assert_eq!(a.allocated(), 3000);
+        assert!(a.alloc(1, true).is_none() && a.alloc(1, false).is_none());
+        // A reset hands everything back.
+        a.reset();
+        assert_eq!(a.allocated(), 0);
+        assert!(a.alloc(1000, false).is_some());
+        // The engine's arena uses the real budget.
+        assert_eq!(SampleArena::with_capacity(10).budget, crate::MAX_ARENA_FLOATS);
     }
 
     #[test]

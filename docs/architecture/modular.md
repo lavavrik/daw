@@ -47,6 +47,13 @@ replaces it).
 - The ladder filter (LP24) is characterful on purpose: a saturator inside the
   feedback loop makes the resonant peak compress with input level (ruling
   R10; see `rack/modules/filter.rs`). Cutoff is smoothed in the log domain.
+- **Voice LEDs** (plan 12; `app/src/ui/rack/VoiceLeds.svelte`): the
+  Instrument tab's header shows "Voices" and one LED per voice of the
+  first MIDI In (lowest module idx; its `voices`, 1 in Mono; none without a
+  MIDI In). Brightness is the voice's level across the rack's Outs (−48..0
+  dB → dark..full; the engine reports nothing below −60 dB), a ring means
+  its gate is held. Read from visSab (want bit 4) by a 30 Hz frame-loop
+  consumer; see [visuals.md](visuals.md#voice-leds).
 
 ## Envelopes
 
@@ -70,6 +77,20 @@ Sustain → Release per channel. Plan 11 appended (indices unchanged):
 - With `delay` 0, `vel_amt` 0 the output is bit-identical to the
   pre-plan-11 envelope (pinned by `adsr_defaults_are_bit_identical`), so old
   patches and export hashes are unchanged.
+
+**Shape previews** (plan 12): the ADSR and LFO panels draw their shape
+above the knobs (`app/src/ui/rack/ShapePreview.svelte`, curves in
+`app/src/ui/vis/shapes.ts`): the ADSR as Delay → Attack → Decay → a
+fixed-width sustain plateau → Release on a √t time axis (labels give the
+real times, "+delay · A · D · S% · R"), drawn at full velocity with a
+dashed softest-note curve when Velocity > 0; the LFO as one cycle × depth
+from the engine's phase 0, labelled "2.00 Hz · 500 ms" or "1/4 · 500 ms".
+They follow the knob values shown, automation lanes included. The curves
+are checked against the real modules: `engine/tests/shapes.rs` writes
+`engine/tests/fixtures/shapes.json` (`UPDATE_FIXTURES=1`) and
+`shapes.test.ts` requires every engine point within 0.01 of the drawn
+line. Change an envelope or LFO curve here → regenerate the fixture and
+update `shapes.ts`. Details: [visuals.md](visuals.md#shape-previews).
 
 ## Declicked edits and smoothing
 

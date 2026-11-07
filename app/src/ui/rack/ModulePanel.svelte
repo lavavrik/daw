@@ -14,6 +14,9 @@
   // Rack passes `scope` = the track's engine slot (with the module idx it
   // finds its scope-bank slot) and the sample rate.
   //
+  // ADSR / LFO (plan 12 Task 5): a shape preview (ShapePreview.svelte) above
+  // the knobs, following the knob values shown (lanes included).
+  //
   // Knobs follow their automation lanes (not a Scope's: its params only
   // change the view) (`owner` = the track: Knob.svelte
   // registers module idx + param name with the app's autoBus) and offer
@@ -26,6 +29,7 @@
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
   import ScopeView from './ScopeView.svelte';
+  import ShapePreview from './ShapePreview.svelte';
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
@@ -121,6 +125,9 @@
   {/if}
   {#if scope}
     <ScopeView track={scope.track} idx={module.idx} params={module.params} sampleRate={scope.sampleRate} {tempo} />
+  {/if}
+  {#if def.id === 'adsr' || def.id === 'lfo'}
+    <ShapePreview {def} idx={module.idx} params={module.params} {owner} {tempo} {color} />
   {/if}
   {#if def.params.length}
     <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>

@@ -64,6 +64,7 @@
   import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
+  import VoiceLeds from './VoiceLeds.svelte';
 
   let { p, engine, track }: { p: Project; engine: AudioEngine; track: SynthTrack } = $props();
 
@@ -625,6 +626,8 @@
       <span class="edited" data-testid="patch-edited" title="Changed since the patch was loaded">(edited)</span>
       <button class="link" onclick={revert} title={`Reload ${track.patchName}, discarding your changes`}>revert</button>
     {/if}
+    <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
+    <VoiceLeds {track} />
     <button class="add" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
     <div class="addwrap">
       <button

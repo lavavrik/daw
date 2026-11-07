@@ -11,7 +11,9 @@ activity), `app/src/audio/{visLayout,visCopy,worklet,engine}.ts`,
 stereo,analyserBus}.ts`, `{Spectrum,Goniometer}.svelte`,
 `app/src/ui/mixer/AnalyserPanel.svelte`; waveforms:
 `app/src/ui/vis/{waveMath.ts,WaveformView.svelte}`,
-`app/src/audio/fineSamples.ts`.
+`app/src/audio/fineSamples.ts`; shape previews and voice LEDs:
+`app/src/ui/vis/shapes.ts`, `app/src/ui/rack/{ShapePreview,VoiceLeds}.svelte`,
+`engine/tests/shapes.rs` (fixture `engine/tests/fixtures/shapes.json`).
 
 ## Data path
 
@@ -321,3 +323,62 @@ engine params yet (spec §4's per-row start offset is unbuilt) and drum
 voices report no position, so the strip draws nothing it cannot back. Both
 are follow-ups, as are drag handles for clip fades and trim (the Clip tab's
 waveform is display only; editing stays in the fields).
+
+## Shape previews
+
+The ADSR and LFO panels show their shape above the knobs
+(`ShapePreview.svelte`, a 120 × 40 px SVG plus a one-line label).
+
+- **Static, not animated:** no frame loop. It redraws when a param changes
+  (a knob, undo, a patch load), when the tempo changes (a synced LFO), and
+  when an automation lane on one of its continuous params moves: like a
+  Knob it registers those params with the autoBus (`ui/autoBus.ts`) and
+  draws the lane's heard value while the lane applies, so it always shows
+  what the knob rings show. The bus calls back only when a value changed;
+  the preview writes the SVG `d` attributes and the label directly.
+- **ADSR curve** (`shapes.ts`, mirroring `adsr.rs`): Delay flat at 0 →
+  Attack linear 0 → 1 → Decay exponential to `sustain` with
+  `tau = decay / ln 100` → a plateau → Release exponential to 0 with
+  `tau = release / ln 100`. The plateau stands for the gate held one more
+  decay time (the decay has then settled to within 1e-4, the engine's
+  sustain capture) and is drawn at a fixed 20 % of the width. Drawn at full
+  velocity; with Velocity > 0 a dashed curve shows the softest note
+  (`× (1 − vel_amt)`).
+- **Time axis** (my call): each timed segment (delay, attack, decay,
+  release) is `∝ √t` wide, normalised so they share the 80 % beside the
+  plateau, and linear in time inside. A 1 ms attack beside a 4 s release
+  is still > 1 px; the label gives the real times ("5 ms · 200 ms · 70% ·
+  300 ms", "+250 ms · …" with a delay).
+- **LFO curve:** one cycle of the wave × `depth` (bipolar), from the
+  engine's phase 0 (synced: phase 0 is on the division's grid line). The 1
+  ms output slew is not drawn. Label: "2.00 Hz · 500 ms", or "1/4 · 500
+  ms" when synced (the period at the current tempo).
+- **Checked against the engine:** `engine/tests/shapes.rs`
+  `shape_fixtures_are_current` renders the real `Adsr` (three param sets,
+  one with a delay) and `Lfo` (four waves, free and synced) and samples 64
+  points of each into `engine/tests/fixtures/shapes.json`
+  (`UPDATE_FIXTURES=1` writes, otherwise it compares within 1e-5);
+  `shapes.test.ts` requires every point within 0.01 of the drawn polyline,
+  mapped through the preview's time axis. Fixture conventions (the
+  sample-time origin, the LFO's sampled phases) are in the test's header.
+- Test hooks: `shape-adsr` / `shape-lfo` (the SVG; the ADSR's carries each
+  segment's width in px as `data-delay` … `data-release`),
+  `shape-label-adsr` / `shape-label-lfo`.
+
+## Voice LEDs
+
+The Instrument tab header shows "Voices" and N LEDs after the patch
+dropdown (`VoiceLeds.svelte`): N is the first MIDI In's `voices` (lowest
+module idx, the one whose gates the engine reports; 1 in Mono). A rack
+without a MIDI In shows none and registers no consumer.
+
+- **Data:** visSab voices (want bit 4) at `(slot × 16 + k) × 2`: the level
+  (the voice's peak across the rack's Outs, with meter ballistics; 0 below
+  −60 dB) and the gate (see *Data path*).
+- **Drawing:** a 30 Hz frame-loop consumer on the LED row (paused off
+  screen like any consumer). Brightness = `voiceLedLevel` (−48..0 dB →
+  0..1, clamped; quantised to 1/64 so an invisible change writes nothing),
+  written as a CSS variable; an amber ring while the gate is held
+  (`data-gate`). Only changed values touch the DOM.
+- Test hooks: `voice-leds`, `voice-led-<k>` with `data-on` (lit) and
+  `data-gate`.

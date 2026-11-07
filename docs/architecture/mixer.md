@@ -205,14 +205,17 @@ via `reset()`. They can **not** simply be wrapped as rack modules, though:
   `add_module` would allocate on the audio thread, and storing them inline
   would make every `Module` slot that big.
 
-So rack effect modules need an **engine-owned FX memory pool**: a fixed
-per-track budget (e.g. N delay-sized and M reverb-sized blocks per track,
-an explicit cap like the sidechain `MAX_KEYS`) allocated once in
-`Engine::new`, and **borrowed-buffer constructors** (`Delay::with_buffer(sr,
-&mut [f32])`-style, or the module holding a pool slot index and receiving the
-slice at `process` time). Adding an FX module then claims a free pool block
-(refused with `BAD_VALUE` when the budget is used up, which the UI mirrors
-like the key cap) and removing it returns the block after its tail fades.
+So rack effect modules need an **engine-owned FX memory pool** (`FxPool`,
+plan 6): typed slots shared by all tracks — **8 delay, 8 reverb and 16 chorus
+slots** — allocated once in `Engine::new` for the context sample rate (~9 MiB
+at 48 kHz, ~18 MiB at 96 kHz), and **borrowed-buffer constructors**
+(`Delay::with_buffer(sr, &mut [f32])`-style, or the module holding a `u8`
+slot index and receiving the slice at `process` time). Adding an FX module
+claims a free slot (refused with `ERR_OUT_OF_MEMORY` when that kind is used
+up; the add menu greys it out, like the key cap) and removing it returns the
+slot after its tail fades; the slot is zeroed before reuse. The pool is
+shared rather than per-track because most patches use none, and the mixer
+returns already give every track a delay and a reverb.
 The mixer's own Reverb/Delay returns keep their dedicated buffers.
 
 The strip's EQ/Comp inserts can become the default rack-per-track chain.

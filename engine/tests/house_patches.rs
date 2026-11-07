@@ -31,7 +31,7 @@ mod common;
 use common::{house_patches, HousePatch, Phrase};
 use daw_engine::engine::Engine;
 use daw_engine::protocol::{
-    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
+    OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_CONNECT, OP_RACK_DISCONNECT, OP_RACK_SET_PARAM, OP_SET_MASTER_GAIN,
     OP_SET_TEMPO,
 };
 use daw_engine::rack::catalog::{spec, ModuleKind};
@@ -1011,23 +1011,64 @@ fn tine_keys_top_octave_fades() {
     }
 }
 
-#[test]
-fn tine_keys_steal_does_not_step() {
-    // One voice (so every note steals it), tine only: C4 at vel 127, then D4
-    // at vel 20 while the C4 tine still rings near full level (10 ms in, so
-    // the restarted attack can't hide a step). The tine's level must glide
-    // to the new velocity (the ADSR's latched 5 ms glide), not jump with the
-    // raw `vel`: no 1 ms RMS frame more than 10 dB below the previous one
-    // around the steal.
+/// Tine Keys, tine only, one voice, with a DC probe: the tine osc (7) → tine
+/// VCA (8) cable is replaced by an Attenuator (amount 0, offset 1: a constant
+/// 1), so the output is the tine envelope itself (× a fixed gain), free of the
+/// 14× sine's beating. With `raw_vel` the pre-fix wiring is rebuilt: the live
+/// velocity² steps the level instead of gliding in the envelope's `vel`.
+fn tine_probe(raw_vel: bool) -> Engine {
     let mut e = tine_only();
     set(&mut e, TINE_MIDI, "voices", 1.0);
+    // Packed port = module × 16 + port.
+    let probe = (17usize, ModuleKind::Attenuator);
+    assert_eq!(e.command(OP_RACK_ADD_MODULE, 0., probe.0 as f64, probe.1 as u32 as f64, 0.), OK);
+    set(&mut e, probe, "amount", 0.0);
+    set(&mut e, probe, "offset", 1.0);
+    assert_eq!(e.command(OP_RACK_DISCONNECT, 0., 128., 0., 0.), OK); // osc 7 → VCA 8 `in`
+    assert_eq!(e.command(OP_RACK_CONNECT, 0., (17 * 16) as f64, 128., 0.), OK);
+    if raw_vel {
+        // The pre-fix wiring: the envelope's `vel` unpatched and the live
+        // velocity² (VCA 10) multiplying the tine after its VCA.
+        let raw = (18usize, ModuleKind::Vca);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 0., raw.0 as f64, raw.1 as u32 as f64, 0.), OK);
+        assert_eq!(e.command(OP_RACK_DISCONNECT, 0., 145., 0., 0.), OK); // VCA 16 → ADSR 9 `vel`
+        assert_eq!(e.command(OP_RACK_DISCONNECT, 0., 177., 0., 0.), OK); // VCA 8 → mixer 11 `in2`
+        assert_eq!(e.command(OP_RACK_CONNECT, 0., 128., (18 * 16) as f64, 0.), OK); // VCA 8 → raw `in`
+        assert_eq!(e.command(OP_RACK_CONNECT, 0., 160., (18 * 16 + 1) as f64, 0.), OK); // VCA 10 (vel²) → raw `cv`
+        assert_eq!(e.command(OP_RACK_CONNECT, 0., (18 * 16) as f64, 177., 0.), OK); // raw → mixer 11 `in2`
+    }
+    settle(&mut e);
+    e
+}
+
+/// C4 at vel 127, stolen by D4 at vel 20 10 ms later (the C4 tine still rings
+/// near full level, so the restarted attack can't hide a step). Returns the
+/// largest one-sample drop of the tine envelope around the steal, and the
+/// bound for a glide: the new velocity² (Δ ≤ 1) reached through the ADSR's
+/// latched 5 ms one-pole, ×3 for margin, in the same units (the tine
+/// envelope's full-scale peak, measured from a lone C4 at vel 127).
+fn tine_steal_drop(raw_vel: bool) -> (f32, f32) {
+    let peak = play(&mut tine_probe(raw_vel), &[60], 127, 0.05, 0.0).m.iter().fold(0.0f32, |m, v| m.max(v.abs()));
     let t = 0.01;
-    let r = run(&mut e, &[(0.0, Ev::On(60, 127)), (t, Ev::On(62, 20)), (0.2, Ev::Off(60)), (0.2, Ev::Off(62))], 0.2);
-    let env = rms_env_db(&r, 0.001);
-    let on = (onset(t) * 1000.0).round() as usize;
-    let worst = (on - 3..on + 15).map(|i| env[i - 1] - env[i]).fold(f32::MIN, f32::max);
-    eprintln!("Tine Keys steal: 1 ms RMS {:?} dB; largest drop {worst:.1} dB", env[on - 3..on + 15].iter().map(|x| x.round()).collect::<Vec<_>>());
-    assert!(worst <= 10.0, "the tine steps {worst:.1} dB in 1 ms at the steal");
+    let ev = [(0.0, Ev::On(60, 127)), (t, Ev::On(62, 20)), (0.2, Ev::Off(60)), (0.2, Ev::Off(62))];
+    let r = run(&mut tine_probe(raw_vel), &ev, 0.2);
+    let on = (onset(t) * SR) as usize;
+    let worst = (on - 8..on + (0.03 * SR) as usize).map(|i| r.m[i - 1] - r.m[i]).fold(f32::MIN, f32::max) / peak;
+    let bound = 3.0 * (1.0 - (-1.0 / (0.005 * SR)).exp());
+    eprintln!("Tine Keys steal (raw vel {raw_vel}): largest one-sample drop {worst:.4} of full scale; glide bound {bound:.4}");
+    (worst, bound)
+}
+
+#[test]
+fn tine_keys_steal_does_not_step() {
+    // The tine's level must glide to the new velocity (the ADSR's latched 5 ms
+    // glide), not jump with the raw `vel`. Measured on a DC probe so it is
+    // deterministic; the same measurement of the old raw-vel wiring must fail
+    // the bound (≈0.97 in one sample), proving the probe can tell them apart.
+    let (worst, bound) = tine_steal_drop(false);
+    assert!(worst <= bound, "the tine steps {worst:.4} (> {bound:.4}) in one sample at the steal");
+    let (raw, bound) = tine_steal_drop(true);
+    assert!(raw > 10.0 * bound, "the probe can't see the old step: raw vel drops only {raw:.4} (bound {bound:.4})");
 }
 
 #[test]

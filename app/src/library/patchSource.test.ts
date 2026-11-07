@@ -13,8 +13,9 @@ describe('patch dropdown value (where the current patch came from)', () => {
     expect(patchOptionValue('Pad', 'Pad', starters, lib)).toBe('Pad');
   });
 
-  it('without a known source: starter first, then the library by name, else the name itself', () => {
-    expect(patchOptionValue('Pad', null, starters, lib)).toBe('Pad');
+  it('without a known source: the library by name, then a starter, else the name itself', () => {
+    expect(patchOptionValue('Pad', null, starters, lib)).toBe(`${LIB}patches/Pad.json`);
+    expect(patchOptionValue('Lead', null, starters, lib)).toBe('Lead');
     expect(patchOptionValue('Acid', null, starters, lib)).toBe(`${LIB}patches/Acid.json`);
     expect(patchOptionValue('From project', null, starters, lib)).toBe('From project');
   });
@@ -22,6 +23,7 @@ describe('patch dropdown value (where the current patch came from)', () => {
   it('a stale source (renamed patch, other library) falls back by name', () => {
     expect(patchOptionValue('Acid', `${LIB}patches/Gone.json`, starters, lib)).toBe(`${LIB}patches/Acid.json`);
     expect(patchOptionValue('Acid', 'Pad', starters, lib)).toBe(`${LIB}patches/Acid.json`);
+    expect(patchOptionValue('Pad', 'Lead', starters, lib)).toBe('Pad'); // a recorded (stale) source: starter first
     expect(patchOptionValue('Pad', `${LIB}patches/Pad.json`, starters, [])).toBe('Pad');
   });
 });

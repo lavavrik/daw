@@ -13,7 +13,7 @@ export const LIB = 'lib:';
 /**
  * The option value for `patchName`. `source`: the value it was loaded or
  * saved from (null: unknown, e.g. it came from a project file). Falls back
- * to a starter of that name, then a library patch of that name, else the
+ * to a library patch of that name (when nothing is recorded), then a starter, else the
  * name itself (the Rack shows it as a disabled placeholder).
  */
 export function patchOptionValue(patchName: string, source: string | null, starters: string[], libPatches: LibPatch[]): string {
@@ -22,7 +22,11 @@ export function patchOptionValue(patchName: string, source: string | null, start
       if (libPatches.some((x) => LIB + x.path === source && x.name === patchName)) return source;
     } else if (source === patchName && starters.includes(source)) return source;
   }
-  if (starters.includes(patchName)) return patchName;
   const lp = libPatches.find((x) => x.name === patchName);
+  // No recorded source: a library patch of that name wins over a same-named
+  // starter, because a track saved from the library before a built-in took
+  // that name (e.g. "Strings", "Sax") must not show (and revert to) the built-in.
+  if (source === null && lp) return LIB + lp.path;
+  if (starters.includes(patchName)) return patchName;
   return lp ? LIB + lp.path : patchName;
 }

@@ -5,7 +5,7 @@
 //   - the House set (housePatches.ts) -> engine/tests/fixtures/house_patches.txt,
 //     replayed by engine/tests/house_patches.rs (levels, clipping, release,
 //     the Sax acceptance numbers), no_alloc.rs and perf.rs. Each house block
-//     also has a "phrase <chord4|chord5|bass|lead>" line: what the level, peak
+//     also has a "phrase <chord4|chord5|bass|lead|arp>" line: what the level, peak
 //     and CPU tests play on it.
 //
 // Why a fixture: the patch data lives in TS and the engine tests can't run

@@ -63,7 +63,10 @@ Sustain → Release per channel. Plan 11 appended (indices unchanged):
   sounding level never steps. Patch MIDI In `vel` into it for velocity
   brightness or loudness. Mono MIDI In `vel` jumps to a note started from
   silence (so the ADSR latches that note's velocity) and glides 5 ms only
-  on legato notes, which the ADSR ignores anyway (no new edge).
+  on legato notes, which the ADSR ignores anyway (no new edge). Exception to
+  "sounding level never steps": a mono patch that patches `vel` straight to
+  an audio VCA (not through an ADSR) now steps the previous note's release
+  tail to the new velocity when a note starts from silence.
 - With `delay` 0, `vel_amt` 0 the output is bit-identical to the
   pre-plan-11 envelope (pinned by `adsr_defaults_are_bit_identical`), so old
   patches and export hashes are unchanged.
@@ -138,7 +141,7 @@ comment and a comment per module.
 |---|---|---|---|---|
 | Leads & Stabs | Sax | mono | lead | Breathy alto-like hook lead |
 | Leads & Stabs | Brass Stab | poly | chord4 | Disco-house hit; Formant + filter bloom |
-| Leads & Stabs | Arp Pluck | poly | chord4 | Short bright 1/16 pluck |
+| Leads & Stabs | Arp Pluck | poly | arp | Short bright 1/16 pluck |
 | Keys | Tine Keys | poly | chord4 | FM e-piano; velocity rings the bell |
 | Keys | Piano Stab | poly | chord4 | Classic house piano stab |
 | Keys | Garage Organ | poly | chord4 | Percussive UKG organ, Formant wah |
@@ -150,7 +153,7 @@ comment and a comment per module.
 | Pads | Warm Pad | poly | chord5 | 2-bar LFO-swept pad + chorus |
 
 Phrases (`HOUSE_PHRASES`): chord4 = C4 E4 G4 B4, chord5 = C3 G3 C4 E4 B4,
-bass = C2 then C3, lead = C4.
+bass = C2 then C3, lead = C4, arp = C4 E4 G4 B4 as 1/16 at 124 BPM, one bar.
 
 **Rules** (checked for every built-in by `patches.test.ts`): one MIDI In and
 one Out; MIDI In `pitch` feeds every Osc and `gate` every ADSR; at most 24

@@ -109,7 +109,7 @@ describe('Recorder', () => {
     rolling(s, -BAR_TICKS);
     s.rec.noteOn(60, 100, -500); // in the count-in
     s.rec.noteOff(60, 300); // released after beat 1: still not recorded
-    s.rec.noteOn(62, 100, -1); // last tick of the count-in
+    s.rec.noteOn(62, 100, -61); // just before the grace window
     s.rec.noteOff(62, 50);
     expect(s.notes()).toEqual([]);
     s.rec.noteOn(64, 100, 0); // tick 0 counts
@@ -211,6 +211,77 @@ describe('Recorder', () => {
       rec.noteOff(pitch, 20);
     }
     expect(full).toBe(1);
+  });
+
+  it('jitter: a note-off mapped a few ticks before its note-on gives len 1, not a whole loop', () => {
+    const s = setup(1);
+    rolling(s);
+    s.rec.noteOn(60, 100, 1000);
+    s.rec.noteOff(60, 998); // separate getOutputTimestamp snapshots can disagree slightly
+    s.rec.noteOn(62, 100, 2000);
+    s.rec.noteOff(62, 1997);
+    expect(s.notes().map((n) => n.len)).toEqual([1, 1]);
+  });
+
+  it('grace window: a note-on up to 60 ticks before tick 0 snaps to start 0', () => {
+    const s = setup(1);
+    rolling(s, -BAR_TICKS);
+    s.rec.noteOn(60, 100, -60); // a 1/64 early on the downbeat
+    s.rec.noteOff(60, 240);
+    s.rec.noteOn(62, 100, -61); // earlier than the grace: count-in, dropped
+    s.rec.noteOff(62, 240);
+    expect(s.notes()).toEqual([{ pitch: 60, start: 0, len: 240, vel: 100 }]);
+  });
+
+  it('sustain pedal: a chord played with the pedal ends at pedal-up', () => {
+    const s = setup(4);
+    rolling(s);
+    s.rec.sustain(true, 0, 'midi:a');
+    s.rec.noteOn(60, 100, 100, 'midi:a');
+    s.rec.noteOn(64, 100, 110, 'midi:a');
+    s.rec.noteOn(67, 100, 120, 'qwerty'); // other source: the pedal does not hold it
+    s.rec.noteOff(60, 200, 'midi:a');
+    s.rec.noteOff(64, 210, 'midi:a');
+    s.rec.noteOff(67, 220, 'qwerty');
+    expect(s.notes().map((n) => n.pitch)).toEqual([67]);
+    s.rec.noteOn(72, 100, 300, 'midi:a'); // still physically held at pedal-up
+    s.rec.sustain(false, 1000, 'midi:a');
+    expect(s.notes().map((n) => [n.pitch, n.start, n.len])).toEqual([[67, 120, 100], [60, 100, 900], [64, 110, 890]]);
+    s.rec.noteOff(72, 1100, 'midi:a'); // pedal up: key-up closes it now
+    expect(s.notes().at(-1)).toMatchObject({ pitch: 72, start: 300, len: 800 });
+  });
+
+  it('sustain pedal: re-pressing a pedal-held pitch closes the old note there and opens a new one', () => {
+    const s = setup(4);
+    rolling(s);
+    s.rec.sustain(true, 0, 'midi:a');
+    s.rec.noteOn(60, 100, 100, 'midi:a');
+    s.rec.noteOff(60, 150, 'midi:a');
+    s.rec.noteOn(60, 90, 400, 'midi:a');
+    expect(s.notes().map((n) => [n.start, n.len])).toEqual([[100, 300]]);
+    s.rec.noteOff(60, 450, 'midi:a');
+    s.rec.sustain(false, 700, 'midi:a');
+    expect(s.notes().map((n) => [n.start, n.len, n.vel])).toEqual([[100, 300, 100], [400, 300, 90]]);
+  });
+
+  it('sustain pedal: pedal-held notes close on stop, and panic lifts the pedal', () => {
+    const s = setup(4);
+    rolling(s);
+    s.rec.sustain(true, 0, 'midi:a');
+    s.rec.noteOn(60, 100, 100, 'midi:a');
+    s.rec.noteOff(60, 150, 'midi:a');
+    s.rec.onTransport(false, 500);
+    expect(s.notes().map((n) => n.len)).toEqual([400]);
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(62, 100, 100, 'midi:a');
+    s.rec.noteOff(62, 150, 'midi:a'); // pedal (pressed before this pass) still down
+    expect(s.notes()).toHaveLength(1);
+    s.clock.now = 300;
+    s.rec.closeSource('midi:a'); // panic: closes and forgets the pedal
+    expect(s.notes().at(-1)).toMatchObject({ pitch: 62, len: 200 });
+    s.rec.noteOn(64, 100, 400, 'midi:a');
+    s.rec.noteOff(64, 480, 'midi:a'); // no pedal any more: closes on key-up
+    expect(s.notes().at(-1)).toMatchObject({ pitch: 64, len: 80 });
   });
 
   it('no target synth track: nothing recorded, nothing thrown', () => {

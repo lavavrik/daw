@@ -12,6 +12,7 @@ const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void } = {}) 
     noteOn: (...a) => void heard.push(['on', ...a]),
     noteOff: (...a) => void heard.push(['off', ...a]),
     closeSource: (...a) => void heard.push(['close', ...a]),
+    sustain: (...a) => void heard.push(['sustain', ...a]),
   };
   const sink = { send: (...a: number[]) => (sent.push(a), true) };
   const h = createShortcutHandlers({ playing: false } as any, sink, createNoteInput(sink, listener), {

@@ -6,9 +6,10 @@
 // recording must never be able to stop a note from sounding or, worse, from
 // being released (stuck notes are the #1 live-input risk).
 //
-// Bend, mod wheel, sustain and panic do NOT go through here; they still go
-// straight to the sink. A panic (or an unplugged keyboard) calls
-// closeSource(source) so the recorder ends that input's open notes.
+// Bend, mod wheel, sustain and panic still go straight to the sink. The
+// sustain pedal is additionally reported here (sustain(): recorder only, no
+// engine command) so recorded notes honour it. A panic (or an unplugged
+// keyboard) calls closeSource(source) so the recorder ends that input's notes.
 import { Op } from '../audio/protocol';
 import type { CommandSink } from '../state/actions';
 
@@ -16,8 +17,10 @@ import type { CommandSink } from '../state/actions';
 export interface NoteListener {
   noteOn(pitch: number, vel: number, perfMs: number, source: string): void;
   noteOff(pitch: number, perfMs: number, source: string): void;
-  /** The input went away / panicked: close its open notes now. */
+  /** The input went away / panicked: close its open notes now (and forget its pedal). */
   closeSource(source: string): void;
+  /** Sustain pedal down/up on `source`. */
+  sustain(on: boolean, perfMs: number, source: string): void;
 }
 
 export interface NoteInput {
@@ -29,6 +32,8 @@ export interface NoteInput {
   on(note: number, vel: number, perfMs: number, source: string): void;
   off(note: number, perfMs: number, source: string): void;
   closeSource(source: string): void;
+  /** Tells the recorder only; the input sends Op.SUSTAIN to the engine itself. */
+  sustain(on: boolean, perfMs: number, source: string): void;
 }
 
 export function createNoteInput(sink: CommandSink, recorder: NoteListener | null): NoteInput {
@@ -50,6 +55,9 @@ export function createNoteInput(sink: CommandSink, recorder: NoteListener | null
     },
     closeSource(source) {
       if (recorder) tell(() => recorder.closeSource(source));
+    },
+    sustain(on, perfMs, source) {
+      if (recorder) tell(() => recorder.sustain(on, perfMs, source));
     },
   };
 }

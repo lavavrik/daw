@@ -8,7 +8,7 @@
   // Play/Stop and arm go through the App (onTogglePlay / onToggleArm) so the
   // count-in and the recorder's stop tick are handled in one place. Count-in
   // and Rec offset persist in localStorage (state/recorder.ts).
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
@@ -39,8 +39,11 @@
   } = $props();
 
   // Mirrors of the recorder's persisted settings (the Recorder is not reactive).
-  let countIn = $state(recorder.countIn);
-  let offsetMs = $state(recorder.offsetMs);
+  // Seeded once on purpose: the recorder is created once per session and these
+  // toggles are its only writers, so untrack() states "initial value only"
+  // (and silences state_referenced_locally).
+  let countIn = $state(untrack(() => recorder.countIn));
+  let offsetMs = $state(untrack(() => recorder.offsetMs));
   const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? '● REC' : '● Rec');
 
   function persist() {

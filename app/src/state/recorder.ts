@@ -10,9 +10,17 @@
 // - Time is the *heard* time: clock.ticksForEvent(event.timeStamp, offsetMs),
 //   i.e. the tick the user was hearing when they hit the key (Bluetooth adds
 //   ~250 ms; offsetMs is a user trim, positive = notes land earlier).
+// - Grace window: a note-on up to GRACE_TICKS before tick 0 (a hair early on
+//   the downbeat after the count-in, or clock jitter) is recorded at tick 0.
 // - Ticks are absolute transport ticks (monotonic while playing); a note's
 //   pattern start is mod(tick, period), its length endTick - startTick, so a
-//   note held across the loop end gets end + period - start. Clamped 1..period.
+//   note held across the loop end gets end + period - start. Clamped 1..period;
+//   a slightly negative length (note-on and note-off are mapped through
+//   different getOutputTimestamp snapshots, so they can disagree by a tick or
+//   two) becomes 1, never a whole loop.
+// - Sustain pedal (per source): while it is down a key-up does not end the
+//   recorded note; pedal-up ends every such note at the pedal event's heard
+//   tick. Re-striking a pedal-held pitch ends the old note there.
 // - The note is written (addNote) on release. Notes still held when recording
 //   becomes inactive (stop, disarm) close at that moment's heard tick.
 // - The target track is captured at the first recorded note-on of the pass
@@ -31,6 +39,8 @@ import type { NoteListener } from '../input/noteInput';
 
 export const REC_OFFSET_MIN = -200;
 export const REC_OFFSET_MAX = 200;
+/** Note-ons this many ticks before tick 0 still record (at 0): 1/64 note at 960 PPQ. */
+export const GRACE_TICKS = 60;
 
 /** The slice of AudioClock the recorder uses. */
 export interface RecorderClock {
@@ -66,6 +76,8 @@ interface Open {
   vel: number;
   /** Absolute heard tick of the note-on. */
   tick: number;
+  /** Key released while the source's pedal was down: ends at pedal-up. */
+  pedalHeld: boolean;
 }
 
 export class Recorder implements NoteListener {
@@ -85,6 +97,8 @@ export class Recorder implements NoteListener {
   #fullReported = false;
   /** Open (held, recording) notes by `${source}:${pitch}`. */
   #open = new Map<string, Open>();
+  /** Sources whose sustain pedal is down (tracked even when not recording). */
+  #pedal = new Set<string>();
 
   private deps: RecorderDeps;
   constructor(deps: RecorderDeps) {
@@ -131,24 +145,43 @@ export class Recorder implements NoteListener {
 
   noteOn(pitch: number, vel: number, perfMs: number, source = '') {
     if (!this.armed || !this.#playing) return;
-    const tick = this.deps.clock.ticksForEvent(perfMs, this.#offsetMs);
-    if (!(tick >= 0)) return; // count-in (or a NaN clock): not recorded
+    let tick = this.deps.clock.ticksForEvent(perfMs, this.#offsetMs);
+    if (!(tick >= -GRACE_TICKS)) return; // count-in (or a NaN clock): not recorded
+    if (tick < 0) tick = 0; // grace window
     if (!this.#track) this.#track = this.deps.target();
     if (!this.#track) return; // no synth track to record into
     const key = `${source}:${pitch}`;
-    // Same key re-struck without a release (two QWERTY keys on one pitch): close the first.
+    // Same key re-struck while still open (pedal-held, or two QWERTY keys on
+    // one pitch): the first note ends here.
     if (this.#open.has(key)) this.#close(key, tick);
-    this.#open.set(key, { pitch, vel, tick });
+    this.#open.set(key, { pitch, vel, tick, pedalHeld: false });
   }
 
   noteOff(pitch: number, perfMs: number, source = '') {
     const key = `${source}:${pitch}`;
-    if (!this.#open.has(key)) return;
-    this.#close(key, this.deps.clock.ticksForEvent(perfMs, this.#offsetMs));
+    const o = this.#open.get(key);
+    if (!o) return;
+    if (this.#pedal.has(source)) o.pedalHeld = true; // ends at pedal-up
+    else this.#close(key, this.deps.clock.ticksForEvent(perfMs, this.#offsetMs));
   }
 
-  /** Close one input's open notes at the heard tick now (panic, unplug). */
+  /** Sustain pedal of `source` (engine SUSTAIN is sent by the input itself). */
+  sustain(on: boolean, perfMs: number, source = '') {
+    if (on) {
+      this.#pedal.add(source);
+      return;
+    }
+    if (!this.#pedal.delete(source)) return;
+    const prefix = `${source}:`;
+    const held = [...this.#open].filter(([k, o]) => o.pedalHeld && k.startsWith(prefix));
+    if (!held.length) return;
+    const tick = this.deps.clock.ticksForEvent(perfMs, this.#offsetMs);
+    for (const [k] of held) this.#close(k, tick);
+  }
+
+  /** Close one input's open notes at the heard tick now and forget its pedal (panic, unplug). */
   closeSource(source: string) {
+    this.#pedal.delete(source);
     const now = this.deps.clock.heardTicks();
     for (const key of [...this.#open.keys()]) {
       if (key.startsWith(`${source}:`)) this.#close(key, now);
@@ -198,11 +231,8 @@ export class Recorder implements NoteListener {
     const period = patternTicks(t);
     const startAbs = Math.round(o.tick);
     const start = mod(startAbs, period);
-    let len = Math.round(endTick) - startAbs;
-    // Absolute ticks are monotonic while playing; if not (transport jumped),
-    // fall back to the modular distance.
-    if (len < 0) len = mod(Math.round(endTick) - startAbs, period);
-    len = Math.min(period, Math.max(1, len));
+    // Negative (jitter between the two timestamp mappings) -> 1.
+    const len = Math.min(period, Math.max(1, Math.round(endTick) - startAbs));
     const dup = `${o.pitch}:${start}`;
     if (this.#written.has(dup)) return;
     const n = this.deps.addNote(t.id, { pitch: o.pitch, start, len, vel: o.vel });

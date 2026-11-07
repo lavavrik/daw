@@ -118,6 +118,7 @@ export async function connectMidi(
       case 'sustain':
         h.pedal = ev.on;
         sink.send(Op.SUSTAIN, ev.on ? 1 : 0);
+        input.sustain(ev.on, at, source(id));
         break;
       case 'panic':
         // Release this input's held notes and lift the pedal (always: a

@@ -51,6 +51,7 @@ const mkSink = () => {
     noteOn: (...a) => void heard.push(['on', ...a]),
     noteOff: (...a) => void heard.push(['off', ...a]),
     closeSource: (...a) => void heard.push(['close', ...a]),
+    sustain: (...a) => void heard.push(['sustain', ...a]),
   });
   return { sent, heard, input, send: sink.send };
 };
@@ -86,8 +87,10 @@ describe('connectMidi', () => {
     a.onmidimessage!({ data: u(0xb0, 64, 127) });
     a.onmidimessage!({ data: u(0x80, 60, 0), timeStamp: 900 });
     expect(sink.sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.SUSTAIN, 1], [Op.NOTE_OFF, 60]]);
-    // Notes (only) reach the recorder, with the event's timestamp and source.
-    expect(sink.heard).toEqual([['on', 60, 100, 812.25, 'midi:a'], ['off', 60, 900, 'midi:a']]);
+    // Notes and the pedal reach the recorder, with the event's timestamp and source.
+    expect(sink.heard).toEqual([
+      ['on', 60, 100, 812.25, 'midi:a'], ['sustain', true, expect.any(Number), 'midi:a'], ['off', 60, 900, 'midi:a'],
+    ]);
   });
   it('no-devices when there are no inputs', async () => {
     install(fakeAccess([]));

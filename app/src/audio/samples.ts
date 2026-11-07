@@ -10,7 +10,8 @@ export class SampleDecodeError extends Error {
   }
 }
 
-const AUDIO_EXT = /\.(wav|aif|aiff|mp3|flac|ogg|m4a)$/i;
+/** The audio file extensions the app accepts (drops, library folder scan). */
+export const AUDIO_EXT = /\.(wav|aif|aiff|mp3|flac|ogg|m4a)$/i;
 
 export function isProbablyAudio(file: File): boolean {
   return file.type.startsWith('audio/') || AUDIO_EXT.test(file.name);

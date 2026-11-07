@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { Op } from '../audio/protocol';
-import { STARTER_PATCHES, validatePatch } from './patches';
+import { STARTER_PATCHES, trackPatch, validatePatch } from './patches';
 import { Project } from './project.svelte';
 import { addSynthTrack, loadPatch } from './rack-actions';
 
@@ -89,6 +89,58 @@ describe('validatePatch', () => {
     expect(r.patch.cables).toEqual([{ from: [0, 'out'], to: [1, 'in'] }, { from: [1, 'out'], to: [2, 'l'] }]);
     const w = r.warnings.join('\n');
     for (const re of [/wave/, /tune/, /bogus/, /theremin/, /idx 1/, /idx 40/, /nope/, /module 7/, /cable/]) expect(w).toMatch(re);
+  });
+
+  it('validatePatch drops unknown modules and bad cables', () => {
+    // A patch as it might come from the library folder (hand-edited, from a
+    // newer version, or simply broken).
+    const r = validatePatch({
+      name: 'From library',
+      modules: [
+        { idx: 0, id: 'midi_in' },
+        { idx: 1, id: 'granular_cloud' }, // a module this version does not know
+        { idx: 2, id: 'osc' },
+        { idx: 3, id: 'out' },
+        null,
+      ],
+      cables: [
+        { from: [0, 'pitch'], to: [2, 'pitch'] },
+        { from: [2, 'out'], to: [1, 'in'] }, // into the dropped module
+        { from: [2, 'out'], to: [3, 'nope'] }, // no such input
+        { from: [3, 'l'], to: [2, 'pitch'] }, // an input used as an output
+        { from: [2, 'out'], to: [3, 'l'] },
+        { from: 'x', to: [3, 'r'] },
+      ],
+    });
+    expect(r.patch.modules.map((m) => m.id)).toEqual(['midi_in', 'osc', 'out']);
+    expect(r.patch.cables).toEqual([
+      { from: [0, 'pitch'], to: [2, 'pitch'] },
+      { from: [2, 'out'], to: [3, 'l'] },
+    ]);
+    expect(r.warnings).toHaveLength(6);
+    expect(r.warnings.join('\n')).toMatch(/granular_cloud/);
+    expect(validatePatch(r.patch).warnings).toEqual([]); // a fixed point
+  });
+
+  it('trackPatch turns a rack back into a patch (SamplePlayer sample ids mapped)', () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addSynthTrack(p, sink, 'S', {
+      name: 'SP',
+      modules: [
+        { idx: 0, id: 'midi_in' },
+        { idx: 4, id: 'sample_player', params: { sample: 3, gain: 0.5 } },
+        { idx: 7, id: 'out' },
+      ],
+      cables: [{ from: [0, 'gate'], to: [4, 'gate'] }, { from: [4, 'out'], to: [7, 'l'] }],
+    })!;
+    const out = trackPatch(t, () => -1);
+    expect(out.name).toBe('SP');
+    expect(out.modules.map((m) => [m.idx, m.id])).toEqual([[0, 'midi_in'], [4, 'sample_player'], [7, 'out']]);
+    expect(out.modules[1].params).toMatchObject({ sample: -1, gain: 0.5 });
+    expect(out.cables).toEqual([{ from: [0, 'gate'], to: [4, 'gate'] }, { from: [4, 'out'], to: [7, 'l'] }]);
+    expect(validatePatch(out).warnings).toEqual([]);
+    expect(trackPatch(t, (id) => id).modules[1].params!.sample).toBe(3);
   });
 
   it('drops pooled effects beyond the free FX-pool budget', () => {

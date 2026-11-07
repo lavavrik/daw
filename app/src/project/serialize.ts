@@ -1,11 +1,11 @@
 // Project -> project.json (schema.ts). Pure: reads the project, changes
 // nothing, same input -> same output. Plan 7's undo snapshots and autosave
 // (Task 4) build on this, and App's "● unsaved" mark compares fingerprints.
-import { moduleDef } from '../audio/catalog';
 import { MIX_DELAY, MIX_MASTER, MIX_REVERB } from '../audio/protocol';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import { accepts } from '../state/mixer-actions';
+import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
 import type { ChannelState, DrumTrack, Project, SynthTrack, Track } from '../state/project.svelte';
 import { SCHEMA_VERSION } from './schema';
@@ -76,21 +76,7 @@ export function serialize(p: Project): ProjectJson {
     slot: t.slot,
     name: t.name,
     color: t.color,
-    patch: {
-      name: t.patchName,
-      modules: t.modules.map((m) => {
-        const def = moduleDef(m.kind);
-        const params: Record<string, number> = {};
-        def.params.forEach((pd, i) => (params[pd.name] = m.params[i]));
-        if (def.id === 'sample_player') params.sample = use(params.sample) ?? -1;
-        return { idx: m.idx, id: def.id, params };
-      }),
-      cables: t.cables.map((c) => {
-        const from = moduleDef(t.modules.find((m) => m.idx === c.from.m)!.kind);
-        const to = moduleDef(t.modules.find((m) => m.idx === c.to.m)!.kind);
-        return { from: [c.from.m, from.outputs[c.from.port].name], to: [c.to.m, to.inputs[c.to.port].name] };
-      }),
-    },
+    patch: trackPatch(t, (id) => use(id) ?? -1),
     patterns: t.patterns.map((pat) => ({
       engineIdx: pat.engineIdx,
       name: pat.name,

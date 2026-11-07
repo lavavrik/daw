@@ -13,6 +13,7 @@
 import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef } from '../audio/catalog';
 import type { ModuleDef } from '../audio/catalog';
 import { MAX_MODULES } from '../audio/protocol';
+import type { SynthTrack } from './project.svelte';
 
 /**
  * A rack patch by name: module kinds by catalog id, params by catalog name,
@@ -137,6 +138,31 @@ export function validatePatch(
     patch.cables.push({ from: [fm, fp], to: [tm, tp] });
   }
   return { patch, warnings };
+}
+
+/**
+ * A synth track's rack as a Patch (by name; every param written, so a later
+ * catalog default change never alters it). `sample` maps a SamplePlayer's
+ * `sample` param (a sample-pool id of this session): a project save keeps
+ * ids it writes and turns others into -1; a library patch, which outlives
+ * the session, uses -1 (none) for all of them.
+ */
+export function trackPatch(t: SynthTrack, sample: (id: number) => number): Patch {
+  const defAt = (idx: number) => moduleDef(t.modules.find((m) => m.idx === idx)!.kind);
+  return {
+    name: t.patchName,
+    modules: t.modules.map((m) => {
+      const def = moduleDef(m.kind);
+      const params: Record<string, number> = {};
+      def.params.forEach((pd, i) => (params[pd.name] = m.params[i]));
+      if (def.id === 'sample_player') params.sample = sample(params.sample);
+      return { idx: m.idx, id: def.id, params };
+    }),
+    cables: t.cables.map((c) => ({
+      from: [c.from.m, defAt(c.from.m).outputs[c.from.port].name],
+      to: [c.to.m, defAt(c.to.m).inputs[c.to.port].name],
+    })),
+  };
 }
 
 export const STARTER_PATCHES: Patch[] = [

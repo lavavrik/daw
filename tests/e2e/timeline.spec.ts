@@ -391,3 +391,21 @@ test('placing: Escape removes the just-placed clip; a tail click places after th
   await clickLane(page, 0, BAR + BAR / 2 + 200);
   expect((await pos(page, 0, 1)).start).toBe(BAR + BAR / 2);
 });
+
+test('the add-track buttons are disabled at 32 tracks and come back when one is removed', async ({ page }) => {
+  await start(page);
+  // The default drum track + 31 more = MAX_TRACKS (32).
+  await page.evaluate(() => { for (let i = 0; i < 31; i++) (window as any).__daw.actions.addDrumTrack(); });
+  await expect.poll(() => page.evaluate(() => (window as any).__daw.project.tracks.length)).toBe(32);
+  for (const id of ['add-drum-track', 'add-synth-track']) {
+    await expect(page.getByTestId(id)).toBeDisabled();
+    await expect(page.getByTestId(id)).toHaveAttribute('title', /32 tracks/);
+  }
+  await page.evaluate(() => {
+    const d = (window as any).__daw;
+    d.actions.removeTrack(d.project.tracks[5].id);
+  });
+  await expect(page.getByTestId('add-synth-track')).toBeEnabled();
+  await page.getByTestId('add-synth-track').click();
+  await expect(page.getByTestId('add-drum-track')).toBeDisabled();
+});

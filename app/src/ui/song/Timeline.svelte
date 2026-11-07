@@ -60,7 +60,7 @@
   import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
   import type { Clip, Project, Track } from '../../state/project.svelte';
-  import { currentPattern, patternLength } from '../../state/project.svelte';
+  import { MAX_TRACKS, currentPattern, patternLength } from '../../state/project.svelte';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip,
@@ -78,6 +78,8 @@
   let { p, engine, clock }: { p: Project; engine: CommandSink; clock: AudioClock | null } = $props();
 
   const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
+  const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
+  const FULL_TITLE = `${MAX_TRACKS} tracks is the maximum: remove one to add another`;
   /** Pixels a press must travel before it counts as a drag (a click never moves a clip). */
   const DRAG_SLOP = 3;
   const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -884,8 +886,9 @@
       </div>
     </div>
     <div class="foot">
-      <button data-testid="add-drum-track" onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
-      <button data-testid="add-synth-track" onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
+      <button data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
+      <button data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
         class="hscroll"

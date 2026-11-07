@@ -266,7 +266,14 @@ test('an explicit save makes the older autosave stale (no offer)', async ({ page
   test.setTimeout(30_000);
   await startAudio(page);
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
-  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.autosave.flush());
+  // An autosave really exists before the save (the start-up hold may have deferred a flush).
+  await expect
+    .poll(() => page.evaluate(async () => {
+      const a = (window as unknown as { __daw: Daw }).__daw.autosave;
+      await a.flush();
+      return a.lastSaved;
+    }), { timeout: 15_000 })
+    .not.toBeNull();
   const dirName = `e2e-stale-${test.info().workerIndex}`;
   await opfsDir(page, dirName);
   await page.evaluate(async (n) => {
@@ -282,3 +289,31 @@ test('an explicit save makes the older autosave stale (no offer)', async ({ page
     localStorage.removeItem('daw.lastExplicitSave');
   }, dirName);
 });
+
+test('a second tab neither autosaves nor offers the first tab\'s session', async ({ page, context }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
+  await expect
+    .poll(() => page.evaluate(async () => {
+      const a = (window as unknown as { __daw: Daw }).__daw.autosave;
+      await a.flush();
+      return a.lastSaved;
+    }), { timeout: 15_000 })
+    .not.toBeNull();
+  const second = await context.newPage();
+  await startAudio(second);
+  await expect(second.getByTestId('flash-hint')).toContainText('Autosave is off — this project is open in another tab');
+  await second.waitForTimeout(300);
+  await expect(second.getByTestId('restore')).toBeHidden();
+  await second.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Pad'));
+  await second.evaluate(() => (window as unknown as { __daw: Daw }).__daw.autosave.flush());
+  expect(await second.evaluate(() => (window as unknown as { __daw: Daw }).__daw.autosave.lastSaved)).toBeNull();
+  await second.close();
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for (const x of ['autosave', 'autosave.tmp']) await root.removeEntry(x, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  });
+});
+

@@ -31,10 +31,10 @@
   import { commandEdits } from './state/edits';
   import { releaseHeldKeys } from './input/shortcuts';
   import {
-    createAutosave, discardAutosave, lastExplicitSave, offersRestore, opfsRoot, peekAutosave, readAutosave,
-    recordExplicitSave,
+    claimAutosaveOwner, createAutosave, discardAutosave, lastExplicitSave, offersRestore, opfsRoot, peekAutosave,
+    readAutosave, withAutosaveLock,
   } from './project/autosave';
-  import type { AutosaveInfo } from './project/autosave';
+  import type { AutosaveInfo, LockManagerLike } from './project/autosave';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -68,7 +68,11 @@
   // project.version signal; a load never bumps it) and when the tab is
   // hidden. Held until the start-up check has run, and while the "Restore
   // last session" offer is open, so the previous session is never
-  // overwritten before the user chose.
+  // overwritten before the user chose. Only one tab autosaves (the one
+  // holding the owner Web Lock); every OPFS access holds the autosave lock.
+  const locks = (navigator as { locks?: LockManagerLike }).locks;
+  const locked = <T,>(fn: (root: FileSystemDirectoryHandle) => Promise<T>) =>
+    withAutosaveLock(locks, async () => fn(await opfsRoot()));
   let autosaveError: string | null = null;
   const autosave = createAutosave({
     getProject: () => project,
@@ -99,8 +103,15 @@
   let restoring = false;
 
   async function checkAutosave() {
+    if (!(await claimAutosaveOwner(locks))) {
+      // Another tab autosaves (and would offer / discard that session): this
+      // one must not overwrite it, nor offer the other tab's live work.
+      autosave.disable();
+      flashHint('Autosave is off — this project is open in another tab', 10_000);
+      return;
+    }
     try {
-      const info = await peekAutosave(await opfsRoot());
+      const info = await locked(peekAutosave);
       if (offersRestore(info, lastExplicitSave())) {
         restoreOffer = info;
         return; // stays held until answered
@@ -116,13 +127,16 @@
     restoring = true;
     restoreOffer = null;
     try {
-      const saved = await readAutosave(await opfsRoot());
+      const saved = await locked(readAutosave);
       if (!saved) throw new Error('the autosave is gone');
       await session.restore(saved.json, saved.files);
       autosave.cancel(); // the restored state is what the autosave holds
       banners.error = null;
       flashHint(`Restored "${project.name}" — not saved to a folder yet`);
     } catch (e) {
+      // A load that failed half-way left a blank session: pending edits from
+      // before must not autosave it over the session that failed to restore.
+      autosave.cancel();
       banners.error = `Couldn't restore the last session — ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       restoring = false;
@@ -133,7 +147,7 @@
   async function startFresh() {
     restoreOffer = null;
     try {
-      await discardAutosave(await opfsRoot());
+      await locked(discardAutosave);
     } catch (e) {
       console.warn('Could not remove the autosave', e);
     }
@@ -302,11 +316,9 @@
         if (project.mode === 'song' && r.armed) r.toggleArm();
         refreshRec();
       },
-      // Project ▸ Save / Save As: the autosave of this state is not needed.
-      onSaved: () => {
-        recordExplicitSave();
-        autosave.cancel();
-      },
+      // Project ▸ Save / Save As: an older autosave is now stale, and a
+      // pending one is dropped unless edits landed during the write.
+      onSaved: ({ version, t }) => autosave.savedExplicitly(t, project.version === version),
     });
     session = s;
     void checkAutosave(); // after audio started: a restore needs the engine
@@ -362,7 +374,7 @@
     {/if}
     {#if restoreOffer}
       {@const offer = restoreOffer}
-      <div class="restore" data-testid="restore" role="alertdialog" aria-label="Restore last session">
+      <div class="restore" data-testid="restore" role="region" aria-label="Restore last session">
         <span>Unsaved work from your last session: <b>{offer.name}</b> (autosaved {when(offer.savedAt)}).</span>
         <button class="ok" onclick={() => void restoreLastSession()}>Restore last session</button>
         <button onclick={() => void startFresh()}>Start fresh</button>

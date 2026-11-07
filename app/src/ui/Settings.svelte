@@ -18,7 +18,7 @@
   //   device.
   import { onMount, untrack } from 'svelte';
   import type { AudioEngine, LatencyInfo } from '../audio/engine';
-  import { BT_LATENCY_MS, CUSTOM_HINT_MAX_S, CUSTOM_HINT_MIN_S, hintLabel, parseLatencyHint } from '../audio/restart';
+  import { BT_LATENCY_MS, CUSTOM_HINT_MAX_S, CUSTOM_HINT_MIN_S, customHint, hintLabel } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
 
   let {
@@ -47,7 +47,8 @@
   let info = $state<LatencyInfo | null>(null);
   let status = $state<string | null>(null);
 
-  const wanted = $derived<LatencyHint>(choice === 'custom' ? parseLatencyHint(customMs / 1000) : choice);
+  /** What Apply would start with; null: the custom field holds nothing usable (Apply is disabled). */
+  const wanted = $derived<LatencyHint | null>(choice === 'custom' ? customHint(customMs) : choice);
   const bt = $derived(info !== null && info.totalMs > BT_LATENCY_MS);
 
   onMount(() => {
@@ -58,6 +59,7 @@
   });
 
   async function apply() {
+    if (wanted === null) return;
     status = null;
     status = await onApply(wanted);
   }
@@ -84,6 +86,9 @@
         min={CUSTOM_HINT_MIN_S * 1000} max={CUSTOM_HINT_MAX_S * 1000} step="1"
         bind:value={customMs}
       /> ms
+      <span class="applies" class:bad={wanted === null} data-testid="latency-applies">
+        {wanted === null ? `Enter ${CUSTOM_HINT_MIN_S * 1000}–${CUSTOM_HINT_MAX_S * 1000} ms` : `Applies ${hintLabel(wanted)}`}
+      </span>
     </label>
   {/if}
   <dl class="readout" title="What the browser chose for the running audio ({hintLabel(hint)})">
@@ -97,7 +102,7 @@
     {:else}Bluetooth headphones add 100–300 ms that no setting here removes: play live with wired output.{/if}
   </p>
   <div class="actions">
-    <button class="ok" data-testid="settings-apply" disabled={busy || blocked !== null} onclick={() => void apply()}>
+    <button class="ok" data-testid="settings-apply" disabled={busy || blocked !== null || wanted === null} onclick={() => void apply()}>
       {busy ? 'Restarting…' : 'Apply'}
     </button>
     <span class="note">Restarts audio and stops playback; the project stays as it is.</span>
@@ -124,5 +129,7 @@
   .actions { display: flex; align-items: center; gap: 8px; }
   .actions .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
   .note { font-size: 10px; color: #7d808c; }
+  .applies { font-size: 10px; color: #7d808c; }
+  .applies.bad { color: #f0a23a; }
   .status { margin: 0; font-size: 11px; color: #f0a23a; }
 </style>

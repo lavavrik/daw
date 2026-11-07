@@ -215,3 +215,54 @@ test('restart keeps project and handles', async ({ page }) => {
     });
   }, [projDir, libDir]);
 });
+
+test('a refused restart keeps the running audio; an empty custom buffer cannot be applied', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/');
+  await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
+  await startAudio(page);
+  await dropFile(page, 'row-0', 'kick.wav', [...makeWav(80, 120)]);
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
+  await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as W).__daw;
+    const d = project.tracks[0];
+    for (const s of [0, 4, 8, 12]) a.setStep(d.id, d.rows![0].id, s, 120);
+  });
+  const before = await snapshot(page);
+  await page.getByTestId('settings-button').click();
+  const panel = page.getByTestId('settings');
+
+  // Custom with the field emptied: nothing would apply, so Apply is off and says why.
+  await panel.getByTestId('latency-hint').selectOption('custom');
+  await expect(panel.getByTestId('latency-applies')).toHaveText('Applies Custom 20 ms');
+  await panel.getByTestId('latency-custom').fill('');
+  await expect(panel.getByTestId('latency-applies')).toHaveText('Enter 1–1000 ms');
+  await expect(panel.getByTestId('settings-apply')).toBeDisabled();
+  await panel.getByTestId('latency-custom').fill('0');
+  await expect(panel.getByTestId('settings-apply')).toBeDisabled();
+
+  // The device refuses a new context: the running engine is kept, untouched.
+  await panel.getByTestId('latency-hint').selectOption('playback');
+  await page.evaluate(() => {
+    const x = window as unknown as W & { __RealAC?: typeof AudioContext };
+    x.__oldEngine = x.__daw.engine;
+    x.__RealAC = window.AudioContext;
+    (window as unknown as { AudioContext: unknown }).AudioContext = function () {
+      throw new Error('device gone');
+    };
+  });
+  await panel.getByTestId('settings-apply').click();
+  await expect(page.getByTestId('banner')).toContainText("Couldn't apply Playback: device gone; kept previous settings");
+  await expect(panel.getByTestId('settings-status')).toContainText('kept previous settings');
+  await expect(page.getByTestId('loading')).toBeHidden();
+  const kept = await page.evaluate(() => {
+    const x = window as unknown as W & { __RealAC?: typeof AudioContext };
+    window.AudioContext = x.__RealAC!;
+    return { same: x.__daw.engine === x.__oldEngine, state: x.__daw.engine!.context.state, hint: localStorage.getItem('daw.latencyHint') };
+  });
+  expect(kept).toEqual({ same: true, state: 'running', hint: null });
+  expect(await snapshot(page)).toBe(before);
+  await page.keyboard.press('Space');
+  await expect.poll(async () => (await stripPeaks(page, [0], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await page.keyboard.press('Space');
+});

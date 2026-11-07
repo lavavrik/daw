@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_KEYS, MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
+import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, removeTrack } from './actions';
@@ -54,6 +54,24 @@ describe('mixer state', () => {
     setMix(p, sink, 'master', 'pan', 1);
     setMix(p, sink, t.id, 'limiter_ceiling', -1);
     expect(sent).toEqual([]);
+  });
+
+  it('setMix sends reverb params only to the Reverb return, delay params only to the Delay return', () => {
+    // Same rule as the engine's MixParam::accepts (catalog.rs): both returns
+    // are 'return' channels, but each only takes its own effect's group.
+    const p = new Project();
+    const { sink, sent } = fake();
+    setMix(p, sink, 'delay', 'rev_decay', 2);
+    setMix(p, sink, 'reverb', 'delay_feedback', 0.5);
+    expect(sent).toEqual([]);
+    expect(p.mixer.delay.params[P('rev_decay')]).toBe(mixParam('rev_decay').default);
+    expect(p.mixer.reverb.params[P('delay_feedback')]).toBe(mixParam('delay_feedback').default);
+    setMix(p, sink, 'reverb', 'rev_decay', 2);
+    setMix(p, sink, 'delay', 'delay_feedback', 0.5);
+    expect(sent).toEqual([
+      [Op.MIX_SET, MIX_REVERB, P('rev_decay'), 2, 0],
+      [Op.MIX_SET, MIX_DELAY, P('delay_feedback'), 0.5, 0],
+    ]);
   });
 
   it('solo and mute toggle', () => {

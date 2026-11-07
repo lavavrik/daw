@@ -4,7 +4,7 @@
 import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
 import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
-import type { MixTarget } from '../audio/mixerCatalog';
+import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
 
@@ -27,12 +27,25 @@ function resolve(p: Project, target: MixChannelTarget): Resolved | null {
   return t && ch ? { ch, index: t.slot, kind: 'track' } : null;
 }
 
+/**
+ * Does channel `index` (of kind `kind`) take `def`? Mirrors the engine's
+ * MixParam::accepts (engine/src/mixer/catalog.rs): reverb-group params only
+ * on the Reverb return, delay-group params only on the Delay return (both are
+ * 'return' channels), everything else by `appliesTo`.
+ */
+function accepts(def: MixParamDef, kind: MixTarget, index: number): boolean {
+  if (def.group === 'reverb') return index === MIX_REVERB;
+  if (def.group === 'delay') return index === MIX_DELAY;
+  return def.appliesTo.includes(kind);
+}
+
 /** Clamp to the catalog range (integers rounded, NaN -> default) and send MIX_SET. */
 export function setMix(p: Project, sink: CommandSink, target: MixChannelTarget, param: string, value: number) {
   const r = resolve(p, target);
   const def = MIX_PARAMS.find((d) => d.name === param);
-  // The engine rejects params that do not apply to the channel kind; so do we.
-  if (!r || !def || !def.appliesTo.includes(r.kind)) return;
+  // The engine rejects params the channel does not take; so do we (nothing
+  // stored, nothing sent).
+  if (!r || !def || !accepts(def, r.kind, r.index)) return;
   const v = clampParam(def, value);
   r.ch.params[def.id] = v;
   sink.send(Op.MIX_SET, r.index, def.id, v);

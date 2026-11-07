@@ -2,18 +2,12 @@
 // AND sends the matching engine command(s), so UI and engine never diverge.
 import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
-import { MAX_TRACKS, TRACK_COLORS } from './project.svelte';
+import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, synthTrack } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
-import { DEFAULT_PATTERN_BARS } from './pattern-actions';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { STARTER_PATCHES } from './patches';
 import type { Patch } from './patches';
-
-export function synthTrack(p: Project, trackId: string): SynthTrack | null {
-  const t = p.tracks.find((x) => x.id === trackId);
-  return t && t.kind === 'synth' ? t : null;
-}
 
 /**
  * Takes the lowest free slot (shared with drums). Command order: ADD_SYNTH_TRACK,

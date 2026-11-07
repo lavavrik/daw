@@ -74,6 +74,17 @@ describe('pattern actions', () => {
     expect(t.pattern.notes.map((n) => n.start)).toEqual([245, 425]);
   });
 
+  it('NaN never reaches the engine: fields fall to their lower bound, strength to 1', () => {
+    const { p, t, sink, sent } = setup();
+    const n = addNote(p, sink, t.id, { pitch: NaN, start: NaN, len: NaN, vel: NaN })!;
+    expect([n.pitch, n.start, n.len, n.vel]).toEqual([0, 0, 1, 1]);
+    updateNotes(p, sink, t.id, [{ id: n.id, start: 250, len: Infinity }]);
+    expect(n.len).toBe(1); // non-finite -> lower bound
+    quantizeNotes(p, sink, t.id, [], 240, NaN);
+    expect(n.start).toBe(240); // NaN strength = full snap
+    expect(sent.flat().every(Number.isFinite)).toBe(true);
+  });
+
   it('quantize wraps a note snapped past the end to 0', () => {
     const { p, t, sink } = setup();
     addNote(p, sink, t.id, { pitch: 60, start: patternTicks(t) - 10, len: 100 });

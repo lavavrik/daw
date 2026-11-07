@@ -5,6 +5,8 @@
 export const MAX_STEPS = 64;
 export const MAX_ROWS = 16;
 export const MAX_TRACKS = 32;
+/** Bars in a new synth track's pattern (1..MAX_PATTERN_BARS). */
+export const DEFAULT_PATTERN_BARS = 4;
 /** Engine sample slots; sample ids are never reused within a session. */
 export const MAX_SAMPLES = 256;
 
@@ -92,4 +94,10 @@ export class Project {
   /** Most recently selected synth track; keeps receiving keys while a drum track is selected. */
   lastSynthTrackId = $state<string | null>(null);
   nextSampleId = $state(0);
+}
+
+/** The synth track with this id, or null (unknown id or a drum track). */
+export function synthTrack(p: Project, trackId: string): SynthTrack | null {
+  const t = p.tracks.find((x) => x.id === trackId);
+  return t && t.kind === 'synth' ? t : null;
 }

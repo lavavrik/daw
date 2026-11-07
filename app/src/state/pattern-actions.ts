@@ -2,11 +2,10 @@
 // sends the matching engine command (NOTE_SET / NOTE_REMOVE / NOTE_CLEAR /
 // SET_PATTERN_BARS), so UI and engine never diverge.
 import { BAR_TICKS, MAX_NOTES, MAX_PATTERN_BARS, Op } from '../audio/protocol';
+import { synthTrack } from './project.svelte';
 import type { Note, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
-import { synthTrack } from './rack-actions';
 
-export const DEFAULT_PATTERN_BARS = 4;
 export const MAX_NOTE_LEN = 61440;
 
 /** Grid sizes in ticks (960 PPQ). */
@@ -17,7 +16,9 @@ export const GRID_TICKS = {
 /** Pattern length in ticks. */
 export const patternTicks = (t: SynthTrack) => t.pattern.bars * BAR_TICKS;
 
-const clampInt = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)));
+/** Rounds and clamps; NaN/±Infinity fall to `lo` so they never reach the engine. */
+const clampInt = (v: number, lo: number, hi: number) =>
+  Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : lo;
 
 function send(sink: CommandSink, t: SynthTrack, n: Note) {
   sink.send(Op.NOTE_SET, t.slot * MAX_NOTES + n.idx, n.pitch * 128 + n.vel, n.start, n.len);
@@ -98,7 +99,7 @@ export function quantizeNotes(
   if (!t || !(gridTicks > 0)) return;
   const want = ids.length ? new Set(ids) : null;
   const total = patternTicks(t);
-  const s = Math.min(1, Math.max(0, strength));
+  const s = Number.isFinite(strength) ? Math.min(1, Math.max(0, strength)) : 1;
   const changes: { id: string; start: number }[] = [];
   for (const n of t.pattern.notes) {
     if (want && !want.has(n.id)) continue;

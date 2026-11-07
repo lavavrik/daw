@@ -13,7 +13,8 @@
 import workletUrl from './worklet.ts?worker&url';
 import { CommandRing, createRingBuffer } from './ring';
 import { CommandSender } from './sendQueue';
-import { Err, HostErr, MIX_CHANNELS, MIX_METER_STRIDE, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import { ResetAcks } from './resetAck';
+import { Err, HostErr, Op, MIX_CHANNELS, MIX_METER_STRIDE, TELEMETRY, TELEMETRY_LEN } from './protocol';
 import type { ProcessorOptions } from './worklet';
 
 type WorkletMessage =
@@ -22,7 +23,8 @@ type WorkletMessage =
   | { type: 'engine-error'; message: string }
   | { type: 'sample-result'; id: number; code: number }
   | { type: 'sample-loaded'; id: number; code: number }
-  | { type: 'rack-add-refused'; slot: number; idx: number; kind: number };
+  | { type: 'rack-add-refused'; slot: number; idx: number; kind: number }
+  | { type: 'reset-done'; code: number };
 
 /** Chrome's AudioContext.playbackStats (not in lib.dom; feature-detected). */
 type WithPlaybackStats = { playbackStats?: { underrunEvents?: number } };
@@ -54,6 +56,8 @@ export class AudioEngine {
   private readonly meterView: Float32Array;
   /** FIFO of loadSample resolvers per sample id (the worklet replies in order). */
   private readonly waiting = new Map<number, ((code: number) => void)[]>();
+  /** RESET_ALL confirmations from the worklet (resetAll). */
+  private readonly resetAcks = new ResetAcks();
   private readonly ready: Promise<void>;
   private started = false;
   private failMsg: string | null = null;
@@ -104,6 +108,8 @@ export class AudioEngine {
             return this.onSampleLoaded?.(m.id, m.code);
           case 'rack-add-refused':
             return this.onRackAddRefused?.(m.slot, m.idx, m.kind);
+          case 'reset-done':
+            return this.resetAcks.ack(m.code);
         }
       };
     });
@@ -122,6 +128,7 @@ export class AudioEngine {
     // Nothing will answer pending uploads any more (or answers are moot).
     for (const q of this.waiting.values()) for (const done of q) done(HostErr.ENGINE_STOPPED);
     this.waiting.clear();
+    this.resetAcks.failAll(HostErr.ENGINE_STOPPED);
     this.onError?.(message);
   }
 
@@ -174,6 +181,21 @@ export class AudioEngine {
     if (this.failMsg !== null) return false;
     this.sender.send(op, a, b, c, d);
     return true;
+  }
+
+  /**
+   * Send OP_RESET_ALL (after every command already queued) and resolve with
+   * its result code once the worklet has applied it: Err.OK, or Err.BAD_VALUE
+   * if the transport was still playing (send STOP first; the same batch is
+   * fine). Only after this resolves may the new session's samples be
+   * uploaded (see resetAck.ts). Rejects if no confirmation arrives within
+   * `timeoutMs`; HostErr.ENGINE_STOPPED once the engine has failed.
+   */
+  resetAll(timeoutMs = 2000): Promise<number> {
+    if (this.failMsg !== null) return Promise.resolve(HostErr.ENGINE_STOPPED);
+    const done = this.resetAcks.wait(timeoutMs);
+    this.send(Op.RESET_ALL);
+    return done;
   }
 
   /** Commands waiting for room in the ring (0 normally). */

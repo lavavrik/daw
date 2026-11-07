@@ -15,9 +15,11 @@
 //     after the command (one-offs, so posting/allocating there is acceptable):
 //     a RACK_ADD_MODULE refused with OUT_OF_MEMORY (FX pool full) is reported
 //     as {type:'rack-add-refused', slot, idx, kind} so the UI can roll its
-//     optimistic add back, and a successful RESET_ALL drops the deferred
-//     sample loads (they belong to the session it ended) and answers each
-//     with HostErr.RESET.
+//     optimistic add back, and every RESET_ALL is answered with
+//     {type:'reset-done', code} (AudioEngine.resetAll waits for it before
+//     uploading samples, see resetAck.ts); a successful one also drops the
+//     deferred sample loads (they belong to the session it ended) and answers
+//     each with HostErr.RESET.
 
 import { CommandRing } from './ring';
 import { applyMeters, meterFall } from './meterBallistics';
@@ -207,8 +209,11 @@ class DawEngineProcessor extends AudioWorkletProcessor {
         const code = ex.engine_command(this.h, c[0], c[1], c[2], c[3], c[4]);
         if (c[0] === Op.RACK_ADD_MODULE && code === Err.OUT_OF_MEMORY) {
           this.port.postMessage({ type: 'rack-add-refused', slot: c[1], idx: c[2], kind: c[3] });
-        } else if (c[0] === Op.RESET_ALL && code === Err.OK) {
-          this.dropPending(HostErr.RESET);
+        } else if (c[0] === Op.RESET_ALL) {
+          if (code === Err.OK) this.dropPending(HostErr.RESET);
+          // Confirm it, so the UI uploads the new project's samples only now
+          // (they travel by postMessage and could otherwise overtake it).
+          this.port.postMessage({ type: 'reset-done', code });
         }
       }
 

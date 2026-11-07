@@ -3,7 +3,7 @@
 // schedule, the same golden hash. Needs a built engine.wasm: `npm test`
 // builds it first (npm run build:engine).
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fnv1a32, MAX_PARTS_IN_FLIGHT, parseJob, renderService, renderSong, sampleData } from './render';
 import type { WorkerReply } from './render';
 import { encodeWav24 } from './wav';
@@ -96,5 +96,15 @@ describe('export render core', () => {
     expect(replies.at(-1)!.type).toBe('done');
     const bytes = replies.reduce((n, r) => n + (r.type === 'part' ? r.bytes.byteLength : 0), 0);
     expect(bytes).toBe(44 + j.frames * 6);
+  });
+
+  it('the last part needs no ack: a render that ends at the in-flight limit still says done (final P2)', async () => {
+    const j = job();
+    j.frames = (MAX_PARTS_IN_FLIGHT - 1) * 48000; // the header + 3 one-second parts = exactly the limit
+    const replies: WorkerReply[] = [];
+    const service = renderService((r) => replies.push(r));
+    service({ type: 'render', wasm: wasmBytes(), job: j }); // never acked
+    await vi.waitFor(() => expect(replies.at(-1)?.type).toBe('done'), { timeout: 2000 });
+    expect(replies.filter((r) => r.type === 'part')).toHaveLength(MAX_PARTS_IN_FLIGHT);
   });
 });

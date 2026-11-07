@@ -169,7 +169,7 @@ export function renderSong(wasm: BufferSource, job: RenderJob): { left: Float32A
  * every message; one render per handler). On `render`: render, encode each
  * block as it comes (Wav24Writer) and post every finished part, transferred.
  * After posting, if MAX_PARTS_IN_FLIGHT parts are un-acked, the render parks
- * until an `ack` arrives (the handler returns to the event loop meanwhile,
+ * (except after the file's last part) until an `ack` arrives (the handler returns to the event loop meanwhile,
  * so acks get in). Progress goes out at the start (0), every 0.25 s of
  * rendered audio and at the end (1); then exactly one `done` or `error`.
  */
@@ -184,12 +184,16 @@ export function renderService(post: (reply: WorkerReply, transfer?: Transferable
       post({ type: 'progress', fraction: 0 }); // alive (exportSong's stall watchdog)
       const ready: Uint8Array[] = [];
       const wav = new Wav24Writer(job.frames, job.sampleRate, (part) => ready.push(part));
-      const send = async () => {
+      /** Post the ready parts; `last`: every frame is rendered (no part after these). */
+      const send = async (last = false) => {
         for (let part = ready.shift(); part; part = ready.shift()) {
           // Wav24Writer parts own their whole buffer: transfer it, no copy.
           const bytes = part.buffer as ArrayBuffer;
           post({ type: 'part', bytes }, [bytes]);
           unacked++;
+          // Park for back-pressure only while more parts can follow: after
+          // the final one, `done` goes out at once (the page acks it anyway).
+          if (last && ready.length === 0) break;
           while (unacked >= MAX_PARTS_IN_FLIGHT) await new Promise<void>((r) => (wake = r));
         }
       };
@@ -202,7 +206,7 @@ export function renderService(post: (reply: WorkerReply, transfer?: Transferable
           post({ type: 'progress', fraction: done / job.frames });
           while (next <= done) next += every;
         }
-        await send();
+        await send(done >= job.frames);
       }
       wav.finish();
       post({ type: 'progress', fraction: 1 });

@@ -55,7 +55,8 @@ with the same engine the AudioWorklet runs, and saves a 24-bit PCM WAV.
    the parts in order, one at a time, and **acks** each to the Worker once
    its write resolved. **Back-pressure:** the Worker posts at most
    `MAX_PARTS_IN_FLIGHT` (4) un-acked parts, then parks its render (between
-   blocks, which does not change the output) until an ack arrives; so
+   blocks, which does not change the output) until an ack arrives — never
+   after the file's last part, so `done` follows it at once; so
    however much faster the render is than the disk, the page holds at most
    four parts (~1.2 MB) and the Worker one more being encoded. Neither side
    ever holds the song as floats or the whole file.

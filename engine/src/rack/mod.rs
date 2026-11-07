@@ -26,7 +26,16 @@
 //!
 //! # Declicking
 //! * Params: modules smooth `smooth` params per sample (5 ms one-pole), so
-//!   `set_param` applies immediately.
+//!   `set_param` applies immediately. Continuous params that are not
+//!   `smooth` (tune, ADSR times, glide, LFO rate) also apply immediately:
+//!   they never click (phase and envelope levels stay continuous) and must
+//!   not dip the output on every step of a knob drag.
+//! * *Stepped* params (`integer`, which includes every choice param: wave,
+//!   filter mode, unison, octave, MIDI In voices/mode, ...) switch the signal
+//!   discontinuously, so they are declicked like structural edits: queued
+//!   behind the 2 ms fade-out while sounding, applied, faded back in. On a
+//!   silent rack they apply at once and the output fades in. Re-sending the
+//!   current value (nothing queued) is a no-op and never dips the output.
 //! * Structural edits on a silent rack apply at once, but the output gain
 //!   restarts from 0 and ramps up over round(0.002·sr) samples, so whatever
 //!   the edit switched on (e.g. the last cable from a free-running LFO to Out)
@@ -79,8 +88,10 @@ enum Edit {
 /// How an edit interacts with the declick machinery (see `Rack::submit`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditClass {
-    /// Smoothed by the module: never faded.
+    /// Continuous param (smoothed by the module, or click-free): never faded.
     Param,
+    /// Integer/choice param: faded like `Structural`, but no order rebuild.
+    Stepped,
     /// A new, cable-less module: cannot change the sound, never faded.
     Add,
     /// Cables, removal, clear: faded (queued while sounding).
@@ -275,7 +286,8 @@ impl Rack {
     }
 
     /// Set param `param` of module `idx` (its smoothing, if any, is done by the
-    /// module). `ERR_BAD_INDEX` for a missing module or param; `ERR_BAD_VALUE`
+    /// module; integer/choice params are declicked by the rack, see module
+    /// docs). `ERR_BAD_INDEX` for a missing module or param; `ERR_BAD_VALUE`
     /// for NaN/Inf, values outside the spec's `min..=max`, or a fractional
     /// value for an integer (incl. choice) param.
     pub fn set_param(&mut self, idx: usize, param: usize, value: f32) -> i32 {
@@ -284,7 +296,11 @@ impl Rack {
         if !(value >= p.min && value <= p.max) || (p.integer && value.fract() != 0.0) {
             return ERR_BAD_VALUE;
         }
-        self.submit(Edit::SetParam(idx as u8, param as u8, value), EditClass::Param);
+        let class = if p.integer { EditClass::Stepped } else { EditClass::Param };
+        if class == EditClass::Stepped && self.queued == 0 && self.param(idx, param) == Some(value) {
+            return OK; // no-op: don't dip the output for a re-sent value
+        }
+        self.submit(Edit::SetParam(idx as u8, param as u8, value), class);
         OK
     }
 
@@ -309,16 +325,19 @@ impl Rack {
     }
 
     /// Apply a validated edit now, or queue it behind a declick fade.
-    /// Structural edits queue while sounding; anything queues while the queue
-    /// is non-empty (to keep edits in order). On overflow everything applies
-    /// at once. A structural edit applied at once (silent rack, or overflow)
-    /// restarts the output gain from 0 so the result fades in.
+    /// Structural and stepped-param edits queue while sounding; anything
+    /// queues while the queue is non-empty (to keep edits in order). On
+    /// overflow everything applies at once. A structural or stepped edit
+    /// applied at once (silent rack, or overflow) restarts the output gain
+    /// from 0 so the result fades in.
     fn submit(&mut self, e: Edit, class: EditClass) {
-        let defer = self.queued > 0 || (class == EditClass::Structural && self.is_sounding());
+        let faded = matches!(class, EditClass::Structural | EditClass::Stepped);
+        let defer = self.queued > 0 || (faded && self.is_sounding());
         if !defer {
             self.apply(e);
             match class {
                 EditClass::Param => {}
+                EditClass::Stepped => self.gain = 0.0,
                 EditClass::Add => self.rebuild_order(),
                 EditClass::Structural => {
                     self.rebuild_order();
@@ -908,6 +927,102 @@ mod tests {
         let j = max_jump(before[before.len() - 1], &out);
         assert!(j <= 0.05, "jump {j}");
         assert!(out[out.len() - 1].abs() < 1e-3, "reaches 0: {}", out[out.len() - 1]);
+    }
+
+    // Osc param indices / wave choices (catalog order).
+    const OSC_WAVE: usize = 0;
+    const OSC_OCTAVE: usize = 1;
+    const OSC_TUNE: usize = 2;
+    const SAW: f32 = 0.0;
+    const OSC_SQUARE: f32 = 1.0;
+    const TRI: f32 = 2.0;
+    const SINE: f32 = 3.0;
+
+    /// Free-running Osc (C4, no pitch input) at `wave` -> Out.l, rendered
+    /// past the fade-in so it is sounding.
+    fn sounding_osc(wave: f32, frames: usize) -> (Rack, f32) {
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::Osc), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Out), OK);
+        assert_eq!(r.set_param(0, OSC_WAVE, wave), OK);
+        assert_eq!(r.connect((0, 0), (1, 0)), OK);
+        let out = render(&mut r, frames);
+        assert!(r.is_sounding());
+        (r, out[out.len() - 1])
+    }
+
+    #[test]
+    fn choice_param_switch_while_sounding_is_declicked() {
+        // Sine and triangle are both smooth at C4 (<= 0.03 per sample at 0.8),
+        // but differ by up to ~0.17 at the same phase: an instant switch would
+        // jump. Try several switch points so one lands mid-cycle.
+        for k in 0..8 {
+            let (mut r, last) = sounding_osc(SINE, 1280 + k * 128 + 37 * k);
+            assert_eq!(r.set_param(0, OSC_WAVE, TRI), OK);
+            let out = render(&mut r, 960);
+            let j = max_jump(last, &out);
+            assert!(j <= 0.05, "switch point {k}: jump {j}");
+            assert_eq!(r.param(0, OSC_WAVE), Some(TRI), "applied after the fade");
+        }
+    }
+
+    #[test]
+    fn saw_to_square_while_sounding_fades_through_zero() {
+        // Saw and square both have edges of their own, so instead of a jump
+        // bound check that the switch is deferred behind the 2 ms fade-out
+        // (output reaches 0 before the new wave starts) and fades back in.
+        let (mut r, _) = sounding_osc(SAW, 1280);
+        assert_eq!(r.set_param(0, OSC_WAVE, OSC_SQUARE), OK);
+        assert_eq!(r.param(0, OSC_WAVE), Some(SAW), "queued while sounding");
+        let out = render(&mut r, 480);
+        let fade = (DECLICK_SECONDS * SR) as usize;
+        let zero = out.iter().position(|&x| x == 0.0).expect("output reaches 0");
+        assert!(zero <= fade + 1, "reaches 0 at {zero}");
+        // Within the fade the gain ramps linearly, so |x| <= 0.8 * (1 - i/fade).
+        for (i, &x) in out[..fade].iter().enumerate() {
+            assert!(x.abs() <= 0.8 * (1.0 - i as f32 / fade as f32) + 0.02, "sample {i}: {x}");
+        }
+        assert_eq!(r.param(0, OSC_WAVE), Some(OSC_SQUARE));
+        assert!(out[out.len() - 1].abs() > 0.5, "square back at level");
+    }
+
+    #[test]
+    fn continuous_unsmoothed_params_still_apply_at_once() {
+        // Tune / ADSR times / LFO rate are not `smooth` but never click
+        // (phase and envelope stay continuous); they must not dip the output
+        // on every knob step while dragging.
+        let (mut r, _) = sounding_square_osc();
+        assert_eq!(r.set_param(0, OSC_TUNE, 3.0), OK);
+        assert_eq!(r.param(0, OSC_TUNE), Some(3.0), "applied at once");
+        let out = render(&mut r, 480);
+        assert!(!dipped(&out), "output dipped");
+    }
+
+    /// A declick dip holds the output under 0.5 for ~100+ samples; a square
+    /// edge (PolyBLEP) only for a couple.
+    fn dipped(out: &[f32]) -> bool {
+        out.iter().filter(|x| x.abs() < 0.5).count() > 8
+    }
+
+    /// Square osc at C1: long flat stretches at +-0.8.
+    fn sounding_square_osc() -> (Rack, f32) {
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::Osc), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Out), OK);
+        assert_eq!(r.set_param(0, OSC_WAVE, OSC_SQUARE), OK);
+        assert_eq!(r.set_param(0, OSC_OCTAVE, -3.0), OK);
+        assert_eq!(r.connect((0, 0), (1, 0)), OK);
+        let out = render(&mut r, 1280);
+        (r, out[out.len() - 1])
+    }
+
+    #[test]
+    fn resending_the_same_choice_does_not_dip() {
+        let (mut r, _) = sounding_square_osc();
+        assert_eq!(r.set_param(0, OSC_WAVE, OSC_SQUARE), OK);
+        assert_eq!(r.set_param(0, OSC_OCTAVE, -3.0), OK);
+        let out = render(&mut r, 480);
+        assert!(!dipped(&out), "output dipped");
     }
 
     #[test]

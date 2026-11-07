@@ -152,12 +152,16 @@ fn rack_edits_and_render_do_not_allocate() {
     assert_eq!(r.set_param(12, 5, 0.5), OK); // fm
     r.note(NoteEvent::On { note: 48, vel: 100 });
     r.note(NoteEvent::On { note: 55, vel: 100 });
+    // Wave/unison/mode are stepped params: while sounding they go through
+    // the declick queue (rack/mod.rs), which must stay allocation-free too.
     for wave in 0..4 {
         assert_eq!(r.set_param(12, 0, wave as f32), OK);
         assert_eq!(r.set_param(12, 4, 0.2 + 0.2 * wave as f32), OK);
         assert_eq!(r.set_param(13, 0, 0.3), OK);
         render(&mut r, 5, &mut ctx);
     }
+    assert_eq!(r.set_param(12, 0, 3.0), OK); // no-op re-send of a stepped param
+    render(&mut r, 2, &mut ctx);
 
     // Filter (every mode, cv from a poly ADSR, drive) + Mixer (mono + poly in).
     r.clear();

@@ -4,8 +4,10 @@
 //! cargo test --release -p daw-engine --test perf -- --ignored --nocapture
 //! ```
 //!
-//! Four synth tracks, each a 13-module, 8-voice patch with 8 notes held,
-//! render 10 s of audio; the elapsed time must stay under 25% of real time.
+//! Four synth tracks, each a 13-module, 8-voice patch with 8 notes held and a
+//! 16-note pattern playing (1 bar of 16ths, so every block has a fair chance
+//! of a note event and the racks render in split segments), render 10 s of
+//! audio; the elapsed time must stay under 25% of real time.
 //!
 //! The tracks are driven through [`Synths`] (the engine's synth-track
 //! storage) rather than engine commands: through commands, `SET_INPUT_TRACK`
@@ -19,6 +21,7 @@
 use daw_engine::protocol::OK;
 use daw_engine::rack::catalog::ModuleKind as K;
 use daw_engine::rack::modules::{Ctx, NoteEvent};
+use daw_engine::sequencer::SeqNote;
 use daw_engine::synth::Synths;
 use std::time::Instant;
 
@@ -82,6 +85,12 @@ fn build(s: &mut Synths, slot: usize) {
     for (i, n) in [48u8, 52, 55, 59, 62, 65, 69, 72].into_iter().enumerate() {
         r.note(NoteEvent::On { note: n + slot as u8, vel: 90 + i as u8 });
     }
+    // 16-note pattern: one bar of 16ths (half a step long), an arpeggio.
+    assert!(s.set_pattern_bars(slot, 1));
+    for i in 0..16u32 {
+        let note = SeqNote { active: true, pitch: 60 + (i * 5 % 24) as u8, vel: 100, start: i * 240, len: 120 };
+        assert!(s.set_note(slot, i as usize, note));
+    }
 }
 
 #[test]
@@ -101,24 +110,31 @@ fn four_synth_tracks_render_under_budget() {
     for _ in 0..100 {
         l.fill(0.0);
         r.fill(0.0);
-        s.render_add(&ctx, &mut l, &mut r);
+        render(&mut s, &mut ctx, tpf, &mut l, &mut r);
     }
     let mut peak = 0.0f32;
     let t0 = Instant::now();
     for _ in 0..blocks {
         l.fill(0.0);
         r.fill(0.0);
-        s.render_add(&ctx, &mut l, &mut r);
-        ctx.ticks += BLOCK as f64 * tpf;
+        render(&mut s, &mut ctx, tpf, &mut l, &mut r);
         peak = peak.max(l[0].abs());
     }
     let elapsed = t0.elapsed().as_secs_f64();
     let audio = (blocks * BLOCK) as f64 / SR as f64;
     let ratio = elapsed / audio;
     println!(
-        "perf: {TRACKS} tracks x 13 modules x 8 voices: {elapsed:.3} s for {audio:.1} s of audio = {:.1}% of real time",
+        "perf: {TRACKS} tracks x 13 modules x 8 voices + 16-note patterns: {elapsed:.3} s for {audio:.1} s of audio = {:.1}% of real time",
         ratio * 100.0
     );
     assert!(peak > 0.0 && peak.is_finite(), "patch must sound (peak {peak})");
     assert!(ratio < 0.25, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+/// One playing block: patterns get the transport window, then the playhead
+/// advances by exactly the window (as `Transport` does).
+fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, l: &mut [f32], r: &mut [f32]) {
+    let t1 = ctx.ticks + BLOCK as f64 * tpf;
+    s.render_add(ctx, Some((ctx.ticks, t1, 1.0 / tpf)), l, r);
+    ctx.ticks = t1;
 }

@@ -5,6 +5,7 @@
 export const Op = {
   NOTE_ON: 1,
   NOTE_OFF: 2,
+  /** a=count-in ticks: 0, or BAR_TICKS for a one-bar count-in (else BAD_VALUE). */
   PLAY: 3,
   STOP: 4,
   SET_TEMPO: 5,
@@ -41,6 +42,15 @@ export const Op = {
   MOD_WHEEL: 26,
   /** a=0/1. */
   SUSTAIN: 27,
+  /** a=slot*MAX_NOTES+idx b=pitch*128+vel (pitch 0..127, vel 1..127)
+   *  c=start ticks (0..61439) d=length ticks (1..61440). Synth slots only. */
+  NOTE_SET: 28,
+  /** a=slot*MAX_NOTES+idx (releases the note if it is sounding). */
+  NOTE_REMOVE: 29,
+  /** a=slot: remove every note of the pattern. */
+  NOTE_CLEAR: 30,
+  /** a=slot b=pattern length in bars, 1..MAX_PATTERN_BARS. */
+  SET_PATTERN_BARS: 31,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 
@@ -76,6 +86,13 @@ export const MAX_POLY = 16;
 export const MAX_PORTS = 8;
 export const MAX_PARAMS = 12;
 
+/** Note slots per synth track's pattern (lib.rs MAX_NOTES). */
+export const MAX_NOTES = 1024;
+/** Longest synth pattern in bars (lib.rs MAX_PATTERN_BARS). */
+export const MAX_PATTERN_BARS = 16;
+/** Ticks per bar, 4/4 at 960 PPQ (lib.rs BAR_TICKS); also the count-in length. */
+export const BAR_TICKS = 3840;
+
 /** Ports per module in a packed port argument (protocol.rs PORT_STRIDE). */
 export const PORT_STRIDE = 16;
 /** Pack `(module, port)` into one rack-command argument: `module * 16 + port`. */
@@ -91,8 +108,10 @@ export const TELEMETRY = {
   peakL: 5,
   peakR: 6,
   lastError: 7,
+  /** Written by the worklet: the context frame at which `ticks` applies. */
+  frame: 8,
 } as const;
-export const TELEMETRY_LEN = 8;
+export const TELEMETRY_LEN = 9;
 
 /** Words (f64) per command record: [op, a, b, c, d]. */
 export const RECORD_WORDS = 5;

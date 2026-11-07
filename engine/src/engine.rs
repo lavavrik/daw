@@ -20,6 +20,20 @@
 //! follows the switch (e.g. a held pedal keeps holding). When the input slot
 //! stops being a synth track (`REMOVE_TRACK`, or `ADD_DRUM_TRACK` over it) the
 //! input track is unset, so a track added there later does not inherit it.
+//!
+//! # Note patterns
+//! Each synth track plays its own [`NotePattern`](crate::sequencer::NotePattern)
+//! while the transport runs (see `sequencer.rs` for the rules). Editing,
+//! removing or moving a sounding note releases it; `STOP` sends `Off` for
+//! every sounding *sequenced* pitch on every synth track (not `AllOff`, so
+//! held live keys keep sounding). Note commands on a slot that is not a synth
+//! track return `ERR_BAD_INDEX`.
+//!
+//! # Count-in
+//! `PLAY` with `a = BAR_TICKS` starts the transport one bar early, at tick
+//! −3840. While the playhead is below 0, drum steps and pattern notes do not
+//! fire, and the metronome clicks even when it is off (the count-in bar
+//! starts with the accent). From tick 0 on, everything plays as usual.
 
 use crate::arena::SampleArena;
 use crate::drums::Drums;
@@ -30,16 +44,24 @@ use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Transport};
 use crate::{
-    MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN,
-    TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
+    BAR_TICKS, MAX_BLOCK, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, PPQ, TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR,
+    TELEMETRY_LEN, TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING, TELEMETRY_TICKS,
 };
 
-/// 4/4: a bar is 4 beats; beat 0 of each bar is the accent.
-const BAR_TICKS: f64 = 4.0 * PPQ;
+/// 4/4: a bar (`BAR_TICKS`) is 4 beats; beat 0 of each bar is the accent.
 const BEAT_OFFSETS: [f64; 4] = [0.0, PPQ, 2.0 * PPQ, 3.0 * PPQ];
 
 /// Initial arena size in floats (128 MB).
 const ARENA_FLOATS: usize = 32 * 1024 * 1024;
+
+/// `ERR_BAD_INDEX` unless `ok` (the target existed).
+fn found(ok: bool) -> Result<(), i32> {
+    if ok {
+        Ok(())
+    } else {
+        Err(protocol::ERR_BAD_INDEX)
+    }
+}
 
 /// What a track slot currently holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +139,15 @@ impl Engine {
             Err(protocol::ERR_BAD_INDEX)
         } else {
             Ok(())
+        }
+    }
+
+    /// Pattern commands are only accepted on synth slots.
+    fn synth_slot(&self, slot: usize) -> Result<(), i32> {
+        if self.kind(slot) == SlotKind::Synth {
+            Ok(())
+        } else {
+            Err(protocol::ERR_BAD_INDEX)
         }
     }
 
@@ -203,15 +234,20 @@ impl Engine {
                 }
             }
             Command::SetMasterGain { gain } => self.master_gain = gain,
-            // Already playing: no-op (does not restart).
-            Command::Play => {
-                self.transport.playing = true;
+            // Already playing: no-op (does not restart, count-in ignored).
+            // Otherwise starts at -count_in (the playhead is 0 after Stop).
+            Command::Play { count_in } => {
+                if !self.transport.playing {
+                    self.transport.ticks = -count_in;
+                    self.transport.playing = true;
+                }
                 self.sync_transport_telemetry();
             }
             Command::Stop => {
                 self.transport.playing = false;
                 self.transport.ticks = 0.0;
                 self.drums.fade_all(); // no hard cuts: 2 ms fade-out
+                self.synths.release_sequenced(); // releases, never AllOff
                 self.sync_transport_telemetry();
             }
             // Applies from the next block; the playhead position is unchanged.
@@ -293,6 +329,24 @@ impl Engine {
                 rack_code(self.rack(slot)?.set_param(module, param, value))?
             }
             Command::RackClear { slot } => self.rack(slot)?.clear(),
+            // Pattern edits (synth slots only; `Synths` returns false for an
+            // inactive track, which a synth slot never is).
+            Command::NoteSet { slot, idx, note } => {
+                self.synth_slot(slot)?;
+                found(self.synths.set_note(slot, idx, note))?
+            }
+            Command::NoteRemove { slot, idx } => {
+                self.synth_slot(slot)?;
+                found(self.synths.remove_note(slot, idx))?
+            }
+            Command::NoteClear { slot } => {
+                self.synth_slot(slot)?;
+                found(self.synths.clear_notes(slot))?
+            }
+            Command::SetPatternBars { slot, bars } => {
+                self.synth_slot(slot)?;
+                found(self.synths.set_pattern_bars(slot, bars))?
+            }
         }
         Ok(())
     }
@@ -330,17 +384,23 @@ impl Engine {
 
     /// Metronome: trigger clicks at their exact sample offsets, rendering the
     /// segments between them so a click spilling past the block end continues
-    /// next block. Does not advance the transport.
+    /// next block. Does not advance the transport. During the count-in
+    /// (ticks < 0) it clicks even when off; when off, the window is cut at
+    /// tick 0 so the first downbeat does not click.
     fn render_metronome(&mut self, left: &mut [f32], right: &mut [f32]) {
         let n = left.len();
         let mut starts = [(0usize, false); 4];
         let mut count = 0;
-        if self.transport.playing && self.metronome.on && n > 0 {
+        let (t0, t1) = self.transport.block_window(n, self.sample_rate);
+        if self.transport.playing && (self.metronome.on || t0 < 0.0) && n > 0 {
             let spt = self.transport.samples_per_tick(self.sample_rate);
-            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
-            events_in_window(t0, t1, BAR_TICKS, &BEAT_OFFSETS, |beat, tick| {
+            let end = if self.metronome.on { t1 } else { t1.min(0.0) };
+            // `events_in_window` ignores negative ticks; shift by whole bars
+            // (beats and accents are unchanged) and shift the ticks back.
+            let shift = if t0 < 0.0 { (-t0 / BAR_TICKS).ceil() * BAR_TICKS } else { 0.0 };
+            events_in_window(t0 + shift, end + shift, BAR_TICKS, &BEAT_OFFSETS, |beat, tick| {
                 if count < starts.len() {
-                    starts[count] = (tick_to_offset(tick, t0, spt, n), beat == 0);
+                    starts[count] = (tick_to_offset(tick - shift, t0, spt, n), beat == 0);
                     count += 1;
                 }
             });
@@ -357,6 +417,8 @@ impl Engine {
 
     /// Drums: new hits are placed at their exact sample offsets while playing
     /// (same pattern as the metronome); tails keep rendering after Stop.
+    /// Steps before tick 0 (count-in) never fire: `events_in_window` skips
+    /// negative ticks.
     fn render_drums(&mut self, left: &mut [f32], right: &mut [f32]) {
         let n = left.len();
         let window = if self.transport.playing && n > 0 {
@@ -368,9 +430,12 @@ impl Engine {
         self.drums.render_add(window, &self.samples, &self.arena, left, right);
     }
 
-    /// Synth tracks, with a `Ctx` from the transport at the block start. Every
-    /// active track renders, playing or not (see `synth.rs`).
+    /// Synth tracks, with a `Ctx` from the transport at the block start (its
+    /// ticks are negative during the count-in; synced LFOs handle that) and,
+    /// while playing, the block's tick window for the patterns. Every active
+    /// track renders, playing or not (see `synth.rs`).
     fn render_synths(&mut self, left: &mut [f32], right: &mut [f32]) {
+        let n = left.len().min(right.len());
         let spt = self.transport.samples_per_tick(self.sample_rate);
         let ctx = Ctx {
             sr: self.sample_rate,
@@ -379,7 +444,13 @@ impl Engine {
             ticks: self.transport.ticks,
             ticks_per_frame: if spt > 0.0 && spt.is_finite() { 1.0 / spt } else { 0.0 },
         };
-        self.synths.render_add(&ctx, left, right);
+        let window = if self.transport.playing && n > 0 {
+            let (t0, t1) = self.transport.block_window(n, self.sample_rate);
+            Some((t0, t1, spt))
+        } else {
+            None
+        };
+        self.synths.render_add(&ctx, window, left, right);
     }
 
     fn fail(&mut self, code: i32) -> i32 {
@@ -1353,5 +1424,338 @@ mod tests {
         assert_eq!(e.telemetry()[7], protocol::ERR_DEFERRED as f64);
         e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
         assert!(e.sample_alloc(0, 10, 1).is_ok());
+    }
+
+    // ---- note patterns and count-in ----------------------------------------
+
+    use crate::protocol::{OP_NOTE_CLEAR, OP_NOTE_REMOVE, OP_NOTE_SET, OP_SET_PATTERN_BARS};
+    use crate::MAX_NOTES;
+
+    /// Set note `idx` of track `slot` (velocity 100); asserts OK.
+    fn set_note(e: &mut Engine, slot: usize, idx: usize, pitch: u32, start: u32, len: u32) {
+        let a = (slot * MAX_NOTES + idx) as f64;
+        assert_eq!(e.command(OP_NOTE_SET, a, (pitch * 128 + 100) as f64, start as f64, len as f64), OK);
+    }
+
+    /// Synth track at `slot`: MIDI In gate -> Out.l at `level`, so the output
+    /// is exactly `held voices * level * 0.8 (master)` while gates are high and
+    /// exactly 0 otherwise.
+    fn gate_patch(e: &mut Engine, slot: f64, level: f64) {
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, slot, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, 0.0, K_MIDI_IN, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, 1.0, K_OUT, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_CONNECT, slot, pk(0, 1), pk(1, 0), 0.0), OK);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 1.0, 0.0, level), OK);
+    }
+
+    /// Render `frames` in blocks of `block` frames (left channel).
+    fn render_blocks(e: &mut Engine, frames: usize, block: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        let (mut l, mut r) = (vec![0.0f32; block], vec![0.0f32; block]);
+        for _ in 0..frames / block {
+            e.process(&mut l, &mut r);
+            out.extend_from_slice(&l);
+        }
+        out
+    }
+
+    /// Indices where the output goes from exactly 0 to non-zero.
+    fn rising(s: &[f32]) -> Vec<usize> {
+        (0..s.len()).filter(|&i| s[i] != 0.0 && (i == 0 || s[i - 1] == 0.0)).collect()
+    }
+
+    /// Indices where the output goes from non-zero to exactly 0.
+    fn falling(s: &[f32]) -> Vec<usize> {
+        (1..s.len()).filter(|&i| s[i] == 0.0 && s[i - 1] != 0.0).collect()
+    }
+
+    fn near(got: usize, want: usize, tol: usize) -> bool {
+        got >= want && got <= want + tol
+    }
+
+    fn play(e: &mut Engine, count_in: f64) {
+        assert_eq!(e.command(OP_PLAY, count_in, 0.0, 0.0, 0.0), OK);
+    }
+
+    #[test]
+    fn note_on_off_at_exact_offsets() {
+        // A note at 960 (sample 24000) for 480 ticks (off at 36000) through
+        // MIDI In -> Osc -> VCA <- ADSR -> Out, 128-frame blocks.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        synth_patch(&mut e, 0.0);
+        set_note(&mut e, 0, 0, 69, 960, 480);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 48000);
+        assert!(s[..24000].iter().all(|&x| x == 0.0), "silent before the note");
+        assert!(s[24000..24032].iter().any(|&x| x != 0.0), "sounds within 32 frames of 24000");
+        // Reference: the same note played live, with 32-frame blocks so the
+        // events land exactly at 24000 and 36000. Identical output proves the
+        // On *and* the release start at those samples (one sub-block grid).
+        let mut r = Engine::new(SR);
+        synth_patch(&mut r, 0.0);
+        r.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0);
+        let mut want = render_blocks(&mut r, 24000, 32);
+        r.command(OP_NOTE_ON, 69.0, 100.0, 0.0, 0.0);
+        want.extend(render_blocks(&mut r, 12000, 32));
+        r.command(OP_NOTE_OFF, 69.0, 0.0, 0.0, 0.0);
+        want.extend(render_blocks(&mut r, 12000, 32));
+        assert!(peak(&want[30000..36000]) > 0.1);
+        for i in 0..48000 {
+            assert!((s[i] - want[i]).abs() < 1e-6, "sample {i}: {} vs {}", s[i], want[i]);
+        }
+    }
+
+    #[test]
+    fn notes_loop_on_pattern_length() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 96000 + 12800);
+        let on = rising(&s);
+        assert_eq!(on.len(), 2, "{on:?}");
+        assert!(near(on[0], 0, 32) && near(on[1], 96000, 32), "{on:?}");
+        assert!(near(falling(&s)[0], 12000, 32));
+    }
+
+    #[test]
+    fn note_crossing_loop_end_releases_after_wrap() {
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25);
+        e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0);
+        set_note(&mut e, 0, 0, 60, 3360, 960); // 84000 .. 96000 + 12000
+        play(&mut e, 0.0);
+        let s = render(&mut e, 128 * 1000);
+        let (on, off) = (rising(&s), falling(&s));
+        assert_eq!(on.len(), 1, "{on:?}");
+        assert!(near(on[0], 84000, 32), "{on:?}");
+        assert_eq!(off.len(), 1, "{off:?}");
+        assert!(near(off[0], 108000, 32), "off at tick 480 of the next loop: {off:?}");
+    }
+
+    #[test]
+    fn removing_a_sounding_note_releases_it() {
+        let mut e = Engine::new(SR);
+        gate_patch(&mut e, 0.0, 0.25);
+        set_note(&mut e, 0, 7, 60, 0, 3840);
+        play(&mut e, 0.0);
+        assert!(render(&mut e, 12800)[12799] > 0.1);
+        assert_eq!(e.command(OP_NOTE_REMOVE, 7.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 12800);
+        assert!(s[32..].iter().all(|&x| x == 0.0), "released within one sub-block");
+        // Moving a sounding note releases it too (it plays again from its new start).
+        set_note(&mut e, 0, 3, 64, 0, 3840);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        play(&mut e, 0.0);
+        assert!(render(&mut e, 12800)[12799] > 0.1);
+        set_note(&mut e, 0, 3, 64, 2000, 3840); // playhead at 512..1024: not yet
+        assert!(render(&mut e, 12800)[32..].iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn shortening_pattern_releases_and_mutes_notes_beyond_end() {
+        // 4 bars at 120 bpm: a bar is 96000 samples. A note in bar 3.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25);
+        set_note(&mut e, 0, 0, 60, 7680, 1920);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 128 * 1519); // 194432: inside the note
+        assert!(s[..192000].iter().all(|&x| x == 0.0));
+        assert!(s[194431] > 0.1, "sounding in bar 3");
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 2.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 2 * 192000);
+        assert!(s[32..].iter().all(|&x| x == 0.0), "released, then silent for two 2-bar loops");
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 4.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 384000);
+        assert!(peak(&s) > 0.1, "plays again at 4 bars");
+    }
+
+    #[test]
+    fn stop_releases_sequenced_but_not_live_notes() {
+        let mut e = Engine::new(SR);
+        gate_patch(&mut e, 0.0, 0.25);
+        e.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 72.0, 127.0, 0.0, 0.0); // live key, held
+        set_note(&mut e, 0, 0, 60, 0, 3840);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 4864);
+        assert!((s[4863] - 0.4).abs() < 1e-3, "two gates: {}", s[4863]);
+        assert_eq!(e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 4864);
+        assert!(s[32..].iter().all(|&x| (x - 0.2).abs() < 1e-3), "live key still held: {}", s[4863]);
+        assert_eq!(e.command(OP_NOTE_OFF, 72.0, 0.0, 0.0, 0.0), OK);
+        assert!(render(&mut e, 1280)[32..].iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn two_tracks_loop_independently() {
+        // Track 0: 1 bar, 0.2 per gate; track 1: 2 bars, 0.4 per gate.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25);
+        gate_patch(&mut e, 1.0, 0.5);
+        e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0);
+        e.command(OP_SET_PATTERN_BARS, 1.0, 2.0, 0.0, 0.0);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        set_note(&mut e, 1, 0, 60, 0, 480);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 192000 + 3200);
+        for (at, want) in [(2000usize, 0.6f32), (50000, 0.0), (98000, 0.2), (146000, 0.0), (194000, 0.6)] {
+            assert!((s[at] - want).abs() < 1e-3, "at {at}: {} vs {want}", s[at]);
+        }
+    }
+
+    #[test]
+    fn count_in_clicks_and_delays_patterns() {
+        // 120 bpm, metronome OFF, one-bar count-in: clicks at 0/0.5/1/1.5 s,
+        // then the drum hit and the pattern note at 96000 (tick 0).
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        load_const(&mut e, 0, 10, 1.0);
+        drum_setup(&mut e, 1.0, 0.0, &[0.0]);
+        gate_patch(&mut e, 0.0, 0.25);
+        set_note(&mut e, 0, 0, 60, 0, 480);
+        play(&mut e, 3840.0);
+        let s = render(&mut e, 128);
+        assert!((e.telemetry()[TELEMETRY_TICKS] - (-3840.0 + 128.0 / 25.0)).abs() < 1e-9, "playhead starts at -1 bar");
+        let mut s = s;
+        s.extend(render(&mut e, 96000 + 3200 - 128));
+        let on = onsets(&s[..96000]);
+        assert_eq!(on.len(), 4, "{on:?}");
+        for (got, want) in on.iter().zip([0usize, 24000, 48000, 72000]) {
+            assert!(near(*got, want, 1), "{got} vs {want}");
+        }
+        let c0 = upward_crossings(&s[on[0]..on[0] + 960]);
+        let c1 = upward_crossings(&s[on[1]..on[1] + 960]);
+        assert!((29..=30).contains(&c0), "count-in bar starts with the accent ({c0})");
+        assert!((19..=20).contains(&c1), "{c1}");
+        // Nothing but the clicks before 96000: no drum, no note.
+        for (i, &x) in s[..96000].iter().enumerate() {
+            let in_click = on.iter().any(|&o| i + 1 >= o && i < o + 960);
+            assert!(in_click || x == 0.0, "sample {i}: {x}");
+        }
+        assert_eq!(s[95999], 0.0);
+        assert!(s[96000] > 0.5, "drum hit at exactly tick 0: {}", s[96000]);
+        assert!(s[96032..96100].iter().all(|&x| (x - 0.2).abs() < 1e-3), "note on within 32 frames");
+        // No click at tick 0 (metronome off): the drum's 10 frames, then only the gate.
+        assert!(s[96010..96032].iter().all(|&x| x == 0.0 || (x - 0.2).abs() < 1e-3));
+    }
+
+    #[test]
+    fn metronome_on_keeps_clicking_through_count_in() {
+        let mut e = start_metronome(120.0);
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        play(&mut e, 3840.0);
+        let s = render(&mut e, 96000 * 2);
+        let on = onsets(&s);
+        assert_eq!(on.len(), 8, "{on:?}");
+        let c4 = upward_crossings(&s[on[4]..on[4] + 960]);
+        assert!((29..=30).contains(&c4), "bar 1 accent after the count-in ({c4})");
+        assert!(near(on[4], 96000, 1));
+    }
+
+    #[test]
+    fn play_while_playing_ignores_count_in() {
+        let mut e = Engine::new(SR);
+        play(&mut e, 0.0);
+        render(&mut e, 1280);
+        let t = e.telemetry()[TELEMETRY_TICKS];
+        play(&mut e, 3840.0);
+        render(&mut e, 128);
+        assert!(e.telemetry()[TELEMETRY_TICKS] > t);
+    }
+
+    #[test]
+    fn synced_lfo_runs_through_count_in() {
+        // Same patch as synth_ctx_follows_transport: square, synced to 1/4.
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        e.command(OP_ADD_SYNTH_TRACK, 0.0, 0.0, 0.0, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 0.0, K_LFO, 0.0);
+        e.command(OP_RACK_ADD_MODULE, 0.0, 1.0, K_OUT, 0.0);
+        e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 0.0, 3.0);
+        e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 2.0, 1.0);
+        e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 3.0, 3.0);
+        e.command(OP_RACK_CONNECT, 0.0, pk(0, 0), pk(1, 0), 0.0);
+        play(&mut e, 3840.0);
+        let s = render(&mut e, 96000 * 2);
+        // Locked to beats during the count-in (negative ticks) and after it.
+        for k in 0..8usize {
+            let b = k * 24000;
+            assert!(s[b + 6000] > 0.5 && s[b + 18000] < -0.5, "beat {k}: {} {}", s[b + 6000], s[b + 18000]);
+        }
+    }
+
+    #[test]
+    fn note_commands_validate() {
+        let mut e = Engine::new(SR);
+        e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 2.0, 0.25);
+        let a = |slot: usize, idx: usize| (slot * MAX_NOTES + idx) as f64;
+        let pv = |pitch: f64, vel: f64| pitch * 128.0 + vel;
+        // Bad, drum and empty slots.
+        for bad in [a(32, 0), -1.0, 0.5, f64::NAN, a(1, 0), a(5, 3)] {
+            assert_eq!(e.command(OP_NOTE_SET, bad, pv(60.0, 100.0), 0.0, 10.0), ERR_BAD_INDEX, "a {bad}");
+            assert_eq!(e.command(OP_NOTE_REMOVE, bad, 0.0, 0.0, 0.0), ERR_BAD_INDEX, "a {bad}");
+        }
+        for slot in [1.0, 5.0, 32.0, f64::NAN] {
+            assert_eq!(e.command(OP_NOTE_CLEAR, slot, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+            assert_eq!(e.command(OP_SET_PATTERN_BARS, slot, 2.0, 0.0, 0.0), ERR_BAD_INDEX);
+        }
+        // Values.
+        for (b, c, d) in [
+            (pv(128.0, 100.0), 0.0, 10.0),
+            (pv(60.0, 0.0), 0.0, 10.0),
+            (pv(60.0, 100.0), 0.0, 0.0),
+            (pv(60.0, 100.0), 61440.0, 10.0),
+            (pv(60.0, 100.0) + 0.5, 0.0, 10.0),
+            (pv(60.0, 100.0), 0.5, 10.0),
+            (pv(60.0, 100.0), 0.0, 10.5),
+            (f64::NAN, 0.0, 10.0),
+            (pv(60.0, 100.0), f64::NAN, 10.0),
+            (pv(60.0, 100.0), 0.0, f64::INFINITY),
+        ] {
+            assert_eq!(e.command(OP_NOTE_SET, a(2, 0), b, c, d), ERR_BAD_VALUE, "{b} {c} {d}");
+        }
+        for bars in [0.0, 17.0, 2.5, f64::NAN] {
+            assert_eq!(e.command(OP_SET_PATTERN_BARS, 2.0, bars, 0.0, 0.0), ERR_BAD_VALUE);
+        }
+        assert_eq!(e.command(OP_PLAY, 1.0, 0.0, 0.0, 0.0), ERR_BAD_VALUE);
+        assert_eq!(e.telemetry()[TELEMETRY_LAST_ERROR], ERR_BAD_VALUE as f64);
+        // Valid edges.
+        assert_eq!(e.command(OP_NOTE_SET, a(2, MAX_NOTES - 1), pv(127.0, 127.0), 61439.0, 61440.0), OK);
+        assert_eq!(e.command(OP_NOTE_SET, a(2, 0), pv(0.0, 1.0), 0.0, 1.0), OK);
+        assert_eq!(e.command(OP_NOTE_REMOVE, a(2, 5), 0.0, 0.0, 0.0), OK, "removing an empty slot is fine");
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 2.0, 16.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_CLEAR, 2.0, 0.0, 0.0, 0.0), OK);
+        // Garbage on the new ops never panics, and audio keeps rendering.
+        play(&mut e, 0.0);
+        let vals = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1e300, 1e300, 0.5, -0.0, 3e9, -1.0, 1.0, 2049.0];
+        for op in 28..=31u32 {
+            for &v in &vals {
+                for &w in &vals {
+                    let _ = e.command(op, a(2, 1), v, w, v);
+                    let _ = e.command(op, v, w, v, w);
+                }
+            }
+        }
+        assert!(render(&mut e, 12800).iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn re_adding_a_synth_track_resets_its_pattern() {
+        let mut e = Engine::new(SR);
+        gate_patch(&mut e, 0.0, 0.25);
+        set_note(&mut e, 0, 0, 60, 0, 3840);
+        e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25); // fresh track: empty pattern, 4 bars
+        play(&mut e, 0.0);
+        assert!(render(&mut e, 12800).iter().all(|&x| x == 0.0));
+        assert_eq!(e.synths.pattern(0).map(|p| p.bars()), Some(4));
     }
 }

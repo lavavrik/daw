@@ -103,7 +103,7 @@ track unsets it.
 
 Native (`cargo test --release -p daw-engine --test perf -- --ignored
 --nocapture`): about 8.5% of the audio budget for 4 tracks x 13 modules x 8
-voices. The e2e `four synth tracks stay under budget` runs four drone patches
+voices, about 9% with each track also playing a 16-note pattern (plan 3). The e2e `four synth tracks stay under budget` runs four drone patches
 (8 voices, 2 saw oscs with unison 2, LP24 + LFO, VCA) in Chromium and
 requires CPU telemetry below 60%, audible output (peak L/R > 0), and no new
 dropouts or errors; a single run measured about 7%.

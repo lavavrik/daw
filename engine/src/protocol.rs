@@ -8,14 +8,18 @@
 //! own line in the form `pub const NAME: u32|i32 = N;`.
 
 use crate::rack::catalog::ModuleKind;
-use crate::{MAX_MODULES, MAX_PARAMS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS};
+use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
+use crate::{
+    BAR_TICKS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
+    MAX_TRACKS,
+};
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
 pub const PORT_STRIDE: usize = 16;
 
 pub const OP_NOTE_ON: u32 = 1; // a=note, b=velocity
 pub const OP_NOTE_OFF: u32 = 2; // a=note
-pub const OP_PLAY: u32 = 3;
+pub const OP_PLAY: u32 = 3; // a=count-in ticks: 0 or 3840 (one bar)
 pub const OP_STOP: u32 = 4;
 pub const OP_SET_TEMPO: u32 = 5; // a=bpm 20..=300
 pub const OP_SET_METRONOME: u32 = 6; // a=0/1
@@ -43,6 +47,12 @@ pub const OP_SET_INPUT_TRACK: u32 = 24; // a=slot or -1 (none)
 pub const OP_PITCH_BEND: u32 = 25; // a=-1..1
 pub const OP_MOD_WHEEL: u32 = 26; // a=0..1
 pub const OP_SUSTAIN: u32 = 27; // a=0/1
+// Synth note patterns (sequencer.rs). A note is addressed as
+// `slot * MAX_NOTES + idx`; pitch and velocity are packed as `pitch * 128 + vel`.
+pub const OP_NOTE_SET: u32 = 28; // a=slot*MAX_NOTES+idx b=pitch*128+vel c=start ticks d=length ticks
+pub const OP_NOTE_REMOVE: u32 = 29; // a=slot*MAX_NOTES+idx
+pub const OP_NOTE_CLEAR: u32 = 30; // a=slot
+pub const OP_SET_PATTERN_BARS: u32 = 31; // a=slot b=1..16
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -59,7 +69,8 @@ pub const ERR_OUT_OF_MEMORY: i32 = -5;
 pub enum Command {
     NoteOn { note: u8, velocity: u8 },
     NoteOff { note: u8 },
-    Play,
+    /// Start with the transport at `-count_in` ticks (0 or one bar).
+    Play { count_in: f64 },
     Stop,
     SetTempo { bpm: f32 },
     SetMetronome { on: bool },
@@ -86,6 +97,12 @@ pub enum Command {
     PitchBend { value: f32 },
     ModWheel { value: f32 },
     Sustain { on: bool },
+    /// Store `note` (always `active`) in pattern slot `idx` of synth track `slot`.
+    NoteSet { slot: usize, idx: usize, note: SeqNote },
+    NoteRemove { slot: usize, idx: usize },
+    NoteClear { slot: usize },
+    /// Pattern length, 1..=`MAX_PATTERN_BARS` bars.
+    SetPatternBars { slot: usize, bars: u8 },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -168,12 +185,51 @@ fn finite(v: f64) -> Result<f32, i32> {
     }
 }
 
+/// Integral value in `lo..=hi`; otherwise `ERR_BAD_VALUE`.
+fn int_in(v: f64, lo: u32, hi: u32) -> Result<u32, i32> {
+    if v.is_finite() && v.fract() == 0.0 && v >= lo as f64 && v <= hi as f64 {
+        Ok(v as u32)
+    } else {
+        Err(ERR_BAD_VALUE)
+    }
+}
+
+/// Packed note address `slot * MAX_NOTES + idx` -> `(slot, idx)`; anything
+/// non-integral or out of range is `ERR_BAD_INDEX`.
+fn note_addr(v: f64) -> Result<(usize, usize), i32> {
+    let i = index(v, MAX_TRACKS * MAX_NOTES)?;
+    Ok((i / MAX_NOTES, i % MAX_NOTES))
+}
+
+/// A note from packed `pitch * 128 + vel` (pitch 0..=127, vel 1..=127), start
+/// `0..MAX_NOTE_TICKS` and length `1..=MAX_NOTE_TICKS`; else `ERR_BAD_VALUE`.
+fn seq_note(pv: f64, start: f64, len: f64) -> Result<SeqNote, i32> {
+    let pv = int_in(pv, 0, 128 * 128 - 1)?;
+    let (pitch, vel) = ((pv / 128) as u8, (pv % 128) as u8);
+    if vel == 0 {
+        return Err(ERR_BAD_VALUE);
+    }
+    Ok(SeqNote {
+        active: true,
+        pitch,
+        vel,
+        start: int_in(start, 0, MAX_NOTE_TICKS - 1)?,
+        len: int_in(len, 1, MAX_NOTE_TICKS)?,
+    })
+}
+
 /// Decode and range-check one record. Never panics.
 pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
     Ok(match op {
         OP_NOTE_ON => Command::NoteOn { note: midi7(a)?, velocity: midi7(b)? },
         OP_NOTE_OFF => Command::NoteOff { note: midi7(a)? },
-        OP_PLAY => Command::Play,
+        OP_PLAY => Command::Play {
+            count_in: if a == 0.0 || a == BAR_TICKS {
+                a.abs() // -0.0 -> 0.0
+            } else {
+                return Err(ERR_BAD_VALUE);
+            },
+        },
         OP_STOP => Command::Stop,
         OP_SET_TEMPO => Command::SetTempo { bpm: ranged(a, 20.0, 300.0)? },
         OP_SET_METRONOME => Command::SetMetronome { on: flag(a)? },
@@ -241,6 +297,19 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_PITCH_BEND => Command::PitchBend { value: ranged(a, -1.0, 1.0)? },
         OP_MOD_WHEEL => Command::ModWheel { value: ranged(a, 0.0, 1.0)? },
         OP_SUSTAIN => Command::Sustain { on: flag(a)? },
+        OP_NOTE_SET => {
+            let (slot, idx) = note_addr(a)?;
+            Command::NoteSet { slot, idx, note: seq_note(b, c, d)? }
+        }
+        OP_NOTE_REMOVE => {
+            let (slot, idx) = note_addr(a)?;
+            Command::NoteRemove { slot, idx }
+        }
+        OP_NOTE_CLEAR => Command::NoteClear { slot: index(a, MAX_TRACKS)? },
+        OP_SET_PATTERN_BARS => Command::SetPatternBars {
+            slot: index(a, MAX_TRACKS)?,
+            bars: int_in(b, 1, MAX_PATTERN_BARS as u32)? as u8,
+        },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -340,6 +409,56 @@ mod tests {
         assert_eq!(decode(OP_MOD_WHEEL, 1., 0., 0., 0.), Ok(Command::ModWheel { value: 1.0 }));
         assert_eq!(decode(OP_SUSTAIN, 1., 0., 0., 0.), Ok(Command::Sustain { on: true }));
         assert_eq!(decode(OP_SUSTAIN, 0.5, 0., 0., 0.), Err(ERR_BAD_VALUE));
+    }
+    #[test]
+    fn decode_play_count_in() {
+        assert_eq!(decode(OP_PLAY, 0., 0., 0., 0.), Ok(Command::Play { count_in: 0.0 }));
+        assert_eq!(decode(OP_PLAY, 3840., 0., 0., 0.), Ok(Command::Play { count_in: 3840.0 }));
+        for bad in [1.0, -3840.0, 960.0, 7680.0, 3840.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_PLAY, bad, 0., 0., 0.), Err(ERR_BAD_VALUE), "{bad}");
+        }
+    }
+    #[test]
+    fn decode_note_commands() {
+        let n = |pitch, vel, start, len| SeqNote { active: true, pitch, vel, start, len };
+        let a = 3. * 1024. + 1023.;
+        assert_eq!(
+            decode(OP_NOTE_SET, a, 60. * 128. + 100., 960., 480.),
+            Ok(Command::NoteSet { slot: 3, idx: 1023, note: n(60, 100, 960, 480) })
+        );
+        assert_eq!(
+            decode(OP_NOTE_SET, 0., 127. * 128. + 127., 61439., 61440.),
+            Ok(Command::NoteSet { slot: 0, idx: 0, note: n(127, 127, 61439, 61440) })
+        );
+        for bad_a in [-1., 32. * 1024., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_NOTE_SET, bad_a, 60. * 128. + 1., 0., 1.), Err(ERR_BAD_INDEX), "a {bad_a}");
+            assert_eq!(decode(OP_NOTE_REMOVE, bad_a, 0., 0., 0.), Err(ERR_BAD_INDEX), "a {bad_a}");
+        }
+        for (b, c, d) in [
+            (128. * 128., 0., 1.),       // pitch 128
+            (60. * 128., 0., 1.),        // velocity 0
+            (60. * 128. + 0.5, 0., 1.),  // fractional
+            (-1., 0., 1.),
+            (f64::NAN, 0., 1.),
+            (61., 61440., 1.),           // start past the last tick
+            (61., -1., 1.),
+            (61., 0.5, 1.),
+            (61., 0., 0.),               // length 0
+            (61., 0., 61441.),
+            (61., 0., 1.5),
+            (61., 0., f64::INFINITY),
+        ] {
+            assert_eq!(decode(OP_NOTE_SET, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
+        }
+        assert_eq!(decode(OP_NOTE_REMOVE, 1025., 0., 0., 0.), Ok(Command::NoteRemove { slot: 1, idx: 1 }));
+        assert_eq!(decode(OP_NOTE_CLEAR, 31., 0., 0., 0.), Ok(Command::NoteClear { slot: 31 }));
+        assert_eq!(decode(OP_NOTE_CLEAR, 32., 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_SET_PATTERN_BARS, 2., 16., 0., 0.), Ok(Command::SetPatternBars { slot: 2, bars: 16 }));
+        assert_eq!(decode(OP_SET_PATTERN_BARS, 2., 1., 0., 0.), Ok(Command::SetPatternBars { slot: 2, bars: 1 }));
+        for bad in [0., 17., 1.5, -1., f64::NAN] {
+            assert_eq!(decode(OP_SET_PATTERN_BARS, 2., bad, 0., 0.), Err(ERR_BAD_VALUE), "bars {bad}");
+        }
+        assert_eq!(decode(OP_SET_PATTERN_BARS, 32., 4., 0., 0.), Err(ERR_BAD_INDEX));
     }
     #[test]
     fn decode_value_ranges() {

@@ -6,10 +6,12 @@
 
 use crate::PPQ;
 
+/// Tempo, run state and playhead.
 pub struct Transport {
     pub bpm: f32,
     pub playing: bool,
-    /// Playhead in ticks at the start of the next block to render.
+    /// Playhead in ticks at the start of the next block to render. Negative
+    /// during a count-in (`PLAY` starts at `-count_in`); 0 after Stop.
     pub ticks: f64,
 }
 
@@ -51,6 +53,11 @@ impl Default for Transport {
 /// so use `tick_to_offset` to place it in the block, and `i` to look up what
 /// to play. Callers wanting a different loop origin should subtract it from
 /// `t0`/`t1` first.
+///
+/// Ticks below 0 (the count-in) never yield events: a window entirely below 0
+/// yields nothing, and one crossing 0 only its events at ticks `>= 0`. (The
+/// metronome, which does click during the count-in, shifts its window by
+/// whole bars.)
 pub fn events_in_window(
     t0: f64,
     t1: f64,
@@ -58,9 +65,10 @@ pub fn events_in_window(
     offsets: &[f64],
     mut f: impl FnMut(usize, f64),
 ) {
-    if !(period > 0.0) || !(t1 > t0) || t0 < 0.0 || !t0.is_finite() || !t1.is_finite() {
+    if !(period > 0.0) || !(t1 > t0) || !(t1 > 0.0) || !t0.is_finite() || !t1.is_finite() {
         return;
     }
+    let t0 = t0.max(0.0);
     let mut k = (t0 / period).floor();
     while k * period < t1 {
         let base = k * period;
@@ -112,6 +120,16 @@ mod tests {
         got.clear();
         events_in_window(960.0, 1920.0, 3840.0, &[0.0, 960.0, 1920.0], |i, t| got.push((i, t)));
         assert_eq!(got, vec![(1, 960.0)]);
+    }
+
+    #[test]
+    fn negative_ticks_never_yield_events() {
+        let mut got = Vec::new();
+        events_in_window(-3840.0, -1.0, 3840.0, &[0.0, 960.0], |i, t| got.push((i, t)));
+        events_in_window(-1.0, 0.0, 3840.0, &[0.0], |i, t| got.push((i, t)));
+        assert!(got.is_empty(), "{got:?}");
+        events_in_window(-1.0, 1.0, 3840.0, &[0.0, 960.0], |i, t| got.push((i, t)));
+        assert_eq!(got, vec![(0, 0.0)]);
     }
 
     #[test]

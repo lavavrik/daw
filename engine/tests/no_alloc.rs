@@ -204,3 +204,65 @@ fn synth_tracks_and_rack_commands_do_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
     assert!(peak > 0.05, "synth should be audible, peak {peak}");
 }
+
+/// Note patterns: 200 notes on a synth track, playback across loop ends at a
+/// 2-bar length, editing / removing / moving notes while they sound, length
+/// changes, clear, Stop (sequenced releases) and Play with a count-in, all with
+/// the counter ARMED.
+#[test]
+fn note_patterns_and_count_in_do_not_allocate() {
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let s = 1.0; // slot
+    let ok = |code: i32| assert_eq!(code, OK);
+    let max_notes = daw_engine::MAX_NOTES as f64;
+    let addr = |idx: f64| s * max_notes + idx;
+    let pv = |pitch: f64, vel: f64| pitch * 128.0 + vel;
+
+    arm();
+
+    ok(e.command(OP_ADD_SYNTH_TRACK, s, 0., 0., 0.));
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, s, m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, s, pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_SET_PATTERN_BARS, s, 2., 0., 0.));
+    // 200 notes over 2 bars (7680 ticks): every 38.4 ticks, some crossing
+    // the loop end, some longer than the pattern.
+    for i in 0..200u32 {
+        let start = (i * 7680 / 200) as f64;
+        let len = [120.0, 480.0, 2000.0, 9000.0][i as usize % 4];
+        ok(e.command(OP_NOTE_SET, addr(i as f64), pv(36.0 + (i % 48) as f64, 100.0), start, len));
+    }
+    ok(e.command(OP_SET_TEMPO, 170., 0., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+
+    // 170 bpm at 48 kHz: a bar is ~67765 samples (~530 blocks); 4 bars ~2120.
+    let mut peak = 0.0f64;
+    for b in 0..2600u32 {
+        match b {
+            100 => ok(e.command(OP_NOTE_SET, addr(3.), pv(70., 90.), 115., 9000.)), // edit a sounding note
+            110 => ok(e.command(OP_NOTE_REMOVE, addr(2.), 0., 0., 0.)), // remove a sounding note
+            120 => ok(e.command(OP_NOTE_SET, addr(7.), pv(43., 100.), 5000., 2000.)), // move
+            130 => ok(e.command(OP_NOTE_SET, addr(500.), pv(80., 64.), 3000., 100.)), // new high slot
+            1500 => ok(e.command(OP_SET_PATTERN_BARS, s, 1., 0., 0.)),
+            1600 => ok(e.command(OP_SET_PATTERN_BARS, s, 16., 0., 0.)),
+            1700 => ok(e.command(OP_SET_PATTERN_BARS, s, 2., 0., 0.)),
+            2200 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            2210 => ok(e.command(OP_PLAY, 3840., 0., 0., 0.)), // count-in
+            2400 => ok(e.command(OP_NOTE_CLEAR, s, 0., 0., 0.)),
+            2410 => ok(e.command(OP_NOTE_SET, addr(0.), pv(60., 100.), 0., 240.)),
+            _ => {}
+        }
+        e.process(&mut l, &mut r);
+        if b < 1500 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "pattern path allocated");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+    assert!(peak > 0.05, "pattern should be audible, peak {peak}");
+}

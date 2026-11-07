@@ -8,6 +8,7 @@ pub mod metronome;
 pub mod protocol;
 pub mod rack;
 pub mod samples;
+pub mod sequencer;
 pub mod synth;
 pub mod transport;
 
@@ -36,6 +37,12 @@ pub const MAX_PARAMS: usize = 12;
 pub const PPQ: f64 = 960.0;
 /// A step is a 16th note.
 pub const STEP_TICKS: f64 = 240.0;
+/// Ticks per bar (4/4). Patterns, the metronome and the count-in are bar-based.
+pub const BAR_TICKS: f64 = 3840.0;
+/// Note slots per synth track's pattern (`sequencer::NotePattern`).
+pub const MAX_NOTES: usize = 1024;
+/// Longest synth pattern, in bars (lengths are 1..=16; a new track gets 4).
+pub const MAX_PATTERN_BARS: usize = 16;
 
 // Telemetry slots (indices into `Engine::telemetry()`, an `[f64; TELEMETRY_LEN]`
 // the worklet copies into the shared telemetry buffer every block). Mirrored
@@ -53,7 +60,11 @@ pub const TELEMETRY_PEAK_L: usize = 5;
 pub const TELEMETRY_PEAK_R: usize = 6;
 /// Most recent failed command / sample-call code (successes leave it).
 pub const TELEMETRY_LAST_ERROR: usize = 7;
-pub const TELEMETRY_LEN: usize = 8;
+/// Written by the worklet, not the engine: the AudioContext frame
+/// (`currentFrame`) at which `TELEMETRY_TICKS` applies, so the UI can map the
+/// playhead to heard time.
+pub const TELEMETRY_FRAME: usize = 8;
+pub const TELEMETRY_LEN: usize = 9;
 
 #[cfg(test)]
 mod tests {
@@ -62,5 +73,6 @@ mod tests {
     #[test]
     fn constants_are_consistent() {
         assert_eq!(STEP_TICKS * 4.0, PPQ);
+        assert_eq!(BAR_TICKS, 4.0 * PPQ);
     }
 }

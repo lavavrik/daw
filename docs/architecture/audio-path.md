@@ -14,7 +14,7 @@ it glitch-free. Code: `app/src/audio/{engine,worklet,ring,protocol}.ts`,
                                                          3 copy out L/R -> outputs[0]  ──► speakers
                                                          4 copy telemetry -> telemetry SAB
                                                          5/6 cpu load, overrun count
- AudioEngine.telemetry() ◄──────────── telemetry SAB (Float64Array(8), overwritten each block)
+ AudioEngine.telemetry() ◄──────────── telemetry SAB (Float64Array(9), overwritten each block)
 
  AudioEngine.loadSample() ── port.postMessage({type:'sample'}) ──► arena alloc + copy
                           ◄── {type:'sample-result', id, code} ──┘

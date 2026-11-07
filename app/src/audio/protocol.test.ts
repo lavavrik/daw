@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
-  PORT_STRIDE, packPort,
+  PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, BAR_TICKS,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -19,7 +19,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(33);
+    expect(Object.keys(rust).length).toBe(37);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -40,14 +40,18 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   const snake = (k: string) => k.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase(); // peakL -> PEAK_L
   const ts: Record<string, number> = {
     MAX_BLOCK, MAX_TRACKS, MAX_ROWS, MAX_STEPS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, TELEMETRY_LEN,
-    MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS,
+    MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, MAX_NOTES, MAX_PATTERN_BARS,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
   it('parsed every MAX_* and TELEMETRY_* constant', () => {
-    expect(Object.keys(rust).length).toBe(10 + 9);
+    expect(Object.keys(rust).length).toBe(12 + 10);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
+  });
+  it('BAR_TICKS matches', () => {
+    const m = read('lib.rs').match(/pub const BAR_TICKS: f64 = ([\d.]+);/);
+    expect(Number(m?.[1])).toBe(BAR_TICKS);
   });
 });

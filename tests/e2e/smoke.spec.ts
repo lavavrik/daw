@@ -568,6 +568,42 @@ test('pulling the VCA→Out cable silences, re-plugging restores', async ({ page
   expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05);
 });
 
+test('keyboard patching: Enter picks a jack up, Enter on another drops it, Esc cancels, Delete unplugs', async ({ page }) => {
+  await addSynth(page); // Deep Bass: VCA 6 -> Out 7
+  const cables = page.locator('[data-testid="cables"] path.cable');
+  await expect(cables).toHaveCount(11);
+  const inL = page.getByTestId('jack-7-in-l');
+  // Jacks are focusable buttons named after module, port and direction.
+  await expect(inL).toHaveAttribute('role', 'button');
+  // Pick up the Out `l` cable, unplug it with Delete: silence.
+  await inL.focus();
+  await page.keyboard.press('Enter');
+  await expect(inL).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('jack-status')).toContainText('Picked up');
+  await expect(cables).toHaveCount(10); // carried
+  await page.keyboard.press('Delete');
+  await expect(inL).toHaveAttribute('aria-pressed', 'false');
+  await expect(cables).toHaveCount(10);
+  await page.waitForTimeout(100);
+  expect(await holdPeak(page, ['KeyA'])).toBeLessThan(0.001);
+  // Esc cancels a pick: nothing changes.
+  const vcaOut = page.getByTestId('jack-6-out-out');
+  await vcaOut.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(0);
+  await expect(cables).toHaveCount(10);
+  // VCA out -> Enter, focus Out l -> Enter: plugged again, sound is back.
+  await vcaOut.focus();
+  await page.keyboard.press('Enter');
+  await inL.focus();
+  await page.keyboard.press('Enter');
+  await expect(cables).toHaveCount(11);
+  await expect(page.getByTestId('patch-edited')).toBeVisible();
+  expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05);
+});
+
 test('add module menu adds Noise', async ({ page }) => {
   await addSynth(page);
   await page.getByRole('button', { name: '+ Add module' }).click();
@@ -580,6 +616,18 @@ test('add module menu adds Noise', async ({ page }) => {
   // Escape closes the menu without adding anything.
   await page.getByRole('button', { name: '+ Add module' }).click();
   await expect(menu).toBeVisible();
+  // Arrow keys move between items (wrapping), Home/End jump.
+  const items = menu.getByRole('menuitem');
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('ArrowUp');
+  await expect(items.last()).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(items.last()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
   await expect(page.locator('[data-testid^="module-"]')).toHaveCount(9);

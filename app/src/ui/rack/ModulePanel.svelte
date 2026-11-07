@@ -18,7 +18,7 @@
   import Knob from './Knob.svelte';
 
   let {
-    module, def, title, isConnected, onparam, onremove, onjackdown, tempo = 120, samples = null, onsampledrop, onsamplesopen,
+    module, def, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen,
   }: {
     module: RackModule;
     def: ModuleDef;
@@ -28,6 +28,10 @@
     onparam: (paramIdx: number, v: number) => void;
     onremove: () => void;
     onjackdown: (e: PointerEvent, dir: 'in' | 'out', port: number) => void;
+    /** Keyboard patching (see Jack.svelte); `isPicked`: the jack a cable was picked up from. */
+    isPicked?: (dir: 'in' | 'out', port: number) => boolean;
+    onjackkey?: (e: KeyboardEvent, dir: 'in' | 'out', port: number) => void;
+    onjackfocus?: (dir: 'in' | 'out', port: number) => void;
     /** Transport BPM, for the Delay's "(max 2 s)" note. */
     tempo?: number;
     /** Sample Player only: the project's samples for the `sample` dropdown. */
@@ -121,7 +125,8 @@
         <div class="jacks">
           {#each def.inputs as port, pi (port.name)}
             <Jack m={module.idx} port={pi} dir="in" name={port.name} signal={port.signal} moduleName={title}
-              connected={isConnected(pi)} onpointerdown={(e) => onjackdown(e, 'in', pi)} />
+              connected={isConnected(pi)} picked={isPicked('in', pi)} onpointerdown={(e) => onjackdown(e, 'in', pi)}
+              onkey={(e) => onjackkey?.(e, 'in', pi)} onfocus={() => onjackfocus?.('in', pi)} />
           {/each}
         </div>
       </div>
@@ -132,7 +137,8 @@
         <div class="jacks">
           {#each def.outputs as port, pi (port.name)}
             <Jack m={module.idx} port={pi} dir="out" name={port.name} signal={port.signal} moduleName={title}
-              connected={false} onpointerdown={(e) => onjackdown(e, 'out', pi)} />
+              connected={false} picked={isPicked('out', pi)} onpointerdown={(e) => onjackdown(e, 'out', pi)}
+              onkey={(e) => onjackkey?.(e, 'out', pi)} onfocus={() => onjackfocus?.('out', pi)} />
           {/each}
         </div>
       </div>

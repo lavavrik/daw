@@ -31,7 +31,14 @@
   // closest('[data-jack]'), and exactly one engine edit (or one disconnect +
   // connect pair) is sent. Drops on anything that is not a matching jack
   // unplug a carried cable / cancel a new one.
-  import { tick } from 'svelte';
+  //
+  // Keyboard patching (minimal, same Drag state with `kbd`): Enter/Space on a
+  // focused jack picks it up exactly like a press would (a connected input
+  // lifts its cable); Tab to another jack moves the dashed cable's free end
+  // there; Enter/Space on it drops (the same drop()); Delete/Backspace
+  // unplugs a carried cable; Esc (anywhere) or a pointer press cancels. A
+  // visually hidden live region says what is picked up.
+  import { tick, untrack } from 'svelte';
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
@@ -86,6 +93,13 @@
     if (!mod) return 'audio';
     const d = moduleDef(mod.kind);
     return (dir === 'in' ? d.inputs : d.outputs)[port]?.signal ?? 'audio';
+  }
+
+  function portName(m: number, dir: 'in' | 'out', port: number): string {
+    const mod = track.modules.find((x) => x.idx === m);
+    if (!mod) return '';
+    const d = moduleDef(mod.kind);
+    return (dir === 'in' ? d.inputs : d.outputs)[port]?.name ?? '';
   }
 
   // ---- jack positions --------------------------------------------------------
@@ -155,6 +169,8 @@
     at: Pt;
     /** Last pointer position (viewport), to re-derive `at` after a scroll. */
     client: Pt;
+    /** Keyboard pick: the jack it was picked up from (`at` follows focus, not the pointer). */
+    kbd?: End & { dir: 'in' | 'out' };
   };
   let drag = $state<Drag | null>(null);
 
@@ -183,6 +199,7 @@
   }
 
   function jackDown(e: PointerEvent, m: number, dir: 'in' | 'out', port: number) {
+    if (drag?.kbd) drag = null; // a press cancels a keyboard pick
     if (e.button !== 0 || !content || drag) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
@@ -229,6 +246,66 @@
     el.addEventListener('lostpointercapture', cancel);
     window.addEventListener('keydown', esc, true);
   }
+
+  // ---- keyboard patching -------------------------------------------------------
+  function jackKey(e: KeyboardEvent, m: number, dir: 'in' | 'out', port: number) {
+    const k = e.key;
+    if (drag?.kbd && (k === 'Delete' || k === 'Backspace')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const d = drag;
+      drag = null;
+      if (d.carry) drop(d, null); // dropped on nothing: unplug
+      return;
+    }
+    if (k !== 'Enter' && k !== ' ') return;
+    e.preventDefault();
+    e.stopPropagation(); // Space must not also toggle play
+    if (e.repeat) return;
+    if (drag?.kbd) {
+      const d = drag;
+      drag = null;
+      drop(d, e.currentTarget as HTMLElement); // same rules as a pointer drop
+      return;
+    }
+    if (drag || !content) return; // a pointer drag is in progress
+    const at = pos[key(m, dir, port)] ?? { x: 0, y: 0 };
+    const existing = dir === 'in' ? track.cables.find((c) => c.to.m === m && c.to.port === port) : undefined;
+    const kbd = { m, port, dir };
+    drag = existing
+      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at, client: { x: 0, y: 0 }, kbd }
+      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at, client: { x: 0, y: 0 }, kbd };
+  }
+  /** The free end of a keyboard-picked cable follows focus from jack to jack. */
+  function jackFocus(m: number, dir: 'in' | 'out', port: number) {
+    if (drag?.kbd) drag.at = pos[key(m, dir, port)] ?? drag.at;
+  }
+  // Esc anywhere cancels a keyboard pick (a carried cable snaps back).
+  $effect(() => {
+    if (!drag?.kbd) return;
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      drag = null;
+    };
+    window.addEventListener('keydown', esc, true);
+    return () => window.removeEventListener('keydown', esc, true);
+  });
+  // Another track's rack: a pick from this one is dropped.
+  $effect(() => {
+    void track.id;
+    untrack(() => { if (drag?.kbd) drag = null; });
+  });
+  const pickedText = $derived.by(() => {
+    const k = drag?.kbd;
+    if (!k) return '';
+    const what = `${titles.get(k.m) ?? ''} ${portName(k.m, k.dir, k.port)}`;
+    const then = k.dir === 'in' && drag?.carry
+      ? 'Enter on another input to move the cable, Delete to unplug it, Esc to cancel'
+      : `Enter on ${drag?.fixed.dir === 'out' ? 'an input' : 'an output'} to connect, Esc to cancel`;
+    return `Picked up ${what}. ${then}.`;
+  });
 
   function drop(d: Drag, under: Element | null) {
     const t = under?.closest<HTMLElement>('[data-jack]');
@@ -444,6 +521,23 @@
     return cats.map((c) => ({ category: c, modules: CATALOG.modules.filter((m) => m.category === c) }));
   });
   let menuOpen = $state(false);
+  /** Arrow keys move between the menu's items (wrapping); Home/End jump. */
+  function menuKey(e: KeyboardEvent) {
+    const items = [...(menuEl?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    const n = items.length;
+    const to =
+      e.key === 'ArrowDown' ? (i + 1) % n
+      : e.key === 'ArrowUp' ? (i <= 0 ? n - 1 : i - 1)
+      : e.key === 'Home' ? 0
+      : e.key === 'End' ? n - 1
+      : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    items[to].focus();
+  }
   let menuEl = $state<HTMLElement | null>(null);
   let menuBtn = $state<HTMLElement | null>(null);
 
@@ -522,7 +616,7 @@
         onclick={() => (menuOpen = !menuOpen)}
       >+ Add module</button>
       {#if menuOpen}
-        <div class="menu" role="menu" data-testid="add-menu" bind:this={menuEl}>
+        <div class="menu" role="menu" tabindex="-1" data-testid="add-menu" bind:this={menuEl} onkeydown={menuKey}>
           {#if full}
             <p class="full">Rack is full ({CATALOG.maxModules} modules). Remove one first.</p>
           {:else}
@@ -584,6 +678,8 @@
     </div>
   {/if}
 
+  <!-- Keyboard patching status (screen readers; the picked jack is ringed). -->
+  <p class="sr-only" data-testid="jack-status" aria-live="polite">{pickedText}</p>
   <div class="rail" data-testid="rail" bind:this={rail}>
     <div class="content" bind:this={content}>
       {#each modules as m (m.idx)}
@@ -595,6 +691,9 @@
           onparam={(i, v) => param(m.idx, i, v)}
           onremove={() => remove(m.idx)}
           onjackdown={(e, dir, port) => jackDown(e, m.idx, dir, port)}
+          onjackkey={(e, dir, port) => jackKey(e, m.idx, dir, port)}
+          onjackfocus={(dir, port) => jackFocus(m.idx, dir, port)}
+          isPicked={(dir, port) => !!drag?.kbd && drag.kbd.m === m.idx && drag.kbd.dir === dir && drag.kbd.port === port}
           tempo={p.tempo}
           samples={moduleDef(m.kind).id === 'sample_player' ? sampleOptions : null}
           onsampledrop={moduleDef(m.kind).id === 'sample_player' ? (e) => void dropSample(e, m.idx) : undefined}
@@ -659,4 +758,5 @@
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }
   .plug { opacity: 0.95; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 </style>

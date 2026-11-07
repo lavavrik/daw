@@ -9,7 +9,7 @@
     "build:engine": "node scripts/build-engine.mjs",
     "dev": "npm run build:engine && vite",
     "preview": "npm run build:engine && vite build && vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json --output human",
+    "check": "svelte-check --tsconfig ./tsconfig.json --output human --fail-on-warnings",
     "test": "npm run check && cargo test --workspace && npm run build:engine && vitest run",
     "test:e2e": "playwright test"
   },

@@ -3,7 +3,7 @@ import { computePeaks } from '../../audio/peaks';
 import { Project } from '../../state/project.svelte';
 import { addAudioClip, addAudioTrack, clipGainLinear, setAudioClip, ticksPerSecond } from '../../state/audio-actions';
 import {
-  FINE_FPP, MIN_FPP, clipEnvelope, clipFrameAt, clipMap, clipSeams, columns, fileMap, fitView, pickSource, spanText, zoomAt,
+  FINE_FPP, MIN_FPP, clipEnvelope, keyView, clipFrameAt, clipMap, clipSeams, columns, fileMap, fitView, pickSource, spanText, zoomAt,
 } from './waveMath';
 import type { WaveSource } from './waveMath';
 
@@ -207,5 +207,23 @@ describe('waveMath', () => {
     expect(spanText(60_000, 48000)).toBe('1.25 s');
     expect(spanText(125, 48000)).toBe('2.6 ms · 125 samples');
     expect(spanText(24_000, 48000)).toBe('500 ms · 24000 samples');
+  });
+
+  it('keys zoom at the centre, scroll and fit', () => {
+    const lim = { frames: 100_000, width: 500, minFpp: MIN_FPP };
+    const v = { frame0: 20_000, framesPerPx: 40 };
+    const centre = v.frame0 + 250 * 40;
+    const zin = keyView(v, '+', false, lim)!;
+    expect(zin.framesPerPx).toBe(20);
+    expect(zin.frame0 + 250 * zin.framesPerPx).toBeCloseTo(centre, 6);
+    expect(keyView(v, '=', false, lim)).toEqual(zin);
+    const zout = keyView(v, '-', false, lim)!;
+    expect(zout.framesPerPx).toBe(80);
+    expect(zout.frame0 + 250 * zout.framesPerPx).toBeCloseTo(centre, 6);
+    // Arrows scroll an eighth of the view (Shift: a whole view).
+    expect(keyView(v, 'ArrowRight', false, lim)).toEqual({ frame0: 20_000 + 500 * 40 / 8, framesPerPx: 40 });
+    expect(keyView(v, 'ArrowLeft', true, lim)).toEqual({ frame0: 0, framesPerPx: 40 });
+    expect(keyView(v, '0', false, lim)).toEqual({ frame0: 0, framesPerPx: 200 });
+    expect(keyView(v, 'a', false, lim)).toBeNull();
   });
 });

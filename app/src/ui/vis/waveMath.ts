@@ -356,3 +356,27 @@ export interface WaveOverlay {
   /** CSS x of view frame `f`. */
   x(f: number): number;
 }
+
+/**
+ * The keyboard on a focused waveform: + / = zoom in 2× and - zooms out at
+ * the centre, ← / → scroll an eighth of the view (Shift: a whole view), 0
+ * fits. Null for any other key.
+ */
+export function keyView(v: View, key: string, shift: boolean, lim: Limits): View | null {
+  const w = Math.max(1, lim.width);
+  switch (key) {
+    case '+':
+    case '=':
+      return zoomAt(v, w / 2, 0.5, lim);
+    case '-':
+    case '_':
+      return zoomAt(v, w / 2, 2, lim);
+    case 'ArrowLeft':
+    case 'ArrowRight':
+      return scrollBy(v, (key === 'ArrowLeft' ? -1 : 1) * (shift ? w : w / 8), lim);
+    case '0':
+      return fitView(lim.frames, w, lim.minFpp);
+    default:
+      return null;
+  }
+}

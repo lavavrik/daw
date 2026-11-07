@@ -11,7 +11,10 @@
   // the zoom at 256 frames per pixel with a note; a failed decode keeps the
   // peaks.
   //
-  // Drawing (all inside the shared frame loop, never through Svelte state):
+  // Drawing (all inside the shared frame loop, never through Svelte state).
+  // The view is in the loop only while it has work (waveDriver.ts): a
+  // change kicks it in, and it leaves once nothing is dirty and `live`
+  // (playback) is off, so a stopped, idle waveform costs no frames.
   //   - the waveform is rendered into an offscreen buffer only when the
   //     zoom, the scroll, the data or the size changes;
   //   - the visible canvas is that buffer plus the caller's `overlay`,
@@ -23,10 +26,18 @@
   //   marked red at its lane's edges (columns: only when drawn from floats,
   //   the peaks clamp at full scale).
   //
-  // Controls: ⌘/Ctrl-wheel or a trackpad pinch (a ctrl-wheel) zooms at the
-  // pointer; the wheel or Shift-wheel scrolls (a plain wheel passes to the
-  // page while the whole file is shown); a double-click fits. The readout
-  // shows the visible span ("1.25 s", "2.6 ms · 125 samples").
+  // Controls: ⌘/Ctrl-wheel or a trackpad pinch (Chrome/Firefox send a
+  // ctrl-wheel; Safari's gesture events are handled too) zooms at the
+  // pointer; the wheel or Shift-wheel scrolls (while the whole file is shown
+  // a vertical wheel passes to the panel, a horizontal swipe is swallowed so
+  // it never navigates back); a double-click fits. Focused (Tab): + / -
+  // zoom at the centre, ← / → scroll (Shift: a page), 0 fits
+  // (waveMath.keyView). It is a slider for assistive tech: aria-valuenow is
+  // the scroll position (%), aria-valuetext the visible span and where it
+  // starts. The readout shows the span ("1.25 s", "2.6 ms · 125 samples").
+  //
+  // The decoded floats are held (fineSamples.retain) while mounted with the
+  // same sample; the last view to let go releases them.
   //
   // Test hooks: the canvas's data-draw ('none' | 'peaks' | 'floats' |
   // 'line' | 'dots') and data-fpp (frames per CSS px); the readout is
@@ -35,14 +46,16 @@
   import { fineSamples } from '../../audio/fineSamples';
   import type { FineRequest } from '../../audio/fineSamples';
   import { frameLoop } from './frameLoop';
+  import { createWaveDriver } from './waveDriver';
+  import type { WaveDriver } from './waveDriver';
   import {
-    FINE_FPP, MIN_FPP, clampView, columns, fitView, sampleAt, scrollBy, spanText, zoomAt,
+    FINE_FPP, MIN_FPP, clampView, columns, fitView, keyView, sampleAt, scrollBy, spanText, zoomAt,
   } from './waveMath';
   import type { FrameMap, Limits, View, WaveOverlay, WaveSource } from './waveMath';
 
   let {
     base, map, fine, height, color, testid, label,
-    overlay = null, overlayKey = '', playhead = null,
+    overlay = null, overlayKey = '', playhead = null, live = false,
   }: {
     /** The sample's axis and peaks (waveMath.waveBase), or null: nothing to draw. */
     base: WaveSource | null;
@@ -59,6 +72,8 @@
     overlayKey?: string;
     /** The playhead's view frame now, or null (hidden); polled every frame. */
     playhead?: (() => number | null) | null;
+    /** Playback is running: stay in the frame loop to move the playhead. */
+    live?: boolean;
   } = $props();
 
   let wrap: HTMLDivElement;
@@ -76,6 +91,16 @@
   let dirtyWave = true;
   let dirtyComp = true;
   let shownHead = NaN;
+  let driver: WaveDriver | null = null;
+  /** The waveform must be rebuilt / only the overlay recomposited; both join the frame loop. */
+  const markWave = () => {
+    dirtyWave = true;
+    driver?.kick();
+  };
+  const markComp = () => {
+    dirtyComp = true;
+    driver?.kick();
+  };
 
   const fs = fineSamples();
   const status = () => (fine ? fs.status(fine.key) : 'none');
@@ -88,17 +113,24 @@
     const lim = limits();
     view = clampView(v, lim);
     fitted = view.framesPerPx >= fitView(lim.frames, lim.width, lim.minFpp).framesPerPx - 1e-9 && view.frame0 === 0;
-    dirtyWave = true;
+    markWave();
   }
 
   // Any input change redraws (the frame loop picks it up).
   $effect(() => {
     void base; void map; void fine?.key; void height; void color;
-    dirtyWave = true;
+    markWave();
   });
   $effect(() => {
     void overlayKey; void overlay;
-    dirtyComp = true;
+    markComp();
+  });
+  $effect(() => {
+    if (live) driver?.kick();
+  });
+  // Hold this sample's floats while shown; the last view to let go frees them.
+  $effect(() => {
+    if (fine) return fs.retain(fine.key);
   });
 
   function size(c: HTMLCanvasElement, w: number, h: number) {
@@ -119,7 +151,11 @@
     const ctx = buf.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, W, H);
-    readoutEl.textContent = base ? spanText(cssW * view.framesPerPx, base.rate) : '';
+    const span = base ? spanText(cssW * view.framesPerPx, base.rate) : '';
+    readoutEl.textContent = span;
+    const room = map.end - cssW * view.framesPerPx;
+    wrap.setAttribute('aria-valuenow', String(room > 0 ? Math.round((view.frame0 / room) * 100) : 0));
+    wrap.setAttribute('aria-valuetext', base ? `${span} visible from ${(view.frame0 / base.rate).toFixed(3)} s` : 'no audio');
     noteEl.hidden = !(tooBig() && view.framesPerPx <= FINE_FPP * dpr * 1.0001);
     canvas.dataset.fpp = String(view.framesPerPx);
     if (!base) {
@@ -235,11 +271,6 @@
 
   /** The frame-loop consumer: redraw what is dirty, then move the playhead. */
   function tick() {
-    const d = Math.max(1, Math.round(window.devicePixelRatio || 1));
-    if (d !== dpr) {
-      dpr = d;
-      dirtyWave = true;
-    }
     if (dirtyWave) render();
     if (dirtyComp) composite();
     const f = playhead?.() ?? null;
@@ -266,45 +297,104 @@
       setView(zoomAt(view, px, factor, lim));
       return;
     }
-    if (fitted) return; // nothing to scroll: let the panel scroll
+    const horizontal = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    // Fitted: a vertical wheel scrolls the panel; a horizontal swipe is
+    // swallowed (it would navigate back).
+    if (fitted && !horizontal) return;
     e.preventDefault();
-    const d = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * unit;
-    setView(scrollBy(view, d, lim));
+    setView(scrollBy(view, (horizontal ? e.deltaX : e.deltaY) * unit, lim));
+  }
+
+  // Safari's trackpad pinch (GestureEvent: scale since gesturestart).
+  type Gesture = Event & { scale: number; clientX?: number };
+  let pinch: { view: View; px: number } | null = null;
+  function gestureStart(e: Event) {
+    e.preventDefault();
+    const g = e as Gesture;
+    const rect = canvas.getBoundingClientRect();
+    pinch = { view, px: g.clientX !== undefined ? g.clientX - rect.left : cssW / 2 };
+  }
+  function gestureChange(e: Event) {
+    e.preventDefault();
+    const g = e as Gesture;
+    if (pinch && base && g.scale > 0) setView(zoomAt(pinch.view, pinch.px, 1 / g.scale, limits()));
+  }
+  const gestureEnd = () => (pinch = null);
+
+  function key(e: KeyboardEvent) {
+    if (!base || e.metaKey || e.ctrlKey || e.altKey) return;
+    const v = keyView(view, e.key, e.shiftKey, limits());
+    if (!v) return;
+    e.preventDefault();
+    if (e.key === '0') fit();
+    else setView(v);
   }
 
   function fit() {
     fitted = true;
-    dirtyWave = true;
+    markWave();
+  }
+
+  /** Device pixel ratio, re-read when it changes (a window moved to another display, browser zoom). */
+  function watchDpr(): () => void {
+    let mq: MediaQueryList | null = null;
+    const on = () => {
+      mq?.removeEventListener('change', on);
+      const d = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      if (d !== dpr) {
+        dpr = d;
+        markWave();
+      }
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      mq.addEventListener('change', on);
+    };
+    on();
+    return () => mq?.removeEventListener('change', on);
   }
 
   onMount(() => {
+    const d = createWaveDriver({
+      loop: frameLoop(), el: wrap, frame: tick,
+      idle: () => !dirtyWave && !dirtyComp && !live,
+    });
+    driver = d;
     const ro = new ResizeObserver(() => {
       const w = wrap.clientWidth;
       if (w !== cssW) {
         cssW = w;
-        dirtyWave = true;
+        markWave();
       }
     });
     ro.observe(wrap);
     cssW = wrap.clientWidth;
+    const offDpr = watchDpr();
     canvas.addEventListener('wheel', wheel, { passive: false });
-    const offFine = fs.subscribe(() => (dirtyWave = true));
-    const offLoop = frameLoop().add({ want: 0, el: wrap, frame: tick });
+    canvas.addEventListener('gesturestart', gestureStart);
+    canvas.addEventListener('gesturechange', gestureChange);
+    canvas.addEventListener('gestureend', gestureEnd);
+    const offFine = fs.subscribe(markWave);
+    d.kick();
     return () => {
+      d.stop();
+      driver = null;
       ro.disconnect();
+      offDpr();
       canvas.removeEventListener('wheel', wheel);
+      canvas.removeEventListener('gesturestart', gestureStart);
+      canvas.removeEventListener('gesturechange', gestureChange);
+      canvas.removeEventListener('gestureend', gestureEnd);
       offFine();
-      offLoop();
     };
   });
 </script>
 
-<div class="wv" bind:this={wrap} data-testid={testid} style:height="{height}px">
-  <canvas
-    bind:this={canvas} style:height="{height}px" aria-label={label}
-    title="⌘/Ctrl-wheel or pinch: zoom · wheel: scroll · double-click: fit"
-    ondblclick={fit}
-  ></canvas>
+<div
+  class="wv" bind:this={wrap} data-testid={testid} style:height="{height}px"
+  role="slider" tabindex="0" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={0}
+  title="⌘/Ctrl-wheel or pinch: zoom · wheel: scroll · double-click: fit · keys: + − ← → 0"
+  onkeydown={key}
+>
+  <canvas bind:this={canvas} style:height="{height}px" aria-hidden="true" ondblclick={fit}></canvas>
   <div class="ph" bind:this={headEl} style="display: none" aria-hidden="true"></div>
   <span class="readout" data-testid="wave-zoom-text" bind:this={readoutEl}></span>
   <span class="note" bind:this={noteEl} hidden>Sample-level zoom: files up to 256 MB</span>
@@ -312,7 +402,8 @@
 
 <style>
   .wv { position: relative; width: 100%; overflow: hidden; background: #131417; border: 1px solid #2a2c33; border-radius: 3px; box-sizing: border-box; }
-  canvas { display: block; width: 100%; cursor: zoom-in; }
+  .wv:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
+  canvas { display: block; width: 100%; }
   .ph { position: absolute; top: 0; left: 0; width: 1px; height: 100%; background: #fff; pointer-events: none; will-change: transform; }
   .readout, .note {
     position: absolute; top: 2px; padding: 0 4px; border-radius: 2px; background: #15161ad9;

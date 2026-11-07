@@ -53,6 +53,7 @@ import type { EngineCommand } from './commands';
 import { serialize } from './serialize';
 import { validate } from './schema';
 import type { MixParamsJson, ProjectJson } from './schema';
+import { fineSamples } from '../audio/fineSamples';
 
 export type { SampleDecoder };
 
@@ -391,6 +392,7 @@ export function blankState(p: Project) {
   p.nextSampleId = 0;
   p.sampleFiles.clear();
   p.sampleMeta.clear(); // a new session's ids are not the old ones
+  fineSamples().clear(); // the waveform's decoded floats (plan 12)
   p.peaksVersion++;
   p.arenaFloats = 0; // RESET_ALL empties the engine's sample arena
 }

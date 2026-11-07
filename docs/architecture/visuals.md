@@ -244,19 +244,31 @@ per pixel. The pairs are quantised outward (plan 9), so a column is never
 smaller than the truth and at most one pair plus 1/127 bigger. Below 256 the
 peaks have nothing finer, so the view asks `fineSamples` for the sample's
 floats: the kept original bytes (`p.sampleFiles`) decoded with the engine's
-own `AudioContext` (`decodeBytes`), so the frames are exactly the ones the
-engine plays (its rate, its 2 ms tail fade). A column is then the exact
+own `AudioContext` (`decodeFine`), so the frames are exactly the ones the
+engine plays (its rate, its 2 ms tail fade). `decodeFine` keeps the
+AudioBuffer's own channel arrays (the fade is applied in place); the only
+big synchronous copy is the encoded bytes handed to `decodeAudioData`
+(which detaches them). Measured in Chromium on an 11-minute 48 kHz stereo
+WAV (127 MB, 63.4 M floats): the decode takes 130–150 ms, off the main
+thread; the longest main-thread stall is 21–24 ms (the bytes copy), against
+44 ms for the copying `decodeBytes` path. A column is then the exact
 min/max of the frames it touches (`waveMath.test.ts`, *columns equal
 brute-force min/max at every zoom*). A stem never needs its samples until
 someone zooms into it.
 
 **The budget.** `fineSamples` keeps one sample, up to 256 MiB of floats
 (about 11 minutes of 48 kHz stereo); a new sample evicts the old before it
-decodes, and a decode overtaken by another sample is dropped. A file whose
+decodes. Decodes run one at a time (`decodeAudioData` cannot be cancelled):
+a request made meanwhile waits, the overtaken result is dropped when it
+lands, and only the newest waiting request starts, so two samples' floats
+never sit in memory together. Views hold their sample (`retain`) while
+mounted; the last to let go releases the floats (abandoning a running
+decode), and a project load clears them (`blankState`). A file whose
 floats would not fit (estimated from `sampleMeta` before decoding) is never
 decoded: the zoom stops at 256 frames per pixel with the note
 "Sample-level zoom: files up to 256 MB". A failed decode is remembered and
-the view keeps the peaks at the same limit. While the floats decode, level
+the view keeps the peaks at the same limit; one that failed because an
+audio restart closed the context is not (the next engine decodes it). While the floats decode, level
 0 is drawn stretched, never a blank.
 
 **Axis.** A view shows "view frames": file frames at the rate the peaks
@@ -276,7 +288,10 @@ changes. Stereo is two lanes. Below 1 frame per device pixel a line runs
 through the samples, with dots from 6 px per sample; a sample at |x| ≥ 1 is
 marked red at its lane's edges (columns mark it only when drawn from floats:
 the peaks clamp at full scale). The work runs in a want-0 frame-loop
-consumer on the view's element, so it costs nothing off screen.
+consumer on the view's element, registered only while there is work
+(`waveDriver.ts`): a change (zoom, scroll, size, data, overlay) or playback
+starting adds it, and it removes itself once nothing is dirty and playback
+is off. A stopped, idle waveform costs no frames, on screen or not.
 
 **Why the playhead is a DOM element.** Moving a 1 px element with a CSS
 transform is a compositor job; redrawing even the cached buffer would cost a
@@ -286,8 +301,14 @@ changes, so playback never redraws a canvas. The Clip tab shows it while the
 song playhead is inside the clip (Song mode).
 
 **Controls.** ⌘/Ctrl-wheel or a trackpad pinch zooms at the pointer (the
-frame under it stays put); the wheel or Shift-wheel scrolls (a plain wheel
-passes to the panel while the whole file is shown); a double-click fits.
+frame under it stays put; Chrome and Firefox send a pinch as a ctrl-wheel,
+Safari's `gesture*` events are handled too); the wheel or Shift-wheel
+scrolls (while the whole file is shown a vertical wheel passes to the
+panel and a horizontal swipe is swallowed, so it never navigates back); a
+double-click fits. Focused (Tab), + / − zoom at the centre, ← / → scroll
+an eighth of the view (Shift: a whole view) and 0 fits (`keyView`). The
+view is a `slider` for assistive tech: `aria-valuenow` is the scroll
+position in %, `aria-valuetext` the visible span and where it starts.
 The readout shows the visible span ("1.25 s", "2.6 ms · 125 samples").
 Test hooks: the canvas's `data-draw` (`none`, `peaks`, `floats`, `line`,
 `dots`) and `data-fpp`; `cliptab-wave`, `row-wave-<r>`, `row-wave-btn-<r>`,

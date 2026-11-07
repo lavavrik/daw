@@ -263,7 +263,9 @@ SONG mode, at their recorded speed.
   playhead while it plays. **⌘/Ctrl-wheel** or a pinch zooms, down to single
   samples (dots); the wheel scrolls; double-click shows the whole clip. The
   corner says how much is visible ("2.6 ms · 125 samples"); samples that hit
-  full scale are marked red. Sample-level zoom works for files up to 256 MB.
+  full scale are marked red. Click it and use **+**/**−**, **←**/**→** and
+  **0** from the keyboard. Sample-level zoom works for files up to ~11 min of
+  48 kHz stereo (256 MB decoded); longer ones stop at 256 samples per pixel.
   An audio track has no Step grid, Piano roll or Instrument.
 - Audio tracks are silent in PAT mode. Each has its own mixer strip (fader,
   sends, inserts, sidechain key).

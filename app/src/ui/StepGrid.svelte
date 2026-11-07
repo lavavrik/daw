@@ -25,7 +25,7 @@
   import { importSample } from '../state/sampleImport';
   import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
   import type { DrumTrack, Project } from '../state/project.svelte';
-  import { decodeBytes } from '../audio/samples';
+  import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
 
@@ -70,14 +70,7 @@
     if (!meta) return null;
     const base = waveBase(meta, engine.sampleRate);
     const f = p.sampleFiles.get(row.sampleId);
-    const rate = engine.sampleRate;
-    const fine = f
-      ? {
-          key: `${f.hash}@${rate}`, bytes: f.bytes, name: f.name,
-          floats: Math.ceil(meta.seconds * rate) * Math.min(2, meta.channels),
-          decode: (b: ArrayBuffer, n: string) => decodeBytes(b.slice(0), n, engine.context),
-        }
-      : null;
+    const fine = f ? fineRequestFor(f, meta, engine.context) : null;
     return { r, row, sampleId: row.sampleId, base, map: fileMap(base.frames), fine };
   });
 

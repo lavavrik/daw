@@ -28,7 +28,7 @@
   // timeline's clips: tests count `[data-testid^="clip-"]`).
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
-  import { decodeBytes } from '../audio/samples';
+  import { fineRequestFor } from '../audio/fineSamples';
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
   import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, setAudioClip, ticksPerSecond } from '../state/audio-actions';
   import WaveformView from './vis/WaveformView.svelte';
@@ -74,13 +74,7 @@
     void p.peaksVersion;
     const id = clip?.sampleId ?? null;
     const f = id !== null ? p.sampleFiles.get(id) : undefined;
-    if (!f || !meta) return null;
-    const rate = engine.sampleRate;
-    return {
-      key: `${f.hash}@${rate}`, bytes: f.bytes, name: f.name,
-      floats: Math.ceil(meta.seconds * rate) * Math.min(2, meta.channels),
-      decode: (b: ArrayBuffer, n: string) => decodeBytes(b.slice(0), n, engine.context),
-    };
+    return f && meta ? fineRequestFor(f, meta, engine.context) : null;
   });
   const overlayKey = $derived(clip ? [clip.gain, clip.fadeIn, clip.fadeOut, clip.len, clip.offset, clip.loop, p.tempo].join('|') : '');
 
@@ -205,7 +199,7 @@
         <WaveformView
           base={wave.base} map={wave.map} {fine} height={120} color={track.color}
           testid="cliptab-wave" label="Waveform of {name}"
-          overlay={drawOverlay} {overlayKey} {playhead}
+          overlay={drawOverlay} {overlayKey} {playhead} live={p.playing && p.mode === 'song'}
         />
       {/key}
     {/if}

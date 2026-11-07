@@ -10,7 +10,8 @@ import { createHistory } from '../history/history';
 import { setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
-import { addAudioFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
+import { addAudioFixture, addAutomationFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
+import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -255,6 +256,83 @@ describe('loadProject', () => {
     const reverbs = p.tracks.flatMap((t) => (t.kind === 'synth' ? t.modules : [])).filter((m) => m.kind === moduleDef('reverb').kind);
     expect(reverbs).toHaveLength(8);
     expect(checkLog(e.log).errors).toEqual([]);
+  });
+
+  it('projectCommands emits lanes after keys', async () => {
+    const { p: src } = await buildFixture();
+    await addAudioFixture(src);
+    const lanes = addAutomationFixture(src);
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    const e = fakeEngine();
+    expect(await loadProject(p, e, json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    // checkLog: every lane target exists and is automatable, ticks are unique, values in range, lanes after everything else.
+    expect(checkLog(e.log).errors).toEqual([]);
+    expect(serialize(p)).toEqual(json);
+    const ops = e.log.flatMap((x) => ('op' in x ? [x] : []));
+    const at = (op: number) => ops.map((x) => x.op).indexOf(op);
+    const lastOf = (op: number) => ops.map((x) => x.op).lastIndexOf(op);
+    expect(lastOf(Op.MIX_SET_KEY)).toBeLessThan(at(Op.AUTO_LANE_SET));
+    expect(lastOf(Op.AUTO_LANE_ENABLE)).toBeLessThan(at(Op.SET_TEMPO));
+    // Per lane: AUTO_LANE_SET, its points (idx = position in the JSON), then AUTO_LANE_ENABLE.
+    const auto = ops.slice(at(Op.AUTO_LANE_SET), lastOf(Op.AUTO_LANE_ENABLE) + 1);
+    expect(auto.map((x) => x.op)).toEqual([
+      Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE, // Drums send A
+      Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE, // Bass fader
+      Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE, // Bass cutoff
+      Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE, // Master ceiling (disabled)
+    ]);
+    const bassSlot = json.tracks.find((t) => t.name === 'Bass')!.slot;
+    expect(auto[4].args).toEqual([lanes.fader.lane, 1, bassSlot, 0]);
+    expect(auto[5].args).toEqual([lanes.fader.lane * 512, 0, -24, 0]);
+    expect(auto[6].args).toEqual([lanes.fader.lane * 512 + 1, 3840, 0, 1]);
+    expect(auto[9].args).toEqual([lanes.cutoff.lane, 2, bassSlot, 4 * 16 + paramIndex(moduleDef('filter'), 'cutoff')]);
+    expect(auto.at(-1)!.args).toEqual([lanes.ceiling.lane, 0, 0, 0]);
+    // The state: lanes with their points sorted by tick, the Master row's lane in the mixer.
+    const bass = p.tracks.find((t) => t.name === 'Bass')!;
+    expect(bass.automation.map((l) => l.target)).toEqual([{ kind: 'mix', param: 'fader' }, { kind: 'rack', module: 4, param: 'cutoff' }]);
+    expect(p.mixer.automation.map((x) => [x.channel, x.lane.enabled])).toEqual([['master', false]]);
+    // Restarting the audio replays the same lanes: projectCommands of the live project.
+    const again = projectCommands(serialize(p), new Map(json.samples.map((s) => [s.id, s.id])));
+    expect(again.commands.filter((c) => c[0] >= Op.AUTO_LANE_SET && c[0] <= Op.AUTO_LANE_ENABLE).map(([op, a = 0, b = 0, c = 0, d = 0]) => [op, a, b, c, d]))
+      .toEqual(auto.map((x) => [x.op, ...x.args]));
+  });
+
+  it('a lane on a module the FX pool drops goes with it', async () => {
+    const { p: src } = await buildFixture();
+    const json = roundJson(serialize(src));
+    const synth = json.tracks[2];
+    if (synth.kind !== 'synth') throw new Error('kind');
+    for (let i = 0; i < 9; i++) synth.patch.modules.push({ idx: 20 + i, id: 'reverb', params: {} });
+    synth.automation.push({ lane: 5, enabled: true, target: { rack: [28, 'size'] }, points: [[0, 0.5, 0]] }); // a dropped reverb
+    synth.automation.push({ lane: 6, enabled: true, target: { rack: [20, 'size'] }, points: [[0, 0.5, 0]] }); // a kept one
+    const p = new Project();
+    const e = fakeEngine();
+    const warnings = await loadProject(p, e, json, filesOf(json, src), fakeDecoder);
+    expect(warnings.filter((w) => /automation/i.test(w))).toHaveLength(1);
+    expect(checkLog(e.log).errors).toEqual([]);
+    expect(p.tracks[2].automation.map((l) => l.lane)).toEqual([6]);
+  });
+
+  it('a v2 project loads and saves as v3', async () => {
+    const v2 = JSON.parse(readFileSync(new URL('./testdata/v2-fixture.json', import.meta.url), 'utf8'));
+    const { p: src } = await buildFixture();
+    const { ids } = await addAudioFixture(src);
+    // The fixture's sample files (same ids and content hashes as when it was frozen).
+    const files = new Map<string, ArrayBuffer>((v2.samples as { id: number; file: string }[]).map((s) => [s.file, src.sampleFiles.get(s.id)!.bytes]));
+    expect(ids).toEqual([3, 4]);
+    const p = new Project();
+    const e = fakeEngine();
+    expect(await loadProject(p, e, v2, files, fakeDecoder)).toEqual([]);
+    expect(checkLog(e.log).errors).toEqual([]);
+    const out = serialize(p);
+    expect(out.schemaVersion).toBe(3);
+    expect(out).toEqual({
+      ...v2,
+      schemaVersion: 3,
+      tracks: v2.tracks.map((t: object) => ({ ...t, automation: [] })),
+      mixer: { ...v2.mixer, automation: [] },
+    });
   });
 
   it('a sidechain key the engine cannot take is dropped with a warning', async () => {

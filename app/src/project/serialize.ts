@@ -7,9 +7,9 @@ import type { MixTarget } from '../audio/mixerCatalog';
 import { accepts } from '../state/mixer-actions';
 import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
-import type { AudioTrack, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
+import type { AudioTrack, AutomationLane, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
 import { SCHEMA_VERSION } from './schema';
-import type { AudioTrackJson, ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
+import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
 
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -38,6 +38,16 @@ function clipsOf(t: PatternTrack): ClipJson[] {
     if (pat) out.push({ idx: c.idx, pattern: pat.engineIdx, start: c.start, len: c.len, offset: c.offset });
   }
   return out;
+}
+
+/** A lane as saved: points in engine idx order (dense, so point i is idx i). */
+export function laneJson(l: AutomationLane): LaneJson {
+  return {
+    lane: l.lane,
+    enabled: l.enabled,
+    target: l.target.kind === 'mix' ? { mix: l.target.param } : { rack: [l.target.module, l.target.param] },
+    points: [...l.points].sort((a, b) => a.idx - b.idx).map((x) => [x.tick, x.value, x.hold ? 1 : 0]),
+  };
 }
 
 /**
@@ -69,6 +79,7 @@ export function serialize(p: Project): ProjectJson {
     }),
     currentPattern: currentPattern(t).engineIdx,
     clips: clipsOf(t),
+    automation: t.automation.map(laneJson),
   });
 
   const synth = (t: SynthTrack): SynthTrackJson => ({
@@ -85,6 +96,7 @@ export function serialize(p: Project): ProjectJson {
     })),
     currentPattern: currentPattern(t).engineIdx,
     clips: clipsOf(t),
+    automation: t.automation.map(laneJson),
   });
 
   const audio = (t: AudioTrack): AudioTrackJson => ({
@@ -96,6 +108,7 @@ export function serialize(p: Project): ProjectJson {
       idx: c.idx, sample: use(c.sampleId), start: c.start, len: c.len, offset: c.offset, loop: c.loop,
       gain: c.gain, fadeIn: c.fadeIn, fadeOut: c.fadeOut,
     })),
+    automation: t.automation.map(laneJson),
   });
 
   const tracks = p.tracks.map((t): TrackJson => (t.kind === 'drum' ? drum(t) : t.kind === 'synth' ? synth(t) : audio(t)));
@@ -113,6 +126,7 @@ export function serialize(p: Project): ProjectJson {
     reverb: mixParams(p.mixer.reverb, 'return', MIX_REVERB),
     delay: mixParams(p.mixer.delay, 'return', MIX_DELAY),
     master: mixParams(p.mixer.master, 'master', MIX_MASTER),
+    automation: p.mixer.automation.map((x) => ({ channel: x.channel, ...laneJson(x.lane) })),
   };
   const samples = [...used].sort((a, b) => a - b).map((id) => {
     const f = p.sampleFiles.get(id)!;

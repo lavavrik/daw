@@ -5,9 +5,10 @@
 // in engine.rs) used to check that a load never sends an invalid command.
 import { moduleDef, paramIndex } from '../audio/catalog';
 import {
-  BAR_TICKS, MAX_CLIPS, MAX_CLIP_GAIN, MAX_MODULES, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SAMPLE_FLOATS,
-  MAX_SONG_TICKS, MIX_CHANNELS, MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE,
+  BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_CLIP_GAIN, MAX_MODULES, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS,
+  MAX_SAMPLE_FLOATS, MAX_SONG_TICKS, MIX_CHANNELS, MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE,
 } from '../audio/protocol';
+import { addLane, addPoint, setLaneEnabled } from '../state/automation-actions';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { addDrumTrack, addRow, selectTrack, setMetronome, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing, setTempo } from '../state/actions';
 import { setMix, setSidechain } from '../state/mixer-actions';
@@ -132,6 +133,65 @@ export async function buildAudioFixture() {
   return { p, ...(await addAudioFixture(p)) };
 }
 
+/**
+ * Automation lanes on a project that has a "Drums" and a "Bass" track
+ * (buildFixture, buildAutoFixture; Bass's rack has its filter at module 4):
+ * a send build-up on the drums (send A -60 -> 0 dB over two bars), a fader
+ * ride with a hold drop on Bass (-24 dB up to 0 dB over a bar, held, then
+ * -inf from bar 2.5), a filter-cutoff sweep on Bass's rack (200 Hz -> 8 kHz
+ * over two bars) and a disabled Master-row limiter-ceiling lane (0 -> -3 dB).
+ */
+export function addAutomationFixture(p: Project) {
+  const s = nullSink;
+  const drums = p.tracks.find((t) => t.name === 'Drums')!;
+  const bass = p.tracks.find((t) => t.name === 'Bass')!;
+  const send = addLane(p, s, drums.id, { kind: 'mix', param: 'send_a' })!;
+  addPoint(p, s, send.id, { tick: 0, value: -60 });
+  addPoint(p, s, send.id, { tick: 2 * BAR_TICKS, value: 0 });
+  const fader = addLane(p, s, bass.id, { kind: 'mix', param: 'fader' })!;
+  addPoint(p, s, fader.id, { tick: 0, value: -24 });
+  addPoint(p, s, fader.id, { tick: BAR_TICKS, value: 0, hold: true });
+  addPoint(p, s, fader.id, { tick: 1.5 * BAR_TICKS, value: -60 });
+  const cutoff = addLane(p, s, bass.id, { kind: 'rack', module: 4, param: 'cutoff' })!;
+  addPoint(p, s, cutoff.id, { tick: 0, value: 200 });
+  addPoint(p, s, cutoff.id, { tick: 2 * BAR_TICKS, value: 8000 });
+  const ceiling = addLane(p, s, 'master', { kind: 'mix', param: 'limiter_ceiling' })!;
+  addPoint(p, s, ceiling.id, { tick: 0, value: 0 });
+  addPoint(p, s, ceiling.id, { tick: 2 * BAR_TICKS, value: -3 });
+  setLaneEnabled(p, s, ceiling.id, false);
+  return { send, fader, cutoff, ceiling };
+}
+
+/**
+ * The export_auto.txt source: "Drums" (a kick on every beat of a sample 0.25 s
+ * long, clips over 3 bars) and "Bass" (STARTER_PATCHES[0], a note per beat,
+ * clips over 3 bars) at 128 BPM in Song mode, with addAutomationFixture's
+ * lanes and the Master-row lane enabled (all five play in the render).
+ */
+export async function buildAutoFixture() {
+  const p = new Project();
+  const s = nullSink;
+  p.name = 'Automation fixture';
+  setTempo(p, s, 128);
+  const ids: [number] = [0];
+  p.sampleFiles.set(0, await sampleFile('kick.wav', 'audio/wav', fakeAudio(40)));
+  p.nextSampleId = 1;
+  const drums = addDrumTrack(p, s)!;
+  setRowSample(p, s, drums.id, drums.rows[0].id, 0, 'kick');
+  for (const st of [0, 4, 8, 12]) setStep(p, s, drums.id, drums.rows[0].id, st, 110);
+  const bass = addSynthTrack(p, s, 'Bass', STARTER_PATCHES[0])!;
+  setPatternBars(p, s, bass.id, 1);
+  for (let b = 0; b < 4; b++) addNote(p, s, bass.id, { pitch: 36 + 7 * (b % 2), start: b * 960, len: 720, vel: 100 });
+  for (let bar = 0; bar < 3; bar++) {
+    addClip(p, s, drums.id, { start: bar * BAR_TICKS, patternId: drums.patterns[0].id });
+    addClip(p, s, bass.id, { start: bar * BAR_TICKS, patternId: bass.patterns[0].id });
+  }
+  const lanes = addAutomationFixture(p);
+  setLaneEnabled(p, s, lanes.ceiling.id, true);
+  setMode(p, s, 'song');
+  return { p, ids, drums, bass, lanes };
+}
+
 export type LogEntry = { op: number; args: number[] } | { sample: number };
 
 /**
@@ -221,6 +281,9 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
   let samples = new Set<number>();
   let racks = new Map<number, Map<number, number>>(); // slot -> idx -> kind
   let keysSent = false;
+  /** Automation lanes: their target (as sent), range and points' ticks by idx. */
+  let lanes = new Map<number, { target: string; min: number; max: number; ticks: Map<number, number> }>();
+  let autoSent = false;
   /** Staged audio-clip gain/fades per address (SOURCE/GAIN stage, SET commits). */
   let staged = new Map<number, { source: boolean; fades: number }>();
   const int = (v: number, lo: number, hi: number) => Number.isInteger(v) && v >= lo && v <= hi;
@@ -240,14 +303,55 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
       const ok = k === 'any' || have === k || (k === 'pattern' && (have === 'drum' || have === 'synth'));
       if (have === 'bad' || have === 'empty' || !ok) bad(`slot ${slot} is ${have}, need ${k}`);
     };
-    const afterKeys = () => keysSent && bad('sent after a sidechain key (keys must be last)');
+    const afterKeys = () => {
+      if (keysSent) bad('sent after a sidechain key (keys must be last)');
+      if (autoSent) bad('sent after an automation lane (lanes go after the tracks, mixer and keys)');
+    };
+    /** Range of an automation target as AUTO_LANE_SET names it (null: the engine refuses it). */
+    const autoRange = (kind: number, ch: number, id: number): { min: number; max: number } | null => {
+      if (kind === 1) {
+        const def = MIX_PARAMS[id];
+        if (!def || def.integer || !int(ch, 0, MIX_CHANNELS - 1)) return null;
+        if (ch < MAX_TRACKS && (kind === 1 && st.kinds[ch] === 'empty')) return null;
+        const ok = def.group === 'reverb' ? ch === MIX_REVERB : def.group === 'delay' ? ch === MIX_DELAY
+          : def.appliesTo.includes(ch < MAX_TRACKS ? 'track' : ch === MIX_REVERB || ch === MIX_DELAY ? 'return' : 'master');
+        return ok ? def : null;
+      }
+      if (kind !== 2 || kind === 2 && st.kinds[ch] !== 'synth') return null;
+      const mk = racks.get(ch)?.get(Math.floor(id / PORT_STRIDE));
+      const pd = mk === undefined ? undefined : moduleDef(mk).params[id % PORT_STRIDE];
+      return pd && !pd.integer ? pd : null;
+    };
     switch (e.op) {
       case Op.STOP: playing = false; break;
       case Op.PLAY: playing = true; break;
       case Op.RESET_ALL:
         if (playing) bad('RESET_ALL while playing');
         st = fresh(); samples = new Set(); racks = new Map(); keysSent = false; staged = new Map();
+        lanes = new Map(); autoSent = false;
         break;
+      case Op.AUTO_LANE_SET: {
+        autoSent = true;
+        if (!int(a, 0, MAX_AUTO_LANES - 1)) { bad('lane'); break; }
+        const range = autoRange(b, c, d);
+        const target = `${b}:${c}:${d}`;
+        if (!range) bad('lane target missing or not automatable');
+        else if ([...lanes].some(([l, x]) => l !== a && x.target === target)) bad('a second lane on one target');
+        else lanes.set(a, { target, ...range, ticks: lanes.get(a)?.ticks ?? new Map() });
+        break;
+      }
+      case Op.AUTO_POINT_SET: {
+        const l = lanes.get(Math.floor(a / MAX_AUTO_POINTS));
+        const idx = a % MAX_AUTO_POINTS;
+        if (!l) { bad('point on a lane without a target'); break; }
+        if (!int(b, 0, MAX_SONG_TICKS) || !inR(c, l.min, l.max) || (d !== 0 && d !== 1)) bad('point');
+        else if ([...l.ticks].some(([i, t]) => i !== idx && t === b)) bad(`tick ${b} is taken`);
+        else l.ticks.set(idx, b);
+        break;
+      }
+      case Op.AUTO_POINT_REMOVE: lanes.get(Math.floor(a / MAX_AUTO_POINTS))?.ticks.delete(a % MAX_AUTO_POINTS); break;
+      case Op.AUTO_LANE_CLEAR: lanes.delete(a); break;
+      case Op.AUTO_LANE_ENABLE: if (!int(a, 0, MAX_AUTO_LANES - 1) || (b !== 0 && b !== 1)) bad('lane enable'); break;
       case Op.SET_TEMPO: if (!inR(a, 20, 300)) bad('tempo'); else st.tempo = a; break;
       case Op.SET_METRONOME: if (a !== 0 && a !== 1) bad('flag'); else st.metronome = a === 1; break;
       case Op.SET_MODE: if (a !== 0 && a !== 1) bad('flag'); else st.song = a === 1; break;
@@ -319,7 +423,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         if (!int(c, 0, MAX_SONG_TICKS) || !int(d, 1, MAX_SONG_TICKS) || c + d > MAX_SONG_TICKS) bad('clip time');
         break;
       }
-      case Op.RACK_CLEAR: need(a, 'synth'); racks.set(a, new Map()); break;
+      case Op.RACK_CLEAR: need(a, 'synth'); racks.set(a, new Map()); break; // (a load clears before any lane)
       case Op.RACK_ADD_MODULE:
         afterKeys(); need(a, 'synth');
         if (!int(b, 0, MAX_MODULES - 1)) bad('module idx');
@@ -353,6 +457,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         break;
       }
       case Op.MIX_SET_KEY:
+        if (autoSent) bad('sidechain key after an automation lane');
         keysSent = true;
         need(a, 'any');
         if (b !== -1) {

@@ -26,6 +26,16 @@
 //      new clip takes the id of a clip leaving another Audio track with the
 //      same sample, length, offset, loop, gain and fades);
 //   3. mixer params by name, then sidechain keys (their sources exist now);
+//   3b. automation lanes (plan 10), matched by engine lane: the engine lost
+//      the lanes of the tracks and modules step 1 removed (the state drops
+//      them there too). Then, explicitly CLEAR FIRST, THEN RE-TARGET: every
+//      lane that goes, or whose target (or owner) changes, gets
+//      AUTO_LANE_CLEAR before any AUTO_LANE_SET, so two lanes trading
+//      targets never hit "a second lane on one target"; a new or
+//      re-targeted lane is then set whole (commands.ts laneCommands), and a
+//      kept one gets its point difference by idx (state/automation.ts
+//      pointCommands: removals before sets) and its enable flag. Lane and
+//      point UI ids survive when their engine lane / idx is kept;
 //   4. tempo, metronome, loop, mode; selection and the live input track.
 // The project name is not restored (a Save As names the project, not an edit).
 import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort } from '../audio/protocol';
@@ -43,13 +53,16 @@ import { sendClip, setLoop, setMode } from '../state/song-actions';
 import { sendAudioClip } from '../state/audio-actions';
 import { MAX_ROWS, MAX_STEPS, currentPattern, newChannel } from '../state/project.svelte';
 import type {
-  AudioClip, AudioTrack, ChannelState, Clip, DrumPattern, DrumTrack, NotePatternState, PatternTrack, Project, SidechainKey,
-  SynthTrack, Track,
+  AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
+  Project, SidechainKey, SynthTrack, Track,
 } from '../state/project.svelte';
-import { trackCommands, trackState } from '../project/commands';
+import { laneCommands, lanesState, trackCommands, trackState } from '../project/commands';
+import { MASTER_CHANNEL_INDEX, pointCommands, pointMap } from '../state/automation';
+import type { PointTuple } from '../state/automation';
 import type {
-  AudioTrackJson, ClipJson, DrumTrackJson, MixParamsJson, PatternTrackJson, ProjectJson, SynthTrackJson,
+  AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, PatternTrackJson, ProjectJson, SynthTrackJson,
 } from '../project/schema';
+import { laneJson } from '../project/serialize';
 
 // Snapshots share unchanged subtrees (history.ts), so identity settles most compares.
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -75,6 +88,11 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
     const tj = want.get(t.slot);
     if (t.kind === 'synth' && tj?.kind === 'synth' && !same(was.get(t.slot), tj)) removeModules(sink, t, tj);
   }
+
+  // What the engine's lanes are now: the live state's (it mirrors the engine,
+  // the lanes step 1 cleared included), before step 2 adds whole tracks
+  // whose lanes the engine does not have yet.
+  const engineLanes = liveLanes(p);
 
   // Audio clips leaving their track (a move between Audio lanes, undone or
   // redone): a matching new clip on another Audio track takes the id back.
@@ -132,6 +150,9 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   let todo = changing.filter((t) => keyOf(t) !== null);
   for (let pass = 0; pass < 2 && todo.length; pass++) todo = todo.filter((t) => !setSidechain(p, sink, t.id, keyOf(t)));
 
+  // 3b. Automation lanes.
+  diffLanes(p, sink, engineLanes, to, order);
+
   // 4. Transport, selection, live input.
   if (p.tempo !== to.tempo) setTempo(p, sink, to.tempo);
   if (p.metronome !== to.metronome) setMetronome(p, sink, to.metronome);
@@ -159,6 +180,9 @@ function removeModules(sink: CommandSink, t: SynthTrack, tj: SynthTrackJson) {
     for (const idx of gone) sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
     t.modules = t.modules.filter((m) => !gone.has(m.idx));
     t.cables = t.cables.filter((c) => !gone.has(c.from.m) && !gone.has(c.to.m));
+    // The engine cleared their lanes too (RACK_REMOVE_MODULE).
+    const lost = (l: AutomationLane) => l.target.kind === 'rack' && gone.has(l.target.module);
+    if (t.automation.some(lost)) t.automation = t.automation.filter((l) => !lost(l));
   }
   return want;
 }
@@ -366,4 +390,90 @@ function diffSynth(p: Project, sink: CommandSink, t: SynthTrack, tj: SynthTrackJ
     }
   }
   t.cables = want.cables;
+}
+
+/** One lane as the engine holds it: who owns it ("slot:<n>" or a Master row channel), its target (JSON form), enable, points by idx. */
+interface EngineLane {
+  owner: string;
+  target: string;
+  enabled: boolean;
+  points: Map<number, PointTuple>;
+}
+
+const trackOwner = (slot: number) => `slot:${slot}`;
+
+/** The live project's lanes by engine lane. */
+function liveLanes(p: Project): Map<number, EngineLane> {
+  const out = new Map<number, EngineLane>();
+  const add = (owner: string, l: AutomationLane) =>
+    out.set(l.lane, { owner, target: JSON.stringify(laneJson(l).target), enabled: l.enabled, points: pointMap(l) });
+  for (const t of p.tracks) for (const l of t.automation) add(trackOwner(t.slot), l);
+  for (const x of p.mixer.automation) add(x.channel, x.lane);
+  return out;
+}
+
+/** Step 3b (see the top). `order`: the live tracks, now matching `to.tracks`. */
+function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane>, to: ProjectJson, order: Track[]) {
+  const send = (c: readonly (number | undefined)[]) => sink.send(c[0]!, c[1], c[2], c[3], c[4]);
+  type Want = { owner: string; channel: number; patch: SynthTrackJson['patch'] | null; lj: LaneJson };
+  const want = new Map<number, Want>();
+  for (const tj of to.tracks) {
+    for (const lj of tj.automation) want.set(lj.lane, { owner: trackOwner(tj.slot), channel: tj.slot, patch: tj.kind === 'synth' ? tj.patch : null, lj });
+  }
+  for (const mj of to.mixer.automation) {
+    want.set(mj.lane, { owner: mj.channel, channel: MASTER_CHANNEL_INDEX[mj.channel], patch: null, lj: mj });
+  }
+  // Clear first...
+  for (const [i, e] of engine) {
+    const w = want.get(i);
+    if (!w || w.owner !== e.owner || JSON.stringify(w.lj.target) !== e.target) {
+      sink.send(Op.AUTO_LANE_CLEAR, i);
+      engine.delete(i);
+    }
+  }
+  // ...then re-target, and edit the kept lanes.
+  for (const [i, w] of want) {
+    const e = engine.get(i);
+    if (!e) {
+      for (const c of laneCommands(w.lj, w.channel, w.patch)) send(c);
+      continue;
+    }
+    for (const c of pointCommands(i, e.points, new Map(w.lj.points.map((pt, idx) => [idx, pt])))) send(c);
+    if (e.enabled !== w.lj.enabled) sink.send(Op.AUTO_LANE_ENABLE, i, w.lj.enabled ? 1 : 0);
+  }
+
+  // The state: each owner's lanes as in `to`, reusing the UI ids of lanes
+  // kept on their engine lane and target, and of points kept on their idx.
+  const reuse = (old: AutomationLane[], lanes: LaneJson[]): AutomationLane[] | null => {
+    if (same(old.map(laneJson), lanes)) return null; // unchanged: leave the state alone
+    const fresh = lanesState(lanes);
+    return fresh.map((l) => {
+      const o = old.find((x) => x.lane === l.lane && JSON.stringify(laneJson(x).target) === JSON.stringify(laneJson(l).target));
+      if (!o) return l;
+      const byIdx = new Map(o.points.map((x) => [x.idx, x]));
+      o.enabled = l.enabled;
+      o.points = l.points.map((x) => {
+        const op = byIdx.get(x.idx);
+        return op ? Object.assign(op, { tick: x.tick, value: x.value, hold: x.hold }) : x;
+      });
+      return o;
+    });
+  };
+  const bySlot = new Map(to.tracks.map((tj) => [tj.slot, tj]));
+  for (const t of order) {
+    const next = reuse(t.automation, bySlot.get(t.slot)!.automation);
+    if (next) t.automation = next;
+  }
+  const masterOld = p.mixer.automation;
+  const oldOf = (ch: MasterChannel) => masterOld.filter((x) => x.channel === ch).map((x) => x.lane);
+  if (!same(masterOld.map((x) => ({ channel: x.channel, ...laneJson(x.lane) })), to.mixer.automation)) {
+    const lanes: { channel: MasterChannel; lane: AutomationLane }[] = [];
+    for (const ch of ['reverb', 'delay', 'master'] as const) {
+      const mine = to.mixer.automation.filter((mj) => mj.channel === ch);
+      const got = reuse(oldOf(ch), mine) ?? oldOf(ch);
+      mine.forEach((mj, k) => lanes.push({ channel: ch, lane: got[k] }));
+    }
+    // Keep `to`'s order across channels.
+    p.mixer.automation = to.mixer.automation.map((mj) => lanes.find((x) => x.lane.lane === mj.lane)!);
+  }
 }

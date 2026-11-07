@@ -6,6 +6,10 @@
 //
 //   v1 -> v2 (plan 9): Audio tracks. A v1 project has none, so the step only
 //                      bumps the version: lossless.
+//   v2 -> v3 (plan 10): automation lanes. A v2 project has none: every track
+//                      (an object in `tracks`) and the mixer (if it is an
+//                      object) get an empty `automation`; nothing else
+//                      changes, so it is lossless too.
 //
 // Anything that is not a v1..current project object (no or a bad
 // schemaVersion, a NEWER version than this build knows) is returned as is
@@ -18,6 +22,12 @@ type Json = Record<string, unknown>;
 /** The steps, by the version they migrate FROM. */
 const STEPS = new Map<unknown, (json: Json) => Json>([
   [1, (json) => ({ ...json, schemaVersion: 2 })],
+  [2, (json) => ({
+    ...json,
+    schemaVersion: 3,
+    ...(Array.isArray(json.tracks) ? { tracks: json.tracks.map((t) => (isObj(t) ? { ...t, automation: [] } : t)) } : {}),
+    ...(isObj(json.mixer) ? { mixer: { ...json.mixer, automation: [] } } : {}),
+  })],
 ]);
 
 /** `json` brought up to the current schema version (see above). */

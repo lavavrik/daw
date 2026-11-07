@@ -120,7 +120,7 @@ test('save then load reproduces the beat', async ({ page }) => {
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
-  expect(listing).toMatchObject({ version: 2, tmp: false }); // plan 9: schema v2
+  expect(listing).toMatchObject({ version: 3, tmp: false }); // plan 10: schema v3
   // The kick plus the default kit's other seven rows (plan 8 Task 4: the kit is in the project).
   expect(listing.names).toHaveLength(8);
   expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-kick\.wav$/)); // <id>-<content hash>-<name>
@@ -411,10 +411,11 @@ test('a second tab neither autosaves nor offers the first tab\'s session', async
 });
 
 
-// Plan 9: schema v2. The frozen genuine v1 save (app/src/project/testdata,
-// also pinned by migrate.test.ts) opens with no warnings, and saving it
-// writes a v2 project.json that carries every v1 field over unchanged.
-test('v1 project opens in v2', async ({ page }) => {
+// Plan 9: schema v2; plan 10: v3. The frozen genuine v1 save
+// (app/src/project/testdata, also pinned by migrate.test.ts) opens with no
+// warnings, and saving it writes a v3 project.json that carries every v1
+// field over unchanged (plus the empty automation lanes v3 adds).
+test('v1 project opens in v3', async ({ page }) => {
   test.setTimeout(30_000);
   const v1 = JSON.parse(readFileSync(new URL('../../app/src/project/testdata/v1-fixture.json', import.meta.url), 'utf8'));
   expect(v1.schemaVersion).toBe(1);
@@ -452,10 +453,12 @@ test('v1 project opens in v2', async ({ page }) => {
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
     return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
   }, dst);
-  expect(out.schemaVersion).toBe(2);
-  // Everything but the version and the sample file names (they carry the content hash) is as saved in v1.
+  expect(out.schemaVersion).toBe(3);
+  // Everything but the version, the sample file names (they carry the content
+  // hash) and the empty lanes (v2 -> v3) is as saved in v1.
   const strip = (j: { schemaVersion: number; samples: { file: string }[] }) => ({ ...j, schemaVersion: 0, samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })) });
-  expect(strip(out)).toEqual(strip(v1));
+  const v3 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...t, automation: [] })), mixer: { ...v1.mixer, automation: [] } };
+  expect(strip(out)).toEqual(strip(v3));
 
   await page.evaluate(async (names) => {
     const root = await navigator.storage.getDirectory();

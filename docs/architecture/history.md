@@ -193,6 +193,8 @@ Order:
    module that goes, on **every** track, before any module is added: pooled
    effects (Delay, Reverb, Chorus) share one FX pool, so an effect moved
    between tracks must leave its old track first or its add is refused.
+   The engine clears the automation lanes of a removed track or module
+   itself; the state drops them here too, so it still mirrors the engine.
 2. **Per track**, in `to` order:
    - a slot the live project lacks is rebuilt **whole** with the plan-6 load
      builders (`project/commands.ts` `trackState` + `trackCommands`: the
@@ -216,6 +218,29 @@ Order:
      was removed in step 1 and is rebuilt whole).
 3. **Mixer** params by name, then sidechain **keys** (sources exist now;
    keys going to none first, so drum-row key slots are free).
+3b. **Automation lanes** (plan 10; automation.md), matched by **engine
+   lane**, after every track and module they can target exists. The
+   engine's lanes are the live state's as it stood after step 1 (a track
+   rebuilt whole in step 2 brings lanes the engine does not have yet).
+   - **Clear, then re-target** (explicit order): every lane that goes, or
+     whose owner or target changes, gets `AUTO_LANE_CLEAR` first; only then
+     is any lane set. So two lanes that trade targets never meet "a second
+     lane on one target", and a re-targeted lane never keeps points from
+     its old range.
+   - A new or re-targeted lane is then sent whole, as a load does
+     (`commands.ts laneCommands`: `AUTO_LANE_SET`, its points,
+     `AUTO_LANE_ENABLE`).
+   - A kept lane gets its point difference **by idx**, like notes
+     (`state/automation.ts pointCommands`): `AUTO_POINT_REMOVE` for every
+     idx that goes or whose tick changes, **all before** any
+     `AUTO_POINT_SET` (ticks are unique per lane and the engine refuses a
+     SET on a tick another point still holds), then a SET per new or
+     changed idx; and `AUTO_LANE_ENABLE` if the flag changed. Point idx are
+     dense in the app (point i of the saved list is idx i), so the snapshot
+     carries them.
+   - The state: each owner's lanes as in `to`; a lane kept on its engine
+     lane and target keeps its UI id, and so do its points kept on their
+     idx; unchanged owners are not touched.
 4. **Transport** (tempo, metronome, loop, mode), selection, and
    `SET_INPUT_TRACK` only if the live input changed.
 
@@ -246,8 +271,13 @@ removed notes`).
   mix. Audio edits (plan 9): every odd seed starts with two Audio tracks
   (`addAudioFixture`), track adds include Audio tracks, and ops add, edit
   (gain/fades, loop/length, sample/offset, a left trim), move (in time and
-  between lanes), split and delete audio clips. A redo onto an empty undo
-  stack resets the expected bottom state.
+  between lanes), split and delete audio clips. Automation (plan 10): two
+  thirds of the seeds start with `addAutomationFixture`'s four lanes, and
+  ops add lanes (any owner, any automatable target), remove, enable and
+  disable them, add points (several in one gesture), move, reshape, delete
+  and draw them, and remove rack modules and load patches (their lanes go
+  with them). A redo onto an empty undo stack resets the expected bottom
+  state.
 - `state/recorder.test.ts`: `undo take undoes edits made during it` (the
   tooltip count is 1; Stop and Undo take end the hold).
 - `ui/inlineConfirms.test.ts`: `undo cancels an open inline confirm`.
@@ -264,7 +294,19 @@ removed notes`).
   audio lanes, a split, a delete, an add, the strip's key) and an Audio
   slot taken by a drum track; only the changed audio clip is re-sent (its
   UI id kept). The engine model stages SOURCE / GAIN and commits on SET, so
-  a missing stage or fades longer than the clip show up as errors.
+  a missing stage or fades longer than the clip show up as errors. Plan 10:
+  `undo restores a removed module and its lane` (also a whole patch and a
+  whole track), `undo/redo lane edits` (point edits, lanes added on a track
+  and the Master row, a lane removed and its engine lane re-used for
+  another target, two lanes trading targets, points rewritten over the old
+  ticks) and `diffApply sends point removals before point sets and keeps
+  point ids`. The engine model validates lane targets (existing,
+  automatable, one lane each), point ranges and unique ticks, and clears
+  lanes with their track, module or rack like the engine.
+- `state/automation.test.ts` `pointCommands: random lane diffs never hit a
+  taken tick`: random lane states (moves that swap or overlap ticks,
+  removals, inserts) applied to the engine model: nothing refused, the
+  lane ends exactly as wanted.
 - e2e `tests/e2e/history.spec.ts`: removing two tracks and undoing restores
   them (sound resumes, transport never stops); undo/redo while a note
   sounds; a fader drag is one step; `undo closes an open confirm` (↶ and

@@ -66,6 +66,7 @@ export function addDrumTrack(
       patterns: [pattern],
       currentPatternId: pattern.id,
       clips: [],
+      automation: [],
     });
     const track = p.tracks[p.tracks.length - 1] as DrumTrack; // reactive proxy
     // The engine resets the mixer slot on ADD; mirror it with default state.

@@ -13,7 +13,8 @@ import type { AudioTrack, DrumTrack, SynthTrack } from '../state/project.svelte'
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { addAudioFixture, buildFixture, nullSink } from '../project/testFixture';
+import { addAudioFixture, addAutomationFixture, buildFixture, nullSink } from '../project/testFixture';
+import { addLane, addPoint, deletePoints, drawPoints, movePoints, removeLane, setLaneEnabled, setPointShape } from '../state/automation-actions';
 import { blankModel, run, view } from './engineModel';
 import { diffApply } from './diffApply';
 
@@ -25,9 +26,10 @@ const loaded = (json: ProjectJson) => view(run(blankModel(), projectCommands(jso
  * The fixture project, with a modelled engine that holds it (as a load would
  * have built it) and a sink that logs every command into that model.
  */
-async function rig(o: { audio?: boolean } = {}) {
+async function rig(o: { audio?: boolean; auto?: boolean } = {}) {
   const f = await buildFixture();
   const audio = o.audio ? await addAudioFixture(f.p) : null;
+  const lanes = o.auto ? addAutomationFixture(f.p) : null;
   const A = serialize(f.p);
   const m = run(blankModel(), projectCommands(A, ids(A)).commands);
   const log: number[][] = [];
@@ -38,13 +40,13 @@ async function rig(o: { audio?: boolean } = {}) {
       return true;
     },
   };
-  return { ...f, audio, A, m, log, sink };
+  return { ...f, audio, lanes, A, m, log, sink };
 }
 
 type Rig = Awaited<ReturnType<typeof rig>>;
 
 /** Edit, then diffApply back to A (undo) and forward to B (redo): each must leave UI and engine exactly as a load would. */
-async function roundTrip(edit: (r: Rig) => void, atA?: (r: Rig) => void, o: { audio?: boolean } = {}) {
+async function roundTrip(edit: (r: Rig) => void, atA?: (r: Rig) => void, o: { audio?: boolean; auto?: boolean } = {}) {
   const r = await rig(o);
   edit(r);
   const B = serialize(r.p);
@@ -293,5 +295,87 @@ describe('diffApply', () => {
       [Op.ADD_AUDIO_TRACK, 0], [Op.AUDIO_CLIP_SOURCE, 0, -1, 0, 0], [Op.AUDIO_CLIP_GAIN, 0, 1, 0, 0], [Op.AUDIO_CLIP_SET, 0, 0, 960],
     ]);
     expect(ok.errors).toEqual([]);
+  });
+
+  it('undo restores a removed module and its lane', async () => {
+    // Review focus 3: removing the filter takes its cutoff lane along (UI and
+    // engine, one action); undo brings back both, at the same module idx and
+    // engine lane, with the same points.
+    await roundTrip(
+      ({ p, sink, synth, lanes }) => {
+        removeModule(p, sink, synth.id, 4);
+        expect(synth.automation.map((l) => l.id)).toEqual([lanes!.fader.id]);
+      },
+      ({ p, synth, lanes }) => {
+        const s = p.tracks.find((t) => t.id === synth.id) as SynthTrack;
+        expect(s.modules.some((m) => m.idx === 4)).toBe(true);
+        const cut = s.automation.find((l) => l.target.kind === 'rack')!;
+        expect(cut.lane).toBe(lanes!.cutoff.lane);
+        expect(cut.target).toEqual({ kind: 'rack', module: 4, param: 'cutoff' });
+        expect(cut.points.map((x) => [x.tick, x.value])).toEqual([[0, 200], [7680, 8000]]);
+      },
+      { auto: true },
+    );
+    // The whole rack replaced, and the whole track removed.
+    await roundTrip(({ p, sink, synth }) => void loadPatch(p, sink, synth.id, STARTER_PATCHES[2]), undefined, { auto: true });
+    await roundTrip(({ p, sink, synth }) => removeTrack(p, sink, synth.id), undefined, { auto: true });
+  });
+
+  it('undo/redo lane edits', async () => {
+    // Point edits on existing lanes; a lane added on a track and on the Master row; enable.
+    await roundTrip(({ p, sink, drums, lanes }) => {
+      const f = lanes!.fader;
+      addPoint(p, sink, f.id, { tick: 1000, value: -12 });
+      movePoints(p, sink, f.id, [f.points[0].id, f.points[1].id], 500, 0.1);
+      setPointShape(p, sink, f.id, [f.points[2].id], false);
+      deletePoints(p, sink, lanes!.send.id, [lanes!.send.points[0].id]);
+      drawPoints(p, sink, lanes!.cutoff.id, [{ tick: 100, value: 300 }, { tick: 2000, value: 3000 }, { tick: 4000, value: 300 }]);
+      setLaneEnabled(p, sink, lanes!.ceiling.id, true);
+      const pan = addLane(p, sink, drums.id, { kind: 'mix', param: 'pan' })!;
+      addPoint(p, sink, pan.id, { tick: 0, value: -1 });
+      const rev = addLane(p, sink, 'reverb', { kind: 'mix', param: 'rev_size' })!;
+      addPoint(p, sink, rev.id, { tick: 960, value: 0.9, hold: true });
+    }, undefined, { auto: true });
+    // A lane removed, and its engine lane re-used for another target (undo: clear, then re-target).
+    await roundTrip(({ p, sink, drums, lanes }) => {
+      removeLane(p, sink, lanes!.send.id);
+      const pan = addLane(p, sink, drums.id, { kind: 'mix', param: 'pan' })!;
+      expect(pan.lane).toBe(lanes!.send.lane);
+      addPoint(p, sink, pan.id, { tick: 3840, value: 0.5 });
+    }, undefined, { auto: true });
+    // Two lanes swap targets (each engine lane's target is the other's old one).
+    await roundTrip(({ p, sink, synth, lanes }) => {
+      removeLane(p, sink, lanes!.fader.id);
+      removeLane(p, sink, lanes!.cutoff.id);
+      const a = addLane(p, sink, synth.id, { kind: 'rack', module: 4, param: 'cutoff' })!;
+      const b = addLane(p, sink, synth.id, { kind: 'mix', param: 'fader' })!;
+      expect([a.lane, b.lane]).toEqual([lanes!.fader.lane, lanes!.cutoff.lane]);
+      addPoint(p, sink, a.id, { tick: 0, value: 1000 });
+    }, undefined, { auto: true });
+    // Points that swap ticks (a move that overlaps the old positions) on one lane.
+    await roundTrip(({ p, sink, lanes }) => {
+      const f = lanes!.fader;
+      deletePoints(p, sink, f.id, f.points.map((x) => x.id));
+      for (const tick of [0, 100, 200, 300]) addPoint(p, sink, f.id, { tick, value: -tick / 10 });
+    }, undefined, { auto: true });
+  });
+
+  it('diffApply sends point removals before point sets and keeps point ids', async () => {
+    const r = await rig({ auto: true });
+    const f = r.lanes!.fader;
+    const ids0 = f.points.map((x) => x.id);
+    const before = serialize(r.p);
+    movePoints(r.p, r.sink, f.id, ids0, 100, 0);
+    const after = serialize(r.p);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, after, before);
+    const ops = r.log.map((c) => c[0]);
+    expect(ops.every((op) => op === Op.AUTO_POINT_REMOVE || op === Op.AUTO_POINT_SET)).toBe(true);
+    expect(ops.lastIndexOf(Op.AUTO_POINT_REMOVE)).toBeLessThan(ops.indexOf(Op.AUTO_POINT_SET));
+    expect(f.points.map((x) => x.id)).toEqual(ids0);
+    expect(r.m.errors).toEqual([]);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, before, before);
+    expect(r.log).toEqual([]);
   });
 });

@@ -6,7 +6,7 @@ import { blankModel, run, view } from '../history/engineModel';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from '../project/testFixture';
+import { addAutomationFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from '../project/testFixture';
 import { setRowSample, setTempo } from '../state/actions';
 import { addAudioClip, addAudioTrack } from '../state/audio-actions';
 import { deleteClips } from '../state/song-actions';
@@ -185,6 +185,22 @@ describe('restartAudio', () => {
     // ...and redo brings back sample 7 (kept at its id on the new engine).
     l.h.redo();
     expect(l.p.tracks[0].kind === 'drum' && l.p.tracks[0].rows[2].sampleId).toBe(7);
+    expect(checkLog(e.log).errors).toEqual([]);
+  });
+
+  it('restart replays the automation lanes (projectCommands: no path of its own)', async () => {
+    const l = await live();
+    addAutomationFixture(l.p);
+    const before = serialize(l.p);
+    const { d, started } = deps(l);
+    await restartAudio(l.p, 'balanced', d);
+    expect(serialize(l.p)).toEqual(before);
+    const e = started[0];
+    const cmds = e.log.filter((x) => 'op' in x).map((x) => ('op' in x ? [x.op, ...x.args] : []));
+    const m = run(blankModel(), cmds);
+    expect(m.errors).toEqual([]);
+    expect(m.autos.filter(Boolean)).toHaveLength(4);
+    expect(view(m, before)).toEqual(loaded(before));
     expect(checkLog(e.log).errors).toEqual([]);
   });
 

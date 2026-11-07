@@ -32,6 +32,7 @@ function mkTrack(id: string, bars: number): SynthTrack {
     patterns: [{ id: `${id}0`, engineIdx: 0, name: 'Pattern 1', bars, notes: [] }],
     currentPatternId: `${id}0`,
     clips: [],
+    automation: [],
   };
 }
 

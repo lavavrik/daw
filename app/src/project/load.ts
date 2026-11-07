@@ -18,7 +18,8 @@
 //      gives the commands -- tracks (patterns, steps/notes, current pattern,
 //      rows with their samples, rack, clips; Audio tracks and their clips)
 //      -> MIX_SET by name ->
-//      MIX_SET_KEY last -> tempo, metronome, mode, loop and the live input
+//      MIX_SET_KEY -> automation lanes (each AUTO_LANE_SET, its points,
+//      AUTO_LANE_ENABLE) -> tempo, metronome, mode, loop and the live input
 //      track (RESET_ALL put the transport back to 124 BPM / Pattern / loop
 //      off / metronome off / no input track, so these are always sent) --
 //      and the normalized project the UI state (projectState) is built from.
@@ -35,7 +36,7 @@
 //
 // p.loading is set through state/idle.ts markBusy / markIdle (a default-kit
 // import waiting for the load to end awaits that signal).
-import { Err, Op } from '../audio/protocol';
+import { Err, MAX_AUTO_POINTS, Op } from '../audio/protocol';
 import { decodeBytes, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
 import { mixParam } from '../audio/mixerCatalog';
@@ -47,7 +48,7 @@ import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
 import { fitsBudget, overBudgetText, sampleFloats } from '../state/sampleBudget';
 import { deferSampleAssign } from '../state/sampleLoads';
-import { projectCommands, trackState } from './commands';
+import { lanesState, projectCommands, trackState } from './commands';
 import type { EngineCommand } from './commands';
 import { serialize } from './serialize';
 import { validate } from './schema';
@@ -239,8 +240,13 @@ export function bindingCommands(p: Project, id: number): [number, number, number
   return out;
 }
 
-/** `cmds` grouped into what must be sent together: an audio clip's SOURCE, GAIN, SET; any other command alone. */
-function units(cmds: EngineCommand[]): EngineCommand[][] {
+/**
+ * `cmds` grouped into what must be sent together: an audio clip's SOURCE,
+ * GAIN, SET; an automation lane's AUTO_LANE_SET with its AUTO_POINT_SETs and
+ * AUTO_LANE_ENABLE (commands.ts laneCommands: a point needs its lane's
+ * target, so a lane is never split); any other command alone.
+ */
+export function units(cmds: EngineCommand[]): EngineCommand[][] {
   const out: EngineCommand[][] = [];
   for (let i = 0; i < cmds.length; i++) {
     const c = cmds[i];
@@ -248,6 +254,13 @@ function units(cmds: EngineCommand[]): EngineCommand[][] {
     if (c[0] === Op.AUDIO_CLIP_SOURCE && commit?.[0] === Op.AUDIO_CLIP_SET && commit[1] === c[1]) {
       out.push(cmds.slice(i, i + 3));
       i += 2;
+    } else if (c[0] === Op.AUTO_LANE_SET) {
+      const lane = c[1];
+      let j = i + 1;
+      while (j < cmds.length && cmds[j][0] === Op.AUTO_POINT_SET && Math.floor(cmds[j][1]! / MAX_AUTO_POINTS) === lane) j++;
+      if (j < cmds.length && cmds[j][0] === Op.AUTO_LANE_ENABLE && cmds[j][1] === lane) j++;
+      out.push(cmds.slice(i, j));
+      i = j - 1;
     } else out.push([c]);
   }
   return out;
@@ -417,6 +430,8 @@ export function projectState(p: Project, proj: ProjectJson) {
   setParams(p.mixer.reverb, proj.mixer.reverb);
   setParams(p.mixer.delay, proj.mixer.delay);
   setParams(p.mixer.master, proj.mixer.master);
+  const master = lanesState(proj.mixer.automation);
+  p.mixer.automation = proj.mixer.automation.map((mj, i) => ({ channel: mj.channel, lane: master[i] }));
   p.tempo = proj.tempo;
   p.metronome = proj.metronome;
   p.mode = proj.mode;

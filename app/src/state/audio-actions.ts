@@ -95,6 +95,7 @@ export function addAudioTrack(p: Project, sink: CommandSink, o: { name?: string 
       name: o.name ?? uniqueTrackName(p, 'Audio'),
       color: TRACK_COLORS[slot % TRACK_COLORS.length],
       clips: [],
+      automation: [],
     });
     const track = p.tracks[p.tracks.length - 1] as AudioTrack; // reactive proxy
     // The engine resets the mixer slot on ADD; mirror it with default state.

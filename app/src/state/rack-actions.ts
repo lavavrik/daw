@@ -38,6 +38,7 @@ export function addSynthTrack(
       patterns: [pattern],
       currentPatternId: pattern.id,
       clips: [],
+      automation: [],
     });
     const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
     p.mixer.channels[track.id] = newChannel(); // the engine resets the mixer slot on ADD
@@ -66,6 +67,8 @@ export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch:
     const { patch: v, warnings } = validatePatch(patch, { fxFree: (id) => fxSlotsFree(p, id) + own(id) });
     const rack = patchRack(t.slot, v);
     for (const c of rack.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
+    // RACK_CLEAR clears every rack lane of the slot in the engine; mirror it.
+    if (t.automation.some((l) => l.target.kind === 'rack')) t.automation = t.automation.filter((l) => l.target.kind !== 'rack');
     t.modules = rack.modules;
     t.cables = rack.cables;
     t.patchName = v.name;
@@ -152,6 +155,7 @@ export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: 
   if (!t || !t.modules.some((m) => m.idx === idx && m.kind === kind)) return null;
   t.modules = t.modules.filter((m) => m.idx !== idx);
   t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
+  dropModuleLanes(t, idx); // the engine refused their AUTO_LANE_SET (no such module)
   return fxPoolFullText(moduleDef(kind)) || `No room for another ${moduleDef(kind).name}`;
 }
 
@@ -176,13 +180,24 @@ export function addModule(p: Project, sink: CommandSink, trackId: string, kind: 
   });
 }
 
-/** The engine drops the module's cables itself; mirror that in state. */
+/**
+ * State only: drop the automation lanes of `t` that drive module `idx` (the
+ * engine clears them itself when the module goes: RACK_REMOVE_MODULE, also
+ * when queued behind a fade).
+ */
+export function dropModuleLanes(t: SynthTrack, idx: number) {
+  const gone = (l: { target: { kind: string; module?: number } }) => l.target.kind === 'rack' && l.target.module === idx;
+  if (t.automation.some(gone)) t.automation = t.automation.filter((l) => !gone(l));
+}
+
+/** The engine drops the module's cables and automation lanes itself; mirror that in state. */
 export function removeModule(p: Project, sink: CommandSink, trackId: string, idx: number) {
   return edit(p, 'Remove module', () => {
     const t = synthTrack(p, trackId);
     if (!t || !t.modules.some((m) => m.idx === idx)) return;
     t.modules = t.modules.filter((m) => m.idx !== idx);
     t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
+    dropModuleLanes(t, idx);
     sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
   });
 }

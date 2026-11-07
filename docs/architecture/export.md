@@ -155,6 +155,20 @@ hash with `UPDATE_GOLDEN=1 cargo test -p daw-engine --test export_render`.
 `export_render.hash` did not change with plan 9: projects without audio
 render exactly as before.
 
+**Automation** (plan 10) has a third fixture, `export_auto.txt` /
+`export_auto.hash`: the export command list of `buildAutoFixture`
+(`project/testFixture.ts`: a drum track on a generated 0.25 s sample and a
+synth on the Deep Bass patch, 3 bars at 128 BPM in Song mode, with the lanes
+of `addAutomationFixture` — a send-A build-up on the drums, a fader ride
+with a hold and a drop on the synth, a filter-cutoff sweep on its rack, and
+a Master-row limiter-ceiling lane). Native:
+`export_auto_render_matches_golden`; wasm: `automation render matches
+native`, which also checks that the same job without the lane commands
+renders differently (the lanes are heard). Regenerated like the audio
+fixture. The export needs no automation code of its own: the lanes come
+from `projectCommands`. `export_render.hash` and `export_audio.hash` did not
+change with plan 10.
+
 Native and wasm are **bit-identical** only with the same math: on wasm the
 transcendental functions (`sin`, `powf`, `exp2`…) come from the pure-Rust
 `libm` inside compiler-builtins, natively from the platform libm, which

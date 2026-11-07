@@ -3,7 +3,7 @@ import { SCHEMA_VERSION, validate } from './schema';
 import type { ProjectJson } from './schema';
 import { projectFingerprint, sampleFilePath, serialize } from './serialize';
 import { sampleFile } from '../state/sampleFiles';
-import { buildFixture } from './testFixture';
+import { addAutomationFixture, buildFixture } from './testFixture';
 import { Project } from '../state/project.svelte';
 import { CLIP_GAIN_MIN_DB, addAudioClip, addAudioTrack, setAudioClip } from '../state/audio-actions';
 
@@ -85,10 +85,10 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 3 };
+    const json = { ...serialize(new Project()), schemaVersion: 4 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
-    expect('error' in r && r.error).toMatch(/schema 3; this one reads up to 2/);
+    expect('error' in r && r.error).toMatch(/schema 4; this one reads up to 3/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
@@ -170,7 +170,7 @@ describe('project schema', () => {
     const json = serialize(p);
     const aj = json.tracks.find((t) => t.kind === 'audio')!;
     expect(aj).toEqual({
-      kind: 'audio', slot: a.slot, name: 'Vox', color: a.color,
+      kind: 'audio', slot: a.slot, name: 'Vox', color: a.color, automation: [],
       clips: [
         { idx: 0, sample: 1, start: 3840, len: c.len, offset: 0.25, loop: true, gain: -6, fadeIn: 240, fadeOut: 480 },
         { idx: 1, sample: 2, start: 0, len: 960, offset: 0, loop: false, gain: 0, fadeIn: 0, fadeOut: 0 },
@@ -207,5 +207,57 @@ describe('project schema', () => {
     expect(vj.clips[2].len).toBe(1);
     const w = r.warnings.join('\n');
     for (const re of [/gain/, /offset/, /loop/, /fade/i, /sample 77/, /slot/, /malformed/]) expect(w).toMatch(re);
+  });
+
+  it('validates lanes', async () => {
+    const { p, synth } = await buildFixture();
+    const lanes = addAutomationFixture(p);
+    const json = serialize(p);
+    const sj = json.tracks.find((t) => t.slot === synth.slot)!;
+    // Targets by catalog name: {mix: name} or {rack: [module idx, name]}; points [tick, value, 0|1] in engine idx order.
+    expect(sj.automation.map((l) => l.target)).toEqual([{ mix: 'fader' }, { rack: [4, 'cutoff'] }]);
+    expect(sj.automation[0]).toEqual({ lane: lanes.fader.lane, enabled: true, target: { mix: 'fader' }, points: [[0, -24, 0], [3840, 0, 1], [5760, -60, 0]] });
+    expect(json.mixer.automation).toEqual([{ channel: 'master', lane: lanes.ceiling.lane, enabled: false, target: { mix: 'limiter_ceiling' }, points: [[0, 0, 0], [7680, -3, 0]] }]);
+    expect(ok(validate(roundJson(json)))).toEqual({ project: roundJson(json), warnings: [] });
+
+    const bad = roundJson(json) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const at = bad.tracks.findIndex((t: { slot: number }) => t.slot === synth.slot);
+    const auto = bad.tracks[at].automation;
+    auto[0].points.push([3840, -3, 0]); // duplicate tick: dropped
+    auto[0].points.push([7000, 99, 1]); // clamped to +6
+    auto[0].points.push([-5, 0, 0], 'junk'); // tick clamped to 0... which is taken: dropped; malformed: dropped
+    auto[1].enabled = 'no'; // not a boolean: true
+    auto.push({ lane: 40, enabled: true, target: { mix: 'mute' }, points: [] }); // integer target
+    auto.push({ lane: 41, enabled: true, target: { mix: 'wobble' }, points: [] }); // unknown
+    auto.push({ lane: 42, enabled: true, target: { rack: [4, 'mode'] }, points: [] }); // integer rack param
+    auto.push({ lane: 43, enabled: true, target: { rack: [30, 'cutoff'] }, points: [] }); // no such module
+    auto.push({ lane: 44, enabled: true, points: [] }); // no target
+    auto.push({ lane: 45, enabled: true, target: { mix: 'fader' }, points: [] }); // a second lane on one target
+    auto.push({ lane: lanes.fader.lane, enabled: true, target: { mix: 'pan' }, points: [] }); // engine lane taken
+    auto.push({ lane: 64, enabled: true, target: { mix: 'pan' }, points: [] }); // engine lane out of range
+    bad.tracks[0].automation.push({ lane: 46, enabled: true, target: { rack: [0, 'level'] }, points: [] }); // rack on drums
+    bad.mixer.automation.push({ channel: 'reverb', lane: 47, enabled: true, target: { mix: 'delay_feedback' }, points: [] }); // not on the Reverb
+    bad.mixer.automation.push({ channel: 'bus', lane: 48, enabled: true, target: { mix: 'fader' }, points: [] }); // no such channel
+    bad.mixer.automation.push({ channel: 'delay', lane: 49, enabled: true, target: { mix: 'delay_feedback' }, points: [[0, 0.5, 0]] }); // fine
+    const r = ok(validate(bad));
+    const vj = r.project.tracks[at];
+    expect(vj.automation.map((l) => l.lane)).toEqual([lanes.fader.lane, lanes.cutoff.lane]);
+    expect(vj.automation[0].points).toEqual([[0, -24, 0], [3840, 0, 1], [5760, -60, 0], [7000, 6, 1]]);
+    expect(vj.automation[1].enabled).toBe(true);
+    expect(r.project.tracks[0].automation.map((l) => l.lane)).toEqual([lanes.send.lane]); // the rack lane on drums: dropped
+    expect(r.project.mixer.automation.map((l) => [l.channel, l.lane])).toEqual([['master', lanes.ceiling.lane], ['delay', 49]]);
+    const w = r.warnings.join('\n');
+    for (const re of [/tick 3840/, /clamped/, /malformed/, /mute/, /wobble/, /mode/, /module 30/, /no target/, /already has a lane/,
+      /lane \d+.*taken/, /64/, /level/, /delay_feedback/, /bus/, /enabled/i]) {
+      expect(w).toMatch(re);
+    }
+
+    // Caps: 512 points per lane, the rest dropped. (64 lanes per project
+    // follows from the unique engine lanes 0..63; validate counts them anyway.)
+    const many = roundJson(json) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    many.tracks[at].automation[0].points = Array.from({ length: 600 }, (_, i) => [i * 10, -6, 0]);
+    const rc = ok(validate(many));
+    expect(rc.project.tracks[at].automation[0].points).toHaveLength(512);
+    expect(rc.warnings.join('\n')).toMatch(/512/);
   });
 });

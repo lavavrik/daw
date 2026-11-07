@@ -11,16 +11,22 @@
 //     per clip AUDIO_CLIP_SOURCE -> AUDIO_CLIP_GAIN -> AUDIO_CLIP_SET (the
 //     staged change and its commit, always together)
 //   -> MIX_SET by name (non-defaults only: RESET_ALL set the defaults)
-//   -> MIX_SET_KEY last (keys need their source tracks and rows)
+//   -> MIX_SET_KEY (keys need their source tracks and rows)
+//   -> automation lanes (plan 10): each track's in track order, then the
+//     Master row's; per lane AUTO_LANE_SET, its points (AUTO_POINT_SET, idx =
+//     position in the JSON), AUTO_LANE_ENABLE. After every track and module
+//     they target; the base values were already set by the rack and MIX_SET
+//     commands (AUTO_LANE_SET captures them).
 //   -> tempo, metronome, mode, loop, live input track (always sent: they
 //     must match the UI whatever the engine had).
 //
 // Pure: no Project, no engine. A validated project (schema.ts validate) is
 // still checked against what only a whole project knows: the shared FX pool
 // (pooled effects beyond it are dropped) and the MAX_KEYS distinct drum-row
-// sidechain keys (a key beyond them is dropped), each with a warning; the
+// sidechain keys (a key beyond them is dropped), each with a warning, and a
+// rack lane whose module was one of those dropped effects goes too; the
 // returned `project` is the normalized one the commands realize.
-import { MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
+import { AUTO_KIND, MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, keyCode, packAutoParam } from '../audio/protocol';
 import { fxPoolSlots, moduleDef } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
 import { validatePatch } from '../state/patches';
@@ -28,9 +34,10 @@ import { makeDrumPattern, makeNotePattern } from '../state/pattern-actions';
 import { patchRack } from '../state/rack-actions';
 import type { EngineCommand } from '../state/rack-actions';
 import { MAX_NOTES } from '../audio/protocol';
-import type { AudioTrack, Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
+import type { AudioTrack, AutomationLane, Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
 import { clipGainLinear } from '../state/audio-actions';
-import type { AudioClipJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
+import { MASTER_CHANNEL_INDEX } from '../state/automation';
+import type { AudioClipJson, LaneJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
 
 export type { EngineCommand };
 
@@ -55,6 +62,7 @@ export function projectCommands(json: ProjectJson, sampleIds: Map<number, number
   const commands: EngineCommand[] = [];
   for (const tj of project.tracks) commands.push(...trackCommands(tj));
   commands.push(...mixerCommands(project));
+  commands.push(...autoCommands(project));
   commands.push(
     [Op.SET_TEMPO, project.tempo],
     [Op.SET_METRONOME, project.metronome ? 1 : 0],
@@ -150,6 +158,50 @@ function mixerCommands(project: ProjectJson): EngineCommand[] {
   return out;
 }
 
+/**
+ * AUTO_LANE_SET, the points, AUTO_LANE_ENABLE for one lane of mixer channel
+ * `channel` (a track's slot, or MASTER_CHANNEL_INDEX) and, for a rack target, of
+ * the synth track whose `patch` is given (the module's catalog id names the
+ * param index). Grouped as one unit by load.ts units().
+ */
+export function laneCommands(lj: LaneJson, channel: number, patch: { modules: { idx: number; id: string }[] } | null): EngineCommand[] {
+  let set: EngineCommand;
+  if ('mix' in lj.target) set = [Op.AUTO_LANE_SET, lj.lane, AUTO_KIND.MIX, channel, mixParam(lj.target.mix).id];
+  else {
+    const [mod, name] = lj.target.rack;
+    const id = patch!.modules.find((m) => m.idx === mod)!.id;
+    set = [Op.AUTO_LANE_SET, lj.lane, AUTO_KIND.RACK, channel, packAutoParam(mod, moduleDef(id).params.findIndex((d) => d.name === name))];
+  }
+  return [
+    set,
+    ...lj.points.map(([tick, value, hold], i): EngineCommand => [Op.AUTO_POINT_SET, autoPoint(lj.lane, i), tick, value, hold]),
+    [Op.AUTO_LANE_ENABLE, lj.lane, lj.enabled ? 1 : 0],
+  ];
+}
+
+/** Every lane: the tracks' (track order), then the Master row's. */
+function autoCommands(project: ProjectJson): EngineCommand[] {
+  const out: EngineCommand[] = [];
+  for (const tj of project.tracks) {
+    for (const lj of tj.automation) out.push(...laneCommands(lj, tj.slot, tj.kind === 'synth' ? tj.patch : null));
+  }
+  for (const mj of project.mixer.automation) out.push(...laneCommands(mj, MASTER_CHANNEL_INDEX[mj.channel], null));
+  return out;
+}
+
+/** UI lanes of a normalized lane list (fresh ids; points sorted by tick, idx = JSON position). */
+export function lanesState(lanes: LaneJson[]): AutomationLane[] {
+  return lanes.map((lj) => ({
+    id: crypto.randomUUID(),
+    lane: lj.lane,
+    enabled: lj.enabled,
+    target: 'mix' in lj.target ? { kind: 'mix', param: lj.target.mix } : { kind: 'rack', module: lj.target.rack[0], param: lj.target.rack[1] },
+    points: lj.points
+      .map(([tick, value, hold], idx) => ({ id: crypto.randomUUID(), idx, tick, value, hold: hold === 1 }))
+      .sort((a, b) => a.tick - b.tick),
+  }));
+}
+
 /** The slot that receives live keys (liveInputTrack of the loaded selection), or -1. */
 export function inputSlot(project: ProjectJson): number {
   const bySlot = (s: number | null) => (s === null ? undefined : project.tracks.find((t) => t.slot === s));
@@ -181,7 +233,13 @@ function normalize(json: ProjectJson, ids: Map<number, number>, warnings: string
     const v = validatePatch(remapped, { fxFree });
     for (const w of v.warnings) warnings.push(`Track "${tj.name}": ${w}`);
     for (const m of v.patch.modules) if (fxPoolSlots(moduleDef(m.id)) !== null) pooled.set(m.id, (pooled.get(m.id) ?? 0) + 1);
-    return { ...tj, patch: v.patch };
+    // A rack lane whose module was dropped above (the engine would refuse its AUTO_LANE_SET).
+    const automation = tj.automation.filter((l) => {
+      if (!('rack' in l.target) || v.patch.modules.some((m) => m.idx === (l.target as { rack: [number, string] }).rack[0])) return true;
+      warnings.push(`Track "${tj.name}": the automation lane of ${l.target.rack[1]} lost its module (dropped)`);
+      return false;
+    });
+    return { ...tj, patch: v.patch, automation };
   });
 
   // Keys: at most MAX_KEYS distinct drum rows (the engine refuses one more);
@@ -225,6 +283,7 @@ export function trackState(tj: TrackJson): Track {
         id: crypto.randomUUID(), idx: c.idx, sampleId: c.sample, start: c.start, len: c.len, offset: c.offset,
         loop: c.loop, gain: c.gain, fadeIn: c.fadeIn, fadeOut: c.fadeOut,
       })),
+      automation: lanesState(tj.automation),
     };
     return t;
   }
@@ -250,6 +309,7 @@ export function trackState(tj: TrackJson): Track {
       patterns,
       currentPatternId: patterns.find((x) => x.engineIdx === tj.currentPattern)!.id,
       clips: clipsOf(patterns),
+      automation: lanesState(tj.automation),
     };
     return t;
   }
@@ -270,6 +330,7 @@ export function trackState(tj: TrackJson): Track {
     patterns,
     currentPatternId: patterns.find((x) => x.engineIdx === tj.currentPattern)!.id,
     clips: clipsOf(patterns),
+    automation: lanesState(tj.automation),
   };
   return t;
 }

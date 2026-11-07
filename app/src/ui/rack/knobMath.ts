@@ -18,6 +18,12 @@ export type KnobDef = Pick<ParamDef, 'label' | 'min' | 'max' | 'default' | 'inte
   minLabel?: string;
 };
 
+/**
+ * The part of a param that maps values to knob positions (toPos / fromPos):
+ * any KnobDef, and what automation needs (state/automation.ts laneValueAt).
+ */
+export type CurveDef = Pick<KnobDef, 'min' | 'max' | 'default' | 'integer' | 'curve'>;
+
 /** Vertical drag distance that covers the whole range (Shift = 10x finer). */
 export const DRAG_PX = 150;
 /** Fine-drag factor while Shift is held. */
@@ -36,10 +42,10 @@ export const ZERO_ZONE = 0.02;
 export const EXP_FLOOR_RATIO = 1000;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
-const zeroBased = (d: KnobDef) => d.curve === 'exp' && d.min <= 0;
+const zeroBased = (d: CurveDef) => d.curve === 'exp' && d.min <= 0;
 
 /** Value -> position 0..1 (clamped). */
-export function toPos(d: KnobDef, v: number): number {
+export function toPos(d: CurveDef, v: number): number {
   if (Number.isNaN(v)) v = d.default;
   if (d.max <= d.min) return 0;
   if (d.curve !== 'exp') return clamp01((v - d.min) / (d.max - d.min));
@@ -54,7 +60,7 @@ export function toPos(d: KnobDef, v: number): number {
 }
 
 /** Position 0..1 -> value, clamped to the range (integer params rounded). */
-export function fromPos(d: KnobDef, pos: number): number {
+export function fromPos(d: CurveDef, pos: number): number {
   const p = clamp01(pos);
   let v: number;
   if (d.curve !== 'exp') v = d.min + p * (d.max - d.min);

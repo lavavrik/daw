@@ -1,13 +1,15 @@
-// project.json: the saved form of a Project (schemaVersion 2) and its
+// project.json: the saved form of a Project (schemaVersion 3) and its
 // validator. See docs/architecture/projects.md. An older file is migrated
-// first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had).
+// first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had; v2 -> v3
+// adds automation lanes, which v2 never had).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
 //     and mixer params, port names), never by catalog index, so catalog
 //     growth never shifts values.
 //   - Engine slots ARE stored (track `slot`, pattern `engineIdx`, clip and
-//     note `idx`) and references use them (clip `pattern`, `currentPattern`,
+//     note `idx`, automation `lane`; a lane's points are listed in engine
+//     idx order, which is dense: point i is idx i) and references use them (clip `pattern`, `currentPattern`,
 //     sidechain `key.track`), so a restore (load, plan-7 undo) puts every
 //     object back in the same engine slot.
 //   - UUIDs are not stored; a load makes fresh ones.
@@ -20,7 +22,10 @@
 //     placed (bad slot, unknown kind, dangling reference) is dropped. Each of
 //     these adds a warning (a missing optional field silently gets its
 //     default). Only a missing/newer schemaVersion is an error.
-import { MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_DELAY, MIX_MASTER, MIX_REVERB, BAR_TICKS } from '../audio/protocol';
+import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_DELAY, MIX_MASTER, MIX_REVERB, BAR_TICKS } from '../audio/protocol';
+import { moduleDef } from '../audio/catalog';
+import type { ParamDef } from '../audio/catalog';
+import type { MixParamDef } from '../audio/mixerCatalog';
 import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
@@ -31,8 +36,8 @@ import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEP
 import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
 
-/** Plan 9: 2 (Audio tracks). Older files are migrated (migrate.ts). */
-export const SCHEMA_VERSION = 2;
+/** Plan 9: 2 (Audio tracks); plan 10: 3 (automation). Older files are migrated (migrate.ts). */
+export const SCHEMA_VERSION = 3;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -64,7 +69,26 @@ interface TrackCommon {
   /** engineIdx of the current pattern. */
   currentPattern: number;
   clips: ClipJson[];
+  /** The track's lanes (its mixer strip; synth tracks: also its rack). */
+  automation: LaneJson[];
 }
+
+/**
+ * An automation lane. `target` by catalog name: a param of the owner's mixer
+ * channel ({mix}), or of module `moduleIdx` of the owner's rack ({rack}:
+ * synth tracks only). Non-integer params only.
+ */
+export interface LaneJson {
+  /** Engine lane 0..MAX_AUTO_LANES-1, unique in the project. */
+  lane: number;
+  enabled: boolean;
+  target: { mix: string } | { rack: [moduleIdx: number, name: string] };
+  /** [tick, value, 0 linear | 1 hold], listed in engine idx order (point i is idx i); unique ticks. */
+  points: [number, number, 0 | 1][];
+}
+
+/** A Master row lane: a lane of the Reverb, Delay or master channel. */
+export type MasterLaneJson = { channel: 'reverb' | 'delay' | 'master' } & LaneJson;
 
 export interface DrumTrackJson extends TrackCommon {
   kind: 'drum';
@@ -129,6 +153,8 @@ export interface AudioTrackJson {
   name: string;
   color: string;
   clips: AudioClipJson[];
+  /** Mixer-strip lanes only. */
+  automation: LaneJson[];
 }
 
 export interface AudioClipJson {
@@ -161,6 +187,8 @@ export interface MixerJson {
   reverb: MixParamsJson;
   delay: MixParamsJson;
   master: MixParamsJson;
+  /** The Master row's lanes. */
+  automation: MasterLaneJson[];
 }
 
 /** Sidechain source: a whole track (row null) or one drum row. */
@@ -275,6 +303,7 @@ export function validate(input: unknown): Validated {
 
   const tracks: TrackJson[] = [];
   const slots = new Set<number>();
+  const lanes: Lanes = { taken: new Set(), count: 0 };
   for (const t of arr(json.tracks)) {
     if (!isObj(t)) {
       r.warn('Dropped a malformed track');
@@ -293,12 +322,13 @@ export function validate(input: unknown): Validated {
     else if (t.color !== undefined) r.warn(`Track "${tname}": bad colour "${String(t.color)}"`);
     const at = `Track "${tname}"`;
     const common = { slot, name: tname, color };
+    const auto = (rack: Patch | null) => readLanes(r, t.automation, lanes, at, (target) => laneDef(target, 'track', slot, rack));
     if (kind === 'audio') {
-      tracks.push({ kind, ...common, clips: readAudioClips(r, t.clips, sampleIds, at) });
+      tracks.push({ kind, ...common, clips: readAudioClips(r, t.clips, sampleIds, at), automation: auto(null) });
     } else if (kind === 'drum') {
       const rows = readRows(r, t.rows, sampleIds, at);
       const patterns = readPatterns(r, t.patterns, at, (p, w) => readDrumPattern(r, p, rows.length, w));
-      tracks.push({ kind, ...common, rows, patterns, ...readCurrentAndClips(r, t, patterns, at) });
+      tracks.push({ kind, ...common, rows, patterns, ...readCurrentAndClips(r, t, patterns, at), automation: auto(null) });
     } else {
       const v = validatePatch(t.patch ?? { name: '', modules: [], cables: [] });
       for (const w of v.warnings) r.warn(`${at}: ${w}`);
@@ -310,11 +340,11 @@ export function validate(input: unknown): Validated {
         }
       }
       const patterns = readPatterns(r, t.patterns, at, (p, w) => readNotePattern(r, p, w));
-      tracks.push({ kind, ...common, patch: v.patch, patterns, ...readCurrentAndClips(r, t, patterns, at) });
+      tracks.push({ kind, ...common, patch: v.patch, patterns, ...readCurrentAndClips(r, t, patterns, at), automation: auto(v.patch) });
     }
   }
 
-  const mixer = readMixer(r, json.mixer, tracks);
+  const mixer = readMixer(r, json.mixer, tracks, lanes);
   const sel = isObj(json.selection) ? json.selection : {};
   const slotOf = (v: unknown, synthOnly: boolean) =>
     tracks.find((t) => t.slot === v && (!synthOnly || t.kind === 'synth'))?.slot ?? null;
@@ -531,7 +561,7 @@ function readMixParams(r: Reader, v: unknown, kind: MixTarget, index: number, at
   return out;
 }
 
-function readMixer(r: Reader, v: unknown, tracks: TrackJson[]): MixerJson {
+function readMixer(r: Reader, v: unknown, tracks: TrackJson[], lanes: Lanes): MixerJson {
   const o = isObj(v) ? v : {};
   const strips: MixerJson['tracks'] = [];
   const seen = new Set<number>();
@@ -559,5 +589,133 @@ function readMixer(r: Reader, v: unknown, tracks: TrackJson[]): MixerJson {
     reverb: readMixParams(r, o.reverb, 'return', MIX_REVERB, 'Mixer Reverb'),
     delay: readMixParams(r, o.delay, 'return', MIX_DELAY, 'Mixer Delay'),
     master: readMixParams(r, o.master, 'master', MIX_MASTER, 'Mixer Master'),
+    automation: readMasterLanes(r, o.automation, lanes),
   };
+}
+
+const MASTER_CHANNELS = { reverb: ['return', MIX_REVERB], delay: ['return', MIX_DELAY], master: ['master', MIX_MASTER] } as const;
+
+/** The Master row's lanes: each names its channel; one of another channel is dropped. */
+function readMasterLanes(r: Reader, v: unknown, lanes: Lanes): MasterLaneJson[] {
+  const out: MasterLaneJson[] = [];
+  const raw = arr(v);
+  for (const x of raw) {
+    const ch = isObj(x) ? x.channel : undefined;
+    if (ch !== 'reverb' && ch !== 'delay' && ch !== 'master') {
+      r.warn(`Master row: dropped an automation lane of channel "${String(ch)}" (no such channel)`);
+      continue;
+    }
+    const [kind, index] = MASTER_CHANNELS[ch];
+    // One lane at a time, so a duplicate target is caught against this channel's earlier lanes only.
+    const mine = out.filter((l) => l.channel === ch);
+    const got = readLanes(r, [x], lanes, `Master row ${ch}`, (t) => laneDef(t, kind, index, null), mine);
+    for (const l of got) out.push({ channel: ch, ...l });
+  }
+  return out;
+}
+
+/** Engine lanes used so far, and how many lanes were kept (at most MAX_AUTO_LANES). */
+interface Lanes {
+  taken: Set<number>;
+  count: number;
+}
+
+/**
+ * The catalog def of a lane target on a mixer channel (`kind`, `index`) and,
+ * for a synth track, its rack `patch` (validated); null when the engine
+ * would refuse it: unknown, integer, not on this channel, a rack target off
+ * a synth track, or a module the rack does not have. `why` says which.
+ */
+function laneDef(
+  target: unknown, kind: MixTarget, index: number, patch: Patch | null,
+): { def: MixParamDef | ParamDef } | { why: string } {
+  if (!isObj(target)) return { why: 'no target' };
+  if (typeof target.mix === 'string') {
+    const name = target.mix;
+    const def = MIX_PARAMS.find((d) => d.name === name);
+    if (!def) return { why: `unknown param "${name}"` };
+    if (def.integer) return { why: `${name} cannot be automated` };
+    if (!accepts(def, kind, index)) return { why: `${name} does not apply here` };
+    return { def };
+  }
+  const rack = target.rack;
+  if (Array.isArray(rack) && rack.length === 2 && typeof rack[1] === 'string') {
+    const [mod, name] = rack as [unknown, string];
+    if (!patch) return { why: `${name}: only synth tracks have a rack` };
+    const pm = patch.modules.find((m) => m.idx === mod);
+    if (!pm) return { why: `${name}: no module ${String(mod)} in the rack` };
+    const def = moduleDef(pm.id).params.find((d) => d.name === name);
+    if (!def) return { why: `unknown param "${name}" of module ${String(mod)}` };
+    if (def.integer) return { why: `${name} cannot be automated` };
+    return { def };
+  }
+  return { why: 'no target' };
+}
+
+/**
+ * A list of lanes of one owner. Dropped, with a warning: a malformed lane,
+ * one whose target laneDef refuses or that already has a lane (`earlier`:
+ * the owner's lanes kept before this list), one whose engine lane is out of
+ * range or taken, and any beyond MAX_AUTO_LANES. Points: malformed ones and
+ * a repeated tick are dropped, ticks and values clamped, at most
+ * MAX_AUTO_POINTS kept; the kept ones stay in their order (their engine idx).
+ */
+function readLanes(
+  r: Reader, v: unknown, lanes: Lanes, at: string,
+  defOf: (target: unknown) => { def: MixParamDef | ParamDef } | { why: string }, earlier: LaneJson[] = [],
+): LaneJson[] {
+  const out: LaneJson[] = [];
+  const key = (t: LaneJson['target']) => JSON.stringify(t);
+  const seen = new Set([...earlier, ...out].map((l) => key(l.target)));
+  for (const x of arr(v)) {
+    if (!isObj(x)) {
+      r.warn(`${at}: dropped a malformed automation lane`);
+      continue;
+    }
+    const d = defOf(x.target);
+    if ('why' in d) {
+      r.warn(`${at}: dropped an automation lane (${d.why})`);
+      continue;
+    }
+    const t = x.target as Record<string, unknown>;
+    const target: LaneJson['target'] = typeof t.mix === 'string' ? { mix: t.mix } : { rack: [(t.rack as [number, string])[0], (t.rack as [number, string])[1]] };
+    const name = 'mix' in target ? target.mix : target.rack[1];
+    if (seen.has(key(target))) {
+      r.warn(`${at}: dropped an automation lane of ${name} (that target already has a lane)`);
+      continue;
+    }
+    if (lanes.count >= MAX_AUTO_LANES) {
+      r.warn(`${at}: dropped the automation lane of ${name} (at most ${MAX_AUTO_LANES} lanes per project)`);
+      continue;
+    }
+    const lane = r.index(x.lane, MAX_AUTO_LANES, lanes.taken, `${at} automation lane ${String(x.lane)} (${name}): engine lane`);
+    if (lane === null) continue;
+    seen.add(key(target));
+    lanes.count++;
+    const w = `${at} automation of ${name}`;
+    const points: [number, number, 0 | 1][] = [];
+    const ticks = new Set<number>();
+    const raw = arr(x.points);
+    for (const pt of raw) {
+      if (!Array.isArray(pt) || pt.length !== 3 || !pt.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+        r.warn(`${w}: dropped a malformed point (${JSON.stringify(pt)})`);
+        continue;
+      }
+      if (points.length >= MAX_AUTO_POINTS) {
+        r.warn(`${w}: only the first ${MAX_AUTO_POINTS} points were kept`);
+        break;
+      }
+      const tick = r.num(pt[0], 0, 0, MAX_SONG_TICKS, `${w} point tick`, true);
+      if (ticks.has(tick)) {
+        r.warn(`${w}: a second point at tick ${tick} (dropped)`);
+        continue;
+      }
+      ticks.add(tick);
+      const value = r.num(pt[1], d.def.default, d.def.min, d.def.max, `${w} point value`);
+      if (pt[2] !== 0 && pt[2] !== 1) r.warn(`${w}: point shape ${pt[2]} is not 0/1 (linear)`);
+      points.push([tick, value, pt[2] === 1 ? 1 : 0]);
+    }
+    out.push({ lane, enabled: r.bool(x.enabled, true, `${w} enabled`), target, points });
+  }
+  return out;
 }

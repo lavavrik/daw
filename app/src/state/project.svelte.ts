@@ -70,6 +70,47 @@ export interface Clip {
   offset: number;
 }
 
+/**
+ * What an automation lane drives (spec addendum §3.4), by catalog NAME. The
+ * channel is implied by the lane's owner: a track's lanes target its own
+ * mixer strip ('mix') or its own rack ('rack', synth tracks only); a Master
+ * row lane (MixerState.automation) targets its channel. Only non-integer
+ * params (state/automation.ts automatableParams).
+ */
+export type AutoTarget = { kind: 'mix'; param: string } | { kind: 'rack'; module: number; param: string };
+
+/**
+ * One breakpoint. `idx` is the engine point slot (0..MAX_AUTO_POINTS-1) within
+ * the lane; a lane's points always use idx 0..n-1 (dense), so the saved
+ * order (idx order) is the engine address (state/automation-actions.ts).
+ */
+export interface AutoPoint {
+  id: string;
+  idx: number;
+  /** Song tick, 0..MAX_SONG_TICKS; unique within the lane. */
+  tick: number;
+  /** Param units, within the catalog range. */
+  value: number;
+  /** Keeps its value up to the next point (else: linear in knob space to it). */
+  hold: boolean;
+}
+
+/**
+ * An automation lane. `lane` is the engine lane (0..MAX_AUTO_LANES-1), unique
+ * across the whole project. Edit through state/automation-actions.ts.
+ */
+export interface AutomationLane {
+  id: string;
+  lane: number;
+  target: AutoTarget;
+  enabled: boolean;
+  /** Sorted by tick. */
+  points: AutoPoint[];
+}
+
+/** The mixer channels a Master row lane can target. */
+export type MasterChannel = 'reverb' | 'delay' | 'master';
+
 export interface DrumTrack {
   kind: 'drum';
   id: string;
@@ -84,6 +125,8 @@ export interface DrumTrack {
   /** The pattern Pattern mode loops and the step grid edits (engine current pattern). */
   currentPatternId: string;
   clips: Clip[];
+  /** Mixer-strip lanes (rack lanes: synth tracks only). */
+  automation: AutomationLane[];
 }
 
 /** One module in a synth track's rack; `idx` is the engine module slot (0..31). */
@@ -130,6 +173,8 @@ export interface SynthTrack {
   /** The pattern Pattern mode loops, the piano roll edits and recording targets. */
   currentPatternId: string;
   clips: Clip[];
+  /** Mixer-strip lanes (rack lanes: synth tracks only). */
+  automation: AutomationLane[];
 }
 
 /**
@@ -167,6 +212,8 @@ export interface AudioTrack {
   name: string;
   color: string;
   clips: AudioClip[];
+  /** Mixer-strip lanes only (an Audio slot has no rack). */
+  automation: AutomationLane[];
 }
 
 export type Track = DrumTrack | SynthTrack | AudioTrack;
@@ -210,6 +257,8 @@ export interface MixerState {
   reverb: ChannelState;
   delay: ChannelState;
   master: ChannelState;
+  /** The Master row's lanes (returns and master), in creation order. */
+  automation: { channel: MasterChannel; lane: AutomationLane }[];
 }
 
 /** The original bytes of a loaded sample, kept so a save writes them unchanged. */
@@ -225,7 +274,7 @@ export interface SampleFile {
 
 export const newChannel = (): ChannelState => ({ params: defaultMixParams(), key: null });
 export const newMixer = (): MixerState => ({
-  channels: {}, reverb: newChannel(), delay: newChannel(), master: newChannel(),
+  channels: {}, reverb: newChannel(), delay: newChannel(), master: newChannel(), automation: [],
 });
 
 export class Project {

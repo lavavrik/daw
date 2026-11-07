@@ -213,7 +213,7 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { version: json.schemaVersion, clips: json.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips) };
   }, dirName);
-  expect(saved.version).toBe(2);
+  expect(saved.version).toBe(3);
   expect(saved.clips).toHaveLength(1);
   expect(saved.clips[0]).toHaveLength(1);
   expect(saved.clips[0][0]).toMatchObject(want);

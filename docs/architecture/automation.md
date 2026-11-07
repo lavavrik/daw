@@ -179,8 +179,8 @@ the param just stops being driven, and its owner resets it anyway.
 | `RACK_CLEAR` (a patch load) | the rack's lanes; the strip's lanes stay |
 | `RESET_ALL` | all lanes |
 
-The UI removes the same lanes in the same `edit()`, so undo restores both.
-That is plan 10, Task 2.
+The UI removes the same lanes in the same `edit()`, so undo restores both
+(see *App* below).
 
 ## Limits and cost
 
@@ -196,3 +196,96 @@ That is plan 10, Task 2.
   Audio tracks, plus all 64 lanes of 512 points, 32 of them applying (16
   mixer, 16 rack), costs 8.2 % of real time. The same mix without automation
   costs 8.1 %. The budget is 40 %.
+
+## App (plan 10 Task 2)
+
+Code: `app/src/state/automation.ts` (pure), `app/src/state/automation-actions.ts`
+(edits), the model in `app/src/state/project.svelte.ts`. Tests:
+`automation.test.ts`, `automation-actions.test.ts`, and the project / history /
+export tests named in projects.md, history.md and export.md.
+
+### Model
+
+- `AutomationLane = {id, lane, target, enabled, points}`. `lane` is the
+  engine lane, unique in the project; `points` are kept **sorted by tick**.
+- `AutoTarget` is `{kind: 'mix', param}` or `{kind: 'rack', module, param}`,
+  by catalog name. The channel is implied by the owner.
+- **Owners.** Every `Track` has `automation: AutomationLane[]`: lanes on its
+  own strip, and on synth tracks also on its own rack (Audio and drum tracks
+  have no rack). The Master row's lanes (Reverb, Delay, master) are in
+  `MixerState.automation` as `{channel, lane}`.
+- `AutoPoint = {id, idx, tick, value, hold}`. `idx` is the engine point
+  slot, and a lane's idx are always **dense** (0..n−1): the saved points are
+  listed in idx order without an idx field (projects.md), and undo matches
+  them by idx.
+- What a knob is set to (`ChannelState.params`, a module's `params`) is the
+  target's **base value**, as in the engine.
+
+### Pure functions (`automation.ts`)
+
+- `laneValueAt(points, tick, param)`: the engine's `Lane::value_at`, in
+  float64. Lin params interpolate the values; exp params the knob position
+  through `knobMath` `toPos` / `fromPos` (zero zone included); clamped to
+  the range; null without points. Pinned by `auto_eval.json` (`laneValueAt
+  matches the engine fixture`, knob space, 1e-6). The knob rings (Task 4)
+  draw it at the heard playhead.
+- `nextBreakpoint(points, tick)`: the first point after `tick`, where an
+  override ends.
+- `thin(samples, tolerance)`: Ramer–Douglas–Peucker with the **vertical**
+  distance (value at the sample's tick: ticks and values are not one unit).
+  The ends are kept; the result is a subset of the input.
+- `automatableParams(owner)`: the mixer params the owner's channel takes,
+  catalog order, then (synth) each module's, rack order. Non-integer only,
+  which also rules out every choice and flag. `targetDef(owner, target)` is
+  the same rule for one target.
+- `laneCount(p)`, `freeLane(p)`, `projectLanes(p)`.
+- `pointCommands(lane, from, to)`: the commands from one point set (idx →
+  `[tick, value, hold]`) to another. **All `AUTO_POINT_REMOVE`s first** (an
+  idx that goes, or whose tick changes), **then the `AUTO_POINT_SET`s** (new
+  or changed idx). The engine refuses a SET on a tick another point of the
+  lane still holds, and after the removals the only held ticks are those of
+  points that keep their idx and tick. A point whose value or shape alone
+  changes is SET in place, since it holds its own tick. Every point edit and
+  undo go through it; a random-diff test drives it against the engine
+  model.
+
+### Actions (`automation-actions.ts`)
+
+Each runs in one `edit()` (one undo entry). A refusal returns null or false,
+changes nothing and sends nothing.
+
+| Action | Sends | Refused when |
+|---|---|---|
+| `addLane(p, sink, owner, target)` (owner: a track id, or `'reverb'` / `'delay'` / `'master'`) | `AUTO_LANE_SET` on the lowest free engine lane | the target is not automatable there, already has a lane on that owner, or 64 lanes exist |
+| `removeLane` | `AUTO_LANE_CLEAR` | no such lane |
+| `setLaneEnabled` | `AUTO_LANE_ENABLE` | no such lane, or no change |
+| `addPoint(p, sink, laneId, {tick, value, hold?})` | one `AUTO_POINT_SET` | 512 points, a tick already used, NaN; the tick is rounded and kept in the song, the value clamped |
+| `movePoints(p, sink, laneId, ids, dTick, dValue)` | the difference | nothing moves. `dTick` is clamped so no moved point reaches an unmoved neighbour or leaves the song: the order never changes. **`dValue` is in knob position** (a fraction of the travel, as the lane is drawn), and each value is clamped to the range |
+| `deletePoints`, `setPointShape(…, ids, hold)` | the difference | nothing changes |
+| `drawPoints(p, sink, laneId, samples)` | the difference | nothing usable drawn, or more than 512 points would result. The samples are rounded to whole ticks (the last on a tick wins), clamped, and thinned in knob position to `DRAW_TOLERANCE` (0.5 % of the travel); the result replaces every point between the first and last sample's tick. The stroke's ends are always kept |
+| `overrideLane(p, sink, laneId)` | `AUTO_OVERRIDE` only | no such lane. **Not an edit**: no undo entry, no unsaved mark. The manual move's own `setMix` / `setParam` that follows is the edit, and it sets the base |
+
+- **Dense idx.** A point edit computes the lane's new point set. Points keep
+  their idx when it is below the new count; new points, and points above
+  it, take the freed idx below it. The difference goes through
+  `pointCommands`. Point objects, and so their UI ids, survive.
+- **Lifecycle** (same `edit()` as the engine's clear):
+  - `removeModule` drops that module's lanes;
+  - `loadPatch` (`RACK_CLEAR`) drops every rack lane of the track;
+  - `rollbackRefusedAdd` drops the lanes of a module the engine never added;
+  - `removeTrack` takes the track's lanes with the track;
+  - the Master row's lanes stay.
+
+### Persistence, replay, undo
+
+- **Schema v3** (projects.md): lanes inside their owner's JSON, points as
+  `[tick, value, 0|1]` in idx order. `validate` drops what the engine would
+  refuse.
+- **Replay** (`projectCommands`): after `MIX_SET_KEY`, before the
+  transport: per lane `AUTO_LANE_SET`, its points, `AUTO_LANE_ENABLE`. So
+  load, export, the audio restart and undo's whole-track rebuilds have no
+  automation path of their own. `load.ts units()` keeps a lane's commands
+  in one unit.
+- **Undo** (history.md, `diffApply` step 3b): lanes by engine lane; clear,
+  then re-target; points by idx with `pointCommands`.
+

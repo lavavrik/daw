@@ -4,7 +4,10 @@
 // gestures, recording passes, pattern / track switches that are not edits,
 // track adds and removes, undo/redo in between; plan 9: gestures and
 // one-shots made while a pass is held open join it; Audio tracks and their
-// clips: add, edit, trim, move between audio lanes, split, delete), undoing everything restores
+// clips: add, edit, trim, move between audio lanes, split, delete; plan 10:
+// automation lanes added, removed, re-targeted and enabled, their points
+// added, moved, reshaped, deleted and drawn, rack modules and patches whose
+// lanes go with them), undoing everything restores
 // the project as it was before the first entry, and redoing it all restores
 // the final state; the modelled engine matches a fresh load of each.
 //
@@ -19,7 +22,10 @@ import { moduleDef, paramIndex } from '../audio/catalog';
 import { addDrumTrack, removeTrack, selectTrack, setTempo, toggleStep } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
 import { addNote, deleteNotes, newPattern, selectPattern, updateNotes } from '../state/pattern-actions';
-import { addSynthTrack, setParam } from '../state/rack-actions';
+import { addSynthTrack, loadPatch, removeModule, setParam } from '../state/rack-actions';
+import { STARTER_PATCHES } from '../state/patches';
+import { automatableParams } from '../state/automation';
+import { addLane, addPoint, deletePoints, drawPoints, movePoints, removeLane, setLaneEnabled, setPointShape } from '../state/automation-actions';
 import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
 import { deleteClips, moveClips, splitClips } from '../state/song-actions';
 import { edit } from '../state/edits';
@@ -28,7 +34,7 @@ import type { AudioTrack, DrumTrack, SynthTrack, Track } from '../state/project.
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { addAudioFixture, buildFixture } from '../project/testFixture';
+import { addAudioFixture, addAutomationFixture, buildFixture } from '../project/testFixture';
 import { blankModel, run, view } from './engineModel';
 import { createHistory, debugStacks } from './history';
 import { diffApply } from './diffApply';
@@ -54,6 +60,7 @@ async function sequence(seed: number, ops: number) {
   const r = rng(seed);
   const { p } = await buildFixture();
   if (seed % 2 === 1) await addAudioFixture(p); // half the sequences start with Audio tracks
+  if (seed % 3 !== 0) addAutomationFixture(p); // two thirds start with lanes
   const start = serialize(p);
   const m = run(blankModel(), projectCommands(start, ids(start)).commands);
   const sink = { send: (op: number, a = 0, b = 0, c = 0, d = 0) => (run(m, [[op, a, b, c, d]]), true) };
@@ -65,6 +72,8 @@ async function sequence(seed: number, ops: number) {
   const drums = () => p.tracks.filter((t): t is DrumTrack => t.kind === 'drum');
   const audios = () => p.tracks.filter((t): t is AudioTrack => t.kind === 'audio');
   const audioClip = () => r.pick(audios().flatMap((t) => t.clips));
+  const lanes = () => [...p.tracks.flatMap((t) => t.automation), ...p.mixer.automation.map((x) => x.lane)];
+  const someOf = <T>(xs: T[]) => xs.filter(() => r.int(2) === 0);
   /** A sample of the session, or none ("missing sample"). */
   const sampleId = () => r.pick([...p.sampleFiles.keys(), null] as (number | null)[])!;
   let pass = 1;
@@ -247,6 +256,58 @@ async function sequence(seed: number, ops: number) {
     (log) => {
       const c = audioClip();
       if (c) (log.push('deleteAudioClip'), deleteClips(p, sink, [c.id]));
+    },
+    // Automation (plan 10).
+    (log) => {
+      const owner = r.pick([...p.tracks.map((t) => t), 'reverb', 'delay', 'master'] as const)!;
+      const target = r.pick(automatableParams(owner))?.target;
+      if (target) (log.push('addLane'), addLane(p, sink, typeof owner === 'string' ? owner : owner.id, target));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (l) (log.push('removeLane'), removeLane(p, sink, l.id));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (l) (log.push('setLaneEnabled'), setLaneEnabled(p, sink, l.id, !l.enabled));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (!l) return;
+      // Several points in one gesture (one entry: the shadow tracks one entry per op).
+      log.push('addPoints');
+      h.begin();
+      for (let i = r.int(4); i >= 0; i--) addPoint(p, sink, l.id, { tick: r.int(40) * 120, value: r.next() * 20 - 10, hold: r.int(3) === 0 });
+      h.commit();
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (l) (log.push('movePoints'), movePoints(p, sink, l.id, someOf(l.points).map((x) => x.id), r.int(4000) - 2000, r.next() - 0.5));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (l) (log.push('setPointShape'), setPointShape(p, sink, l.id, someOf(l.points).map((x) => x.id), r.int(2) === 0));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (l) (log.push('deletePoints'), deletePoints(p, sink, l.id, someOf(l.points).map((x) => x.id)));
+    },
+    (log) => {
+      const l = r.pick(lanes());
+      if (!l) return;
+      log.push('drawPoints');
+      const t0 = r.int(20) * 240;
+      const n = 2 + r.int(60);
+      drawPoints(p, sink, l.id, Array.from({ length: n }, (_, i) => ({ tick: t0 + i * 37, value: 5 * Math.sin(i / (1 + r.int(9))) })));
+    },
+    (log) => {
+      const t = r.pick(synths());
+      const m = t && r.pick(t.modules);
+      if (t && m) (log.push('removeModule'), removeModule(p, sink, t.id, m.idx));
+    },
+    (log) => {
+      const t = r.pick(synths());
+      if (t && r.int(3) === 0) (log.push('loadPatch'), loadPatch(p, sink, t.id, r.pick(STARTER_PATCHES)!));
     },
     (log) => (log.push('undo'), step('undo')),
     (log) => (log.push('redo'), step('redo')),

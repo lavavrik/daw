@@ -8,7 +8,9 @@
 //! `render matches native` (app/src/export/render.test.ts) renders the same
 //! job through `engine.wasm` and checks it against the same file. The audio
 //! clip job `fixtures/export_audio.txt` (plan 9) is pinned the same way by
-//! `export_audio.hash` and `audio render matches native`.
+//! `export_audio.hash` and `audio render matches native`, and the automation
+//! job `fixtures/export_auto.txt` (plan 10) by `export_auto.hash` and
+//! `automation render matches native`.
 //!
 //! Job (both sides): `engine_new(sample_rate)`; every `sample` line is
 //! allocated, filled (planar) and marked ready; every `cmd` line is sent in
@@ -173,6 +175,16 @@ fn export_render_matches_golden_hash() {
 #[test]
 fn export_audio_render_matches_golden() {
     matches_golden("export_audio");
+}
+
+/// Plan 10: the export command list of a project with automation lanes (a
+/// fader ride and a hold drop, a send build-up, a filter-cutoff sweep on a
+/// synth rack, a Master-row limiter-ceiling lane), frozen by
+/// app/src/export/render.test.ts from `exportCommands`; its own golden hash,
+/// asserted by the wasm side too (`automation render matches native`).
+#[test]
+fn export_auto_render_matches_golden() {
+    matches_golden("export_auto");
 }
 
 #[test]

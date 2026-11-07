@@ -10,7 +10,7 @@ import { encodeWav24 } from './wav';
 import { engineWasmBytes as wasmBytes } from './testWasm';
 import { exportCommands, exportFrames } from './exportSong';
 import { serialize } from '../project/serialize';
-import { buildAudioFixture } from '../project/testFixture';
+import { buildAudioFixture, buildAutoFixture } from '../project/testFixture';
 
 const fixture = (f: string) => readFileSync(new URL(`../../../engine/tests/fixtures/${f}`, import.meta.url), 'utf8');
 
@@ -149,5 +149,48 @@ describe('export render core', () => {
     const text = `${lines.join('\n')}\n`;
     if (process.env.UPDATE_FIXTURE) writeFileSync(new URL('../../../engine/tests/fixtures/export_audio.txt', import.meta.url), text);
     expect(fixture('export_audio.txt')).toBe(text);
+  });
+
+  it('automation render matches native', () => {
+    const j = parseJob(fixture('export_auto.txt'));
+    expect(j.commands.some((c) => c[0] === 49)).toBe(true); // AUTO_LANE_SET: the lanes are in it
+    const { left, right } = renderSong(wasmBytes(), j);
+    expect(left.length).toBe(j.frames);
+    expect(left.some((x) => Math.abs(x) > 0.01)).toBe(true);
+    const golden = fixture('export_auto.hash').trim();
+    expect(fnv1a32(left, right).toString(16).padStart(8, '0')).toBe(golden);
+    // The lanes are heard: the same job without them renders differently.
+    const plain = renderSong(wasmBytes(), { ...j, commands: j.commands.filter((c) => c[0] < 49 || c[0] > 54) });
+    expect(fnv1a32(plain.left, plain.right)).not.toBe(fnv1a32(left, right));
+  });
+
+  it('export_auto.txt is the export command list of the automation test project, frozen', async () => {
+    // engine/tests/export_render.rs renders this file natively
+    // (export_auto_render_matches_golden); it must stay what exportCommands
+    // builds for project/testFixture.ts buildAutoFixture. Regenerate after an
+    // intended change with UPDATE_FIXTURE=1, then UPDATE_GOLDEN=1 cargo test
+    // -p daw-engine --test export_render.
+    const { p, ids } = await buildAutoFixture();
+    const json = serialize(p);
+    const rate = 48000;
+    const lines = [
+      '# Fixed render job shared by engine/tests/export_render.rs (native) and',
+      '# app/src/export/render.test.ts (engine.wasm), like export_render.txt.',
+      '# Frozen: the export command list (exportCommands) of the automation test',
+      '# project (project/testFixture.ts buildAutoFixture: a drum track and a',
+      '# synth in Song mode, 128 BPM, with a fader ride and a hold drop on the',
+      '# synth strip, a send build-up on the drums, a filter-cutoff sweep on the',
+      '# synth rack, and a Master-row limiter-ceiling lane). Sample data is',
+      '# generated (see export_render.rs).',
+      `sample_rate ${rate}`,
+      `frames ${exportFrames(json, rate)}`,
+      `sample ${ids[0]} ${rate / 4} 1 21`,
+      ...exportCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands.map(
+        ([op, a = 0, b = 0, c = 0, d = 0]) => `cmd ${op} ${a} ${b} ${c} ${d}`,
+      ),
+    ];
+    const text = `${lines.join('\n')}\n`;
+    if (process.env.UPDATE_FIXTURE) writeFileSync(new URL('../../../engine/tests/fixtures/export_auto.txt', import.meta.url), text);
+    expect(fixture('export_auto.txt')).toBe(text);
   });
 });

@@ -10,7 +10,7 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 2
+  project.json            schemaVersion 3
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -19,11 +19,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 2)
+## project.json (schemaVersion 3)
 
 ```jsonc
 {
-  "schemaVersion": 2, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 3, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -32,25 +32,35 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
       "patterns": [{ "engineIdx": 0, "name": "Pattern 1", "stepCount": 16, "swing": 0,
                      "hits": [[0, 0, 100], [0, 4, 100]] }],   // [row, step, velocity]
       "currentPattern": 0,                 // an engineIdx
-      "clips": [{ "idx": 0, "pattern": 0, "start": 0, "len": 3840, "offset": 0 }] },
+      "clips": [{ "idx": 0, "pattern": 0, "start": 0, "len": 3840, "offset": 0 }],
+      "automation": [                      // plan 10: the track's lanes (every kind)
+        { "lane": 0, "enabled": true,      // engine lane 0..63, unique in the project
+          "target": { "mix": "send_a" },   // a param of the track's own strip, by name
+          "points": [[0, -60, 0], [7680, 0, 0]] } ] },  // [tick, value, 0 linear | 1 hold], idx order
     { "kind": "synth", "slot": 1, "name": "Bass", "color": "#ffa94d",
       "patch": { "name": "Deep Bass",       // state/patches.ts Patch: by name
                  "modules": [{ "idx": 0, "id": "midi_in", "params": { "mode": 1, ... } }],
                  "cables": [{ "from": [0, "pitch"], "to": [1, "pitch"] }] },
       "patterns": [{ "engineIdx": 0, "name": "Pattern 1", "bars": 4,
                      "notes": [{ "idx": 0, "pitch": 36, "vel": 100, "start": 0, "len": 480 }] }],
-      "currentPattern": 0, "clips": [] },
+      "currentPattern": 0, "clips": [],
+      "automation": [{ "lane": 1, "enabled": true,
+                       "target": { "rack": [4, "cutoff"] },   // [module idx, param name]: synth tracks only
+                       "points": [[0, 200, 0], [7680, 8000, 0]] }] },
     { "kind": "audio", "slot": 2, "name": "Vox", "color": "#ffd43b",   // plan 9
       "clips": [{ "idx": 0, "sample": 1, "start": 3840, "len": 7680,
                   "offset": 0.25,           // seconds into the file (rate-independent)
                   "loop": false, "gain": -3, // dB, -60 (= -inf) .. +12
-                  "fadeIn": 240, "fadeOut": 480 }] }   // ticks, fadeIn + fadeOut <= len
+                  "fadeIn": 240, "fadeOut": 480 }],   // ticks, fadeIn + fadeOut <= len
+      "automation": [] }                   // mixer-strip lanes only
   ],
   "mixer": {
     "tracks": [{ "slot": 0, "params": { "fader": 0, "pan": 0, ... }, "key": null },
                { "slot": 1, "params": { ... }, "key": { "track": 0, "row": 0 } }],
     "reverb": { "rev_size": 0.6, ... }, "delay": { "delay_time": 6, ... },
-    "master": { "fader": 0, "limiter_ceiling": -0.3, ... }
+    "master": { "fader": 0, "limiter_ceiling": -0.3, ... },
+    "automation": [{ "channel": "master", "lane": 2, "enabled": false,   // the Master row's lanes
+                     "target": { "mix": "limiter_ceiling" }, "points": [[0, 0, 0], [7680, -3, 0]] }]
   },
   "samples": [{ "id": 0, "name": "kick.wav", "type": "audio/wav", "file": "samples/0-1a2b3c4d-kick.wav" }],
   "selection": { "track": 0, "synth": 1 }  // selected track, Keys → target (slots)
@@ -79,6 +89,18 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   `Project.generation` (bumped by `blankState`) after its engine upload, so
   an upload from a session that New / Open / Restore replaced never lands
   in the new one.
+- **Automation lanes** (plan 10, spec addendum §3.4; automation.md) live
+  inside their owner: a track's in its `automation`, the Master row's
+  (Reverb, Delay, master) in `mixer.automation` with their `channel`. A
+  target is a non-integer catalog param, by name: `{mix: name}` on the
+  owner's channel, or `{rack: [moduleIdx, name]}` on a synth track's rack.
+  `lane` is the engine lane. A lane's `points` are listed in **engine idx
+  order**: the app keeps each lane's idx dense (point i is idx i), so the
+  position is the address and undo can match points by idx. The values are
+  the base-independent breakpoints; what the knobs are set to (the mixer
+  params, the rack params) is each target's **base value**, which plays
+  wherever a lane does not apply (Pattern mode, a disabled lane). Which
+  tracks show their lanes is UI state, not saved.
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
@@ -99,11 +121,15 @@ folder's sample list all get it). It is pure (the input is not changed).
 | From → to | Plan | Change |
 |---|---|---|
 | 1 → 2 | 9 | Audio tracks. A v1 project has none, so only the version moves: lossless. |
+| 2 → 3 | 10 | Automation. A v2 project has none: every track object and the mixer object get an empty `automation`; nothing else changes, so it is lossless. |
 
 A version newer than the build knows stays an error ("saved by a newer
 version of the app"); a save always writes the current version.
-`migrate.test.ts` pins v1 → v2 on a frozen genuine v1 save
-(`project/testdata/v1-fixture.json`) and minimal v1 files.
+`migrate.test.ts` pins v1 → v3 (through v2) on a frozen genuine v1 save
+(`project/testdata/v1-fixture.json`) and minimal v1 files, and v2 → v3 on a
+frozen genuine v2 save with Audio tracks (`project/testdata/v2-fixture.json`,
+the plan-9 save of `buildFixture` + `addAudioFixture`); `load.test.ts` `a v2
+project loads and saves as v3` opens it and checks the save.
 
 ## Sample memory (spec addendum §3.3)
 
@@ -185,7 +211,7 @@ its load, so the kit never retries into the gap between them.
 
 Never throws, never lets an out-of-range value through. Unknown fields are
 ignored. The file is migrated first (see above). A missing/non-integer
-`schemaVersion` or one greater than the current one (2) is an
+`schemaVersion` or one greater than the current one (3) is an
 **error** (nothing changes). Everything else becomes a **warning**, shown in a
 notice banner after the load (all of them in the console):
 
@@ -210,6 +236,15 @@ notice banner after the load (all of them in the console):
   SET after it commit a stale source); edits keep a one-shot's offset
   inside its file, and within `MAX_SAMPLE_FLOATS` frames at 192 kHz when
   the length is unknown.
+- an automation lane (plan 10) is dropped when it is malformed, its target
+  is missing, unknown, integer, not on its channel (or a rack target off a
+  synth track, or on a module the validated rack lacks), its target already
+  has a lane of that owner, its engine `lane` is out of 0..63 or taken, or
+  it would be the 65th; a Master row lane of an unknown `channel` too. Its
+  points: malformed ones dropped, ticks (0..`MAX_SONG_TICKS`, whole) and
+  values (the target's range) clamped, a repeated tick dropped (the first
+  kept), at most 512 kept; the kept points keep their order (= their idx).
+  `enabled` defaults to true.
 
 ## Load order (`loadProject`)
 
@@ -246,7 +281,16 @@ notice banner after the load (all of them in the console):
      → `AUDIO_CLIP_GAIN` → `AUDIO_CLIP_SET` (stage, stage, commit: always
      the three together, `commands.ts audioClipCommands`);
    - `MIX_SET` by name (non-defaults; RESET_ALL set the rest), then
-     **`MIX_SET_KEY` last** (keys need their source tracks and rows);
+     `MIX_SET_KEY` (keys need their source tracks and rows);
+   - **automation lanes** (plan 10), the tracks' in track order, then the
+     Master row's: per lane `AUTO_LANE_SET`, its `AUTO_POINT_SET`s (idx =
+     position in `points`), `AUTO_LANE_ENABLE` (always sent). After every
+     track and module they target; the bases were already set by the
+     `RACK_SET_PARAM` / `MIX_SET` commands, and `AUTO_LANE_SET` captures
+     them. A rack lane whose module the FX-pool check dropped is dropped
+     with it (a warning). `load.ts units()` keeps a lane's commands
+     together as one unit (like an audio clip's triple), so the late-upload
+     rebind (`bindingCommands`) never splits one;
    - `SET_TEMPO`, `SET_METRONOME`, `SET_MODE`, `SET_LOOP`, `SET_INPUT_TRACK`
      — always, because RESET_ALL put the engine back to 124 BPM / Pattern /
      loop off / metronome off / no input.
@@ -258,9 +302,12 @@ warnings go to their own banner (`banners.load`).
 `load.test.ts` replays every load through a model of the engine's checks
 (`testFixture.ts` `checkLog`): no out-of-range command, nothing addressed to a
 missing track/module/sample (an audio clip's SOURCE included), every audio
-clip staged before its commit with fades that fit, nothing after the keys
-but transport. `projectCommands includes audio tracks` runs it on the
-fixture plus two Audio tracks (`addAudioFixture`).
+clip staged before its commit with fades that fit, every lane target
+existing and automatable, unique point ticks with values in range, nothing
+after the keys but lanes and transport, nothing after a lane but lanes and
+transport. `projectCommands includes audio tracks` runs it on the
+fixture plus two Audio tracks (`addAudioFixture`); `projectCommands emits
+lanes after keys` adds the automation lanes (`addAutomationFixture`).
 
 ## Saving (`writeProject`)
 

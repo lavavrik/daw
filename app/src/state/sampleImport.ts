@@ -15,6 +15,12 @@
 // upload (the old context may close under the decode; the old engine may
 // close before it answers) ends the import with "Audio restarted — drop it
 // again": the bytes never reached the new engine.
+//
+// `busy` marks a failure that only says the project was busy (an audio
+// restart, or Project.loading with the session still the same one: an
+// autosave restore still reading, which may fail and leave it). The same
+// file can be imported again once that is over; the default kit does
+// (state/defaultKit.ts), a drop just reports it / drops it as before.
 import { Err } from '../audio/protocol';
 import { baseName, decodeBytes, isProbablyAudio, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
@@ -31,8 +37,8 @@ export interface ImportEngine {
 
 export type ImportResult =
   | { ok: true; id: number; name: string; deferred: boolean }
-  /** `error` null: dropped silently (its target or session is gone). */
-  | { ok: false; error: string | null };
+  /** `error` null: dropped silently (its target or session is gone, or the project was busy). */
+  | { ok: false; error: string | null; busy?: true };
 
 export async function importSample(
   p: Project, engine: ImportEngine, file: File, stillThere: () => boolean,
@@ -40,7 +46,7 @@ export async function importSample(
   const unreadable = { ok: false, error: `Couldn't load "${file.name}" — not a readable audio file` } as const;
   if (!isProbablyAudio(file)) return unreadable;
   const restarts = p.audioRestarts;
-  const again = { ok: false, error: `Audio restarted — drop "${file.name}" again` } as const;
+  const again = { ok: false, error: `Audio restarted — drop "${file.name}" again`, busy: true } as const;
   const restarted = () => p.restarting || p.audioRestarts !== restarts;
   let bytes: ArrayBuffer;
   let channels: Float32Array[];
@@ -53,7 +59,8 @@ export async function importSample(
   const kept = await sampleFile(file.name, file.type, bytes); // hashed async, before the id is taken
   if (restarted()) return again;
   // A project load started meanwhile: this drop belonged to the old session.
-  if (p.loading || !stillThere()) return { ok: false, error: null };
+  if (!stillThere()) return { ok: false, error: null };
+  if (p.loading) return { ok: false, error: null, busy: true };
   if (p.nextSampleId >= MAX_SAMPLES) return { ok: false, error: `Sample limit reached (${MAX_SAMPLES} loads per session)` };
   const gen = p.generation;
   const id = p.nextSampleId++;
@@ -62,7 +69,8 @@ export async function importSample(
   // A New / Open / Restore started (or finished) during the upload: the id
   // belonged to the old session (RESET_ALL dropped the sample); the new
   // session's id `id` is someone else's. Drop it silently.
-  if (p.loading || p.generation !== gen) return { ok: false, error: null };
+  if (p.generation !== gen) return { ok: false, error: null };
+  if (p.loading) return { ok: false, error: null, busy: true };
   if (code !== Err.OK && code !== Err.DEFERRED) {
     return { ok: false, error: `Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}` };
   }

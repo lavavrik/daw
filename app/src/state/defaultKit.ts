@@ -25,9 +25,20 @@
 //     edited while the kit loaded, their edit stays one undo step, undoing
 //     it keeps the kit, and undoing back to the start clears "unsaved";
 //   - except when the session was saved to a folder meanwhile: the folder
-//     lacks the sample, so it is an ordinary unsaved change.
+//     lacks the sample, so it is an ordinary unsaved change. A save still
+//     writing when it lands sees Project.baselineEpoch change and leaves the
+//     project unsaved too (project/session.ts saveTo);
+//   - if the user already edited this session (its version moved since the
+//     load began), the autosave has (or will have) a copy without the
+//     sample: KitDeps.landedAfterEdit asks it to write again (App:
+//     autosave.markDirty, no version bump). An untouched session never
+//     autosaves.
 // A row the user filled first keeps the user's sample. A New / Open /
 // restore that replaced the session (Project.generation) ends the load.
+// An import that only failed because the project was busy (an audio
+// restart, or an autosave restore still reading: sampleImport `busy`) is
+// retried once that is over, so a restart never leaves kit rows asking to
+// "drop it again".
 import { starterSample } from '../library/starter';
 import type { ProjectJson, SampleJson } from '../project/schema';
 import { fingerprintOf, serialize } from '../project/serialize';
@@ -87,6 +98,12 @@ export interface KitDeps {
   fetchFile(file: string): Promise<File>;
   /** A sample could not be loaded (the app: the error banner). */
   onError(message: string): void;
+  /**
+   * A kit sample landed in a session the user already edited (the App:
+   * autosave.markDirty, so the autosave includes it). Never called for an
+   * untouched session.
+   */
+  landedAfterEdit?(): void;
 }
 
 /** The app's: the bundled starter kit, problems in the error banner. */
@@ -96,6 +113,14 @@ export const appKitDeps: KitDeps = {
 };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** How often a kit import waiting for a busy project checks again. */
+export const KIT_RETRY_POLL_MS = 50;
+
+/** Resolves once no load / restore read / audio restart is running. */
+async function untilIdle(p: Project) {
+  while (p.loading || p.restarting) await new Promise((r) => setTimeout(r, KIT_RETRY_POLL_MS));
+}
 
 function emptyRow(p: Project, trackId: string, rowId: string): boolean {
   const t = p.tracks.find((x) => x.id === trackId);
@@ -109,6 +134,7 @@ function emptyRow(p: Project, trackId: string, rowId: string): boolean {
  */
 export async function loadDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps = appKitDeps) {
   const gen = p.generation;
+  const v0 = p.version; // the session as it started: any change of it is a user edit
   const t = p.tracks.find((x) => x.id === trackId);
   if (t?.kind !== 'drum') return;
   const jobs = t.rows.slice(0, DEFAULT_KIT.length).map((r, i) => ({ rowId: r.id, kit: DEFAULT_KIT[i] }));
@@ -123,12 +149,24 @@ export async function loadDefaultKit(p: Project, engine: ImportEngine & CommandS
     }
     const empty = () => emptyRow(p, trackId, j.rowId);
     if (!empty()) continue;
-    const r = await importSample(p, engine, got.file, empty);
+    let r = await importSample(p, engine, got.file, empty);
+    if (!r.ok && r.busy) {
+      // An audio restart or an autosave restore's read: the session may well
+      // outlive it. Try once more after it (the live engine by then).
+      await untilIdle(p);
+      if (p.generation !== gen) return;
+      if (!empty()) continue;
+      r = await importSample(p, engine, got.file, empty);
+      if (p.generation !== gen) return;
+      if (!r.ok && r.busy) r = { ok: false, error: `Couldn't load the starter kit's "${j.kit.file}" — drag it in from the Browser's Starter kit` };
+    }
     if (!r.ok) {
       if (r.error) deps.onError(r.error);
       continue;
     }
-    const attach = (id: number) => attachKitSample(p, engine, trackId, j.rowId, id);
+    const attach = (id: number) => {
+      if (attachKitSample(p, engine, trackId, j.rowId, id) && p.version !== v0) deps.landedAfterEdit?.();
+    };
     if (r.deferred) deferSampleAssign(r.id, j.kit.name, attach);
     else attach(r.id);
   }
@@ -153,7 +191,8 @@ export function attachKitSample(p: Project, sink: CommandSink, trackId: string, 
   }
   const sample = serialize(p).samples.find((s) => s.id === sampleId);
   if (!sample) return true; // not saved (no original bytes): no stored state changes
-  const patch = (s: ProjectJson) => withRowSample(s, t.slot, i, name, sample);
+  p.baselineEpoch++;
+  const patch = (s: ProjectJson) => withRowSample(s, t.slot, name, sample);
   p.history?.rebase(patch);
   if (p.folder) markEdited(p);
   else if (p.savedFingerprint) p.savedFingerprint = fingerprintOf(patch(JSON.parse(p.savedFingerprint) as ProjectJson));
@@ -161,17 +200,18 @@ export function attachKitSample(p: Project, sink: CommandSink, trackId: string, 
 }
 
 /**
- * `s` with `sample` on row `row` of the drum track in `slot`, if that row is
- * there, empty and still named `name`; else `s` itself. New nodes only for
- * what changed (fresh copies every call: history.ts rebase shares and
- * freezes them per snapshot).
+ * `s` with `sample` on the first empty row named `name` of the drum track in
+ * `slot` (by name, not by the live row's index: a snapshot may hold the rows
+ * elsewhere), if there is one and `sample` is not in `s` yet; else `s`
+ * itself. New nodes only for what changed (fresh copies every call:
+ * history.ts rebase shares and freezes them per snapshot).
  */
-export function withRowSample(s: ProjectJson, slot: number, row: number, name: string, sample: SampleJson): ProjectJson {
+export function withRowSample(s: ProjectJson, slot: number, name: string, sample: SampleJson): ProjectJson {
   const ti = s.tracks.findIndex((x) => x.slot === slot);
   const t = s.tracks[ti];
   if (t?.kind !== 'drum') return s;
-  const r = t.rows[row];
-  if (!r || r.sample !== null || r.name !== name || s.samples.some((x) => x.id === sample.id)) return s;
+  const row = t.rows.findIndex((r) => r.sample === null && r.name === name);
+  if (row < 0 || s.samples.some((x) => x.id === sample.id)) return s;
   const rows = t.rows.map((x, k) => (k === row ? { ...x, sample: sample.id } : x));
   return {
     ...s,

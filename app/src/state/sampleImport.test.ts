@@ -48,11 +48,11 @@ describe('importSample (Finder drop and library drag share it)', () => {
     expect((await importSample(p, engine(HostErr.ENGINE_STOPPED).e, wav(), () => true)).ok).toBe(false);
   });
 
-  it('target gone or a project load started meanwhile: silently dropped', async () => {
+  it('target gone or a project load started meanwhile: silently dropped (busy: the same session may outlive the load)', async () => {
     const p = new Project();
     expect(await importSample(p, engine(Err.OK).e, wav(), () => false)).toEqual({ ok: false, error: null });
     p.loading = true;
-    expect(await importSample(p, engine(Err.OK).e, wav(), () => true)).toEqual({ ok: false, error: null });
+    expect(await importSample(p, engine(Err.OK).e, wav(), () => true)).toEqual({ ok: false, error: null, busy: true });
     expect(p.sampleFiles.size).toBe(0);
   });
 
@@ -88,7 +88,7 @@ describe('importSample (Finder drop and library drag share it)', () => {
       p.loading = true;
       return dec(b);
     };
-    const again = { ok: false, error: 'Audio restarted — drop "kick.wav" again' };
+    const again = { ok: false, error: 'Audio restarted — drop "kick.wav" again', busy: true };
     expect(await importSample(p, e, wav(), () => true)).toEqual(again);
     // The old context closed under the decode (it rejects): same message, not "not readable".
     const p2 = new Project();

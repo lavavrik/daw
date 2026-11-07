@@ -217,6 +217,12 @@ export class Project {
    * entry. Set only around a synchronous call. Not reactive.
    */
   baselining = false;
+  /**
+   * Bumped by every starting-point change that reaches the saved state (a
+   * default-kit sample landing). A save compares it like `version`: one that
+   * landed while the files were written is not in the folder. Not reactive.
+   */
+  baselineEpoch = 0;
   /** Where Save writes (null: Save does a Save As). Not reactive. */
   folder: FileSystemDirectoryHandle | null = null;
   /**

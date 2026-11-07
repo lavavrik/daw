@@ -106,10 +106,21 @@ edit (`attachKitSample`): set with `p.baselining` (no dirty, no version bump
 session — no undo entry), then the undo history (`history.rebase`) and the
 saved fingerprint are patched with the same change, so an edit the user
 made while the kit loaded stays one undo step whose undo keeps the kit, and
-undoing back to the start clears "● unsaved". If the session was saved to a
-folder meanwhile, the sample is an ordinary unsaved change instead. A row
-the user filled first is left alone; a New / Open / Restore
-(`p.generation`) ends the load.
+undoing back to the start clears "● unsaved" (snapshots are patched by row
+*name* within the track, `withRowSample`, not by the live row's index). If
+the session was saved to a folder meanwhile, the sample is an ordinary
+unsaved change instead; a save still writing when it lands sees
+`p.baselineEpoch` move and leaves the project unsaved (and keeps a pending
+autosave). If the user already edited the session (its version moved since
+the load began), `KitDeps.landedAfterEdit` (App: `autosave.markDirty()`,
+no version bump) makes the autosave include the sample; an untouched
+session still never autosaves. A row the user filled first is left alone; a
+New / Open / Restore (`p.generation`) ends the load. An import that failed
+only because the project was busy — an audio restart, or an autosave
+restore still reading (`importSample` `busy`) — is retried once that is
+over (so a restart never leaves kit rows asking to "drop it again"); if
+the retry is refused too, the banner says to drag it in from the Browser's
+Starter kit.
 
 ## Validation (`validate`)
 

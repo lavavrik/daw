@@ -15,7 +15,8 @@
   import { Project } from './state/project.svelte';
   import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
-  import { addDefaultDrumTrack, loadDefaultKit } from './state/defaultKit';
+  import { addDefaultDrumTrack, appKitDeps, loadDefaultKit } from './state/defaultKit';
+  import type { KitDeps } from './state/defaultKit';
   import { library } from './library/library.svelte';
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
@@ -104,6 +105,12 @@
     },
   });
   autosave.hold(true);
+  /**
+   * The default kit (state/defaultKit.ts): a sample landing after the user
+   * edited the session is not an edit (no version bump), but the autosave
+   * must still include it.
+   */
+  const kitDeps: KitDeps = { ...appKitDeps, landedAfterEdit: () => autosave.markDirty() };
   let seenVersion = project.version;
   $effect(() => {
     const v = project.version;
@@ -215,7 +222,7 @@
   function onFresh(trackId: string) {
     autosave.cancel();
     if (ownsAutosave) void deleteAutosave();
-    void loadDefaultKit(project, live, trackId);
+    void loadDefaultKit(project, live, trackId, kitDeps);
   }
 
   /** "Mar 3, 14:05" (or just "14:05" today). */
@@ -474,8 +481,10 @@
         refreshRec();
       },
       // Project ▸ Save / Save As: an older autosave is now stale, and a
-      // pending one is dropped unless edits landed during the write.
-      onSaved: ({ version, t }) => autosave.savedExplicitly(t, project.version === version),
+      // pending one is dropped unless edits (or default-kit samples) landed
+      // during the write.
+      onSaved: ({ version, baselineEpoch, t }) =>
+        autosave.savedExplicitly(t, project.version === version && project.baselineEpoch === baselineEpoch),
       // Project ▸ New: drop the old session's autosave, fill the kit.
       onFresh,
     });
@@ -497,7 +506,7 @@
     void connectMidi(live, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
     // Not awaited either: rows fill as the kit's samples land. A restore
     // accepted meanwhile replaces the session and ends it (Project.generation).
-    if (kitTrack) void loadDefaultKit(project, live, kitTrack.id);
+    if (kitTrack) void loadDefaultKit(project, live, kitTrack.id, kitDeps);
   }
 
   /**

@@ -5,12 +5,15 @@ import { describe, expect, it } from 'vitest';
 import { Err } from '../audio/protocol';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
-import { markSaved } from '../project/session';
+import { FakeDir, asDir } from '../project/fakeDir';
+import type { ProjectJson, SampleJson } from '../project/schema';
+import { createProjectSession, markSaved } from '../project/session';
+import type { SessionEngine } from '../project/session';
 import { projectFingerprint, serialize } from '../project/serialize';
 import { fakeAudio, fakeDecoder } from '../project/testFixture';
 import { toggleStep } from './actions';
 import { commandEdits } from './edits';
-import { DEFAULT_KIT, addDefaultDrumTrack, defaultKitRows, loadDefaultKit } from './defaultKit';
+import { DEFAULT_KIT, addDefaultDrumTrack, defaultKitRows, loadDefaultKit, withRowSample } from './defaultKit';
 import type { KitDeps } from './defaultKit';
 import { Project, currentPattern } from './project.svelte';
 import type { DrumTrack } from './project.svelte';
@@ -62,6 +65,7 @@ function deps(o: { fail?: string[]; hold?: boolean } = {}) {
 }
 
 const rowsOf = (p: Project) => (p.tracks[0] as DrumTrack).rows;
+const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('default kit rows', () => {
   it('eight named rows in order, each with its starter-kit file', () => {
@@ -181,5 +185,104 @@ describe('loadDefaultKit', () => {
     } finally {
       off();
     }
+  });
+
+  it('Save As while the kit loads: the folder lacks the late samples, so the project stays unsaved (final M1)', async () => {
+    const { p, t, engine } = fresh();
+    const { d, release } = deps({ hold: true });
+    const loading = loadDefaultKit(p, engine, t.id, d);
+    const dir = new FakeDir('Song');
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const getDir = dir.getDirectoryHandle.bind(dir);
+    dir.getDirectoryHandle = async (n: string, o?: { create?: boolean }) => (await gate, getDir(n, o));
+    const saved: { version: number; baselineEpoch: number }[] = [];
+    const s = createProjectSession(p, engine as unknown as SessionEngine, { onSaved: (i) => void saved.push(i) });
+    const saving = s.saveTo(asDir(dir)); // serialized now (no kit samples), written once the gate opens
+    release();
+    await loading; // the kit lands while the files are written
+    open();
+    await saving;
+    expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
+    expect(p.folder).toBe(asDir(dir));
+    expect(p.dirty).toBe(true); // the folder does not have the samples
+    expect(p.savedFingerprint).not.toBe(projectFingerprint(p));
+    // The autosave's pending write must not be dropped either (App onSaved).
+    expect(saved).toHaveLength(1);
+    expect(saved[0].baselineEpoch).not.toBe(p.baselineEpoch);
+  });
+
+  it('a kit row landing after the user edited asks the autosave to write it; an untouched session never does (final M2)', async () => {
+    for (const edited of [false, true]) {
+      const { p, t, engine, v0 } = fresh();
+      const { d, release } = deps({ hold: true });
+      let asked = 0;
+      d.landedAfterEdit = () => asked++;
+      const loading = loadDefaultKit(p, engine, t.id, d);
+      if (edited) toggleStep(p, engine, t.id, t.rows[0].id, 0);
+      const v = p.version;
+      release();
+      await loading;
+      expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
+      expect(p.version).toBe(v); // still no version bump (no extra undo / dirty signal)
+      expect(asked).toBe(edited ? 8 : 0);
+      if (!edited) expect(p.version).toBe(v0);
+    }
+  });
+
+  it('withRowSample finds the row by name within the track, wherever it is in that snapshot (final M3)', () => {
+    const { p } = fresh();
+    const s = serialize(p);
+    const t = s.tracks[0] as Extract<ProjectJson['tracks'][number], { kind: 'drum' }>;
+    // An older snapshot whose rows sit at other indexes than the live ones.
+    const moved: ProjectJson = { ...s, tracks: [{ ...t, rows: [t.rows[1], t.rows[0], ...t.rows.slice(2)] }] };
+    const sample = { id: 0, name: 'clap.wav', file: 'samples/0-x-clap.wav' } as unknown as SampleJson;
+    const got = withRowSample(moved, t.slot, 'Clap', sample);
+    const rows = (got.tracks[0] as typeof t).rows;
+    expect(rows.map((r) => [r.name, r.sample])).toEqual([['Clap', 0], ['Kick', null], ...t.rows.slice(2).map((r) => [r.name, null])]);
+    expect(got.samples.map((x) => x.id)).toEqual([0]);
+    // No empty row of that name (or the sample is already there): unchanged.
+    expect(withRowSample(got, t.slot, 'Clap', { ...sample, id: 1 } as SampleJson)).toBe(got);
+    expect(withRowSample(moved, t.slot, 'Cowbell', sample)).toBe(moved);
+  });
+
+  it('an autosave restore still reading (p.loading) when a row imports: retried once it is over (final M4)', async () => {
+    const { p, t, engine, v0 } = fresh();
+    const { d, errors } = deps();
+    p.loading = true; // session.restore reading the autosave (generation unchanged until it loads)
+    const loading = loadDefaultKit(p, engine, t.id, d);
+    await tick(30);
+    p.loading = false; // the read failed: the fresh session stays
+    await loading;
+    expect(errors).toEqual([]);
+    expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
+    expect([p.dirty, p.version]).toEqual([false, v0]);
+  });
+
+  it('a restore that replaced the session during that wait: nothing lands (final M4)', async () => {
+    const { p, t, engine } = fresh();
+    const { d, errors } = deps();
+    p.loading = true;
+    const loading = loadDefaultKit(p, engine, t.id, d);
+    await tick(30);
+    p.generation++; // the restore loaded
+    p.loading = false;
+    await loading;
+    expect(errors).toEqual([]);
+    expect(rowsOf(p).every((r) => r.sampleId === null)).toBe(true);
+  });
+
+  it('an audio restart during the kit load: the rows load after it, no "drop it again" (final P4)', async () => {
+    const { p, t, engine } = fresh();
+    const { d, errors } = deps();
+    p.loading = p.restarting = true; // audio/restart.ts
+    const loading = loadDefaultKit(p, engine, t.id, d);
+    await tick(30);
+    p.loading = p.restarting = false;
+    p.audioRestarts++;
+    await loading;
+    expect(errors).toEqual([]);
+    expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
+    expect(p.dirty).toBe(false);
   });
 });

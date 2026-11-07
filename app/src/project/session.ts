@@ -65,9 +65,11 @@ export function markSaved(p: Project, fingerprint = projectFingerprint(p)) {
   p.dirty = false;
 }
 
-/** What a finished save wrote: the edit count and time when it was serialized. */
+/** What a finished save wrote: the edit count, starting-point count and time when it was serialized. */
 export interface SavedInfo {
   version: number;
+  /** Project.baselineEpoch then (a default-kit sample that landed during the write is not in the folder). */
+  baselineEpoch: number;
   t: number;
 }
 
@@ -112,12 +114,13 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
 
   async function saveTo(dir: FileSystemDirectoryHandle) {
     // The snapshot: edits may land while the files are written (async).
-    const info: SavedInfo = { version: p.version, t: Date.now() };
+    const info: SavedInfo = { version: p.version, baselineEpoch: p.baselineEpoch, t: Date.now() };
     const json = serialize(p);
     await writeProject(dir, json, projectFiles(p, json));
     p.folder = dir;
     markSaved(p, fingerprintOf(json));
-    if (p.version !== info.version) p.dirty = true; // those edits are not in the folder
+    // Those edits / kit samples are not in the folder.
+    if (p.version !== info.version || p.baselineEpoch !== info.baselineEpoch) p.dirty = true;
     opts.onSaved?.(info);
   }
 

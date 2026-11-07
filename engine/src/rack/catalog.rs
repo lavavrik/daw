@@ -18,7 +18,7 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK};
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
 /// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
 /// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15,
-/// SamplePlayer=16.
+/// SamplePlayer=16, Formant=17.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -39,6 +39,7 @@ pub enum ModuleKind {
     Saturator = 14,
     Attenuator = 15,
     SamplePlayer = 16,
+    Formant = 17,
 }
 
 impl ModuleKind {
@@ -61,6 +62,7 @@ impl ModuleKind {
         ModuleKind::Saturator,
         ModuleKind::Attenuator,
         ModuleKind::SamplePlayer,
+        ModuleKind::Formant,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
@@ -557,6 +559,30 @@ static SAMPLE_PLAYER: ModuleSpec = ModuleSpec {
     ],
 };
 
+static FORMANT: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Formant,
+    id: "formant",
+    name: "Formant",
+    category: "shaping",
+    // Three resonant band-pass peaks (see `modules::formant`). Peak i sits at
+    // f_i × 2^(shift + track × pitch + cv_amt × cv); pitch/cv read 0 when
+    // unconnected. The defaults are an alto-sax body.
+    inputs: &[port("in", Signal::Audio), port("pitch", Signal::Pitch), port("cv", Signal::Cv)],
+    outputs: &[port("out", Signal::Audio)],
+    params: &[
+        cont("f1", "Formant 1", 150.0, 1500.0, 500.0, Curve::Exp, "Hz", true),
+        cont("f2", "Formant 2", 500.0, 4000.0, 1500.0, Curve::Exp, "Hz", true),
+        cont("f3", "Formant 3", 1200.0, 8000.0, 2600.0, Curve::Exp, "Hz", true),
+        cont("q", "Q", 1.0, 20.0, 6.0, Curve::Exp, "", true),
+        lin("g2", "Gain 2", 0.0, 1.0, 0.7, true),
+        lin("g3", "Gain 3", 0.0, 1.0, 0.5, true),
+        cont("shift", "Shift", -2.0, 2.0, 0.0, Curve::Lin, "oct", true),
+        lin("track", "Pitch track", 0.0, 1.0, 0.0, true),
+        cont("cv_amt", "CV amount", -4.0, 4.0, 0.0, Curve::Lin, "oct", true),
+        lin("mix", "Mix", 0.0, 1.0, 1.0, true),
+    ],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -577,6 +603,7 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::Saturator => &SATURATOR,
         ModuleKind::Attenuator => &ATTENUATOR,
         ModuleKind::SamplePlayer => &SAMPLE_PLAYER,
+        ModuleKind::Formant => &FORMANT,
     }
 }
 
@@ -720,7 +747,6 @@ mod tests {
         let k = ModuleKind::SamplePlayer;
         assert_eq!(k as u8, 16);
         assert_eq!(ModuleKind::from_id(16), Some(k));
-        assert_eq!(ModuleKind::from_id(17), None);
         assert_eq!(k.fx_kind(), None, "inline: reads the sample pool, owns no ring");
         let s = spec(k);
         assert_eq!((s.id, s.name, s.category), ("sample_player", "Sample Player", "source"));
@@ -739,6 +765,38 @@ mod tests {
             ]
         );
         assert!(s.params[1].smooth, "gain is smoothed");
+    }
+
+    #[test]
+    fn catalog_id_17() {
+        let k = ModuleKind::Formant;
+        assert_eq!(k as u8, 17);
+        assert_eq!(ModuleKind::from_id(17), Some(k));
+        assert_eq!(ModuleKind::from_id(18), None);
+        assert_eq!(k.fx_kind(), None, "inline: no FX pool");
+        let s = spec(k);
+        assert_eq!((s.id, s.name, s.category), ("formant", "Formant", "shaping"));
+        let names = |ps: &[PortSpec]| ps.iter().map(|p| (p.name, p.signal)).collect::<Vec<_>>();
+        assert_eq!(names(s.inputs), [("in", Signal::Audio), ("pitch", Signal::Pitch), ("cv", Signal::Cv)]);
+        assert_eq!(names(s.outputs), [("out", Signal::Audio)]);
+        let ps: Vec<_> = s.params.iter().map(|p| (p.name, p.min, p.max, p.default, p.curve)).collect();
+        assert_eq!(
+            ps,
+            [
+                ("f1", 150.0, 1500.0, 500.0, Curve::Exp),
+                ("f2", 500.0, 4000.0, 1500.0, Curve::Exp),
+                ("f3", 1200.0, 8000.0, 2600.0, Curve::Exp),
+                ("q", 1.0, 20.0, 6.0, Curve::Exp),
+                ("g2", 0.0, 1.0, 0.7, Curve::Lin),
+                ("g3", 0.0, 1.0, 0.5, Curve::Lin),
+                ("shift", -2.0, 2.0, 0.0, Curve::Lin),
+                ("track", 0.0, 1.0, 0.0, Curve::Lin),
+                ("cv_amt", -4.0, 4.0, 0.0, Curve::Lin),
+                ("mix", 0.0, 1.0, 1.0, Curve::Lin),
+            ]
+        );
+        assert!(s.params.iter().all(|p| p.smooth && !p.integer), "every Formant param is smooth");
+        assert!(s.params.len() <= crate::MAX_PARAMS);
     }
 
     #[test]

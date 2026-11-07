@@ -3,13 +3,20 @@ import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } fr
 import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16)', () => {
+  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17)', () => {
     expect(CATALOG.modules.map((m) => m.id)).toEqual([
       'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
       'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
-      'sample_player',
+      'sample_player', 'formant',
     ]);
-    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(17).keys()]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(18).keys()]);
+  });
+  it('the formant is an inline shaping module', () => {
+    const f = moduleDef('formant');
+    expect(f.category).toBe('shaping');
+    expect(fxPoolSlots(f)).toBeNull();
+    expect(f.inputs.map((p) => p.name)).toEqual(['in', 'pitch', 'cv']);
+    expect(f.params.map((p) => p.name)).toEqual(['f1', 'f2', 'f3', 'q', 'g2', 'g3', 'shift', 'track', 'cv_amt', 'mix']);
   });
   it('the sample player is a pool-free source with a -1 (none) sample param', () => {
     const sp = moduleDef('sample_player');

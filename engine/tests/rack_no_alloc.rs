@@ -10,15 +10,17 @@ use daw_engine::rack::Rack;
 use daw_engine::samples::SampleView;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-static ALLOCS: AtomicUsize = AtomicUsize::new(0);
-thread_local! { static ARMED: Cell<bool> = const { Cell::new(false) }; }
+thread_local! {
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+    /// Per-thread count, so tests running in parallel never mask each other.
+    static COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 struct Counting;
 fn note() {
     if ARMED.with(|a| a.get()) {
-        ALLOCS.fetch_add(1, Ordering::SeqCst);
+        COUNT.with(|c| c.set(c.get() + 1));
     }
 }
 unsafe impl GlobalAlloc for Counting {
@@ -49,7 +51,7 @@ fn rack_edits_and_render_do_not_allocate() {
     let mut ctx = Ctx { sr: 48000.0, bpm: 124.0, playing: true, ticks: 0.0, ticks_per_frame: 124.0 * 960.0 / 60.0 / 48000.0 };
 
     ARMED.with(|a| a.set(true));
-    ALLOCS.store(0, Ordering::SeqCst);
+    COUNT.with(|c| c.set(0));
 
     // Immediate edits (silent rack).
     assert_eq!(r.add_module(0, ModuleKind::Lfo, &mut fx), OK);
@@ -257,6 +259,88 @@ fn rack_edits_and_render_do_not_allocate() {
     assert_eq!((fx.in_use(FxKind::Delay), fx.in_use(FxKind::Reverb), fx.in_use(FxKind::Chorus)), (0, 0, 0));
 
     ARMED.with(|a| a.set(false));
-    assert_eq!(ALLOCS.load(Ordering::SeqCst), 0, "rack allocated");
+    assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
+    assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
+}
+
+/// Plan 11: a Formant and an ADSR with `vel` cabled (delay, velocity), MIDI
+/// In legato glide, param moves (smooth, stepped `glide_mode`, `delay`),
+/// and removal while sounding.
+#[test]
+fn formant_and_adsr_do_not_allocate() {
+    // MIDI In 0: pitch 0, gate 1, vel 2, mod 3. Osc 1: pitch 0. Adsr 2:
+    // gate 0, vel 1; params delay 4, vel_amt 5. Formant 3: in 0, pitch 1,
+    // cv 2; params f1 0, q 3, shift 6, track 7, cv_amt 8, mix 9.
+    let mut r = Rack::new(48000.0);
+    let mut fx = FxPool::new(48000.0);
+    let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+    let mut ctx = Ctx { sr: 48000.0, bpm: 124.0, playing: true, ticks: 0.0, ticks_per_frame: 124.0 * 960.0 / 60.0 / 48000.0 };
+    let mut render = |r: &mut Rack, fx: &mut FxPool, blocks: usize, ctx: &mut Ctx| {
+        for _ in 0..blocks {
+            r.render_add(ctx, fx, SampleView::NONE, &mut l, &mut rr);
+            ctx.ticks += 128.0 * ctx.ticks_per_frame;
+        }
+    };
+
+    ARMED.with(|a| a.set(true));
+    COUNT.with(|c| c.set(0));
+
+    assert_eq!(r.add_module(0, ModuleKind::MidiIn, &mut fx), OK);
+    assert_eq!(r.add_module(1, ModuleKind::Osc, &mut fx), OK);
+    assert_eq!(r.add_module(2, ModuleKind::Adsr, &mut fx), OK);
+    assert_eq!(r.add_module(3, ModuleKind::Formant, &mut fx), OK);
+    assert_eq!(r.add_module(4, ModuleKind::Vca, &mut fx), OK);
+    assert_eq!(r.add_module(5, ModuleKind::Out, &mut fx), OK);
+    assert_eq!(r.connect((0, 0), (1, 0)), OK); // pitch -> osc
+    assert_eq!(r.connect((0, 1), (2, 0)), OK); // gate -> adsr
+    assert_eq!(r.connect((0, 2), (2, 1)), OK); // vel -> adsr vel
+    assert_eq!(r.connect((1, 0), (3, 0)), OK); // osc -> formant in
+    assert_eq!(r.connect((0, 0), (3, 1)), OK); // pitch -> formant pitch (poly)
+    assert_eq!(r.connect((0, 3), (3, 2)), OK); // mod -> formant cv
+    assert_eq!(r.connect((3, 0), (4, 0)), OK);
+    assert_eq!(r.connect((2, 0), (4, 1)), OK); // env -> vca cv
+    assert_eq!(r.connect((4, 0), (5, 0)), OK);
+    assert_eq!(r.set_param(2, 4, 0.05), OK); // delay
+    assert_eq!(r.set_param(2, 5, 0.8), OK); // vel_amt
+    assert_eq!(r.set_param(3, 3, 20.0), OK); // q
+    assert_eq!(r.set_param(3, 7, 1.0), OK); // track
+    assert_eq!(r.set_param(3, 8, -2.0), OK); // cv_amt
+    for (n, v) in [(48u8, 100u8), (55, 40), (60, 127), (64, 1)] {
+        r.note(NoteEvent::On { note: n, vel: v });
+        r.note(NoteEvent::Mod(v as f32 / 127.0));
+        render(&mut r, &mut fx, 4, &mut ctx);
+    }
+    for blk in 0..20 {
+        assert_eq!(r.set_param(3, 0, 200.0 + 60.0 * blk as f32), OK); // f1
+        assert_eq!(r.set_param(3, 6, -2.0 + 0.2 * blk as f32), OK); // shift
+        assert_eq!(r.set_param(3, 9, (blk % 3) as f32 * 0.5), OK); // mix
+        assert_eq!(r.set_param(2, 4, 0.01 * blk as f32), OK); // delay
+        r.automate(3, 1, 600.0 + 100.0 * blk as f32); // f2, automated
+        r.automate(2, 5, (blk % 5) as f32 * 0.25); // vel_amt, automated
+        render(&mut r, &mut fx, 2, &mut ctx);
+    }
+    // Mono with legato glide; glide_mode is stepped (declick queue).
+    assert_eq!(r.set_param(0, 1, 1.0), OK);
+    assert_eq!(r.set_param(0, 2, 0.1), OK);
+    assert_eq!(r.set_param(0, 4, 1.0), OK); // glide_mode Legato
+    render(&mut r, &mut fx, 5, &mut ctx);
+    r.note(NoteEvent::On { note: 48, vel: 90 });
+    render(&mut r, &mut fx, 3, &mut ctx);
+    r.note(NoteEvent::On { note: 55, vel: 30 }); // legato: glides
+    render(&mut r, &mut fx, 5, &mut ctx);
+    assert_eq!(r.set_param(0, 4, 0.0), OK); // back to Always
+    r.note(NoteEvent::Off { note: 55 });
+    render(&mut r, &mut fx, 5, &mut ctx);
+    assert!(r.is_sounding());
+    // Remove the Formant and the ADSR while sounding (declicked).
+    assert_eq!(r.remove_module(3), OK);
+    assert_eq!(r.remove_module(2), OK);
+    render(&mut r, &mut fx, 10, &mut ctx);
+    r.note(NoteEvent::AllOff);
+    r.clear();
+    render(&mut r, &mut fx, 10, &mut ctx);
+
+    ARMED.with(|a| a.set(false));
+    assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
 }

@@ -654,7 +654,7 @@ mod tests {
             decode(OP_RACK_ADD_MODULE, 3., 31., 8., 0.),
             Ok(Command::RackAddModule { slot: 3, module: 31, kind: ModuleKind::Out })
         );
-        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 17., 0.), Err(ERR_BAD_INDEX), "unknown kind");
+        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 18., 0.), Err(ERR_BAD_INDEX), "unknown kind");
         assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 32., 1., 0.), Err(ERR_BAD_INDEX));
         assert_eq!(decode(OP_RACK_REMOVE_MODULE, 3., 4., 0., 0.), Ok(Command::RackRemoveModule { slot: 3, module: 4 }));
         // Ports are packed module*16 + port.

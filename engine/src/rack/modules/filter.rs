@@ -141,9 +141,10 @@ fn sat(v: f32) -> f32 {
     HEADROOM * tanh_fast(v * (1.0 / HEADROOM))
 }
 
-/// Output soft limiter (see the module docs). Non-finite in -> 0 out.
+/// Output soft limiter (see the module docs): linear to ±2, easing into
+/// ±3.5. Non-finite in -> 0 out. Shared with the Formant.
 #[inline]
-fn limit(y: f32) -> f32 {
+pub(super) fn limit(y: f32) -> f32 {
     let a = y.abs();
     let y = if a <= OUT_KNEE {
         y
@@ -159,12 +160,35 @@ fn limit(y: f32) -> f32 {
 }
 
 #[inline]
-fn finite_or_zero(x: f32) -> f32 {
+pub(super) fn finite_or_zero(x: f32) -> f32 {
     if x.is_finite() {
         x
     } else {
         0.0
     }
+}
+
+/// Simper's TPT SVF coefficients `[a1, a2, a3]` for prewarped gain
+/// `g = tan(π·fc/sr)` and damping `k` (`1/Q`). Shared with the Formant.
+#[inline]
+pub(super) fn svf_coefs(g: f32, k: f32) -> [f32; 3] {
+    let a1 = 1.0 / (1.0 + g * (g + k));
+    let a2 = g * a1;
+    let a3 = g * a2;
+    [a1, a2, a3]
+}
+
+/// One TPT SVF step on state `s` (ic1eq, ic2eq) with input `v0`; returns
+/// `(v1, v2)`: band-pass with unity peak gain is `k·v1`, low-pass `v2`.
+/// Shared with the Formant.
+#[inline]
+pub(super) fn svf_step(s: &mut [f32; 2], v0: f32, a: [f32; 3]) -> (f32, f32) {
+    let v3 = v0 - s[1];
+    let v1 = a[0] * s[0] + a[1] * v3;
+    let v2 = s[1] + a[1] * s[0] + a[2] * v3;
+    s[0] = 2.0 * v1 - s[0];
+    s[1] = 2.0 * v2 - s[1];
+    (v1, v2)
 }
 
 /// Per-sample coefficients for one cutoff/reso pair.
@@ -257,9 +281,7 @@ impl Filter {
             let g = tan_fast(pi_t * l2.exp2());
             let k = 2.0 - 2.0 * reso * SVF_RESO_SCALE;
             c.svf_k = k;
-            c.a1 = 1.0 / (1.0 + g * (g + k));
-            c.a2 = g * c.a1;
-            c.a3 = g * c.a2;
+            [c.a1, c.a2, c.a3] = svf_coefs(g, k);
         }
         if ladder {
             let ll2 = (l2 + LADDER_OFFSET_OCT * (1.0 - reso)).min(self.max_l2);
@@ -357,13 +379,8 @@ impl Filter {
                 }
                 let (mut v0, mut v1, mut v2) = (0.0, 0.0, 0.0);
                 if need_svf {
-                    let s = &mut self.svf[ch];
                     v0 = sat(x);
-                    let v3 = v0 - s[1];
-                    v1 = c.a1 * s[0] + c.a2 * v3;
-                    v2 = s[1] + c.a2 * s[0] + c.a3 * v3;
-                    s[0] = 2.0 * v1 - s[0];
-                    s[1] = 2.0 * v2 - s[1];
+                    (v1, v2) = svf_step(&mut self.svf[ch], v0, [c.a1, c.a2, c.a3]);
                 }
                 let pick = |m: u8| match m {
                     LP24 => lp24,
@@ -388,9 +405,10 @@ impl Filter {
     }
 }
 
-/// Zero states below `FLUSH`; zero them all if any is non-finite.
+/// Zero states below `FLUSH`; zero them all if any is non-finite. Shared
+/// with the Formant.
 #[inline]
-fn flush<const N: usize>(s: &mut [f32; N]) {
+pub(super) fn flush<const N: usize>(s: &mut [f32; N]) {
     if s.iter().any(|x| !x.is_finite()) {
         *s = [0.0; N];
         return;
@@ -469,6 +487,48 @@ mod tests {
             }
         }
         (0.5 * (lo + hi)).exp()
+    }
+
+    /// FNV-1a (64-bit) over the f32 bits of an LP12, a BP and an LP24 render
+    /// (noise + saw, a swept poly cv, resonance, drive, a sounding mode
+    /// switch). Frozen before plan 11 exposed the SVF step and the limiter to
+    /// the Formant: the refactor must not change a single sample.
+    #[test]
+    fn filter_output_unchanged() {
+        const FROZEN: u64 = 0xa42a_c925_70ac_7899;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut noise = crate::dsp::test_util::Noise::new(7);
+        for (mode, reso, drive) in [(LP12, 0.85, 0.0), (BP, 0.6, 0.4), (LP24, 0.7, 0.2)] {
+            let mut f = Filter::new(SR);
+            let mut p = params(mode, 900.0, reso);
+            p[CV_AMT] = 3.0;
+            p[DRIVE] = drive;
+            let mut ins = [PortBuf::new(), PortBuf::new()];
+            ins[0].channels = 2;
+            ins[1].channels = 2;
+            let mut outs = [PortBuf::new()];
+            for b in 0..400 {
+                if b == 300 {
+                    p[MODE] = if mode == LP24 { LP12 } else { LP24 } as f32;
+                }
+                for i in 0..RACK_BLOCK {
+                    let n = b * RACK_BLOCK + i;
+                    ins[0].data[0][i] = 0.8 * noise.next();
+                    ins[0].data[1][i] = ((n % 110) as f32 / 55.0 - 1.0) * 0.9;
+                    ins[1].data[0][i] = (n as f32 * 0.0007).sin();
+                    ins[1].data[1][i] = (n as f32 * 0.0003).cos() * 0.5;
+                }
+                f.process(&p, &ins, &mut outs);
+                for ch in 0..2 {
+                    for &y in &outs[0].data[ch] {
+                        for byte in y.to_bits().to_le_bytes() {
+                            h = (h ^ byte as u64).wrapping_mul(0x0100_0000_01b3);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(h, FROZEN, "filter output changed: {h:#x}");
     }
 
     #[test]

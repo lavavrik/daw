@@ -26,6 +26,7 @@ pub mod compressor;
 pub mod delay;
 pub mod eq;
 pub mod filter;
+pub mod formant;
 pub mod lfo;
 pub mod midi_in;
 pub mod mixer;
@@ -92,6 +93,7 @@ pub enum Module {
     Saturator(saturator::Saturator),
     Attenuator(attenuator::Attenuator),
     SamplePlayer(sample_player::SamplePlayer),
+    Formant(formant::Formant),
 }
 
 impl Module {
@@ -114,6 +116,7 @@ impl Module {
             ModuleKind::Saturator => Module::Saturator(saturator::Saturator::new(sr)),
             ModuleKind::Attenuator => Module::Attenuator(attenuator::Attenuator::new(sr)),
             ModuleKind::SamplePlayer => Module::SamplePlayer(sample_player::SamplePlayer::new(sr)),
+            ModuleKind::Formant => Module::Formant(formant::Formant::new(sr)),
             ModuleKind::MidiIn => Module::MidiIn(midi_in::MidiIn::new(sr)),
             ModuleKind::Osc => Module::Osc(osc::Osc::new(sr)),
             ModuleKind::Noise => Module::Noise(noise::Noise::new(sr)),
@@ -144,6 +147,7 @@ impl Module {
             Module::Saturator(m) => m.snap(),
             Module::Attenuator(m) => m.snap(),
             Module::SamplePlayer(m) => m.snap(),
+            Module::Formant(m) => m.snap(),
         }
     }
 
@@ -166,6 +170,7 @@ impl Module {
             Module::Saturator(_) => ModuleKind::Saturator,
             Module::Attenuator(_) => ModuleKind::Attenuator,
             Module::SamplePlayer(_) => ModuleKind::SamplePlayer,
+            Module::Formant(_) => ModuleKind::Formant,
         }
     }
 
@@ -208,6 +213,7 @@ impl Module {
             Module::Saturator(m) => m.process(params, ins, outs),
             Module::Attenuator(m) => m.process(params, ins, outs),
             Module::SamplePlayer(m) => m.process(params, ins, outs, smp),
+            Module::Formant(m) => m.process(params, ins, outs),
         }
     }
 
@@ -246,6 +252,7 @@ impl Module {
             Module::Saturator(m) => m.reset(),
             Module::Attenuator(_) => {}
             Module::SamplePlayer(m) => m.reset(),
+            Module::Formant(m) => m.reset(),
         }
     }
 }

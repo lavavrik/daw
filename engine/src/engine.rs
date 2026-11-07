@@ -2048,7 +2048,7 @@ mod tests {
         assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), ERR_BAD_INDEX);
         assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), ERR_BAD_INDEX);
         // Bad kind ids / module indices / slots.
-        for kind in [99.0, 17.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
+        for kind in [99.0, 18.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
             assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, kind, 0.0), ERR_BAD_INDEX, "kind {kind}");
         }
         assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 32.0, K_OSC, 0.0), ERR_BAD_INDEX);

@@ -195,6 +195,38 @@ Params: `sample` (pool id 0..255, −1 = none), `gain` (0..2, smoothed),
 - Modules get the pool read-only as a `SampleView`, passed next to the FX
   pool down `Synths::render_add` → `Rack::render_add` → `Module::process`.
 
+## Formant (17)
+
+A *Shaping* module (`rack/modules/formant.rs`): three resonant band-pass
+peaks with pitch tracking and a CV shift. It is the body of the Sax and
+the "bloom"/"wah" of Brass Stab and Garage Organ. Inline (no FX pool).
+
+- **Signal flow.** `in` → three band-passes in parallel →
+  `wet = bp1 + g2·bp2 + g3·bp3` → `out = dry + mix·(wet − dry)` → the
+  Filter's output soft limiter (linear to ±2, easing into ±3.5), so full-
+  scale noise at q 20 stays within ±3.5.
+- **Centres.** Peak *i* sits at `f_i × 2^(shift + track·pitch + cv_amt·cv)`,
+  clamped to 20 Hz..0.45·sr; `pitch` and `cv` read 0 when unconnected. With
+  `track` 1 the peaks follow the note; 0 keeps a fixed body (a real
+  instrument's resonances do not move with the note); the Sax uses ≈ 0.15.
+- **Unity-peak sum.** Each peak is the Filter's TPT SVF band-pass (`k·v1`,
+  damping `k = 1/q`; the SVF step, its coefficients and `tan_fast` are
+  shared with `filter.rs`, not copied), so every peak has unity gain at its
+  centre and, with `g2 = g3 = 1`, the response peaks within 1.5 dB of 0 dB at
+  each `f_i` (tested). No input saturation.
+- **Smoothing and channels.** Every param is smoothed over 5 ms (`f1..f3`
+  and `q` in log2). Coefficients are computed per sample, shared across
+  channels when `pitch` and `cv` are mono or unconnected (as in the Filter),
+  per channel otherwise. Channels are the maximum over the connected inputs
+  (a mono `in` is broadcast to a poly `pitch`). Even a 1-octave cv step does
+  not click: the TPT states stay continuous.
+- **Defaults** are an alto-sax body: 500 / 1500 / 2600 Hz, q 6, gains 1 /
+  0.7 / 0.5, so a fresh Formant is useful at once.
+- **No vowel table.** Three explicit peaks plus a CV shift cover sax, brass
+  and organ "wah" with 10 params (≤ 12). A vowel morph table (a/e/i/o/u
+  presets interpolated by a knob) would need either more params or a fixed
+  table that fits only one voice size; it is a follow-up if wanted.
+
 ## Adding a module
 
 Modules are enum-dispatched (no trait objects, no allocation):
@@ -203,8 +235,8 @@ Modules are enum-dispatched (no trait objects, no allocation):
    `process(...)`; follow the contract at the top of `rack/modules/mod.rs`).
    Declare it with `pub mod <name>;` in `rack/modules/mod.rs`.
 2. Add the variant to `enum Module` and wire it into
-   `Module::with_fx_slot`, `Module::kind`, `Module::process` and
-   `Module::reset` (same file). A module that needs a big buffer borrows it
+   `Module::with_fx_slot`, `Module::kind`, `Module::process`,
+   `Module::reset` and `Module::snap` (same file). A module that needs a big buffer borrows it
    from the FX pool instead (see above): give it a `FxKind` bank and
    `ModuleKind::fx_kind`.
 3. Add the variant to `enum ModuleKind` in `rack/catalog.rs` with a **fixed

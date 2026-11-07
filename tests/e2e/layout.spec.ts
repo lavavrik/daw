@@ -45,3 +45,43 @@ for (const width of [1440, 1280, 1024]) {
     await expect(page.getByLabel('BPM')).toBeInViewport();
   });
 }
+
+// The widest state also has the dropout tail ("· 123 drop": a 3-digit
+// count): at 1440 and 1400 px (wide readouts) and at
+// 1280 px (the narrow step), with the master spectrum in the bar, it must
+// still fit on one row (a wrap mid-session would move everything below).
+for (const width of [1440, 1400, 1280]) {
+  test(`top bar fits at ${width} px with 123 dropouts, unsaved and playing`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await expect(page.getByTestId('play')).toBeVisible();
+    await page.getByTestId('mode-song').click();
+    await expect(page.getByTestId('project-name')).toContainText('unsaved');
+    await page.getByTestId('play').click();
+    await expect(page.getByTestId('play')).toContainText('Stop');
+    // The top bar polls engine.dropouts() at 4 Hz.
+    await page.evaluate(() => {
+      const e = window.__daw.engine as unknown as { dropouts: () => number };
+      e.dropouts = () => 123;
+    });
+    await expect(page.getByTestId('cpu')).toContainText('123 drop');
+    const out = await page.evaluate(() => {
+      const bar = document.querySelector('header')!;
+      const b = bar.getBoundingClientRect();
+      const kids = [...bar.children].filter((el) => getComputedStyle(el).display !== 'none') as HTMLElement[];
+      const rs = kids.map((el) => el.getBoundingClientRect()).filter((r) => r.height > 0);
+      const minBottom = Math.min(...rs.map((r) => r.bottom));
+      return {
+        clipped: kids
+          .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > b.right + 0.5 || r.left < b.left - 0.5); })
+          .map((el) => el.dataset.testid ?? el.className),
+        rows: rs.some((r) => r.top >= minBottom) ? 2 : 1,
+      };
+    });
+    expect(out.clipped).toEqual([]);
+    expect(out.rows, 'one row').toBe(1);
+    await expect(page.getByTestId('cpu')).toBeInViewport();
+  });
+}
+

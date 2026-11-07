@@ -7,9 +7,15 @@
   // circle's radius is full scale (a full-scale mono sine draws a vertical
   // line touching the circle; nothing within ±1 leaves it). Mono is a
   // vertical line, wide material a blob, an inverted side a horizontal line.
+  // Phosphor: each frame fades the last ones (a translucent fill instead of a
+  // clear), so dots leave a short trail; after FADE_FRAMES of silence the
+  // trace is gone and drawing stops until there is signal again.
   //
   // Correlation: −1 (red, left: out of phase, cancels in mono) … 0 … +1
-  // (green, right: mono), smoothed over 300 ms, with the value as text.
+  // (green, right: mono), the bus's CorrelationMeter (stereo.ts: smoothed
+  // sums over 300 ms; holds through silence, eases to 0 after 2 s), with the
+  // value as text (the bar itself is hidden from assistive tech: the text
+  // carries the value).
   //
   // Drawn straight from the bus after each analysis (≤ 30 Hz, not through
   // Svelte state), only while on screen. data-corr exposes the shown value.
@@ -19,6 +25,9 @@
 
   const S = 120;
   const R = S / 2 - 4;
+  /** Share of the last frame kept (phosphor), and frames until it is gone. */
+  const KEEP = 0.65;
+  const FADE_FRAMES = 12;
 
   let canvas: HTMLCanvasElement;
   let bar = $state<HTMLElement | null>(null);
@@ -26,11 +35,15 @@
   let valueEl = $state<HTMLElement | null>(null);
   let dpr = 1;
   let shown = '';
-  let wasEmpty = false;
+  /** Silent frames since the last dot (FADE_FRAMES + 1: faded out, idle). */
+  let quiet = FADE_FRAMES + 1;
 
-  function frame(c: CanvasRenderingContext2D) {
+  /** The graticule over a background fill of `alpha` (1: clean; less: fade the trace). */
+  function frame(c: CanvasRenderingContext2D, alpha = 1) {
+    c.globalAlpha = alpha;
     c.fillStyle = '#15161a';
     c.fillRect(0, 0, S, S);
+    c.globalAlpha = 1;
     c.strokeStyle = '#2c2e36';
     c.lineWidth = 1;
     c.beginPath();
@@ -69,13 +82,13 @@
       canvas.width = canvas.height = S * dpr;
       resized = true;
     }
-    // Silence after silence: nothing to redraw.
+    // Silence: fade the trace out over FADE_FRAMES, then stop drawing.
     let empty = true;
     for (let i = 0; i < n && empty; i++) if (bus.gonX[i] !== 0 || bus.gonY[i] !== 0) empty = false;
-    if (!(empty && wasEmpty && !resized)) {
-      wasEmpty = empty;
+    quiet = empty ? quiet + 1 : 0;
+    if (quiet <= FADE_FRAMES + 1 || resized) {
       c.setTransform(dpr, 0, 0, dpr, 0, 0);
-      frame(c);
+      frame(c, resized || quiet > FADE_FRAMES ? 1 : 1 - KEEP);
       // Full scale (√2 in point units) = the radius.
       const k = R / Math.SQRT2;
       c.fillStyle = '#7fd1ae';
@@ -107,13 +120,12 @@
 </script>
 
 <div class="stereo">
-  <canvas
-    bind:this={canvas} style:width="{S}px" style:height="{S}px" data-testid="goniometer"
-    aria-label="Master goniometer: mid up, side across; a vertical line is mono"
-  ></canvas>
+  <div class="gon" role="img" aria-label="Master goniometer: mid up, side across; a vertical line is mono">
+    <canvas bind:this={canvas} style:width="{S}px" style:height="{S}px" data-testid="goniometer" aria-hidden="true"></canvas>
+  </div>
   <div class="side">
     <div class="lbl">Correlation <span class="val" bind:this={valueEl}>0.00</span></div>
-    <div class="corr" title="Master phase correlation (300 ms): +1 mono, 0 wide, −1 out of phase (cancels in mono)">
+    <div class="corr" aria-hidden="true" title="Master phase correlation (300 ms): +1 mono, 0 wide, −1 out of phase (cancels in mono)">
       <span class="end">−1</span>
       <div class="track" bind:this={bar} data-testid="correlation" data-corr="0.00">
         <span class="mid"></span>
@@ -127,7 +139,8 @@
 
 <style>
   .stereo { display: flex; gap: 10px; align-items: flex-start; }
-  canvas { display: block; flex: none; }
+  .gon { flex: none; }
+  canvas { display: block; }
   .side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
   .lbl { display: flex; justify-content: space-between; font-size: 10px; color: #a3a6b3; }
   .val { color: #e6e7ec; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }

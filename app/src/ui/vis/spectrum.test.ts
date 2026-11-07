@@ -3,21 +3,41 @@ import { Ballistics, Bands, DB_FLOOR, SPEC_N, SpectrumAnalyser, freqToX, hoverRe
 
 const SR = 48000;
 
-function sine(f: number, amp = 1, phase = 0.3): Float64Array {
+function sine(f: number, amp = 1, phase = 0.3, sr = SR): Float64Array {
   const x = new Float64Array(SPEC_N);
-  for (let i = 0; i < SPEC_N; i++) x[i] = amp * Math.sin((2 * Math.PI * f * i) / SR + phase);
+  for (let i = 0; i < SPEC_N; i++) x[i] = amp * Math.sin((2 * Math.PI * f * i) / sr + phase);
   return x;
 }
 
 describe('spectrum', () => {
   it('a full-scale sine reads 0 dB in its band', () => {
-    const an = new SpectrumAnalyser(SR);
-    for (const count of [60, 20]) {
-      const bands = new Bands(count, SR);
-      for (const f of [50, 1000, 10000]) {
-        const raw = bands.measure(an.analyse(sine(f)));
-        expect(raw[bands.bandOf(f)], `${f} Hz in ${count} bands`).toBeCloseTo(0, 0);
-        expect(Math.abs(raw[bands.bandOf(f)]), `${f} Hz in ${count} bands`).toBeLessThanOrEqual(0.5);
+    for (const sr of [44100, 48000, 96000]) {
+      const an = new SpectrumAnalyser(sr);
+      for (const count of [60, 20]) {
+        const bands = new Bands(count, sr);
+        for (const phase of [0, 0.3, 1.1, 2.0]) {
+          for (const f of [50, 1000, 10000]) {
+            const raw = bands.measure(an.analyse(sine(f, 1, phase, sr)));
+            expect(Math.abs(raw[bands.bandOf(f)]), `${f} Hz, ${count} bands, ${sr} Hz, phase ${phase}`).toBeLessThanOrEqual(0.5);
+          }
+        }
+      }
+    }
+  });
+
+  it('a full-scale sine reads 0 dB in its band at any frequency', () => {
+    // From 30 Hz up (45 Hz at 96 kHz, where a bin is 23 Hz): below that the
+    // sine's mirror image near 0 Hz bends the lowest bins (up to ~1.5 dB).
+    for (const sr of [44100, 48000, 96000]) {
+      const an = new SpectrumAnalyser(sr);
+      const sets = [new Bands(60, sr), new Bands(20, sr)];
+      for (const phase of [0.3, 2.0]) {
+        for (let f = sr > 48000 ? 45 : 30; f < 19900; f *= 1.023) {
+          const bins = an.analyse(sine(f, 1, phase, sr));
+          for (const b of sets) {
+            expect(Math.abs(b.measure(bins)[b.bandOf(f)]), `${f.toFixed(1)} Hz, ${b.count} bands, ${sr} Hz`).toBeLessThanOrEqual(0.5);
+          }
+        }
       }
     }
   });

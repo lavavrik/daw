@@ -11,6 +11,11 @@
   //   dB" (the hovered band's level; the note helps tune kick and bass).
   // - `need: 'mini'` (the top bar, 20 master bands): bars, no labels.
   //
+  // Accessibility: the panel is one role="img" with a label (the canvases
+  // are hidden); the mini view is hidden (its button carries the label).
+  // The hover readout is pointer-only for now (a keyboard cursor is a
+  // follow-up).
+  //
   // The canvases are device-pixel sharp. A frame that would draw exactly
   // what is already there (silence) is skipped. data-peak-db exposes the
   // loudest band level to tests.
@@ -182,14 +187,19 @@
   });
 </script>
 
-<div class="spec" class:mini={need === 'mini'} style:width="{width}px" style:height="{height}px">
+<div
+  class="spec" class:mini={need === 'mini'} style:width="{width}px" style:height="{height}px"
+  role={need === 'panel' ? 'img' : undefined}
+  aria-label={need === 'panel' ? `Spectrum, 20 Hz to 20 kHz, ${DB_FLOOR} to +${DB_TOP} dB` : undefined}
+  aria-hidden={need === 'mini' ? 'true' : undefined}
+>
   {#if need === 'panel'}<canvas class="grid" bind:this={gridCanvas} style:width="{width}px" style:height="{height}px" aria-hidden="true"></canvas>{/if}
   <canvas
     bind:this={canvas}
     style:width="{width}px" style:height="{height}px"
     data-testid={need === 'panel' ? 'analyser-spectrum' : 'mini-spectrum-canvas'}
     data-peak-db="-inf"
-    aria-label={need === 'panel' ? `Spectrum, 20 Hz to 20 kHz, ${DB_FLOOR} to +${DB_TOP} dB` : 'Master spectrum'}
+    aria-hidden="true"
     onpointermove={need === 'panel' ? move : undefined}
     onpointerleave={need === 'panel' ? leave : undefined}
   ></canvas>

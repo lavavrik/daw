@@ -18,8 +18,9 @@
 //   is 11.7 Hz at 48 kHz) reads the curve interpolated across its span,
 //   which for the narrowest bands is their centre, so the low end is a
 //   smooth curve, not a staircase. A full-scale sine reads 0 ± 0.5 dB in its
-//   band from ~30 Hz up (below that its mirror image near 0 Hz bends the
-//   bins).
+//   band (measured ±0.32) from 30 Hz up at 44.1/48 kHz and from 45 Hz up at
+//   96 kHz (a bin is 23 Hz there); below that the sine's mirror image near
+//   0 Hz bends the lowest bins and a reading can be off by up to ~1.5 dB.
 // - Ballistics: instant rise, fall FALL_DB_PER_S; peak-hold dots hold
 //   HOLD_S, then fall PEAK_FALL_DB_PER_S. The display range is
 //   DB_FLOOR..DB_TOP (−90..+6 dB); levels never go below the floor.

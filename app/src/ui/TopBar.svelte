@@ -388,28 +388,34 @@
      while there are dropouts) and "● unsaved" becomes "●" (tooltip: Unsaved
      changes), leaving ~20 px of slack at 1280 px in the widest state
      (playing, unsaved) since the 66 px master spectrum came in; to make
-     room below 1400 px the gaps are 3 px, the Keys / MIDI caps tighter, the small and
-     segmented buttons, the BPM field and Metro have less padding, and with
-     dropouts the red pill drops its "CPU " word ("1% · 2 drop", full text in
-     the tooltip), so the dropout tail still fits on one row at 1280 px
-     (a wrap mid-session would move everything under the bar); Play/Stop has
-     a fixed width so starting playback
+     room, below 1460 px the gaps are 3 px and the small and segmented
+     buttons, the BPM field and Metro have less padding, and below 1400 px
+     the Keys / MIDI caps are tighter and with dropouts the red pill drops
+     its "CPU " word ("1% · 123 drop", full text in the tooltip), so even a
+     3-digit dropout tail fits on one row at 1400 and 1280 px (a wrap
+     mid-session would move everything under the bar); Play/Stop has a fixed
+     width so starting playback
      never re-flows the bar. If it still doesn't fit, the bar wraps
      onto a second row. overflow-x: clip (not hidden) stays as the last guard:
      it never becomes a scroll container, so the popovers can drop below. */
   .bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
   .pill.keys, .pill.midi { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+  /* Below 1460 px: tighter gaps and padding, so the widest state (playing,
+     unsaved, a 3-digit "· 123 drop" tail, the master spectrum) stays on one
+     row down to 1400 px (e2e layout.spec.ts). */
+  @media (max-width: 1459px) {
+    .bar { gap: 3px; }
+    .small, .seg button:not(.hist button) { padding: 4px 6px; }
+    input { padding: 4px 6px; }
+    .metro { padding: 4px 7px; }
+  }
   @media (max-width: 1399px) {
     /* 90 / 72: room for the 64 px master spectrum at 1280 px. */
     .pill.keys { max-width: 90px; }
     .pill.midi { max-width: 72px; }
     .pill:not(.bad) .long, .unsaved .long { display: none; }
     .proj summary { max-width: 160px; }
-    /* Room for the dropout tail next to the master spectrum at 1280 px. */
-    .bar { gap: 3px; }
-    .small, .seg button:not(.hist button) { padding: 4px 6px; }
-    input { padding: 4px 6px; }
-    .metro { padding: 4px 7px; }
+    /* With dropouts the red pill drops its "CPU " word (tooltip unchanged). */
     .pill.bad .cpuw { display: none; }
   }
   .spacer { flex: 1; }

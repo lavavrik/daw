@@ -36,7 +36,7 @@ import { VIS_GUARD, VIS_HDR, VIS_WANT, type VisViews } from '../../audio/visLayo
 import { VIS_TAP_RING } from '../../audio/protocol';
 import { frameLoop, type FrameLoop } from './frameLoop';
 import { Ballistics, Bands, DB_FLOOR, SPEC_N, SpectrumAnalyser } from './spectrum';
-import { CORR_FRAMES, GONIO_FRAMES, correlation, goniometer, smoothCorrelation } from './stereo';
+import { CorrelationMeter, MAX_STEREO_FRAMES, corrFrames, goniometer, gonioFrames } from './stereo';
 
 export type AnalyserSource = number | 'master';
 export type AnalyserNeed = 'mini' | 'panel' | 'stereo';
@@ -76,7 +76,7 @@ export interface AnalyserBus {
   readonly panelBands: Bands;
   /** The source the panel arrays hold (follows `selected` once analysed). */
   readonly panelSource: AnalyserSource;
-  /** Master correlation, smoothed (−1..+1). */
+  /** Master correlation, as the bar shows it (stereo.ts CorrelationMeter, −1..+1). */
   readonly correlation: number;
   /** Master goniometer points (see stereo.ts), `gonN` of them. */
   readonly gonX: Float32Array;
@@ -106,10 +106,12 @@ const MIN_ANALYSIS_MS = 1000 / 30 - 4;
  * A slow frame rate (a throttled background tab) is not a pause.
  */
 const STILL_SHARE = 0.5;
-/** Ballistics never step more than this (a long pause is not a long fall). */
-const MAX_DT_S = 0.1;
-/** Newest frames read per source (master: the correlation's 4800; tap: the FFT's). */
-const MASTER_FRAMES = Math.max(CORR_FRAMES, SPEC_N, GONIO_FRAMES);
+/**
+ * Ballistics and smoothing never step more than this. A pause is handled by
+ * the staleness rule above, so this only bounds a pathological gap; a
+ * throttled tab (1–2 frames a second) still falls at the stated rates.
+ */
+const MAX_DT_S = 1;
 const DEFAULT_RATE = 48000;
 
 interface ViewEntry {
@@ -147,13 +149,18 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
   const mini = new Ballistics(MINI_BANDS);
   const panel = new Ballistics(PANEL_BANDS);
   let panelSource: AnalyserSource = 'master';
-  let corr = 0;
+  const corr = new CorrelationMeter();
+  /** Window lengths at the attached rate (frames). */
+  let corrN = corrFrames(DEFAULT_RATE);
+  let gonioN = gonioFrames(DEFAULT_RATE);
+  let masterN = Math.max(corrN, SPEC_N, gonioN);
   let gonN = 0;
-  const gonX = new Float32Array(GONIO_FRAMES);
-  const gonY = new Float32Array(GONIO_FRAMES);
+  // Sized for any rate up to 192 kHz (the windows are capped by the ring).
+  const gonX = new Float32Array(MAX_STEREO_FRAMES);
+  const gonY = new Float32Array(MAX_STEREO_FRAMES);
   // Scratch: the newest frames of a ring, oldest first.
-  const bufL = new Float32Array(MASTER_FRAMES);
-  const bufR = new Float32Array(MASTER_FRAMES);
+  const bufL = new Float32Array(MAX_STEREO_FRAMES);
+  const bufR = new Float32Array(MAX_STEREO_FRAMES);
   const mono = new Float64Array(SPEC_N);
   const silentMini = new Float32Array(MINI_BANDS).fill(DB_FLOOR);
   const silentPanel = new Float32Array(PANEL_BANDS).fill(DB_FLOOR);
@@ -254,7 +261,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
       master.last = tap.last = -Infinity;
       mini.reset();
       panel.reset();
-      corr = 0;
+      corr.reset();
     }
     let needMini = false;
     let needPanel = false;
@@ -275,16 +282,16 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
     if (needMini || needStereo || panelMaster) {
       const head = Atomics.load(vis.hdr, VIS_HDR.masterHead);
       look(master, head, now);
-      read(vis.masterL, vis.masterR, head, master, MASTER_FRAMES);
+      read(vis.masterL, vis.masterR, head, master, masterN);
       if (needMini || panelMaster) {
-        monoOf(MASTER_FRAMES);
+        monoOf(masterN);
         const b = bins();
         if (needMini) mini.step(b ? miniBands.measure(b) : silentMini, dt);
         if (panelMaster) panel.step(b ? panelBands.measure(b) : silentPanel, dt);
       }
       if (needStereo) {
-        corr = smoothCorrelation(corr, correlation(bufL, bufR, MASTER_FRAMES - CORR_FRAMES, MASTER_FRAMES), dt);
-        gonN = goniometer(bufL, bufR, gonX, gonY); // the newest GONIO_FRAMES of the buffers
+        corr.step(bufL, bufR, masterN - corrN, masterN, dt);
+        gonN = goniometer(bufL, bufR, gonX, gonY, gonioN, masterN);
       }
     }
 
@@ -373,6 +380,9 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
         analyser = new SpectrumAnalyser(r);
         miniBands = new Bands(MINI_BANDS, r);
         panelBands = new Bands(PANEL_BANDS, r);
+        corrN = corrFrames(r);
+        gonioN = gonioFrames(r);
+        masterN = Math.max(corrN, SPEC_N, gonioN);
       }
       // A new engine starts with the tap off; the frame loop re-sends ours.
       lastVis = null;
@@ -394,7 +404,7 @@ export function createAnalyserBus(env: AnalyserEnv): AnalyserBus {
       return panelSource;
     },
     get correlation() {
-      return corr;
+      return corr.value;
     },
     gonX,
     gonY,

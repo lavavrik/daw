@@ -147,22 +147,35 @@ opens the Mixer tab.
   its span: a band wider than a bin is the max of its bins (or a peak's
   parabola top in the band); a band narrower than a bin (below ~100 Hz in
   the panel: a bin is 11.7 Hz at 48 kHz) is interpolated, so the low end is
-  a curve, not a staircase. Measured: a full-scale sine reads within
-  ±0.27 dB in its own band anywhere from 21 Hz to 19.9 kHz, at 44.1 and
-  48 kHz, in both band sets; bands two octaves away read below −60 dB;
+  a curve, not a staircase. Measured over phases and both band sets: a
+  full-scale sine reads within ±0.32 dB in its own band from 30 Hz to
+  19.9 kHz at 44.1 and 48 kHz and from 45 Hz at 96 kHz (a bin is 23 Hz
+  there); lower, its mirror image near 0 Hz bends the lowest bins (up to
+  ~1.5 dB). Bands two octaves away read below −60 dB;
 - **ballistics**: instant rise, fall 24 dB/s; peak-hold dots hold 1.0 s,
   then fall 12 dB/s; no slope tilt (a 3/4.5 dB/oct tilt is a follow-up);
 - hover readout "55 Hz · A1 · −8.2 dB": the frequency under the pointer,
   its nearest note (A4 = 440 Hz), the level of its band — for tuning kick
-  and bass.
+  and bass. Pointer-only for now (a keyboard cursor is a follow-up); the
+  panel is one labelled image to assistive tech, the top-bar view hidden
+  (its button has the label).
 
-**Stereo** (`stereo.ts`, Master only): correlation `Σ LR / √(Σ L² Σ R²)`
-over the newest 4800 frames (100 ms), smoothed by a 300 ms one-pole;
-silence (either side) reads 0, never NaN, so sparse material (a lone
-click) drifts toward 0 between hits. The goniometer draws the newest 2048
-frames as dots at `x = (R − L)/√2`, `y = (L + R)/√2`: mono is vertical,
-an inverted side horizontal. The scale is fixed with full scale at the
-radius (|(L, R)| ≤ √2 for samples within ±1 maps to the circle).
+**Stereo** (`stereo.ts`, Master only). Correlation `Σ LR / √(Σ L² Σ R²)`
+over the newest 100 ms (4800 frames at 48 kHz). The bar does not smooth
+the per-window ratio: it smooths the window's mean sums (`ΣLR`, `ΣL²`,
+`ΣR²`) with a 300 ms one-pole and shows the ratio of the smoothed sums, so
+sparse material — a click every half second, a kick between gaps — reads
+its true correlation (a sparse mono click reads > 0.95) instead of being
+pulled toward 0 by the silent windows in between. Below a gate (smoothed
+RMS under −60 dBFS) it holds the last reading, and after 2 s of sustained
+gating eases to 0 (300 ms); it starts at 0 and never reads NaN. The
+goniometer draws the newest 2048 frames at 48 kHz (the same ~43 ms at
+other rates) as dots at `x = (R − L)/√2`, `y = (L + R)/√2`: mono is
+vertical, an inverted side horizontal, with a short phosphor trail (each
+frame fades the last). The scale is fixed with full scale at the radius
+(|(L, R)| ≤ √2 for samples within ±1 maps to the circle). Window lengths
+follow the sample rate but never exceed a ring read (8192 − 256 = 7936
+frames: 83 ms at 96 kHz, 41 ms at 192 kHz).
 
 **The bus** (`analyserBus.ts`) is one 30 Hz frame-loop consumer; views
 subscribe (`mini`, `panel`, `stereo`, each with its canvas as `el`, watched
@@ -186,6 +199,9 @@ analysis, so there is never a per-view FFT:
   it moved less than half the frames the elapsed time should have
   brought) read as silence, so old audio never shows as current, while a
   slow frame rate (a throttled tab) is not mistaken for a pause;
+- ballistics and smoothing step by the real time between analyses (at
+  most 1 s: a pause is the staleness rule's job, so a throttled tab still
+  falls at the stated rates);
 - at most 30 analyses a second (the loop's `hz: 30` and a 29 ms guard
   against re-registration); nothing allocates per frame.
 

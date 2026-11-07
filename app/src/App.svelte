@@ -15,6 +15,7 @@
   import { Project } from './state/project.svelte';
   import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
+  import { addDefaultDrumTrack, loadDefaultKit } from './state/defaultKit';
   import { library } from './library/library.svelte';
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
@@ -386,7 +387,9 @@
 
   function onstarted(e: AudioEngine) {
     latencyHint = e.latencyHint;
-    addDrumTrack(project, e); // default track so the UI has something to show
+    // The fresh session: the default kit's drum track (state/defaultKit.ts),
+    // its samples loaded once everything below is wired.
+    const kitTrack = addDefaultDrumTrack(project, e);
     markSaved(project); // a fresh session has nothing to save yet
     const r = recorderFor(project, live, liveClock, () => {
       banners.error = 'Pattern is full (1024 notes): some recorded notes were dropped';
@@ -450,6 +453,8 @@
       // Project ▸ Save / Save As: an older autosave is now stale, and a
       // pending one is dropped unless edits landed during the write.
       onSaved: ({ version, t }) => autosave.savedExplicitly(t, project.version === version),
+      // Project ▸ New: fill its default drum track from the kit.
+      onFresh: (trackId) => void loadDefaultKit(project, live, trackId),
     });
     session = s;
     void checkAutosave(); // after audio started: a restore needs the engine
@@ -467,6 +472,9 @@
     // Not awaited: the permission prompt must never block startup/rendering.
     // Bound to `live`, so it outlives an audio restart as is.
     void connectMidi(live, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
+    // Not awaited either: rows fill as the kit's samples land. A restore
+    // accepted meanwhile replaces the session and ends it (Project.generation).
+    if (kitTrack) void loadDefaultKit(project, live, kitTrack.id);
   }
 
   /**

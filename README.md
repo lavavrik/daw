@@ -35,25 +35,29 @@ start audio from a click). The screen has four parts:
 
 - the **top bar**: the Project menu (the project name, "Untitled" at first),
   undo/redo, transport, recording, tempo and status;
-- the **Browser** on the left: your sample library and saved patches;
+- the **Browser** on the left: your sample library and saved patches, and the
+  built-in **Starter kit**;
 - the **timeline** at the top: one lane per track, with **+ Drum track** and
   **+ Synth track** under the track list;
 - the **bottom panel**: the selected track's editor (**Step grid** for drums;
   **Piano roll** or **Instrument** for synths) and the **Mixer** tab.
 
-A new project starts with one drum track at 124 BPM.
+A new project starts at 124 BPM with one drum track that is already a
+playable kit: eight rows (Kick, Clap, Closed hat, Open hat, Snare, Rim,
+Shaker, Perc) loaded from the built-in starter kit, no steps yet. The rows
+fill a moment after start; that is the starting point, not an edit (no
+"● unsaved", nothing to undo). Project ▸ New starts the same way; restoring
+the last session or opening a project does not add it.
 
 ## The first loop
 
-1. Drag a kick from Finder (or from the Browser, see [Library](#library))
-   onto the first drum row; an empty row says "drop sample", and the row takes
-   the file's name. No samples yet? Click **Use starter kit** in the Browser,
-   or open `samples/starter/` (two kicks, clap, snare, rim, closed and open
-   hats, shaker, tom, two chord stabs and a sub hit; synthesised by
-   `scripts/make-starter-kit.mjs`, CC0).
-2. Drag a hat onto the second row. Dropping on a row that already has a
-   sample replaces it; dropping on **+ Add row** makes a new row. Drop several
-   files at once and each gets its own row.
+1. The kit is already there: skip to step 3, or swap sounds. Drag a kick
+   from Finder (or from the Browser, see [Library](#library)) onto the Kick
+   row: dropping on a row that already has a sample replaces it, and the row
+   takes the file's name. An empty row says "drop sample".
+2. Dropping on **+ Add row** makes a new row. Drop several files at once and
+   each gets its own row. The Browser's **Starter kit** section has more
+   sounds (a second kick, a sub hit, two chord stabs) to drag in.
 3. Click cells to place steps; click-drag paints. **Alt**-click places a quiet
    ghost note (drawn dimmer). A focused cell also toggles with **Enter**. For
    four-on-the-floor, put the kick on steps 1, 5, 9 and 13 and the hat on 3,
@@ -263,11 +267,20 @@ writing an empty file.
 ## Library
 
 The **Browser** pane is one library for every project. Click **Choose library
-folder…** once (any folder; sub-folders open as you browse them) or **Use
-starter kit** for the bundled sounds (read-only). **↻** rescans the folder.
+folder…** once (any folder; sub-folders open as you browse them). **↻**
+rescans the folder.
 
-- Click a sample to preview it (**■ Stop** stops); big files stream instead of
-  loading into memory. Up to 2000 entries per folder are listed.
+Below it, always, is the built-in **Starter kit** (read-only; click its
+header to fold it): two kicks, clap, snare, rim, closed and open hats,
+shaker, tom, two chord stabs and a sub hit, synthesised by
+`scripts/make-starter-kit.mjs` and dedicated to the public domain (CC0 1.0,
+`samples/starter/LICENSE.txt`). The sounds are part of the app (bundled
+with the build), and a new project's drum track is made of them. They
+preview and drag like library samples.
+
+- Click a sample (folder or kit) to preview it (**■ Stop** stops); big files
+  stream instead of loading into memory. Up to 2000 entries per folder are
+  listed.
 - Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample
   Player** module. It is copied into the project (Save writes it to
   `samples/`), so projects stay self-contained.

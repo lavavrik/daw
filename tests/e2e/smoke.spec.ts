@@ -229,12 +229,12 @@ test('bad file drop shows error', async ({ page }) => {
   const before = await rows.count();
   await dropFile(page, 'row-1', 'notes.txt', 'text/plain', [...Buffer.from('hello')]);
   await expect(page.getByTestId('banner')).toContainText('Couldn\'t load "notes.txt"');
-  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('Clap'); // unchanged: the default kit's
   // A .wav name with garbage bytes passes the extension check but fails decoding.
   await page.getByRole('button', { name: 'Dismiss' }).click();
   await dropFile(page, 'row-1', 'broken.wav', 'audio/wav', [1, 2, 3, 4, 5, 6, 7, 8]);
   await expect(page.getByTestId('banner')).toContainText('not a readable audio file');
-  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('Clap');
   // A failed drop on "+ Add row" must not leave an orphan row.
   await dropFile(page, 'add-row', 'notes.txt', 'text/plain', [...Buffer.from('hello')]);
   await expect(rows).toHaveCount(before);
@@ -253,7 +253,7 @@ test('drop outside a row is caught: no navigation, hint shown', async ({ page })
   expect(prevented.drop).toBe(true);
   await expect(page.getByTestId('banner')).toContainText('Drop onto a step-grid row');
   expect(page.url()).toBe(url);
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Kick'); // the default kit's, unchanged
   // A real row drop is not flagged with the hint.
   await page.getByRole('button', { name: 'Dismiss' }).click();
   await loadKickOnRow0(page);
@@ -370,6 +370,9 @@ async function fillArena(page: Page, leave: number) {
 
 test('a deferred load evicted from the retry queue shows an error', async ({ page }) => {
   await startAudio(page);
+  // Let the default kit load first: loading after the fill (stopped, so it
+  // may grow the arena) it would leave room for the kick.
+  await expect(page.getByTestId('row-7').getByTestId('row-name')).toHaveText('Perc');
   await fillArena(page, 0);
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);
@@ -382,7 +385,7 @@ test('a deferred load evicted from the retry queue shows an error', async ({ pag
   });
   await expect(page.getByTestId('banner')).toContainText('Couldn\'t load "kick"');
   await expect(page.getByTestId('notice')).toBeHidden();
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Kick'); // the default kit's, unchanged
 });
 
 // ---- Track list (Task 8): driven through the UI, not raw engine commands ----

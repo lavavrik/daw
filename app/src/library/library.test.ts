@@ -26,8 +26,6 @@ function deps(stored: StoredLibrary | null = null, picked: FakeDir | null = null
     deps: {
       store: { load: async () => stored, save: async (v: StoredLibrary | null) => void saved.push(v) },
       pick: async () => (picked ? asDir(picked) : null),
-      starter: { name: 'Starter kit', files: [{ path: 'kick-deep.wav', url: '/s/kick-deep.wav' }] },
-      fetchBytes: async (url: string) => (url === '/s/kick-deep.wav' ? new Uint8Array([9, 9]).buffer : Promise.reject(new Error('404'))),
     },
   };
 }
@@ -124,15 +122,11 @@ describe('library (folder handle, permission, reconnect)', () => {
     expect(d.saved).toEqual([{ kind: 'folder', handle: asDir(dir) }]);
   });
 
-  it('the starter kit is read-only and reads through fetch', async () => {
-    const d = deps();
+  it('a starter-kit choice stored by an older version reads as nothing chosen (the kit is always in the Browser now)', async () => {
+    const d = deps({ kind: 'starter' } as unknown as StoredLibrary);
     const lib = createLibrary(d.deps);
-    await lib.useStarter();
-    expect(lib.state).toMatchObject({ status: 'ready', source: 'starter', name: 'Starter kit', writable: false });
-    expect(d.saved).toEqual([{ kind: 'starter' }]);
-    const f = await lib.readSample('kick-deep.wav');
-    expect(new Uint8Array(await f.arrayBuffer())).toEqual(new Uint8Array([9, 9]));
-    await expect(lib.savePatch('X', { name: 'X', modules: [], cables: [] })).rejects.toThrow(/library folder/);
+    await lib.init();
+    expect(lib.state).toMatchObject({ status: 'none', source: null, writable: false });
   });
 
   it('savePatch writes patches/<name>.json, refuses to overwrite unless asked, and lists it', async () => {

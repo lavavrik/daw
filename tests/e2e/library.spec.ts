@@ -145,18 +145,17 @@ test('library sample drag loads into row', async ({ page }) => {
 
   // "+ Add row" accepts a library drag too: a new row with that sample.
   await drag(page, 'lib-sample-bass.wav', 'add-row');
-  await expect(page.getByTestId('row-4').getByTestId('row-name')).toHaveText('bass');
+  await expect(page.getByTestId('row-8').getByTestId('row-name')).toHaveText('bass'); // after the default kit's eight
   await expect(page.getByTestId('banner')).toBeHidden();
   await page.getByTestId('lib-sample-drums/kick.wav').click(); // previewing, for the screenshot
   await expect(page.getByTestId('preview-stop')).toBeVisible();
   await page.screenshot({ path: 'test-results/browser.png' });
   await page.getByTestId('preview-stop').click();
 
-  // The bundled starter kit: read-only, previews and drags the same way.
-  await page.getByTestId('library-starter').click();
-  await expect(page.getByTestId('library-name')).toHaveText('Starter kit');
-  await expect(page.getByTestId('lib-sample-kick-deep.wav')).toBeVisible();
-  await drag(page, 'lib-sample-snare.wav', 'row-1');
+  // The built-in starter kit section, beside the folder: drags the same way (more in kit.spec.ts).
+  await expect(page.getByTestId('library-name')).toHaveText(name);
+  await expect(page.getByTestId('kit-sample-kick-deep.wav')).toBeVisible();
+  await drag(page, 'kit-sample-snare.wav', 'row-1');
   await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('snare');
   await cleanup(page, name);
 });
@@ -183,9 +182,6 @@ test('save patch then load from library', async ({ page }) => {
   await page.getByRole('button', { name: 'Instrument' }).click();
 
   // No library folder yet: Save patch is disabled and says why.
-  await expect(page.getByTestId('patch-save')).toBeDisabled();
-  await expect(page.getByTestId('patch-save')).toHaveAttribute('title', 'Choose a library folder to save patches');
-  await page.getByTestId('library-starter').click(); // the starter kit is read-only
   await expect(page.getByTestId('patch-save')).toBeDisabled();
   await expect(page.getByTestId('patch-save')).toHaveAttribute('title', 'Choose a library folder to save patches');
 
@@ -239,6 +235,7 @@ test('save patch then load from library', async ({ page }) => {
 
 test('permission lost shows reconnect', async ({ page }) => {
   await startAudio(page);
+  await expect(page.getByTestId('row-7').getByTestId('row-name')).toHaveText('Perc'); // the default kit has loaded
   const name = `e2e-lib-perm-${test.info().workerIndex}`;
   await makeLibrary(page, name, [{ path: 'kick.wav', bytes: kick }]);
   // A stored handle after a browser restart: queryPermission says 'prompt'
@@ -275,7 +272,7 @@ test('permission lost shows reconnect', async ({ page }) => {
   await expect(page.getByTestId('library-reconnect')).toBeVisible();
   await expect(page.getByTestId('library-message')).toContainText('moved or deleted');
   await expect(page.getByTestId('banner')).toBeHidden();
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Kick'); // unchanged (the default kit's)
   await cleanup(page, name);
 });
 

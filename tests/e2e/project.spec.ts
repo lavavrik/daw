@@ -119,8 +119,10 @@ test('save then load reproduces the beat', async ({ page }) => {
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
   expect(listing).toMatchObject({ version: 1, tmp: false });
-  expect(listing.names).toHaveLength(1);
-  expect(listing.names[0]).toMatch(/^0-[0-9a-f]{8}-kick\.wav$/); // <id>-<content hash>-<name>
+  // The kick plus the default kit's other seven rows (plan 8 Task 4: the kit is in the project).
+  expect(listing.names).toHaveLength(8);
+  expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-kick\.wav$/)); // <id>-<content hash>-<name>
+  expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-clap\.wav$/));
 
   // A new session: reload, start audio, open the folder.
   await startAudio(page);
@@ -189,9 +191,10 @@ test('dropping several files on "+ Add row" adds one row per file', async ({ pag
     { name: 'b.wav', bytes: [...makeWav(200)] },
     { name: 'c.wav', bytes: [...makeWav(300)] },
   ]);
-  await expect(page.getByTestId('row-6').getByTestId('row-name')).toHaveText('c');
-  await expect(page.getByTestId('row-4').getByTestId('row-name')).toHaveText('a');
-  await expect(page.getByTestId('row-5').getByTestId('row-name')).toHaveText('b');
+  // After the default kit's eight rows (plan 8 Task 4).
+  await expect(page.getByTestId('row-10').getByTestId('row-name')).toHaveText('c');
+  await expect(page.getByTestId('row-8').getByTestId('row-name')).toHaveText('a');
+  await expect(page.getByTestId('row-9').getByTestId('row-name')).toHaveText('b');
 });
 
 test('Project menu: New asks inline before discarding unsaved changes', async ({ page }) => {
@@ -258,7 +261,7 @@ test('restore banner appears and restores', async ({ page }) => {
     const marker = JSON.parse(await (await (await dir.getFileHandle('autosave.json')).getFile()).text());
     return { name: marker.project.name, samples: marker.project.samples.length };
   });
-  expect(written).toEqual({ name: 'Night Drive', samples: 1 });
+  expect(written).toEqual({ name: 'Night Drive', samples: 8 }); // the kick + the default kit's other seven
 
   // Reload (a crash or a closed tab): the next start offers the session back.
   await startAudio(page);

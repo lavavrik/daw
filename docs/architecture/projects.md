@@ -82,7 +82,30 @@ Every edit sends an engine command, so `AudioEngine.onCommand` →
 500 ms after edits pause and in an idle callback, compares
 `projectFingerprint` with the saved one and clears `dirty` if the project is
 back to its saved state. **The autosave subscribes to `p.version`** (below).
-Nothing is marked while `p.loading`.
+Nothing is marked while `p.loading`, nor while `p.baselining` (a change to
+the session's starting point, below).
+
+## The default kit (`state/defaultKit.ts`, plan 8 Task 4)
+
+A fresh session — first start, New, and Start fresh (which keeps the first
+start's session) — gets one drum track whose eight rows (Kick, Clap, Closed
+hat, Open hat, Snare, Rim, Shaker, Perc; the first `MAX_ROWS`) are created
+synchronously with the session, empty, before `markSaved` /
+`history.clear()`. Their samples are then fetched from the bundled starter
+kit and imported in row order through `importSample` (original bytes in
+`p.sampleFiles`, so Save, export and an audio restart have them), not
+awaited: the UI is usable at once and rows fill as samples land; a failure
+is the normal error banner and leaves that row empty. Restore and Open never
+add the kit. A landing sample is part of the **starting point**, not an
+edit (`attachKitSample`): set with `p.baselining` (no dirty, no version bump
+— so nothing autosaves and the next start offers no restore of an untouched
+session — no undo entry), then the undo history (`history.rebase`) and the
+saved fingerprint are patched with the same change, so an edit the user
+made while the kit loaded stays one undo step whose undo keeps the kit, and
+undoing back to the start clears "● unsaved". If the session was saved to a
+folder meanwhile, the sample is an ordinary unsaved change instead. A row
+the user filled first is left alone; a New / Open / Restore
+(`p.generation`) ends the load.
 
 ## Validation (`validate`)
 
@@ -280,7 +303,8 @@ project replaces the session).
 ## Library (`app/src/library/`)
 
 The Browser pane (`ui/Browser.svelte`) shows one **library** in every
-project: a folder the user picks once, or the bundled starter kit.
+project — a folder the user picks once — and, below it, always, the
+built-in **Starter kit** (not a library source; plan 8 Task 4).
 
 ```
 My Sounds/                any layout; every audio file below is listed
@@ -290,7 +314,8 @@ My Sounds/                any layout; every audio file below is listed
 
 - **Handle + permission** (`handles.ts`): the `FileSystemDirectoryHandle`
   is stored in IndexedDB `daw-library` / `library` / `current` as
-  `{ kind: 'folder', handle }` (or `{ kind: 'starter' }`). On start
+  `{ kind: 'folder', handle }` (an older `{ kind: 'starter' }` reads as
+  nothing chosen). On start
   `queryPermission({ mode: 'readwrite' })` — never a prompt — and, unless
   it says `granted` (after a browser restart it usually says `prompt`), the
   library is **lost** and the pane offers **Reconnect folder**, whose click
@@ -313,10 +338,12 @@ My Sounds/                any layout; every audio file below is listed
   folder, with "N more not shown". A refresh re-lists only the root, the
   expanded folders and `patches/` (an expanded folder that vanished just
   closes). `patches/*.json` (not nested) is listed eagerly under Patches.
-- **Starter kit** (`starter.ts`): `samples/starter/*` through Vite
+- **Starter kit** (`starter.ts`): `samples/starter/*` (CC0) through Vite
   (`import.meta.glob(…, { query: '?url' })`: `/@fs/` in dev, emitted assets
-  in a build), read with `fetch`. Read-only: Save patch is disabled ("Choose
-  a library folder to save patches").
+  in a build), read with `fetch` (`starterSample`). Read-only, its own
+  foldable section; previews keyed `kit:<file>`; dragged with its own type
+  `application/x-daw-starter-sample` (so no library path is mistaken for
+  it). The default kit (above) is made of it.
 - **Preview** (`preview.ts`): never through the engine; one at a time;
   work that was superseded never starts. The library hands over the disk
   `File` unread (`sampleBlob`), and its size decides: up to 50 MB (5 MB for

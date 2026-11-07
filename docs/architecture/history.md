@@ -71,6 +71,15 @@ Undo/redo (⌘Z / ⇧⌘Z or Ctrl+Y, ignored while typing; the top bar's ↶ ↷
 with "Undo Move notes" tooltips) first commit an open gesture, and are
 refused while `p.loading`.
 
+- **Starting-point changes** (plan 8 Task 4): the default kit's samples land
+  in a fresh session asynchronously (state/defaultKit.ts), maybe after the
+  user's first edits. They run with `p.baselining` (`edit` just runs `fn`:
+  no entry), then `history.rebase(fn)` maps every stored snapshot (both
+  stacks, an open gesture's "before", the sharing base) through the same
+  pure patch, sharing and freezing the new nodes like any snapshot. Each
+  entry still differs only by its own edit, so undoing an early edit keeps
+  the kit.
+
 ## Cost
 
 A snapshot is a full `serialize` (~1.5 ms on a 32-track project); before

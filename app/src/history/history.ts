@@ -37,6 +37,13 @@
 //     but not an edit (selectPattern, selectTrack and Save As's rename call
 //     settle(); a new such change must too), so the "after" is exactly the
 //     state at the pass's last note, as when it was taken eagerly.
+//
+// Starting-point changes (plan 8 Task 4): the default kit's samples land in
+// a fresh session asynchronously, maybe after the user already edited. They
+// are not edits (no entry; state/edits.ts Project.baselining), and an undo
+// must not take them away: rebase(fn) patches every stored snapshot (both
+// stacks, an open gesture's "before") with the same change, so each entry
+// still differs only by its own edit.
 import type { ProjectJson } from '../project/schema';
 import { banners } from '../state/banners.svelte';
 import { jsonEqual, sameProject, shareSnapshot } from '../project/serialize';
@@ -84,6 +91,13 @@ export interface History {
   readonly labels: { undo: string | null; redo: string | null };
   /** The coalesce key of the entry undo would apply ("rec:3": a recording pass), or null. */
   readonly undoKey: string | null;
+  /**
+   * A starting-point change was just applied to the live project outside
+   * the history: map every stored snapshot through `fn` (pure; returns its
+   * argument when the change does not apply to it), keeping them shared and
+   * frozen. See the header.
+   */
+  rebase(fn: (snap: ProjectJson) => ProjectJson): void;
   /** True while undo/redo applies a snapshot (actions then just run). */
   readonly applying: boolean;
   /**
@@ -295,6 +309,25 @@ export function createHistory(o: HistoryOptions): History {
     },
     settle: () => {
       if (depth === 0) settle();
+    },
+    rebase(fn) {
+      // One result per snapshot object: entries that shared one still do.
+      const done = new Map<ProjectJson, ProjectJson>();
+      const map = (s: ProjectJson): ProjectJson => {
+        let r = done.get(s);
+        if (!r) {
+          const next = fn(s);
+          r = next === s ? s : shareSnapshot(s, next, freeze);
+          done.set(s, r);
+        }
+        return r;
+      };
+      for (const e of [...undo, ...redo]) {
+        e.before = map(e.before);
+        e.after = map(e.after); // a stale "after" is retaken from the live project anyway
+      }
+      if (open?.before) open.before = map(open.before);
+      if (lastSnap) lastSnap = map(lastSnap);
     },
     debugStacks: () => ({
       undo: undo.map((e) => [e.id, e.merges]),

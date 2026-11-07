@@ -210,6 +210,13 @@ export class Project {
    * uploaded on the old engine checks it. Not reactive.
    */
   audioRestarts = 0;
+  /**
+   * A change to the session's starting point is being applied, not an edit
+   * (the default kit's samples landing, state/defaultKit.ts): edits.ts marks
+   * nothing (no dirty, no version bump, so no autosave) and records no undo
+   * entry. Set only around a synchronous call. Not reactive.
+   */
+  baselining = false;
   /** Where Save writes (null: Save does a Save As). Not reactive. */
   folder: FileSystemDirectoryHandle | null = null;
   /**

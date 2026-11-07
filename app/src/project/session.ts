@@ -6,7 +6,7 @@
 // saveTo / openFrom take any FileSystemDirectoryHandle (a picked folder, or
 // OPFS in the e2e tests via __daw.saveTo / __daw.openFrom) and throw on
 // failure; the menu commands wrap them with the picker and the banners.
-import { addDrumTrack } from '../state/actions';
+import { addDefaultDrumTrack } from '../state/defaultKit';
 import { banners, flashHint } from '../state/banners.svelte';
 import { Project } from '../state/project.svelte';
 import { folderInUse, pickProjectFolder, readProject, writeProject } from './fsFolder';
@@ -86,6 +86,12 @@ export interface SessionOptions {
    * no edit landed during the write).
    */
   onSaved?: (info: SavedInfo) => void;
+  /**
+   * After New built its fresh session (the default kit's drum track, empty
+   * rows; history cleared; marked saved): App starts loading the kit into
+   * it (state/defaultKit.ts loadDefaultKit, not awaited).
+   */
+  onFresh?: (trackId: string) => void;
   /** The folder picker (tests pass a fake). */
   pick?: () => Promise<FileSystemDirectoryHandle | null>;
 }
@@ -235,10 +241,11 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
       once(async () => {
         try {
           await replace(serialize(new Project()), new Map());
-          addDrumTrack(p, engine); // like a fresh start
+          const kit = addDefaultDrumTrack(p, engine); // like a fresh start
           p.history?.clear(); // that track is the starting point, not an edit
           p.folder = null;
           markSaved(p);
+          if (kit) opts.onFresh?.(kit.id);
           banners.error = null;
           banners.load = null;
         } catch (e) {

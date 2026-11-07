@@ -1,0 +1,159 @@
+import { expect, test, type Page } from '@playwright/test';
+import { makeWav } from './wav';
+
+// The built-in starter kit (plan 8 Task 4): a fresh session — first start
+// and Project ▸ New — starts with the default drum track filled from the
+// bundled kit, untouched ("unsaved" off, nothing to undo); the Browser always
+// shows the kit as its own section, beside a library folder.
+
+type Daw = {
+  engine: { telemetry(): Float32Array } | null;
+  project: {
+    dirty: boolean;
+    version: number;
+    sampleFiles: Map<number, { name: string; bytes: ArrayBuffer }>;
+    tracks: { kind: string; rows?: { name: string; sampleId: number | null }[] }[];
+  };
+  history: { labels: { undo: string | null; redo: string | null } } | null;
+  library: { attach(dir: FileSystemDirectoryHandle): Promise<void> };
+};
+
+const KIT = ['Kick', 'Clap', 'Closed hat', 'Open hat', 'Snare', 'Rim', 'Shaker', 'Perc'];
+const FILES = ['kick-punch.wav', 'clap.wav', 'hat-closed.wav', 'hat-open.wav', 'snare.wav', 'rim.wav', 'shaker.wav', 'perc-tom.wav'];
+
+async function startAudio(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+}
+
+/** The default drum track holds the eight kit rows, each with its kit sample (original bytes kept). */
+async function expectKit(page: Page) {
+  for (const [i, name] of KIT.entries()) await expect(page.getByTestId(`row-${i}`).getByTestId('row-name')).toHaveText(name);
+  await expect(page.getByTestId('row-8')).toHaveCount(0);
+  const kept = await page.evaluate(() => {
+    const p = (window as unknown as { __daw: Daw }).__daw.project;
+    return p.tracks[0].rows!.map((r) => {
+      const f = p.sampleFiles.get(r.sampleId!);
+      return f ? [f.name, f.bytes.byteLength > 1000] : null;
+    });
+  });
+  expect(kept).toEqual(FILES.map((f) => [f, true]));
+  // A starting point, not an edit: nothing unsaved, nothing to undo.
+  await expect(page.getByTestId('project-name')).toHaveText('Untitled');
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.dirty)).toBe(false);
+  await expect(page.getByTestId('undo')).toBeDisabled();
+}
+
+/** Max peakL seen over `ms`. */
+function maxPeak(page: Page, ms = 1500) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<number>((resolve) => {
+        const eng = (window as unknown as { __daw: Daw }).__daw.engine!;
+        let max = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          max = Math.max(max, eng.telemetry()[5]);
+          if (performance.now() - t0 > ms) {
+            clearInterval(id);
+            resolve(max);
+          }
+        }, 4);
+      }),
+    ms,
+  );
+}
+
+/** Tap Kick on the downbeat, play: the kit sounds. */
+async function expectKickPlays(page: Page) {
+  await page.getByTestId('step-0-0').click();
+  await page.keyboard.press('Space');
+  expect(await maxPeak(page)).toBeGreaterThan(0.05);
+  await page.keyboard.press('Space');
+}
+
+test('a fresh start has the playable starter kit', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  await expectKit(page);
+  // Not an edit: no version bump, so the autosave has nothing to write (and
+  // the next start offers no "Restore last session" for an untouched kit).
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.version)).toBe(0);
+  await expectKickPlays(page);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo /); // the tap is the first edit
+});
+
+test('Project ▸ New starts from the kit again', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  await expectKit(page);
+  await page.getByTestId('step-0-4').click(); // an edit, so New asks first
+  await page.getByTestId('project-menu').click();
+  await page.getByTestId('project-new').click();
+  await page.getByTestId('project-discard').click();
+  await expectKit(page);
+  // The kit samples of the old session were dropped; the new ones are fresh ids.
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length)).toBe(1);
+  await expectKickPlays(page);
+});
+
+test('the Browser always shows the starter kit, beside a library folder', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  const kit = page.getByTestId('starter-kit');
+  await expect(kit).toBeVisible(); // no folder chosen yet
+  await expect(page.getByTestId('library-choose')).toBeVisible();
+
+  const name = `e2e-kit-${test.info().workerIndex}`;
+  await page.evaluate(async ({ name, bytes }) => {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(name, { recursive: true }).catch(() => {});
+    const lib = await root.getDirectoryHandle(name, { create: true });
+    const w = await (await lib.getFileHandle('bass.wav', { create: true })).createWritable();
+    await w.write(new Uint8Array(bytes));
+    await w.close();
+    await (window as unknown as { __daw: Daw }).__daw.library.attach(lib);
+  }, { name, bytes: [...makeWav(55, 200)] });
+  await expect(page.getByTestId('library-name')).toHaveText(name);
+  await expect(page.getByTestId('lib-sample-bass.wav')).toBeVisible();
+  await expect(kit).toBeVisible();
+  await expect(page.getByTestId('kit-sample-kick-deep.wav')).toBeVisible();
+  await expect(page.getByTestId('kit-sample-stab-cm9.wav')).toBeVisible();
+
+  // Preview (one at a time, never in the project).
+  await page.getByTestId('kit-sample-kick-deep.wav').click();
+  await expect(page.getByTestId('preview-stop')).toBeVisible();
+  await page.getByTestId('preview-stop').click();
+  await expect(page.getByTestId('preview-stop')).toBeHidden();
+
+  // Drag onto "+ Add row": a ninth row with that sample, its bytes kept for Save.
+  await expectKit(page);
+  await page.evaluate(() => {
+    const src = document.querySelector('[data-testid="kit-sample-kick-deep.wav"]')!;
+    const dst = document.querySelector('[data-testid="add-row"]')!;
+    const dt = new DataTransfer();
+    const ev = (el: Element, t: string) => el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
+    ev(src, 'dragstart');
+    for (const t of ['dragenter', 'dragover', 'drop']) ev(dst, t);
+    ev(src, 'dragend');
+  });
+  await expect(page.getByTestId('row-8').getByTestId('row-name')).toHaveText('kick-deep');
+  await expect(page.getByTestId('project-name')).toContainText('● unsaved'); // that one is an edit
+  await expect(page.getByTestId('banner')).toBeHidden();
+  await page.screenshot({ path: 'test-results/browser-kit.png' });
+
+  // Collapsible.
+  await page.getByTestId('starter-kit-toggle').click();
+  await expect(page.getByTestId('kit-sample-kick-deep.wav')).toBeHidden();
+  await page.getByTestId('starter-kit-toggle').click();
+  await expect(page.getByTestId('kit-sample-kick-deep.wav')).toBeVisible();
+
+  await page.evaluate(async (name) => {
+    await (await navigator.storage.getDirectory()).removeEntry(name, { recursive: true }).catch(() => {});
+    await new Promise((r) => {
+      const req = indexedDB.deleteDatabase('daw-library');
+      req.onsuccess = req.onerror = req.onblocked = r;
+    });
+  }, name);
+});

@@ -2,8 +2,9 @@
 //
 // File System Access handles can be stored in IndexedDB (structured clone)
 // but not in localStorage, so the choice lives in IndexedDB "daw-library",
-// store "library", key "current": either { kind: 'folder', handle } or
-// { kind: 'starter' } (the bundled read-only kit, starter.ts).
+// store "library", key "current": { kind: 'folder', handle }. (Older
+// versions could store { kind: 'starter' }; the starter kit is always in the
+// Browser now, so that reads as nothing chosen.)
 //
 // Permission: a stored handle usually comes back as 'prompt' after a browser
 // restart. queryPermission() never shows UI, so start-up uses it and, if
@@ -12,7 +13,7 @@
 // Handles without these methods (OPFS in some engines, test fakes) count as
 // granted.
 
-export type StoredLibrary = { kind: 'folder'; handle: FileSystemDirectoryHandle } | { kind: 'starter' };
+export type StoredLibrary = { kind: 'folder'; handle: FileSystemDirectoryHandle };
 
 type PermissionMode = { mode: 'read' | 'readwrite' };
 type PermissionHandle = FileSystemDirectoryHandle & {
@@ -98,7 +99,7 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 export const idbLibraryStore = {
   async load(): Promise<StoredLibrary | null> {
     const v = (await tx('readonly', (s) => s.get(KEY))) as StoredLibrary | undefined;
-    return v && (v.kind === 'starter' || (v.kind === 'folder' && v.handle)) ? v : null;
+    return v && v.kind === 'folder' && v.handle ? v : null;
   },
   async save(v: StoredLibrary | null): Promise<void> {
     await (v ? tx('readwrite', (s) => s.put(v, KEY)) : tx('readwrite', (s) => s.delete(KEY)));

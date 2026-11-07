@@ -414,4 +414,48 @@ describe('lean history', () => {
     s.h.undo();
     expect(notesOf(t)).toEqual([[60, 0, 10]]);
   });
+  it('rebase: a starting-point change patches every stored state, so undo/redo keep it (plan 8 Task 4)', () => {
+    const s = setup();
+    s.toggle(1); // entry A
+    s.toggle(2); // entry B
+    s.h.undo(); // B on the redo stack
+    s.h.begin(); // a gesture that has edited: its before is stored too
+    s.toggle(5);
+    // The change lands in the live project outside the history (the kit row's name here).
+    const row = s.d.rows[1];
+    row.name = 'Kick';
+    const patch = (j: ProjectJson): ProjectJson => {
+      const t = j.tracks[0];
+      if (t.kind !== 'drum' || t.rows[1].name === 'Kick') return j;
+      return { ...j, tracks: [{ ...t, rows: t.rows.map((r, i) => (i === 1 ? { ...r, name: 'Kick' } : r)) }] };
+    };
+    s.h.rebase(patch);
+    s.h.commit(); // entry C (toggle 5)
+    expect(s.h.undo()).toBe(true); // C
+    expect(s.h.undo()).toBe(true); // A
+    expect([s.step(1), s.step(2), s.step(5)]).toEqual([0, 0, 0]);
+    expect(s.d.rows[1].name).toBe('Kick');
+    s.h.redo(); // A
+    s.h.redo(); // C (B was dropped by C)
+    expect([s.step(1), s.step(5)]).toEqual([100, 100]);
+    expect(s.d.rows[1].name).toBe('Kick');
+  });
+
+  it('rebase keeps snapshots shared and frozen', () => {
+    const s = big(1, 1);
+    const t = s.synths[0];
+    addNote(s.p, s.sink, t.id, { pitch: 60, start: 0, len: 10 });
+    addNote(s.p, s.sink, t.id, { pitch: 61, start: 0, len: 10 });
+    s.p.tempo = 99; // the starting-point change (no command)
+    s.h.rebase((j) => (j.tempo === 99 ? j : { ...j, tempo: 99 }));
+    s.h.undo();
+    s.h.undo();
+    s.h.redo();
+    const [b1, a0, a1] = s.applied; // B.before, A.before, A.after
+    expect([b1.tempo, a0.tempo, a1.tempo]).toEqual([99, 99, 99]);
+    expect(a1).toBe(b1); // A.after and B.before were one object, and still are
+    expect(a1.mixer).toBe(a0.mixer); // unchanged subtrees still shared
+    expect(() => { (a0 as { tempo: number }).tempo = 1; }).toThrow(TypeError);
+    expect(s.p.tempo).toBe(99);
+  });
 });

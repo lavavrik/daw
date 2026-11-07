@@ -1,28 +1,35 @@
 <script lang="ts">
   // The left Browser pane: the sample + patch library (spec §4 "Library
-  // browser"; state in library/library.svelte.ts).
+  // browser"; state in library/library.svelte.ts) and the built-in starter
+  // kit (library/starter.ts; plan 8 Task 4).
   //
-  //   header   library name (folder, or "Starter kit · read-only"), ↻ rescan
+  //   header   library folder name, ↻ rescan
   //   preview  what is playing, with ■ Stop (one preview at a time)
-  //   body     none:  Choose library folder… / Use starter kit
-  //            lost:  why, and "Reconnect folder" (permission needs a click)
-  //            ready: folders (listed one level at a time when expanded,
-  //                   "N more not shown" past the per-folder cap) and
-  //                   samples; Patches (patches/*.json)
-  //   footer   switch library (folder / starter kit)
+  //   body     the folder:
+  //              none:  Choose library folder…
+  //              lost:  why, and "Reconnect folder" (permission needs a click)
+  //              ready: folders (listed one level at a time when expanded,
+  //                     "N more not shown" past the per-folder cap) and
+  //                     samples; Patches (patches/*.json)
+  //            Starter kit (always, read-only, foldable): the bundled CC0
+  //            samples the default drum track is made of
+  //   footer   change folder
   //
-  // Samples: click previews (library/preview.ts: straight to the speakers,
-  // never through the engine; big files stream instead of decoding); drag onto a step-grid row, "+ Add row" or a
+  // Samples (folder and kit alike): click previews (library/preview.ts:
+  // straight to the speakers, never through the engine; big files stream
+  // instead of decoding); drag onto a step-grid row, "+ Add row" or a
   // Sample Player copies the file into the project (library/drag.ts).
   // Problems with one file show in this pane's own inline banner; an
   // unreachable folder is the `lost` state, never a stream of errors.
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../audio/engine';
-  import { startLibraryDrag } from '../library/drag';
+  import { STARTER_SAMPLE_MIME, startLibraryDrag } from '../library/drag';
   import { LibraryLostError, library } from '../library/library.svelte';
   import { createPreview } from '../library/preview';
   import type { Preview } from '../library/preview';
+  import { listingFromPaths } from '../library/scan';
   import type { LibSample } from '../library/scan';
+  import { STARTER_KIT, starterSample } from '../library/starter';
 
   let { engine }: { engine: AudioEngine } = $props();
 
@@ -45,20 +52,26 @@
     previewEngine = e;
   });
 
-  async function toggle(s: LibSample) {
-    if (previewing === s.path) return pv().stop();
+  /** Kit previews are keyed "kit:<file>", apart from any library path. */
+  const KIT = 'kit:';
+  const kitSamples = listingFromPaths(STARTER_KIT.files.map((f) => f.path)).samples;
+  let kitOpen = $state(true);
+
+  async function toggle(s: LibSample, kit = false) {
+    const k = kit ? KIT + s.path : s.path;
+    if (previewing === k) return pv().stop();
     error = null;
     try {
-      await pv().play(s.path, () => library.sampleBlob(s.path));
+      await pv().play(k, () => (kit ? starterSample(s.path) : library.sampleBlob(s.path)));
     } catch (e) {
       if (e instanceof LibraryLostError) return; // the pane shows "Reconnect folder"
       error = e instanceof Error && e.message.includes(s.name) ? e.message : `Couldn't preview "${s.name}" — not a readable audio file`;
     }
   }
-  function key(e: KeyboardEvent, s: LibSample) {
+  function key(e: KeyboardEvent, s: LibSample, kit = false) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    void toggle(s);
+    void toggle(s, kit);
   }
 
   // A new listing (refresh, another library) may hold other bytes at the same paths.
@@ -100,7 +113,7 @@
     });
   }
   const choose = () => library.choose().catch((e) => (error = `Couldn't open the folder — ${e instanceof Error ? e.message : String(e)}`));
-  const nameOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
+  const nameOf = (key: string) => (key.startsWith(KIT) ? key.slice(KIT.length) : key.slice(key.lastIndexOf('/') + 1));
 </script>
 
 {#snippet folder(path: string, depth: number)}
@@ -133,8 +146,7 @@
     <span class="ttl">Library</span>
     {#if lib.source}
       <span class="name" data-testid="library-name" title={lib.name}>{lib.name}</span>
-      {#if lib.source === 'starter'}<span class="ro" title="The bundled kit: samples only, nothing is saved here">read-only</span>{/if}
-      {#if lib.source === 'folder' && lib.status === 'ready'}
+      {#if lib.status === 'ready'}
         <button class="icon" data-testid="library-refresh" title="Rescan the folder" aria-label="Rescan the folder" onclick={() => void library.refresh()}>↻</button>
       {/if}
     {/if}
@@ -156,7 +168,6 @@
     {#if lib.status === 'none'}
       <p>Pick a folder of samples once; it stays your library in every project. Patches you save go to its <code>patches/</code> folder.</p>
       <button class="big" data-testid="library-choose" onclick={choose}>Choose library folder…</button>
-      <button class="big alt" data-testid="library-starter" onclick={() => void library.useStarter()}>Use starter kit</button>
     {:else if lib.status === 'loading'}
       <p class="dim" role="status">Scanning…</p>
     {:else if lib.status === 'lost'}
@@ -170,17 +181,35 @@
       {:else}
         <p class="dim">No audio files here (wav, aiff, mp3, flac, ogg, m4a).</p>
       {/if}
-      {#if lib.source === 'folder'}
-        <div class="sec">Patches</div>
-        {#each lib.patches as pt (pt.path)}
-          <div class="item pat" data-testid="lib-patch-{pt.name}" title="Load it from the Patch menu of a synth track's Instrument tab">
-            <span class="tw">⎍</span><span class="nm">{pt.name}</span>
-          </div>
-        {:else}
-          <p class="dim">None yet — Save patch in a synth track's Instrument tab.</p>
-        {/each}
-      {/if}
+      <div class="sec">Patches</div>
+      {#each lib.patches as pt (pt.path)}
+        <div class="item pat" data-testid="lib-patch-{pt.name}" title="Load it from the Patch menu of a synth track's Instrument tab">
+          <span class="tw">⎍</span><span class="nm">{pt.name}</span>
+        </div>
+      {:else}
+        <p class="dim">None yet — Save patch in a synth track's Instrument tab.</p>
+      {/each}
     {/if}
+
+    <section class="kit" data-testid="starter-kit" aria-label="Starter kit">
+      <button class="sec fold" data-testid="starter-kit-toggle" aria-expanded={kitOpen} onclick={() => (kitOpen = !kitOpen)}>
+        <span>{kitOpen ? '▾' : '▸'} Starter kit</span>
+        <span class="ro" title="Built in (CC0): drag a sound into the project; nothing is saved here">read-only</span>
+      </button>
+      {#if kitOpen}
+        <div class="tree">
+          {#each kitSamples as s (s.path)}
+            <div
+              class="item smp" class:on={previewing === KIT + s.path}
+              role="button" tabindex="0" draggable="true" data-testid="kit-sample-{s.path}"
+              title="{s.name} — built-in starter kit: click to preview, drag onto a row or a Sample Player"
+              onclick={() => void toggle(s, true)} onkeydown={(e) => key(e, s, true)}
+              ondragstart={(e) => startLibraryDrag(e, s.path, STARTER_SAMPLE_MIME)}
+            ><span class="tw">{previewing === KIT + s.path ? '■' : '♪'}</span><span class="nm">{s.name}</span></div>
+          {/each}
+        </div>
+      {/if}
+    </section>
   </div>
 
   {#if lib.status !== 'none'}
@@ -188,10 +217,7 @@
       {#if lib.status === 'lost'}
         <button class="link" data-testid="library-choose" onclick={choose}>Choose another folder…</button>
       {:else}
-        <button class="link" data-testid="library-choose" onclick={choose}>{lib.source === 'folder' ? 'Change folder…' : 'Choose library folder…'}</button>
-      {/if}
-      {#if lib.source !== 'starter'}
-        <button class="link" data-testid="library-starter" onclick={() => void library.useStarter()}>Starter kit</button>
+        <button class="link" data-testid="library-choose" onclick={choose}>Change folder…</button>
       {/if}
     </div>
   {/if}
@@ -217,8 +243,14 @@
   .lost { color: #ffd98a; }
   code { color: #c9cbd3; }
   .big { display: block; width: calc(100% - 8px); margin: 0 4px 6px; font: inherit; padding: 5px 8px; border-radius: 3px; border: 1px solid #f0a23a; background: #f0a23a; color: #111; font-weight: 600; cursor: pointer; text-align: center; }
-  .big.alt { background: transparent; color: #c9cbd3; border-color: #3a3d48; font-weight: 400; }
   .sec { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #6a6d79; margin: 6px 4px 2px; }
+  .kit { margin-top: 8px; border-top: 1px solid #2a2c33; padding-top: 2px; }
+  .fold {
+    display: flex; align-items: center; gap: 6px; width: calc(100% - 8px); font-family: inherit; text-align: left;
+    border: 0; background: transparent; padding: 0; cursor: pointer;
+  }
+  .fold:hover, .fold:focus-visible { color: #c9cbd3; outline: none; }
+  .fold .ro { text-transform: none; letter-spacing: 0; }
   .tree { display: flex; flex-direction: column; }
   .item {
     display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box; font: inherit; text-align: left;

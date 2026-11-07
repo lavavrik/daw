@@ -85,7 +85,11 @@ function blockShare(page: Page, ms: number) {
 
 test('deferred drop while playing: notice, loads on Stop, engine keeps running at real time', async ({ page }) => {
   await startAudio(page);
-  // Leave less room than the kick (50 ms = 2205..2400 frames) needs.
+  // Let the default kit load first: loading after the fill (stopped, so it
+  // may grow the arena) it would leave room for the kick.
+  await expect(page.getByTestId('row-7').getByTestId('row-name')).toHaveText('Perc');
+  // Leave less room than the kick (50 ms = 2205..2400 frames) needs (the fill
+  // gets a chunk of its own size when the kit's samples took some of the first).
   await fillArena(page, 100);
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);
@@ -98,7 +102,7 @@ test('deferred drop while playing: notice, loads on Stop, engine keeps running a
   const share = blockShare(page, 1500);
   await dropFile(page, 'row-0', 'kick.wav', 'audio/wav', [...makeWav()]);
   await expect(page.getByTestId('notice')).toContainText('"kick" will load when playback stops');
-  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('drop sample');
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Kick'); // the default kit's, until Stop
   const s = await share;
   console.log(`SERIAL deferred drop: engine blocks at ${(s * 100).toFixed(1)}% of real time`);
   expect(s).toBeGreaterThanOrEqual(0.95);

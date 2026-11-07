@@ -18,9 +18,12 @@ export const NON_EDIT_OPS: ReadonlySet<number> = new Set([
   Op.PITCH_BEND, Op.MOD_WHEEL, Op.SUSTAIN, Op.RESET_ALL,
 ]);
 
-/** The project was edited (ignored while a load replaces it). */
+/**
+ * The project was edited (ignored while a load replaces it, and for a
+ * starting-point change: Project.baselining).
+ */
 export function markEdited(p: Project) {
-  if (p.loading) return;
+  if (p.loading || p.baselining) return;
   p.dirty = true;
   p.version++;
 }
@@ -33,10 +36,11 @@ export function commandEdits(p: Project, op: number) {
 /**
  * Run a user-level edit as one undo entry (history/history.ts transact):
  * every exported action in state/*-actions.ts wraps its body in this. Nested
- * calls (an action calling another), a load replacing the session and
- * undo/redo applying a snapshot just run `fn`.
+ * calls (an action calling another), a load replacing the session,
+ * undo/redo applying a snapshot and a starting-point change
+ * (Project.baselining: the history is rebased instead) just run `fn`.
  */
 export function edit<T>(p: Project, label: string, fn: () => T, opts?: { coalesce?: string }): T {
-  if (!p.history || p.loading) return fn();
+  if (!p.history || p.loading || p.baselining) return fn();
   return p.history.transact(label, fn, opts);
 }

@@ -3,7 +3,7 @@ import { Op } from '../audio/protocol';
 import { Project } from './project.svelte';
 import { addDrumTrack, addRow } from './actions';
 import { renamePattern } from './pattern-actions';
-import { commandEdits, markEdited } from './edits';
+import { commandEdits, edit, markEdited } from './edits';
 
 describe('edit tracking (fix 5)', () => {
   it('edit commands mark the project dirty and bump its version; transport and live notes do not', () => {
@@ -32,5 +32,18 @@ describe('edit tracking (fix 5)', () => {
     renamePattern(p, { send: () => true }, t.id, t.patterns[0].id, 'Verse');
     expect(p.version).toBe(v + 2);
     expect(p.dirty).toBe(true);
+  });
+  it('a starting-point change (baselining) marks nothing and is no undo entry (plan 8 Task 4)', () => {
+    const p = new Project();
+    let transacts = 0;
+    p.history = { transact: (_l: string, fn: () => unknown) => (transacts++, fn()) } as unknown as Project['history'];
+    p.baselining = true;
+    commandEdits(p, Op.SET_ROW_SAMPLE);
+    markEdited(p);
+    expect(edit(p, 'Load sample', () => 7)).toBe(7);
+    expect([p.dirty, p.version, transacts]).toEqual([false, 0, 0]);
+    p.baselining = false;
+    edit(p, 'Load sample', () => commandEdits(p, Op.SET_ROW_SAMPLE));
+    expect([p.dirty, p.version, transacts]).toEqual([true, 1, 1]);
   });
 });

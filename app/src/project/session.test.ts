@@ -185,4 +185,20 @@ describe('project session', () => {
     });
     expect(pickerOpened).toBe(false);
   });
+  it('New starts from the default kit track: kit rows, not dirty, history cleared, onFresh starts the kit load (plan 8 Task 4)', async () => {
+    const { p } = await buildFixture();
+    let cleared = 0;
+    p.history = { clear: () => cleared++, settle: () => {}, transact: (_l: string, fn: () => unknown) => fn() } as unknown as Project['history'];
+    const fresh: string[] = [];
+    const s = createProjectSession(p, engine(), { onFresh: (trackId) => fresh.push(trackId) });
+    await s.newProject();
+    expect(banners.error).toBeNull();
+    expect(p.tracks).toHaveLength(1);
+    const t = p.tracks[0];
+    expect(t.kind === 'drum' && t.rows.map((r) => r.name)).toEqual(['Kick', 'Clap', 'Closed hat', 'Open hat', 'Snare', 'Rim', 'Shaker', 'Perc']);
+    expect(fresh).toEqual([t.id]);
+    expect(cleared).toBeGreaterThan(0);
+    expect(p.dirty).toBe(false);
+    expect(p.savedFingerprint).toBe(projectFingerprint(p));
+  });
 });

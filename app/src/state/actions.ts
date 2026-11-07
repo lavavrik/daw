@@ -15,10 +15,10 @@ export interface CommandSink {
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
-function makeRow(n: number): DrumRow {
+function makeRow(name: string): DrumRow {
   return {
     id: crypto.randomUUID(),
-    name: `Row ${n}`,
+    name,
     sampleId: null,
     gain: 1,
     pan: 0,
@@ -41,8 +41,14 @@ export function uniqueTrackName(p: Project, base: string): string {
   return n === 1 ? base : `${base} ${n}`;
 }
 
-/** Returns null when all MAX_TRACKS slots are taken. */
-export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackName(p, 'Drums')): DrumTrack | null {
+/**
+ * Returns null when all MAX_TRACKS slots are taken. `rowNames`: the rows it
+ * starts with, empty (the default kit's names for a fresh session's track,
+ * state/defaultKit.ts; at most MAX_ROWS).
+ */
+export function addDrumTrack(
+  p: Project, sink: CommandSink, name = uniqueTrackName(p, 'Drums'), rowNames = ['Row 1', 'Row 2', 'Row 3', 'Row 4'],
+): DrumTrack | null {
   return edit(p, 'Add drum track', () => {
     const used = new Set(p.tracks.map((t) => t.slot));
     let slot = 0;
@@ -56,7 +62,7 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackNa
       slot,
       name,
       color: TRACK_COLORS[slot % TRACK_COLORS.length],
-      rows: [1, 2, 3, 4].map(makeRow),
+      rows: rowNames.slice(0, MAX_ROWS).map(makeRow),
       patterns: [pattern],
       currentPatternId: pattern.id,
       clips: [],
@@ -75,7 +81,7 @@ export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow
   return edit(p, 'Add row', () => {
     const track = p.tracks.find((t) => t.id === trackId);
     if (!track || track.kind !== 'drum' || track.rows.length >= MAX_ROWS) return null;
-    track.rows.push(makeRow(track.rows.length + 1));
+    track.rows.push(makeRow(`Row ${track.rows.length + 1}`));
     markEdited(p); // no engine command, so mark it here
     return track.rows[track.rows.length - 1];
   });

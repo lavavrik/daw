@@ -115,7 +115,13 @@ export async function listPatches(root: FileSystemDirectoryHandle): Promise<LibP
   return out.sort((a, b) => byName(a.name, b.name));
 }
 
-/** A root listing for a fixed list of root-level files (the bundled starter kit). */
+const MIME: Record<string, string> = {
+  wav: 'audio/wav', aif: 'audio/aiff', aiff: 'audio/aiff', mp3: 'audio/mpeg', flac: 'audio/flac', ogg: 'audio/ogg', m4a: 'audio/mp4',
+};
+/** The audio MIME type for a file name's extension ('' if unknown). */
+export const audioMime = (name: string): string => MIME[name.slice(name.lastIndexOf('.') + 1).toLowerCase()] ?? '';
+
+/** A root listing for a fixed list of root-level files (the built-in starter kit). */
 export function listingFromPaths(paths: string[]): LibListing {
   const samples = paths.filter(isAudioName).sort(byName).map((p) => ({ name: p, path: p }));
   return { folders: [], samples, more: 0 };

@@ -185,7 +185,7 @@ test('restart keeps project and handles', async ({ page }) => {
   await page.getByTestId('track-0').click(); // the drums' step grid
   const preBass = await snapshot(page); // (the selection moved: part of the snapshot)
   await drag(page, 'lib-sample-bass.wav', 'add-row');
-  await expect(page.getByTestId('row-4').getByTestId('row-name')).toHaveText('bass');
+  await expect(page.getByTestId('row-8').getByTestId('row-name')).toHaveText('bass'); // after the default kit's eight
   const withBass = await snapshot(page);
 
   // Undo / redo across the restart, through the new engine.

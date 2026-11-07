@@ -1,11 +1,12 @@
 // The sample + patch library shown in the Browser pane (spec §4 "Library
 // browser"; plan 6 Task 5).
 //
-// Sources:
-//   - a folder the user picks once (Choose library folder…), remembered in
-//     IndexedDB (handles.ts) and read/written through the File System
-//     Access API: samples anywhere in it, patches in patches/*.json;
-//   - the bundled starter kit (Use starter kit), read-only via fetch().
+// The source: a folder the user picks once (Choose library folder…),
+// remembered in IndexedDB (handles.ts) and read/written through the File
+// System Access API: samples anywhere in it, patches in patches/*.json.
+// (The built-in starter kit is not a library source: the Browser always
+// shows it as its own section, library/starter.ts. A starter-kit choice
+// stored by an older version reads as nothing chosen.)
 //
 // Status:
 //   none     nothing chosen yet;
@@ -31,27 +32,25 @@ import { writeFile } from '../project/fsFolder';
 import type { Patch } from '../state/patches';
 import { idbLibraryStore, isAccessLost, pickLibraryFolder, queryAccess, requestAccess } from './handles';
 import type { StoredLibrary } from './handles';
-import { PATCHES_DIR, listFolder, listPatches, listingFromPaths, patchFileName } from './scan';
+import { PATCHES_DIR, audioMime, listFolder, listPatches, patchFileName } from './scan';
 import type { LibListing, LibPatch } from './scan';
-import { STARTER_KIT, fetchBytes } from './starter';
-import type { StarterKit } from './starter';
 
 export type LibraryStatus = 'none' | 'loading' | 'ready' | 'lost';
 
 export interface LibraryState {
   status: LibraryStatus;
-  source: 'folder' | 'starter' | null;
-  /** Folder name (or "Starter kit"), also while lost. */
+  source: 'folder' | null;
+  /** Folder name, also while lost. */
   name: string;
   /** Listed folders by path: '' (the root) and every expanded folder. Empty unless ready. */
   listings: Record<string, LibListing>;
-  /** patches/*.json (folder libraries only). */
+  /** patches/*.json. */
   patches: LibPatch[];
   /** Bumped by every (re)listing: files at the same paths may have changed. */
   stamp: number;
   /** Why the library is lost (shown in the Browser), else null. */
   message: string | null;
-  /** Patches can be saved (a reachable folder; never the starter kit). */
+  /** Patches can be saved (a reachable folder). */
   writable: boolean;
 }
 
@@ -66,8 +65,6 @@ export class LibraryLostError extends Error {
 export interface LibraryDeps {
   store: { load(): Promise<StoredLibrary | null>; save(v: StoredLibrary | null): Promise<void> };
   pick: () => Promise<FileSystemDirectoryHandle | null>;
-  starter: StarterKit;
-  fetchBytes: (url: string) => Promise<ArrayBuffer>;
 }
 
 export interface Library {
@@ -76,7 +73,6 @@ export interface Library {
   init(): Promise<void>;
   /** Choose library folder… (user gesture). Cancel keeps the current library. */
   choose(): Promise<void>;
-  useStarter(): Promise<void>;
   /** Use `handle` as the library, as start-up would (e2e: OPFS); `persist` also remembers it. */
   attach(handle: FileSystemDirectoryHandle, persist?: boolean): Promise<void>;
   /** "Reconnect folder" (user gesture): ask for permission again, then rescan. */
@@ -107,11 +103,6 @@ const lostText = {
   permission: (n: string) => `Allow access to "${n}" again to browse it.`,
   missing: (n: string) => `"${n}" can't be reached — it may have been moved or deleted, or access was revoked.`,
 };
-
-const MIME: Record<string, string> = {
-  wav: 'audio/wav', aif: 'audio/aiff', aiff: 'audio/aiff', mp3: 'audio/mpeg', flac: 'audio/flac', ogg: 'audio/ogg', m4a: 'audio/mp4',
-};
-const mimeOf = (name: string) => MIME[name.slice(name.lastIndexOf('.') + 1).toLowerCase()] ?? '';
 
 async function resolveFile(root: FileSystemDirectoryHandle, path: string, create = false): Promise<FileSystemFileHandle> {
   const parts = path.split('/');
@@ -194,17 +185,6 @@ export function createLibrary(deps: LibraryDeps): Library {
     await relist(g);
   }
 
-  async function useStarter() {
-    ++gen;
-    handle = null;
-    open.clear();
-    set({
-      source: 'starter', name: deps.starter.name, status: 'ready', message: null, patches: [], stamp: state.stamp + 1,
-      listings: { '': listingFromPaths(deps.starter.files.map((f) => f.path)) },
-    });
-    await deps.store.save({ kind: 'starter' }).catch((e) => console.warn('Could not remember the library choice', e));
-  }
-
   /**
    * Run a folder operation; an access failure turns into `lost` +
    * LibraryLostError (or, if only that file is gone, a re-list + `missing`).
@@ -228,13 +208,6 @@ export function createLibrary(deps: LibraryDeps): Library {
     }
   }
 
-  /** A starter-kit sample, fetched (small files, read-only). */
-  async function starterFile(path: string): Promise<File> {
-    const f = deps.starter.files.find((x) => x.path === path);
-    if (!f) throw new Error(`"${path}" is not in the starter kit`);
-    return new File([await deps.fetchBytes(f.url)], path, { type: mimeOf(path) });
-  }
-
   return {
     state,
     async init() {
@@ -244,15 +217,14 @@ export function createLibrary(deps: LibraryDeps): Library {
       } catch (e) {
         console.warn('Could not read the stored library choice', e);
       }
-      if (!stored || gen !== 0) return; // nothing stored, or the user already chose
-      if (stored.kind === 'starter') await useStarter();
-      else await attach(stored.handle);
+      // Nothing stored (or an older version's starter-kit choice), or the user already chose.
+      if (stored?.kind !== 'folder' || gen !== 0) return;
+      await attach(stored.handle);
     },
     async choose() {
       const h = await deps.pick();
       if (h) await attach(h, true);
     },
-    useStarter,
     attach,
     async reconnect() {
       const h = handle;
@@ -294,7 +266,6 @@ export function createLibrary(deps: LibraryDeps): Library {
     },
     async sampleBlob(path) {
       const name = path.slice(path.lastIndexOf('/') + 1);
-      if (state.source === 'starter') return starterFile(path);
       return guarded(
         async (root) => (await resolveFile(root, path)).getFile(),
         () => new Error(`"${name}" is no longer in the library folder`),
@@ -302,12 +273,11 @@ export function createLibrary(deps: LibraryDeps): Library {
     },
     async readSample(path) {
       const name = path.slice(path.lastIndexOf('/') + 1);
-      if (state.source === 'starter') return starterFile(path);
       return guarded(
         async (root) => {
           const file = await (await resolveFile(root, path)).getFile();
           // Own copy of the bytes: the File may be invalidated if the disk file changes.
-          return new File([await file.arrayBuffer()], name, { type: file.type || mimeOf(name) });
+          return new File([await file.arrayBuffer()], name, { type: file.type || audioMime(name) });
         },
         () => new Error(`"${name}" is no longer in the library folder`),
       );
@@ -349,10 +319,8 @@ export function createLibrary(deps: LibraryDeps): Library {
   };
 }
 
-/** The app's library: IndexedDB-remembered folder, the real picker, the bundled kit. */
+/** The app's library: IndexedDB-remembered folder, the real picker. */
 export const library: Library = createLibrary({
   store: idbLibraryStore,
   pick: pickLibraryFolder,
-  starter: STARTER_KIT,
-  fetchBytes,
 });

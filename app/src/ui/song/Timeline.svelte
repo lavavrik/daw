@@ -1171,6 +1171,7 @@
     const r = await dropAudioFiles(p, engine, files, trackId, start);
     if (!r.track) {
       if (r.imported && trackId === null && p.tracks.length >= MAX_TRACKS) flashHint(FULL_TITLE);
+      else if (r.imported && trackId !== null && !p.tracks.some((t) => t.id === trackId)) flashHint('The track was removed — files not placed');
       return;
     }
     if (r.placed.length) {

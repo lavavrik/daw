@@ -25,7 +25,7 @@ import type { ImportEngine } from './sampleImport';
 import { deferSampleAssign } from './sampleLoads';
 
 export interface DropResult {
-  /** The track the clips went to (null: no free track slot for a new one). */
+  /** The track the clips went to (null: no free track slot for a new one, or the target lane was removed during the import: the UI says so). */
   track: AudioTrack | null;
   /** The clips placed, in order (fewer than imported when the lane or song ran out). */
   placed: AudioClip[];

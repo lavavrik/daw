@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 
@@ -409,3 +410,55 @@ test('a second tab neither autosaves nor offers the first tab\'s session', async
   });
 });
 
+
+// Plan 9: schema v2. The frozen genuine v1 save (app/src/project/testdata,
+// also pinned by migrate.test.ts) opens with no warnings, and saving it
+// writes a v2 project.json that carries every v1 field over unchanged.
+test('v1 project opens in v2', async ({ page }) => {
+  test.setTimeout(30_000);
+  const v1 = JSON.parse(readFileSync(new URL('../../app/src/project/testdata/v1-fixture.json', import.meta.url), 'utf8'));
+  expect(v1.schemaVersion).toBe(1);
+  await startAudio(page);
+  const w = test.info().workerIndex;
+  const src = `e2e-v1-${w}`;
+  const dst = `e2e-v1-saved-${w}`;
+  const files = (v1.samples as { file: string }[]).map((s, i) => ({ file: s.file.split('/')[1], bytes: [...makeWav(100 + 50 * i, 80)] }));
+  const warnings = await page.evaluate(
+    async ({ src, dst, json, files }) => {
+      const root = await navigator.storage.getDirectory();
+      for (const n of [src, dst]) await root.removeEntry(n, { recursive: true }).catch(() => {});
+      const dir = await root.getDirectoryHandle(src, { create: true });
+      const put = async (d: FileSystemDirectoryHandle, name: string, data: FileSystemWriteChunkType) => {
+        const wr = await (await d.getFileHandle(name, { create: true })).createWritable();
+        await wr.write(data);
+        await wr.close();
+      };
+      await put(dir, 'project.json', json);
+      const samples = await dir.getDirectoryHandle('samples', { create: true });
+      for (const f of files) await put(samples, f.file, new Uint8Array(f.bytes));
+      return (window as unknown as { __daw: Daw }).__daw.openFrom(dir);
+    },
+    { src, dst, json: JSON.stringify(v1), files },
+  );
+  expect(warnings).toEqual([]);
+  await expect(page.getByTestId('banner')).toBeHidden();
+  await expect(page.getByTestId('project-name')).toContainText('Fixture');
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.map((t) => [t.kind, t.name]))).toEqual(
+    (v1.tracks as { kind: string; name: string }[]).map((t) => [t.kind, t.name]),
+  );
+
+  const out = await page.evaluate(async (dst) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(dst, { create: true });
+    await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
+    return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
+  }, dst);
+  expect(out.schemaVersion).toBe(2);
+  // Everything but the version and the sample file names (they carry the content hash) is as saved in v1.
+  const strip = (j: { schemaVersion: number; samples: { file: string }[] }) => ({ ...j, schemaVersion: 0, samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })) });
+  expect(strip(out)).toEqual(strip(v1));
+
+  await page.evaluate(async (names) => {
+    const root = await navigator.storage.getDirectory();
+    for (const n of names) await root.removeEntry(n, { recursive: true }).catch(() => {});
+  }, [src, dst]);
+});

@@ -18,7 +18,7 @@ type DawWindow = {
       sampleRate: number;
     } | null;
     Op: Record<string, number>;
-    project: { arenaFloats: number; tracks: { id: string; slot: number; kind: string; rows?: { id: string }[] }[] };
+    project: { arenaFloats: number; mode: string; tracks: { id: string; slot: number; kind: string; rows?: { id: string }[]; clips?: unknown[] }[] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: Record<string, (...args: any[]) => any>;
   };
@@ -131,19 +131,18 @@ test('deferred drop while playing: notice, loads on Stop, engine keeps running a
  * 16-note arpeggio in the pattern), EQ and both sends on every strip, two
  * sidechained compressors (synth 1 keyed by drum track 1's kick row, synth 2
  * by the whole of drum track 2), both returns and the master limiter. Built
- * through the same actions the UI uses (window.__daw.actions). Plays 10 s.
- * Budget: audio-thread CPU share < 0.6 and no new dropouts.
+ * through the same actions the UI uses (window.__daw.actions). The mix
+ * settings go on every track there is, so Audio tracks added before get them
+ * too.
  */
-test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
-  test.setTimeout(60_000);
-  await startAudio(page);
+async function buildSpec6(page: Page) {
   const setup = await page.evaluate(async () => {
     const { engine, actions: a, project } = (window as unknown as DawWindow).__daw!;
     // Drum sample: 0.1 s of a decaying sine (id 0, shared by every row).
     const n = Math.round(engine!.sampleRate * 0.1);
     const ch = new Float32Array(n).map((_, i) => Math.sin(i * 0.05) * (1 - i / n));
     if ((await engine!.loadSample(0, [ch])) !== 0) return { ok: false, why: 'sample' };
-    // Drum tracks: the default one is slot 0; add three more, 8 rows each.
+    // Drum tracks: the default one is the first; add three more, 8 rows each.
     for (let i = 0; i < 3; i++) a.addDrumTrack();
     const drums = project.tracks.filter((t) => t.kind === 'drum');
     for (const t of drums) {
@@ -186,39 +185,52 @@ test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
   });
   expect(setup.ok, setup.why).toBe(true);
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
+  return { synths: setup.synths!, drums: setup.drums! };
+}
+
+/**
+ * Plays (from the stopped transport) for a 2.5 s warm-up, then 10 s while
+ * sampling the audio-thread CPU share, the master peak, the keyed comp's gain
+ * reduction (strip `scSlot`) and the meter peaks of the `watch` strips.
+ * Budget: CPU share < 0.6, blocks >= 95% of real time, no new dropouts or
+ * engine errors.
+ */
+async function playAndMeasure(page: Page, label: string, scSlot: number, watch: number[] = []) {
   const drop0 = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
   const err0 = await slot(page, 7)();
-
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);
   await page.waitForTimeout(2500); // warm-up (telemetry CPU is written once a second)
   // 10 s: sample the CPU share, the peak and the first comp's gain reduction.
   const run = await page.evaluate(
-    (scSlot) =>
-      new Promise<{ cpu: number[]; peak: number; gr: number; share: number }>((resolve) => {
+    ({ scSlot, watch }) =>
+      new Promise<{ cpu: number[]; peak: number; gr: number; share: number; strips: number[] }>((resolve) => {
         const eng = (window as unknown as DawWindow).__daw!.engine!;
         const cpu: number[] = [];
+        const strips = watch.map(() => 0);
         let peak = 0;
         let gr = 0;
         const b0 = eng.telemetry()[0];
         const t0 = performance.now();
         const id = setInterval(() => {
           const t = eng.telemetry();
+          const m = eng.meters();
           cpu.push(t[3]);
           peak = Math.max(peak, t[5], t[6]);
-          gr = Math.max(gr, eng.meters()[scSlot * 3 + 2]); // the keyed comp's gain reduction
+          gr = Math.max(gr, m[scSlot * 3 + 2]); // the keyed comp's gain reduction
+          watch.forEach((s, i) => (strips[i] = Math.max(strips[i], m[s * 3], m[s * 3 + 1])));
           if (performance.now() - t0 >= 10_000) {
             clearInterval(id);
             const secs = (performance.now() - t0) / 1000;
-            resolve({ cpu, peak, gr, share: ((t[0] - b0) * 128) / eng.sampleRate / secs });
+            resolve({ cpu, peak, gr, share: ((t[0] - b0) * 128) / eng.sampleRate / secs, strips });
           }
         }, 250);
       }),
-    setup.synths![0],
+    { scSlot, watch },
   );
   const mean = run.cpu.reduce((x, y) => x + y, 0) / run.cpu.length;
   const max = Math.max(...run.cpu);
-  console.log(`PERF spec6 browser: cpu mean=${(mean * 100).toFixed(1)}% max=${(max * 100).toFixed(1)}% blocks=${(run.share * 100).toFixed(1)}% of real time`);
+  console.log(`PERF ${label}: cpu mean=${(mean * 100).toFixed(1)}% max=${(max * 100).toFixed(1)}% blocks=${(run.share * 100).toFixed(1)}% of real time`);
   expect(run.peak).toBeGreaterThan(0.01); // it sounds
   expect(run.gr).toBeGreaterThan(1); // the sidechain ducks
   expect(max).toBeGreaterThan(0);
@@ -226,4 +238,105 @@ test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
   expect(run.share).toBeGreaterThanOrEqual(0.95);
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts())).toBe(drop0);
   expect(await slot(page, 7)()).toBe(err0);
+  return run;
+}
+
+/** Plays 10 s of the spec 6 mix (Pattern mode). */
+test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
+  test.setTimeout(60_000);
+  await startAudio(page);
+  const { synths } = await buildSpec6(page);
+  await playAndMeasure(page, 'spec6 browser', synths[0]);
+});
+
+/**
+ * Drop a `secs` long stereo WAV (two sines, built in the page: no 20 MB
+ * argument from Node) below the lanes at tick 0, as from Finder: a new Audio
+ * track with one clip the file's length. Returns the track's slot.
+ */
+async function dropLongAudio(page: Page, name: string, secs: number, freq: number) {
+  const v = JSON.parse((await page.getByTestId('timeline').getAttribute('data-view'))!) as { ticksPerPx: number; scrollTick: number };
+  const x = (await page.getByTestId('tl-lane-0').boundingBox())!.x - v.scrollTick / v.ticksPerPx;
+  const below = (await page.getByTestId('tl-below').boundingBox())!;
+  const count = () => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks.filter((t) => t.kind === 'audio').length);
+  const before = await count();
+  await page.evaluate(
+    ({ name, secs, freq, x, y }) => {
+      const sr = 48000;
+      const n = sr * secs;
+      const buf = new ArrayBuffer(44 + n * 4);
+      const v = new DataView(buf);
+      const str = (at: number, s: string) => [...s].forEach((c, i) => v.setUint8(at + i, c.charCodeAt(0)));
+      str(0, 'RIFF');
+      v.setUint32(4, 36 + n * 4, true);
+      str(8, 'WAVEfmt ');
+      v.setUint32(16, 16, true);
+      v.setUint16(20, 1, true); // PCM
+      v.setUint16(22, 2, true); // stereo
+      v.setUint32(24, sr, true);
+      v.setUint32(28, sr * 4, true);
+      v.setUint16(32, 4, true);
+      v.setUint16(34, 16, true);
+      str(36, 'data');
+      v.setUint32(40, n * 4, true);
+      const pcm = new Int16Array(buf, 44);
+      for (let i = 0; i < n; i++) {
+        pcm[2 * i] = Math.round(Math.sin((2 * Math.PI * freq * i) / sr) * 0.5 * 32767);
+        pcm[2 * i + 1] = Math.round(Math.sin((2 * Math.PI * freq * 1.5 * i) / sr) * 0.5 * 32767);
+      }
+      const el = document.querySelector('[data-testid="tl-below"]')!;
+      const dt = new DataTransfer();
+      dt.items.add(new File([buf], `${name}.wav`, { type: 'audio/wav' }));
+      for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    },
+    { name, secs, freq, x, y: below.y + Math.min(below.height / 2, 14) },
+  );
+  await expect.poll(count, { timeout: 20_000 }).toBe(before + 1);
+  const t = await page.evaluate(() => {
+    const a = (window as unknown as DawWindow).__daw!.project.tracks.filter((t) => t.kind === 'audio').at(-1)!;
+    return { slot: a.slot, clips: a.clips!.length };
+  });
+  expect(t.clips).toBe(1);
+  return t.slot;
+}
+
+/**
+ * Spec §6 plus 4 stereo Audio tracks, each one 2-minute clip from tick 0
+ * (addendum §4: the serial perf scenario gains Audio tracks with long clips),
+ * in Song mode: the drum and synth patterns are laid out as clips over 16
+ * bars so everything plays at once. Same budget as spec 6.
+ */
+test('spec 6 mix plus 4 audio tracks with long clips stays under the browser CPU budget', async ({ page }) => {
+  test.setTimeout(120_000);
+  await startAudio(page);
+  await expect(page.getByTestId('tl-lane-0')).toBeVisible();
+  // The Audio tracks first, while the lanes still fit (tl-below in view).
+  const audio: number[] = [];
+  for (const [i, f] of [110, 165, 220, 330].entries()) audio.push(await dropLongAudio(page, `stem-${i}`, 120, f));
+  const mb = await page.evaluate(() => ((window as unknown as DawWindow).__daw!.project.arenaFloats * 4) / 2 ** 20);
+  console.log(`PERF audio stems: ${mb.toFixed(0)} MB of sample memory`);
+  expect(mb).toBeGreaterThan(4 * 2 * 120 * 44100 * 4 / 2 ** 20 - 1); // 4 stereo 2-minute files, at least at 44.1 kHz
+  await expect(page.getByTestId('banner')).toBeHidden();
+
+  const { synths } = await buildSpec6(page);
+  const laid = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    let n = 0;
+    for (const t of project.tracks.filter((t) => t.kind !== 'audio')) {
+      for (let start = 0; start < 16 * 3840; ) {
+        const c = a.addClip(t.id, { start });
+        if (!c) return -1;
+        start += c.len;
+        n++;
+      }
+    }
+    return n;
+  });
+  expect(laid).toBeGreaterThan(0);
+  await page.keyboard.press('Shift+L');
+  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
+  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks browser', synths[0], audio);
+  // Every stem was heard (the strips' meters, after the -6 dB fader).
+  for (const p of run.strips) expect(p).toBeGreaterThan(0.05);
+  await page.keyboard.press('Space');
 });

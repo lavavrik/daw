@@ -215,6 +215,30 @@ real time) and the browser `tests/e2e/serial.spec.ts` (audio-thread CPU < 0.6,
 no new dropouts, blocks >= 95% of real time; run in the serial Playwright
 project so no other worker competes for the CPU).
 
+Plan 9 adds the Audio-track variant (addendum §4), with the same budgets:
+
+- **Native:** `spec6_mix_with_audio_tracks_renders_under_budget` plays the
+  Song-mode mix plus 4 Audio tracks, each one 180 s stereo clip (276 MB of
+  samples).
+- **Browser:** `spec 6 mix plus 4 audio tracks with long clips` drops four
+  2-minute stereo WAVs below the lanes, as from Finder (176 MB of sample
+  memory at 48 kHz). It then builds the spec 6 mix, lays its patterns out as
+  clips over 16 bars and plays in Song mode. It also checks that every Audio
+  strip is heard.
+
+Measured on the dev Mac (Apple M5 Pro; native in release, browser on the dev server):
+
+| Scenario | Native (share of real time) | Browser (audio-thread CPU, mean over 10 s; range of runs) |
+|---|---|---|
+| Spec 6, Pattern mode | 8.1–8.2% | 16.8–18.8% (max 20.6%) |
+| Spec 6, Song mode | 8.4–8.5% | 14.6% (no Audio tracks, one-off probe) |
+| Spec 6, Song mode + 4 Audio tracks | 8.5–8.6% | 10.1–15.0% (max 16.7%) |
+
+Audio clips cost almost nothing: a voice reads frames from the arena and
+scales them by its envelope, with no interpolation or time-stretch. The
+browser figures drift by a few points between runs, more than the Audio tracks
+add, so only the 0.6 budget is asserted.
+
 ## Plan 6: reuse as rack modules
 
 The strip processors are plain stereo DSP structs in `engine/src/dsp/`

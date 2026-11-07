@@ -222,6 +222,25 @@ test('⌘O / Ctrl+O on a dirty project asks the same "Discard and open…" quest
   await expect(page.getByTestId('project-name')).toContainText('● unsaved');
 });
 
+test('closing the tab with unsaved edits to a saved project asks first (P9)', async ({ page }) => {
+  await startAudio(page);
+  const dirName = `e2e-unload-${test.info().workerIndex}`;
+  await opfsDir(page, dirName);
+  await page.evaluate(async (n) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
+    await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
+  }, dirName);
+  await page.getByTestId('play').click(); // a real gesture (the prompt needs one) …
+  await page.getByTestId('play').click(); // … that leaves the transport stopped
+  await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
+  await expect(page.getByTestId('project-name')).toContainText('● unsaved');
+  const dialog = page.waitForEvent('dialog');
+  await page.close({ runBeforeUnload: true });
+  const d = await dialog;
+  expect(d.type()).toBe('beforeunload');
+  await d.accept();
+});
+
 test('restore banner appears and restores', async ({ page }) => {
   test.setTimeout(60_000);
   await startAudio(page);

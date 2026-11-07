@@ -183,7 +183,9 @@ Save (or when edits bring it back to the saved state). New, Open… and
 Cmd/Ctrl+O ask in the Project menu before discarding unsaved changes (or an
 unanswered **Restore last session** offer). Save As into a folder that already
 holds a project asks "Replace the project in …?" first: its project.json and
-the samples it lists are replaced.
+the samples it lists are replaced. Closing or reloading the tab with
+unsaved changes to a project that has a folder asks first (the browser's own
+"Leave site?").
 
 **Autosave** runs on its own a few seconds after you stop editing, into the
 browser's private storage (not your project folder). After a crash or a closed

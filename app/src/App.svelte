@@ -27,6 +27,7 @@
   import { banners, flashHint } from './state/banners.svelte';
   import { installSampleLoads } from './state/sampleLoads';
   import { createProjectSession, markSaved } from './project/session';
+  import { warnOnUnload } from './project/discard';
   import type { ProjectSession } from './project/session';
   import { createDirtyCheck } from './project/dirtyCheck';
   import { commandEdits } from './state/edits';
@@ -99,6 +100,17 @@
     };
     document.addEventListener('visibilitychange', hidden);
     return () => document.removeEventListener('visibilitychange', hidden);
+  });
+  // Unsaved edits to a project with a folder: the browser asks before the tab
+  // closes or reloads (project/discard.ts warnOnUnload).
+  onMount(() => {
+    const unload = (e: BeforeUnloadEvent) => {
+      if (!warnOnUnload(project)) return;
+      e.preventDefault();
+      e.returnValue = ''; // older Chrome needs it set
+    };
+    window.addEventListener('beforeunload', unload);
+    return () => window.removeEventListener('beforeunload', unload);
   });
 
   /** An autosave newer than the last explicit save, offered in an inline banner (never confirm()). */

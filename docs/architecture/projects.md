@@ -172,6 +172,13 @@ the unrestored session …?" — the fresh session is not dirty, but answering
 the offer this way lets the next edit autosave over it). ⌘N is the
 browser's own and is not taken over.
 
+**Closing the tab.** While a project with a folder has unsaved changes
+(`warnOnUnload`), App's `beforeunload` handler asks for the browser's own
+"Leave site?" prompt — the one native dialog allowed, as nothing else can
+stop an unload and the autosave's last flush on `visibilitychange` is async.
+A project without a folder is left to the autosave (a restored session
+stays "unsaved" until saved and would otherwise prompt on every close).
+
 ## Autosave (`autosave.ts`)
 
 A crash, a reload or a closed tab loses at most the last few seconds.

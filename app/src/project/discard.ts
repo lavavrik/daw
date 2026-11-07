@@ -19,3 +19,16 @@ export function discardWarning(p: { dirty: boolean; name: string }, restoreOffer
   }
   return p.dirty ? `${edits}.` : null;
 }
+
+/**
+ * Closing / reloading the tab: the browser's own "Leave site?" prompt (the
+ * one native dialog allowed: nothing else can stop an unload) while a
+ * project that lives in a folder has unsaved changes. The autosave's last
+ * flush on visibilitychange is async and may not finish, and the folder
+ * would not have those edits anyway. A project without a folder is left to
+ * the autosave (a restored session stays "unsaved" until saved, so it would
+ * prompt on every close).
+ */
+export function warnOnUnload(p: { dirty: boolean; folder: unknown }): boolean {
+  return p.dirty && p.folder !== null;
+}

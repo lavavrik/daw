@@ -5,7 +5,7 @@ with the same engine the AudioWorklet runs, and saves a 24-bit PCM WAV.
 
 ## What is rendered
 - **Song mode** from tick 0 to the **song end** (the end of the last clip,
-  `songEndTicks`) at the project tempo, plus a **2 s tail** for reverb, delay
+  pattern or audio clip alike, `songEndTicks`) at the project tempo, plus a **2 s tail** for reverb, delay
   and releases.
 - **The metronome is always off** in the export, whatever the top bar shows,
   and the **loop is off** (the song plays straight through). Everything else
@@ -31,7 +31,12 @@ with the same engine the AudioWorklet runs, and saves a 24-bit PCM WAV.
    project uses is decoded from `p.sampleFiles` (the original bytes) with the
    project AudioContext's `decodeAudioData` through `decodeBytes`, the same
    path a live load takes, so the engine gets the same data (Workers have no
-   `decodeAudioData`). The command list is **`projectCommands`** (the one
+   `decodeAudioData`). Audio clips' samples are among them (`serialize`
+   lists every sample a row, Sample Player or audio clip uses), decoded the
+   same way; the clips themselves come from the same builder (Audio tracks:
+   `ADD_AUDIO_TRACK`, then per clip SOURCE, GAIN, SET), so the export plays
+   them exactly as the live engine does, chase and declick fades included.
+   The command list is **`projectCommands`** (the one
    replay-order builder, `project/commands.ts`) for the project with the
    metronome off, Song mode and the loop off, followed by `SEEK 0` and `PLAY`
    (`exportCommands`). Sample ids map to themselves: `p.sampleFiles` is keyed
@@ -133,6 +138,22 @@ left then right f32 samples):
   through **engine.wasm** in Node with `renderSong` (the Worker's own block
   loop) and asserts the same hash; the streamed parts are pinned to equal
   `encodeWav24` of that render, byte for byte. `npm test` builds engine.wasm first.
+
+**Audio clips** (plan 9) are pinned the same way by a second fixture,
+`engine/tests/fixtures/export_audio.txt` and its own hash
+`export_audio.hash`: the export command list of `buildAudioFixture`
+(`project/testFixture.ts`: two Audio tracks at 120 BPM — a loop clip of a
+generated 0.5 s mono sample at −3 dB, a missing-sample clip, and a clip of
+a generated 1 s stereo sample trimmed by 0.25 s with +3 dB, a 240-tick fade-in
+and a 480-tick fade-out, on a strip with a compressor keyed from the first
+track). Native: `export_audio_render_matches_golden`; wasm: `audio render
+matches native`. The fixture is checked against what `exportCommands`
+builds today (`export_audio.txt is the export command list of the audio
+test project, frozen`); after an intended change regenerate it with
+`UPDATE_FIXTURE=1 npx vitest run app/src/export/render.test.ts`, then the
+hash with `UPDATE_GOLDEN=1 cargo test -p daw-engine --test export_render`.
+`export_render.hash` did not change with plan 9: projects without audio
+render exactly as before.
 
 Native and wasm are **bit-identical** only with the same math: on wasm the
 transcendental functions (`sin`, `powf`, `exp2`…) come from the pure-Rust

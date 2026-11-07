@@ -1,0 +1,33 @@
+# Fixed render job shared by engine/tests/export_render.rs (native) and
+# app/src/export/render.test.ts (engine.wasm), like export_render.txt.
+# Frozen: the export command list (exportCommands) of the audio test
+# project (project/testFixture.ts buildAudioFixture: 2 Audio tracks -- a
+# loop clip of a mono sample, a missing-sample clip, a trimmed and faded
+# clip of a stereo sample on a strip sidechained from the first -- 120 BPM,
+# Song mode). Sample data is generated (see export_render.rs); the lengths
+# match the fixture's sampleMeta (0.5 s mono, 1 s stereo at 48 kHz).
+sample_rate 48000
+frames 480000
+sample 0 24000 1 11
+sample 1 48000 2 12
+cmd 45 0 0 0 0
+cmd 46 0 0 0 1
+cmd 47 0 0.7079457843841379 0 0
+cmd 48 0 0 7680 0
+cmd 46 1 -1 0 0
+cmd 47 1 1 0 0
+cmd 48 1 11520 3840 0
+cmd 45 1 0 0 0
+cmd 46 256 1 0.25 0
+cmd 47 256 1.4125375446227544 240 480
+cmd 48 256 2400 1440 0
+cmd 41 1 0 -2 0
+cmd 41 1 11 1 0
+cmd 42 1 0 0 0
+cmd 5 120 0 0 0
+cmd 6 0 0 0 0
+cmd 38 1 0 0 0
+cmd 39 0 0 0 0
+cmd 24 -1 0 0 0
+cmd 40 0 0 0 0
+cmd 3 0 0 0 0

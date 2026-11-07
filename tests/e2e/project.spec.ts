@@ -119,7 +119,7 @@ test('save then load reproduces the beat', async ({ page }) => {
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
-  expect(listing).toMatchObject({ version: 1, tmp: false });
+  expect(listing).toMatchObject({ version: 2, tmp: false }); // plan 9: schema v2
   // The kick plus the default kit's other seven rows (plan 8 Task 4: the kit is in the project).
   expect(listing.names).toHaveLength(8);
   expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-kick\.wav$/)); // <id>-<content hash>-<name>

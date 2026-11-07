@@ -19,7 +19,10 @@
 //      changed ones -- the engine edits its current pattern, so each is
 //      selected in turn -- then the current pattern, then clips, then
 //      patterns that are gone: CLEAR_PATTERN_DATA), and the synth rack
-//      (modules added, params, cables);
+//      (modules added, params, cables); an Audio track: its clips by idx
+//      (CLIP_REMOVE for the ones that go, then SOURCE, GAIN, SET for each
+//      new or changed one; an unchanged clip keeps its UI id and is not
+//      re-sent);
 //   3. mixer params by name, then sidechain keys (their sources exist now);
 //   4. tempo, metronome, loop, mode; selection and the live input track.
 // The project name is not restored (a Save As names the project, not an edit).
@@ -35,10 +38,16 @@ import type { MixChannelTarget } from '../state/mixer-actions';
 import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-actions';
 import { patchRack } from '../state/rack-actions';
 import { sendClip, setLoop, setMode } from '../state/song-actions';
+import { sendAudioClip } from '../state/audio-actions';
 import { MAX_ROWS, MAX_STEPS, currentPattern, newChannel } from '../state/project.svelte';
-import type { ChannelState, Clip, DrumPattern, DrumTrack, NotePatternState, Project, SidechainKey, SynthTrack, Track } from '../state/project.svelte';
+import type {
+  AudioClip, AudioTrack, ChannelState, Clip, DrumPattern, DrumTrack, NotePatternState, PatternTrack, Project, SidechainKey,
+  SynthTrack, Track,
+} from '../state/project.svelte';
 import { trackCommands, trackState } from '../project/commands';
-import type { ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from '../project/schema';
+import type {
+  AudioTrackJson, ClipJson, DrumTrackJson, MixParamsJson, PatternTrackJson, ProjectJson, SynthTrackJson,
+} from '../project/schema';
 
 // Snapshots share unchanged subtrees (history.ts), so identity settles most compares.
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -79,7 +88,8 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
       t.name = tj.name;
       t.color = tj.color;
       if (t.kind === 'drum') diffDrum(p, sink, t, tj as DrumTrackJson);
-      else diffSynth(p, sink, t, tj as SynthTrackJson);
+      else if (t.kind === 'synth') diffSynth(p, sink, t, tj as SynthTrackJson);
+      else diffAudio(sink, t, tj as AudioTrackJson);
     }
     bySlot.set(t.slot, t);
     order.push(t);
@@ -158,7 +168,7 @@ type AnyPattern = DrumPattern | NotePatternState;
  * the state; they are sent with that pattern selected in the engine.
  */
 function diffPatterns<PJ extends { engineIdx: number }>(
-  p: Project, sink: CommandSink, t: Track, tj: TrackJson & { patterns: PJ[] },
+  p: Project, sink: CommandSink, t: PatternTrack, tj: PatternTrackJson & { patterns: PJ[] },
   make: (pj: PJ) => AnyPattern, edit: (live: AnyPattern | null, made: AnyPattern, pj: PJ) => number[][],
 ) {
   const slot = t.slot;
@@ -192,7 +202,7 @@ function diffPatterns<PJ extends { engineIdx: number }>(
   for (const x of live) if (!patterns.some((y) => y.engineIdx === x.engineIdx)) sink.send(Op.CLEAR_PATTERN_DATA, slot, x.engineIdx);
 }
 
-function diffClips(sink: CommandSink, t: Track, clips: ClipJson[]) {
+function diffClips(sink: CommandSink, t: PatternTrack, clips: ClipJson[]) {
   const patterns: AnyPattern[] = t.patterns;
   const byIdx = new Map(t.clips.map((c) => [c.idx, c]));
   const wanted = new Set(clips.map((c) => c.idx));
@@ -208,6 +218,29 @@ function diffClips(sink: CommandSink, t: Track, clips: ClipJson[]) {
     if (changed) sendClip(sink, t, c);
   }
   t.clips = next;
+}
+
+/** An Audio track's clips by idx: removals first, then each new or changed clip (SOURCE, GAIN, SET). */
+function diffAudio(sink: CommandSink, t: AudioTrack, tj: AudioTrackJson) {
+  const byIdx = new Map(t.clips.map((c) => [c.idx, c]));
+  const wanted = new Set(tj.clips.map((c) => c.idx));
+  for (const c of t.clips) if (!wanted.has(c.idx)) sink.send(Op.CLIP_REMOVE, t.slot * MAX_CLIPS + c.idx);
+  const next: AudioClip[] = [];
+  const changed: AudioClip[] = [];
+  for (const cj of tj.clips) {
+    const fields = {
+      sampleId: cj.sample, start: cj.start, len: cj.len, offset: cj.offset, loop: cj.loop,
+      gain: cj.gain, fadeIn: cj.fadeIn, fadeOut: cj.fadeOut,
+    };
+    let c = byIdx.get(cj.idx);
+    const same = c && (Object.keys(fields) as (keyof typeof fields)[]).every((k) => c![k] === fields[k]);
+    if (!c) c = { id: crypto.randomUUID(), idx: cj.idx, ...fields };
+    else Object.assign(c, fields);
+    next.push(c);
+    if (!same) changed.push(c);
+  }
+  t.clips = next;
+  for (const c of t.clips) if (changed.some((x) => x.idx === c.idx)) sendAudioClip(sink, t, c);
 }
 
 function diffDrum(p: Project, sink: CommandSink, t: DrumTrack, tj: DrumTrackJson) {

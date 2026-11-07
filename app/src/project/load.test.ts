@@ -10,7 +10,7 @@ import { createHistory } from '../history/history';
 import { setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
-import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
+import { addAudioFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
 import type { ProjectJson } from './schema';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -60,6 +60,48 @@ describe('loadProject', () => {
     expect(pc.samples.map((s) => s.id)).toEqual([0, 1, 2]);
     expect(pc.project).toEqual(json);
     expect(pc.warnings).toEqual([]);
+  });
+
+  it('projectCommands includes audio tracks', async () => {
+    const { p: src } = await buildFixture();
+    const { ids } = await addAudioFixture(src);
+    const json = roundJson(serialize(src));
+    expect(json.samples.map((s) => s.id)).toEqual([0, 1, 2, ...ids]); // audio-clip samples are listed
+    const p = new Project();
+    const e = fakeEngine();
+    expect(await loadProject(p, e, json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    // Nothing addressed to a missing sample or slot, every clip staged before its commit.
+    expect(checkLog(e.log).errors).toEqual([]);
+    expect(serialize(p)).toEqual(json);
+    const ops = e.log.flatMap((x) => ('op' in x ? [x] : []));
+    const audio = json.tracks.filter((t) => t.kind === 'audio');
+    expect(audio.map((t) => t.name)).toEqual(['Loop', 'Vox']);
+    for (const t of audio) {
+      const add = ops.findIndex((x) => x.op === Op.ADD_AUDIO_TRACK && x.args[0] === t.slot);
+      expect(add).toBeGreaterThanOrEqual(0);
+      for (const c of t.kind === 'audio' ? t.clips : []) {
+        const at = ops.findIndex((x) => x.op === Op.AUDIO_CLIP_SOURCE && x.args[0] === t.slot * 256 + c.idx);
+        expect(at).toBeGreaterThan(add);
+        expect(ops.slice(at, at + 3).map((x) => x.op)).toEqual([Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET]);
+        expect(ops[at].args[1]).toBe(c.sample ?? -1);
+        expect(ops[at + 2].args.slice(1, 3)).toEqual([c.start, c.len]);
+      }
+    }
+    // The sidechain from an Audio track (whole track) goes last, with the other keys.
+    expect(ops.filter((x) => x.op === Op.MIX_SET_KEY)).toHaveLength(3);
+    expect(p.sampleMeta.get(ids[1])).toMatchObject({ channels: 1, peaks: null }); // what the (fake) decode gave
+
+    // A clip whose sample is missing from the folder is kept as "missing sample" (-1), with a warning.
+    const files = filesOf(json, src);
+    files.delete(json.samples.find((s) => s.id === ids[1])!.file);
+    const q = new Project();
+    const e2 = fakeEngine();
+    const w = await loadProject(q, e2, json, files, fakeDecoder);
+    expect(w).toEqual([expect.stringMatching(/vox\.wav.*missing/)]);
+    expect(checkLog(e2.log).errors).toEqual([]);
+    const vox = q.tracks.find((t) => t.name === 'Vox');
+    expect(vox?.kind === 'audio' && vox.clips.map((c) => c.sampleId)).toEqual([null]);
+    expect(e2.log.some((x) => 'op' in x && x.op === Op.AUDIO_CLIP_SOURCE && x.args[1] === -1 && x.args[0] === vox!.slot * 256)).toBe(true);
   });
 
   it('a load clears the undo history (undo never crosses sessions)', async () => {

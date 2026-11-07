@@ -132,7 +132,63 @@ export interface SynthTrack {
   clips: Clip[];
 }
 
-export type Track = DrumTrack | SynthTrack;
+/**
+ * An audio clip on an Audio track's lane (spec addendum §3.1). `idx` is the
+ * engine clip slot (0..MAX_CLIPS-1) within the track, like Clip.idx. The
+ * clip plays sample `sampleId` at native speed for start <= t < start+len,
+ * from file position `offset + (t - start)` seconds (modulo the file length
+ * when `loop`). Edits go through state/audio-actions.ts.
+ */
+export interface AudioClip {
+  id: string;
+  idx: number;
+  /** Session sample id (p.sampleFiles); null: "missing sample", silent. */
+  sampleId: number | null;
+  /** Song ticks; start + len <= MAX_SONG_TICKS, len >= 1. */
+  start: number;
+  len: number;
+  /** Trim start: seconds into the file (>= 0), so it does not depend on the sample rate. */
+  offset: number;
+  /** Loop to fill: the file repeats until the clip ends. */
+  loop: boolean;
+  /** dB, CLIP_GAIN_MIN_DB (= -inf, silence) .. CLIP_GAIN_MAX_DB (+12). */
+  gain: number;
+  /** Linear fades in song ticks; fadeIn + fadeOut <= len. */
+  fadeIn: number;
+  fadeOut: number;
+}
+
+/** A track of audio clips (no patterns, rows or rack); its own mixer strip. */
+export interface AudioTrack {
+  kind: 'audio';
+  id: string;
+  /** Engine track slot, shared with drum and synth tracks. */
+  slot: number;
+  name: string;
+  color: string;
+  clips: AudioClip[];
+}
+
+export type Track = DrumTrack | SynthTrack | AudioTrack;
+/** A track that plays patterns (has `patterns`, `currentPatternId` and pattern clips). */
+export type PatternTrack = DrumTrack | SynthTrack;
+
+/** Waveform peaks of one sample (computed by plan 9 Task 5's audio/peaks.ts; never saved). */
+export interface Peaks {
+  /** Frames per min/max pair at level 0 (256); each further level is 4x coarser. */
+  framesPerPeak: number;
+  /** levels[l][ch]: interleaved Int8 min/max pairs. */
+  levels: Int8Array[][];
+}
+
+/** What the session knows about a loaded sample (Project.sampleMeta). */
+export interface SampleMeta {
+  /** File length in seconds (decoded frames / the context's rate). */
+  seconds: number;
+  channels: number;
+  /** null until computed (the lane draws a flat placeholder). */
+  peaks: Peaks | null;
+}
 
 /** A sidechain source: a whole track (row null) or one drum row of a drum track. */
 export interface SidechainKey {
@@ -233,6 +289,20 @@ export class Project {
    * and on load; a save writes the ones the project uses.
    */
   readonly sampleFiles = new Map<number, SampleFile>();
+  /**
+   * Engine sample id -> its length, channels and waveform peaks (not
+   * reactive: bump `peaksVersion` after a change the lanes must redraw).
+   * Filled on import, load, restore and restart; cleared with the session.
+   */
+  readonly sampleMeta = new Map<number, SampleMeta>();
+  /** Bumped when sampleMeta changes, so the audio lanes redraw. */
+  peaksVersion = $state(0);
+  /**
+   * Sample floats uploaded into the current engine since the last load or
+   * audio restart, live and replaced ones together: the engine's arena is a
+   * bump allocator (state/sampleBudget.ts). Not reactive.
+   */
+  arenaFloats = 0;
   tempo = $state(124);
   metronome = $state(false);
   playing = $state(false);
@@ -264,6 +334,9 @@ export class Project {
   history: History | null = null;
 }
 
+/** Narrows to the pattern-playing kinds (drum, synth). */
+export const isPatternTrack = (t: Track): t is PatternTrack => t.kind !== 'audio';
+
 /** The synth track with this id, or null (unknown id or a drum track). */
 export function synthTrack(p: Project, trackId: string): SynthTrack | null {
   const t = p.tracks.find((x) => x.id === trackId);
@@ -273,8 +346,8 @@ export function synthTrack(p: Project, trackId: string): SynthTrack | null {
 /** The track's current pattern (falls back to the first; patterns is never empty). */
 export function currentPattern(t: DrumTrack): DrumPattern;
 export function currentPattern(t: SynthTrack): NotePatternState;
-export function currentPattern(t: Track): DrumPattern | NotePatternState;
-export function currentPattern(t: Track): DrumPattern | NotePatternState {
+export function currentPattern(t: PatternTrack): DrumPattern | NotePatternState;
+export function currentPattern(t: PatternTrack): DrumPattern | NotePatternState {
   const ps: (DrumPattern | NotePatternState)[] = t.patterns;
   const pat = ps.find((x) => x.id === t.currentPatternId);
   if (!pat && (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {

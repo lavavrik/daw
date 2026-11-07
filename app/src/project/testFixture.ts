@@ -5,8 +5,8 @@
 // in engine.rs) used to check that a load never sends an invalid command.
 import { moduleDef, paramIndex } from '../audio/catalog';
 import {
-  BAR_TICKS, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_CHANNELS,
-  MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE,
+  BAR_TICKS, MAX_CLIPS, MAX_CLIP_GAIN, MAX_MODULES, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SAMPLE_FLOATS,
+  MAX_SONG_TICKS, MIX_CHANNELS, MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE,
 } from '../audio/protocol';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { addDrumTrack, addRow, selectTrack, setMetronome, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing, setTempo } from '../state/actions';
@@ -14,10 +14,11 @@ import { setMix, setSidechain } from '../state/mixer-actions';
 import { addNote, newPattern, selectPattern, setPatternBars } from '../state/pattern-actions';
 import { addModule, addSynthTrack, connect, setParam } from '../state/rack-actions';
 import { addClip, setLoop, setMode } from '../state/song-actions';
+import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
 import { STARTER_PATCHES } from '../state/patches';
 import { sampleFile } from '../state/sampleFiles';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, Project } from '../state/project.svelte';
-import type { DrumTrack, SynthTrack } from '../state/project.svelte';
+import type { AudioTrack, DrumTrack, SynthTrack } from '../state/project.svelte';
 import type { LoadEngine, SampleDecoder } from './load';
 
 export const nullSink = { send: () => true };
@@ -93,6 +94,44 @@ export async function buildFixture(): Promise<{ p: Project; drums: DrumTrack; sy
   return { p, drums, synth, synth2 };
 }
 
+/**
+ * Two Audio tracks on `p` (plan 9): "Loop" with a loop clip of a mono
+ * sample (-3 dB) plus a clip whose sample is missing (sample null), and
+ * "Vox" with a trimmed and faded clip of a stereo sample (+3 dB) whose strip
+ * is sidechained from "Loop" (compressor on). Samples get the next two ids
+ * (fakeAudio bytes; `sampleMeta` says 0.5 s mono and 1 s stereo, which is
+ * what export_audio.txt generates for them). Song mode.
+ */
+export async function addAudioFixture(p: Project): Promise<{ loop: AudioTrack; vox: AudioTrack; ids: [number, number] }> {
+  const s = nullSink;
+  const ids: [number, number] = [p.nextSampleId, p.nextSampleId + 1];
+  p.sampleFiles.set(ids[0], await sampleFile('loop.wav', 'audio/wav', fakeAudio(30)));
+  p.sampleFiles.set(ids[1], await sampleFile('vox.wav', 'audio/wav', fakeAudio(31)));
+  p.sampleMeta.set(ids[0], { seconds: 0.5, channels: 1, peaks: null });
+  p.sampleMeta.set(ids[1], { seconds: 1, channels: 2, peaks: null });
+  p.nextSampleId += 2;
+  const loop = addAudioTrack(p, s, { name: 'Loop' })!;
+  addAudioClip(p, s, loop.id, { sampleId: ids[0], start: 0, len: 2 * BAR_TICKS, loop: true, gain: -3 });
+  addAudioClip(p, s, loop.id, { sampleId: null, start: 3 * BAR_TICKS, len: BAR_TICKS });
+  const vox = addAudioTrack(p, s, { name: 'Vox' })!;
+  const vc = addAudioClip(p, s, vox.id, { sampleId: ids[1], start: BAR_TICKS / 2 })!;
+  trimAudioClipStart(p, s, vc.id, vc.start + BAR_TICKS / 8); // 0.25 s into the file at 120 BPM
+  setAudioClip(p, s, vc.id, { gain: 3, fadeIn: 240, fadeOut: 480 });
+  setMix(p, s, vox.id, 'comp_on', 1);
+  setMix(p, s, vox.id, 'fader', -2);
+  setSidechain(p, s, vox.id, { trackId: loop.id, row: null });
+  setMode(p, s, 'song');
+  return { loop, vox, ids };
+}
+
+/** A project of just the two addAudioFixture tracks at 120 BPM (the export_audio.txt source). */
+export async function buildAudioFixture() {
+  const p = new Project();
+  p.name = 'Audio fixture';
+  setTempo(p, nullSink, 120);
+  return { p, ...(await addAudioFixture(p)) };
+}
+
 export type LogEntry = { op: number; args: number[] } | { sample: number };
 
 /**
@@ -161,7 +200,7 @@ export interface ModelState {
   song: boolean;
   loop: [number, number];
   input: number;
-  kinds: ('empty' | 'drum' | 'synth')[];
+  kinds: ('empty' | 'drum' | 'synth' | 'audio')[];
 }
 
 /**
@@ -182,6 +221,8 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
   let samples = new Set<number>();
   let racks = new Map<number, Map<number, number>>(); // slot -> idx -> kind
   let keysSent = false;
+  /** Staged audio-clip gain/fades per address (SOURCE/GAIN stage, SET commits). */
+  let staged = new Map<number, { source: boolean; fades: number }>();
   const int = (v: number, lo: number, hi: number) => Number.isInteger(v) && v >= lo && v <= hi;
   const inR = (v: number, lo: number, hi: number) => Number.isFinite(v) && v >= lo && v <= hi;
   log.forEach((e, i) => {
@@ -193,9 +234,11 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
     }
     const [a, b, c, d] = e.args;
     const kind = (slot: number) => (int(slot, 0, MAX_TRACKS - 1) ? st.kinds[slot] : 'bad');
-    const need = (slot: number, k: 'drum' | 'synth' | 'any') => {
+    /** 'pattern': drum or synth (an Audio track has no patterns). */
+    const need = (slot: number, k: 'drum' | 'synth' | 'audio' | 'pattern' | 'any') => {
       const have = kind(slot);
-      if (have === 'bad' || have === 'empty' || (k !== 'any' && have !== k)) bad(`slot ${slot} is ${have}, need ${k}`);
+      const ok = k === 'any' || have === k || (k === 'pattern' && (have === 'drum' || have === 'synth'));
+      if (have === 'bad' || have === 'empty' || !ok) bad(`slot ${slot} is ${have}, need ${k}`);
     };
     const afterKeys = () => keysSent && bad('sent after a sidechain key (keys must be last)');
     switch (e.op) {
@@ -203,7 +246,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
       case Op.PLAY: playing = true; break;
       case Op.RESET_ALL:
         if (playing) bad('RESET_ALL while playing');
-        st = fresh(); samples = new Set(); racks = new Map(); keysSent = false;
+        st = fresh(); samples = new Set(); racks = new Map(); keysSent = false; staged = new Map();
         break;
       case Op.SET_TEMPO: if (!inR(a, 20, 300)) bad('tempo'); else st.tempo = a; break;
       case Op.SET_METRONOME: if (a !== 0 && a !== 1) bad('flag'); else st.metronome = a === 1; break;
@@ -214,11 +257,37 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         break;
       case Op.SEEK: if (!int(a, 0, MAX_SONG_TICKS)) bad('seek'); break;
       case Op.SET_INPUT_TRACK: if (a !== -1) need(a, 'synth'); st.input = a; break;
-      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK:
+      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK:
         afterKeys();
         if (!int(a, 0, MAX_TRACKS - 1)) bad('slot');
-        else { st.kinds[a] = e.op === Op.ADD_DRUM_TRACK ? 'drum' : 'synth'; racks.set(a, new Map()); }
+        else {
+          st.kinds[a] = e.op === Op.ADD_DRUM_TRACK ? 'drum' : e.op === Op.ADD_SYNTH_TRACK ? 'synth' : 'audio';
+          racks.set(a, new Map());
+          for (const k of staged.keys()) if (Math.floor(k / MAX_CLIPS) === a) staged.delete(k);
+        }
         break;
+      // Audio clips: SOURCE + GAIN stage, SET commits; a source must name an
+      // uploaded sample (or -1), and the staged fades must fit the clip.
+      case Op.AUDIO_CLIP_SOURCE:
+        afterKeys(); need(Math.floor(a / MAX_CLIPS), 'audio');
+        if (b !== -1 && !samples.has(b)) bad(`sample ${b} not uploaded`);
+        if (!inR(c, 0, MAX_SAMPLE_FLOATS / 8000) || (d !== 0 && d !== 1)) bad('audio clip source');
+        staged.set(a, { source: true, fades: staged.get(a)?.fades ?? -1 });
+        break;
+      case Op.AUDIO_CLIP_GAIN:
+        afterKeys(); need(Math.floor(a / MAX_CLIPS), 'audio');
+        if (!inR(b, 0, MAX_CLIP_GAIN) || !int(c, 0, MAX_SONG_TICKS) || !int(d, 0, MAX_SONG_TICKS)) bad('audio clip gain');
+        staged.set(a, { source: staged.get(a)?.source ?? false, fades: c + d });
+        break;
+      case Op.AUDIO_CLIP_SET: {
+        afterKeys(); need(Math.floor(a / MAX_CLIPS), 'audio');
+        if (!int(b, 0, MAX_SONG_TICKS) || !int(c, 1, MAX_SONG_TICKS) || b + c > MAX_SONG_TICKS) bad('audio clip time');
+        const g = staged.get(a);
+        if (!g?.source || g.fades < 0) bad('audio clip committed before its SOURCE and GAIN');
+        else if (g.fades > c) bad('audio clip fades longer than the clip');
+        break;
+      }
+      case Op.CLIP_REMOVE: need(Math.floor(a / MAX_CLIPS), 'any'); staged.delete(a); break;
       case Op.SET_ROW_SAMPLE:
         need(a, 'drum'); if (!int(b, 0, MAX_ROWS - 1)) bad('row');
         if (c !== -1 && !samples.has(c)) bad(`sample ${c} not uploaded`);
@@ -232,7 +301,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         break;
       case Op.SET_STEP_COUNT: need(a, 'drum'); if (![16, 32, 64].includes(b)) bad('count'); break;
       case Op.SET_SWING: need(a, 'drum'); if (!inR(b, 0, 1)) bad('swing'); break;
-      case Op.SET_CURRENT_PATTERN: need(a, 'any'); if (!int(b, 0, MAX_PATTERNS - 1)) bad('pattern'); break;
+      case Op.SET_CURRENT_PATTERN: need(a, 'pattern'); if (!int(b, 0, MAX_PATTERNS - 1)) bad('pattern'); break;
       case Op.SET_PATTERN_BARS: need(a, 'synth'); if (!int(b, 1, MAX_PATTERN_BARS)) bad('bars'); break;
       case Op.NOTE_SET: {
         const slot = Math.floor(a / MAX_NOTES);
@@ -244,7 +313,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
       }
       case Op.CLIP_SET: {
         afterKeys();
-        need(Math.floor(a / MAX_CLIPS), 'any');
+        need(Math.floor(a / MAX_CLIPS), 'pattern');
         const off = Math.floor(b / 16), pat = b % 16;
         if (!int(a % MAX_CLIPS, 0, MAX_CLIPS - 1) || !int(off, 0, 61439) || !int(pat, 0, MAX_PATTERNS - 1)) bad('clip');
         if (!int(c, 0, MAX_SONG_TICKS) || !int(d, 1, MAX_SONG_TICKS) || c + d > MAX_SONG_TICKS) bad('clip time');

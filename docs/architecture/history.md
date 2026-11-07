@@ -204,7 +204,14 @@ Order:
      pattern changes), then the current pattern, then **clips**, then
      `CLEAR_PATTERN_DATA` for patterns that are gone; the **rack** — modules
      added (a different kind at an idx was removed in step 1), params, then
-     cables by input port.
+     cables by input port;
+   - an **Audio track** (plan 9): name/colour, then its audio clips by idx:
+     `CLIP_REMOVE` for every clip that goes first, then `AUDIO_CLIP_SOURCE`
+     → `AUDIO_CLIP_GAIN` → `AUDIO_CLIP_SET` for each new or changed clip
+     (always the three: the first two only stage). An unchanged clip is not
+     re-sent and keeps its UI id. A clip moved between Audio lanes is a
+     removal on one track and an add on the other (a slot that changed kind
+     was removed in step 1 and is rebuilt whole).
 3. **Mixer** params by name, then sidechain **keys** (sources exist now;
    keys going to none first, so drum-row key slots are free).
 4. **Transport** (tempo, metronome, loop, mode), selection, and
@@ -234,7 +241,11 @@ removed notes`).
   reruns one sequence); recorded notes hold their pass open until a
   `newPass` op releases it, so the random gestures and one-shots in between
   join it, and a `jam` op (notes, a gesture, a one-shot, notes) forces that
-  mix. A redo onto an empty undo stack resets the expected bottom state.
+  mix. Audio edits (plan 9): every odd seed starts with two Audio tracks
+  (`addAudioFixture`), track adds include Audio tracks, and ops add, edit
+  (gain/fades, loop/length, sample/offset, a left trim), move (in time and
+  between lanes), split and delete audio clips. A redo onto an empty undo
+  stack resets the expected bottom state.
 - `state/recorder.test.ts`: `undo take undoes edits made during it` (the
   tooltip count is 1; Stop and Undo take end the hold).
 - `ui/inlineConfirms.test.ts`: `undo cancels an open inline confirm`.
@@ -246,7 +257,12 @@ removed notes`).
 - `diffApply.test.ts`: every kind of edit is undone and redone, and after
   each the UI state serializes to the snapshot and the modelled engine
   (`engineModel.ts`) equals a fresh load of it; only the changed note is
-  sent for a note edit.
+  sent for a note edit. `undo/redo audio clip edits`: a whole Audio track
+  added and removed, per-clip edits (gain/fade/loop, a trim, a move between
+  audio lanes, a split, a delete, an add, the strip's key) and an Audio
+  slot taken by a drum track; only the changed audio clip is re-sent (its
+  UI id kept). The engine model stages SOURCE / GAIN and commits on SET, so
+  a missing stage or fades longer than the clip show up as errors.
 - e2e `tests/e2e/history.spec.ts`: removing two tracks and undoing restores
   them (sound resumes, transport never stops); undo/redo while a note
   sounds; a fader drag is one step; `undo closes an open confirm` (↶ and

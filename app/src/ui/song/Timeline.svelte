@@ -59,12 +59,13 @@
   import { addSynthTrack } from '../../state/rack-actions';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
-  import type { Clip, Project, Track } from '../../state/project.svelte';
-  import { MAX_TRACKS, currentPattern, patternLength } from '../../state/project.svelte';
+  import type { AudioClip, Clip, Project, Track } from '../../state/project.svelte';
+  import { MAX_TRACKS, currentPattern, isPatternTrack, patternLength } from '../../state/project.svelte';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip,
   } from '../../state/song-actions';
+  import { trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
@@ -102,7 +103,7 @@
   let hint = $state<string | null>(null);
   let cursor = $state('default');
 
-  type Found = { t: Track; c: Clip; lane: number };
+  type Found = { t: Track; c: Clip | AudioClip; lane: number };
   const lanesH = $derived(p.tracks.length * LANE_H);
   /** Every clip by id, with its track and lane (position in the track list). */
   const byId = $derived.by(() => {
@@ -119,12 +120,21 @@
     return [...all.filter((b) => !selected.has(b.id)), ...all.filter((b) => selected.has(b.id))];
   });
 
-  const patLenOf = (t: Track, c: Clip) => {
-    const pat = patternOf(t, c.patternId);
-    return pat ? patternLength(pat) : BAR;
+  // Audio clips (plan 9) have no pattern: no repeat marks here, and the
+  // sample name stands in for the pattern name (Task 5 draws their lanes).
+  const patternClip = (t: Track, c: Clip | AudioClip) => ('patternId' in c && isPatternTrack(t) ? { t, c } : null);
+  const patLenOf = (t: Track, c: Clip | AudioClip) => {
+    const pc = patternClip(t, c);
+    const pat = pc && patternOf(pc.t, pc.c.patternId);
+    return pat ? patternLength(pat) : pc ? BAR : c.len;
   };
-  const patNameOf = (t: Track, c: Clip) => patternOf(t, c.patternId)?.name ?? '?';
-  const uses = (t: Track, patternId: string) => t.clips.filter((c) => c.patternId === patternId).length;
+  const patNameOf = (t: Track, c: Clip | AudioClip) => {
+    const pc = patternClip(t, c);
+    if (pc) return patternOf(pc.t, pc.c.patternId)?.name ?? '?';
+    const id = 'sampleId' in c ? c.sampleId : null;
+    return (id !== null ? p.sampleFiles.get(id)?.name : undefined) ?? 'missing sample';
+  };
+  const uses = (t: Track, patternId: string) => t.clips.filter((c) => 'patternId' in c && c.patternId === patternId).length;
 
   const readoutText = $derived.by(() => {
     if (hint) return hint;
@@ -132,7 +142,8 @@
       const { t, c } = byId.get(sel[0])!;
       const reps = c.len / patLenOf(t, c);
       const times = Number.isInteger(reps) ? `×${reps}` : `×${reps.toFixed(2)}`;
-      const inEditor = p.selectedTrackId === t.id && t.currentPatternId === c.patternId;
+      const pc = patternClip(t, c);
+      const inEditor = !pc || (p.selectedTrackId === t.id && pc.t.currentPatternId === pc.c.patternId);
       return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)} · ${times}${inEditor ? '' : ' · double-click to edit'}`;
     }
     if (sel.length > 1) return `${sel.length} clips selected`;
@@ -492,6 +503,10 @@
       box = { x0: x, y0: y, x1: x, y1: y };
     } else {
       // Place the track's current pattern at the bar under the pointer.
+      if (!isPatternTrack(t)) {
+        flashHint('Drop an audio file on this lane to place it');
+        return;
+      }
       const tick = xToTick(x, v);
       let start = Math.max(0, e.altKey ? Math.round(tick) : snapFloor(tick, BAR));
       // A bar-snapped start can fall inside an earlier clip's tail (the click
@@ -560,6 +575,14 @@
         r = { start: o.start, len: resizeRight(o, e.altKey ? end + dtRaw : snap(end + dtRaw, BEAT), minLen), offset: o.offset };
       } else {
         r = resizeLeft(o, e.altKey ? o.start + dtRaw : snap(o.start + dtRaw, BEAT), d.patLen, minLen);
+        // An audio clip's offset is seconds: the trim moves it with the start (plan 9 Task 5 draws these lanes).
+        if (byId.get(o.id)?.t.kind === 'audio') {
+          const start = r.start;
+          if (`${start}` === d.last) return;
+          d.last = `${start}`;
+          schedule(() => trimAudioClipStart(p, engine, o.id, start));
+          return;
+        }
       }
       const k = `${r.start},${r.len},${r.offset}`;
       if (k === d.last) return;
@@ -661,6 +684,7 @@
     const f = hit && byId.get(hit.id);
     if (!f) return;
     selectTrack(p, engine, f.t.id);
+    if (!('patternId' in f.c)) return;
     selectPattern(p, engine, f.t.id, f.c.patternId);
     flashHint(`Editing ${f.t.name} · ${patNameOf(f.t, f.c)} below`);
   }
@@ -680,7 +704,7 @@
   }
   const menuClip = $derived(menu ? byId.get(menu.clipId) ?? null : null);
   /** "Make unique" only means something when another clip shares the pattern. */
-  const menuShared = $derived(menuClip ? uses(menuClip.t, menuClip.c.patternId) > 1 : false);
+  const menuShared = $derived(menuClip && 'patternId' in menuClip.c ? uses(menuClip.t, menuClip.c.patternId) > 1 : false);
   const menuDeleteIds = $derived(menuClip ? (selected.has(menuClip.c.id) ? sel : [menuClip.c.id]) : []);
 
   function closeMenu() {
@@ -877,7 +901,7 @@
       >
         <canvas bind:this={canvas} class="lanes-cv"></canvas>
         {#each overlays as o, lane (o.t.id)}
-          <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{lane * LANE_H}px" title="{o.t.name}: click to place {currentPattern(o.t).name}">
+          <div class="lane" data-testid="tl-lane-{o.t.slot}" style:top="{lane * LANE_H}px" title="{o.t.name}: {isPatternTrack(o.t) ? `click to place ${currentPattern(o.t).name}` : 'drop audio files here'}">
             {#each o.clips as k (k.c.id)}
               <div
                 class="clip"

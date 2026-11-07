@@ -1,7 +1,8 @@
 # Projects
 
 A project is a folder. Code: `app/src/project/` — `schema.ts` (the JSON
-shape + `validate`), `serialize.ts` (pure `serialize`, `projectFingerprint`),
+shape + `validate`), `migrate.ts` (older schema versions → the current
+one), `serialize.ts` (pure `serialize`, `projectFingerprint`),
 `load.ts` (`loadProject`: reset + command replay), `commands.ts`
 (`projectCommands`: the pure replay-order builder), `fsFolder.ts` (folder
 I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
@@ -9,7 +10,7 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 1
+  project.json            schemaVersion 2
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -18,11 +19,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 1)
+## project.json (schemaVersion 2)
 
 ```jsonc
 {
-  "schemaVersion": 1, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 2, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -38,7 +39,12 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
                  "cables": [{ "from": [0, "pitch"], "to": [1, "pitch"] }] },
       "patterns": [{ "engineIdx": 0, "name": "Pattern 1", "bars": 4,
                      "notes": [{ "idx": 0, "pitch": 36, "vel": 100, "start": 0, "len": 480 }] }],
-      "currentPattern": 0, "clips": [] }
+      "currentPattern": 0, "clips": [] },
+    { "kind": "audio", "slot": 2, "name": "Vox", "color": "#ffd43b",   // plan 9
+      "clips": [{ "idx": 0, "sample": 1, "start": 3840, "len": 7680,
+                  "offset": 0.25,           // seconds into the file (rate-independent)
+                  "loop": false, "gain": -3, // dB, -60 (= -inf) .. +12
+                  "fadeIn": 240, "fadeOut": 480 }] }   // ticks, fadeIn + fadeOut <= len
   ],
   "mixer": {
     "tracks": [{ "slot": 0, "params": { "fader": 0, "pan": 0, ... }, "key": null },
@@ -56,8 +62,14 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 - **Engine slots are kept** (`slot`, `engineIdx`, clip/note `idx`) and
   references use them, so a restore (load, plan 7's undo snapshots) puts
   everything back in the same engine slot. UUIDs are not stored.
-- **Samples:** only those used by a drum row or a SamplePlayer `sample` param
-  whose original file the session holds (`Project.sampleFiles`, filled on
+- **Audio tracks** (plan 9, spec addendum §3.1) have no patterns, rows or
+  rack: just clips, each `{idx, sample, start, len, offset, loop, gain,
+  fadeIn, fadeOut}` (see `state/audio-actions.ts` for the units). A clip
+  whose sample is missing (not in `samples`, its file absent, or it failed
+  to decode) is **kept** with `sample: null` — drawn as "missing sample",
+  silent — with a warning, so its place in the song survives.
+- **Samples:** only those used by a drum row, a SamplePlayer `sample` param
+  or an audio clip whose original file the session holds (`Project.sampleFiles`, filled on
   drop and load); any other use is written as none. The content hash in the
   file name is the first 8 hex digits of SHA-256 (`crypto.subtle`, async,
   computed once per drop / load — never a synchronous loop over the bytes).
@@ -71,6 +83,44 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
   what a save / load / New records as the saved state.
+- **Session-only sample data** (never saved): `Project.sampleMeta` (each
+  sample's length in seconds, channels and waveform peaks; filled on import,
+  load, restore and restart; a non-reactive Map, with `p.peaksVersion`
+  bumped so the lanes redraw) and `Project.arenaFloats` (see *Sample
+  memory* below).
+
+## Schema versions and migration (`migrate.ts`)
+
+Each schema change bumps `schemaVersion`. `migrate(json)` brings an older
+file up to the current version one step at a time and runs **before**
+`validate` (validate calls it first, so open, autosave restore and the
+folder's sample list all get it). It is pure (the input is not changed).
+
+| From → to | Plan | Change |
+|---|---|---|
+| 1 → 2 | 9 | Audio tracks. A v1 project has none, so only the version moves: lossless. |
+
+A version newer than the build knows stays an error ("saved by a newer
+version of the app"); a save always writes the current version.
+`migrate.test.ts` pins v1 → v2 on a frozen genuine v1 save
+(`project/testdata/v1-fixture.json`) and minimal v1 files.
+
+## Sample memory (spec addendum §3.3)
+
+The engine's sample arena is a bump allocator capped at 1 GiB
+(`MAX_ARENA_FLOATS`): every upload since the last load (`RESET_ALL`) or
+audio restart (a new engine) keeps its space, samples replaced or no longer
+used included. `Project.arenaFloats` mirrors that count
+(`state/sampleBudget.ts`): `importSample` checks the decoded file
+**before uploading it** and refuses one that would not fit — "long.wav
+needs 230 MB of sample memory; 120 MB is free (1 GB limit). Removed
+samples are freed when the project is reopened." — with no id taken,
+nothing uploaded and no clip placed. It reserves the floats when it takes
+the id and gives them back if the engine refuses the upload. A load starts
+the count over from the samples it uploads (only the used ones, compact
+ids), the audio restart from the ones it re-uploads (its late uploads add
+theirs). The engine's own `ERR_OUT_OF_MEMORY` stays the backstop.
+`budgetText(p)` is the Browser footer's "412 MB / 1 GB".
 
 ## Unsaved changes and `Project.version`
 
@@ -133,7 +183,8 @@ its load, so the kit never retries into the gap between them.
 ## Validation (`validate`)
 
 Never throws, never lets an out-of-range value through. Unknown fields are
-ignored. A missing/non-integer `schemaVersion` or one greater than 1 is an
+ignored. The file is migrated first (see above). A missing/non-integer
+`schemaVersion` or one greater than the current one (2) is an
 **error** (nothing changes). Everything else becomes a **warning**, shown in a
 notice banner after the load (all of them in the console):
 
@@ -148,7 +199,10 @@ notice banner after the load (all of them in the console):
   on Reverb, `delay_*` not on Delay, the `setMix` rule) dropped; sidechain
   keys whose track/row does not exist dropped;
 - a row/SamplePlayer using a sample not in `samples`, or a sample with a bad
-  file path (anything but `samples/<one name>`) → cleared/dropped.
+  file path (anything but `samples/<one name>`) → cleared/dropped;
+- an audio clip: a sample not in `samples` → `null` (the clip is kept);
+  gain, offset, start, length and fades clamped; fades that together exceed
+  the clip shorten the fade-in.
 
 ## Load order (`loadProject`)
 
@@ -166,7 +220,10 @@ notice banner after the load (all of them in the console):
    here on also sets `p.folder = null`, so a later Save cannot write the
    blank session over the folder it came from.
 4. Upload the samples with **compact ids 0..n−1** (fixes id burning);
-   drum rows and SamplePlayer `sample` params are remapped old → new.
+   drum rows, SamplePlayer `sample` params and audio clips are remapped
+   old → new (a sample that did not load: none / `null`). Each upload's
+   length and channels go to `p.sampleMeta`, its floats to
+   `p.arenaFloats` (counted from zero: `blankState` reset it).
 5. Replay synchronously. The command list comes from the pure
    `projectCommands(json, sampleIds)` (`commands.ts`, no Project, no
    engine): the one place that knows this order, shared with undo's
@@ -178,6 +235,9 @@ notice banner after the load (all of them in the console):
      sample/gain/pan/mute; the rack via `patchRack` (as `loadPatch`; its FX-pool budget counts
      the tracks already loaded: extra Delays/Reverbs/Choruses are dropped with
      "All 8 … in use"); clips;
+   - an Audio track: `ADD_AUDIO_TRACK`, then per clip `AUDIO_CLIP_SOURCE`
+     → `AUDIO_CLIP_GAIN` → `AUDIO_CLIP_SET` (stage, stage, commit: always
+     the three together, `commands.ts audioClipCommands`);
    - `MIX_SET` by name (non-defaults; RESET_ALL set the rest), then
      **`MIX_SET_KEY` last** (keys need their source tracks and rows);
    - `SET_TEMPO`, `SET_METRONOME`, `SET_MODE`, `SET_LOOP`, `SET_INPUT_TRACK`
@@ -190,7 +250,10 @@ warnings go to their own banner (`banners.load`).
 
 `load.test.ts` replays every load through a model of the engine's checks
 (`testFixture.ts` `checkLog`): no out-of-range command, nothing addressed to a
-missing track/module/sample, nothing after the keys but transport.
+missing track/module/sample (an audio clip's SOURCE included), every audio
+clip staged before its commit with fades that fit, nothing after the keys
+but transport. `projectCommands includes audio tracks` runs it on the
+fixture plus two Audio tracks (`addAudioFixture`).
 
 ## Saving (`writeProject`)
 

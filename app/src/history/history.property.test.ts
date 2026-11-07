@@ -3,7 +3,8 @@
 // an undo. For many seeded random sequences of mixed edits (one-shots,
 // gestures, recording passes, pattern / track switches that are not edits,
 // track adds and removes, undo/redo in between; plan 9: gestures and
-// one-shots made while a pass is held open join it), undoing everything restores
+// one-shots made while a pass is held open join it; Audio tracks and their
+// clips: add, edit, trim, move between audio lanes, split, delete), undoing everything restores
 // the project as it was before the first entry, and redoing it all restores
 // the final state; the modelled engine matches a fresh load of each.
 //
@@ -19,13 +20,15 @@ import { addDrumTrack, removeTrack, selectTrack, setTempo, toggleStep } from '..
 import { setMix } from '../state/mixer-actions';
 import { addNote, deleteNotes, newPattern, selectPattern, updateNotes } from '../state/pattern-actions';
 import { addSynthTrack, setParam } from '../state/rack-actions';
+import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
+import { deleteClips, moveClips, splitClips } from '../state/song-actions';
 import { edit } from '../state/edits';
-import { currentPattern } from '../state/project.svelte';
-import type { DrumTrack, SynthTrack, Track } from '../state/project.svelte';
+import { currentPattern, isPatternTrack } from '../state/project.svelte';
+import type { AudioTrack, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { buildFixture } from '../project/testFixture';
+import { addAudioFixture, buildFixture } from '../project/testFixture';
 import { blankModel, run, view } from './engineModel';
 import { createHistory, debugStacks } from './history';
 import { diffApply } from './diffApply';
@@ -50,6 +53,7 @@ const loaded = (json: ProjectJson) => view(run(blankModel(), projectCommands(jso
 async function sequence(seed: number, ops: number) {
   const r = rng(seed);
   const { p } = await buildFixture();
+  if (seed % 2 === 1) await addAudioFixture(p); // half the sequences start with Audio tracks
   const start = serialize(p);
   const m = run(blankModel(), projectCommands(start, ids(start)).commands);
   const sink = { send: (op: number, a = 0, b = 0, c = 0, d = 0) => (run(m, [[op, a, b, c, d]]), true) };
@@ -59,6 +63,10 @@ async function sequence(seed: number, ops: number) {
 
   const synths = () => p.tracks.filter((t): t is SynthTrack => t.kind === 'synth');
   const drums = () => p.tracks.filter((t): t is DrumTrack => t.kind === 'drum');
+  const audios = () => p.tracks.filter((t): t is AudioTrack => t.kind === 'audio');
+  const audioClip = () => r.pick(audios().flatMap((t) => t.clips));
+  /** A sample of the session, or none ("missing sample"). */
+  const sampleId = () => r.pick([...p.sampleFiles.keys(), null] as (number | null)[])!;
   let pass = 1;
   // As the recorder does (plan 9): each note is written under the pass's key,
   // and the pass is held open from its first note until it ends (newPass),
@@ -117,6 +125,7 @@ async function sequence(seed: number, ops: number) {
 
   /** selectPattern: not an edit, but saved. Prefers a pattern that is not current. */
   const switchPattern = (log: string[], t: Track | undefined) => {
+    if (t && !isPatternTrack(t)) return;
     const others = t ? (t.patterns as { id: string }[]).filter((x) => x.id !== t.currentPatternId) : [];
     const pat = r.pick(others.length ? others : (t?.patterns ?? []) as { id: string }[]);
     if (t && pat) (log.push('selectPattern'), selectPattern(p, sink, t.id, pat.id));
@@ -198,8 +207,10 @@ async function sequence(seed: number, ops: number) {
     (log) => {
       if (p.tracks.length >= 7) return;
       log.push('addTrack');
-      if (r.int(2)) addSynthTrack(p, sink);
-      else addDrumTrack(p, sink);
+      const k = r.int(3);
+      if (k === 0) addSynthTrack(p, sink);
+      else if (k === 1) addDrumTrack(p, sink);
+      else addAudioTrack(p, sink);
     },
     (log) => {
       const t = r.pick(p.tracks);
@@ -209,6 +220,33 @@ async function sequence(seed: number, ops: number) {
       const t = r.pick(synths());
       const osc = t?.modules.find((x) => x.kind === moduleDef('osc').kind);
       if (t && osc) (log.push('setParam'), setParam(p, sink, t.id, osc.idx, paramIndex(moduleDef('osc'), 'octave'), r.int(5) - 2));
+    },
+    // Audio clips (plan 9).
+    (log) => {
+      const t = r.pick(audios());
+      if (t) (log.push('addAudioClip'), addAudioClip(p, sink, t.id, { sampleId: sampleId(), start: r.int(8) * 960, len: r.int(2) ? undefined : 1 + r.int(4000) }));
+    },
+    (log) => {
+      const c = audioClip();
+      if (!c) return;
+      log.push('setAudioClip');
+      const k = r.int(4);
+      if (k === 0) setAudioClip(p, sink, c.id, { gain: 0 - r.int(30), fadeIn: r.int(300), fadeOut: r.int(300) });
+      else if (k === 1) setAudioClip(p, sink, c.id, { loop: !c.loop, len: 1 + r.int(8000) });
+      else if (k === 2) setAudioClip(p, sink, c.id, { sampleId: sampleId(), offset: r.int(8) / 8 });
+      else trimAudioClipStart(p, sink, c.id, c.start + r.int(1000) - 500);
+    },
+    (log) => {
+      const c = audioClip();
+      if (c) (log.push('moveAudioClip'), moveClips(p, sink, [c.id], r.int(2000) - 1000, r.int(3) - 1));
+    },
+    (log) => {
+      const c = audioClip();
+      if (c) (log.push('splitAudioClip'), splitClips(p, sink, [c.id], c.start + r.int(c.len + 1)));
+    },
+    (log) => {
+      const c = audioClip();
+      if (c) (log.push('deleteAudioClip'), deleteClips(p, sink, [c.id]));
     },
     (log) => (log.push('undo'), step('undo')),
     (log) => (log.push('redo'), step('redo')),

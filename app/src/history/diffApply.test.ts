@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_NOTES, Op } from '../audio/protocol';
+import { MAX_CLIPS, MAX_NOTES, Op } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { addDrumTrack, addRow, removeTrack, selectTrack, setMetronome, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setTempo, toggleStep } from '../state/actions';
 import { setMix, setSidechain } from '../state/mixer-actions';
 import { addNote, deleteNotes, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern, setPatternBars, updateNotes } from '../state/pattern-actions';
 import { addModule, addSynthTrack, connect, disconnect, loadPatch, removeModule, setParam } from '../state/rack-actions';
-import { deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, setLoop, setMode } from '../state/song-actions';
+import { deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, setLoop, setMode, splitClips } from '../state/song-actions';
+import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
 import { STARTER_PATCHES } from '../state/patches';
 import { Project, currentPattern } from '../state/project.svelte';
-import type { DrumTrack, SynthTrack } from '../state/project.svelte';
+import type { AudioTrack, DrumTrack, SynthTrack } from '../state/project.svelte';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { buildFixture, nullSink } from '../project/testFixture';
+import { addAudioFixture, buildFixture, nullSink } from '../project/testFixture';
 import { blankModel, run, view } from './engineModel';
 import { diffApply } from './diffApply';
 
@@ -24,8 +25,9 @@ const loaded = (json: ProjectJson) => view(run(blankModel(), projectCommands(jso
  * The fixture project, with a modelled engine that holds it (as a load would
  * have built it) and a sink that logs every command into that model.
  */
-async function rig() {
+async function rig(o: { audio?: boolean } = {}) {
   const f = await buildFixture();
+  const audio = o.audio ? await addAudioFixture(f.p) : null;
   const A = serialize(f.p);
   const m = run(blankModel(), projectCommands(A, ids(A)).commands);
   const log: number[][] = [];
@@ -36,14 +38,14 @@ async function rig() {
       return true;
     },
   };
-  return { ...f, A, m, log, sink };
+  return { ...f, audio, A, m, log, sink };
 }
 
 type Rig = Awaited<ReturnType<typeof rig>>;
 
 /** Edit, then diffApply back to A (undo) and forward to B (redo): each must leave UI and engine exactly as a load would. */
-async function roundTrip(edit: (r: Rig) => void, atA?: (r: Rig) => void) {
-  const r = await rig();
+async function roundTrip(edit: (r: Rig) => void, atA?: (r: Rig) => void, o: { audio?: boolean } = {}) {
+  const r = await rig(o);
   edit(r);
   const B = serialize(r.p);
   expect(B).not.toEqual(r.A);
@@ -222,5 +224,47 @@ describe('diffApply', () => {
     expect(view(r.m, A)).toEqual(loaded(A));
     expect(r.m.errors).toEqual([]);
   });
-});
 
+  it('undo/redo audio clip edits', async () => {
+    // A whole Audio track that comes and goes (trackState + trackCommands).
+    await roundTrip(({ p, sink }) => {
+      const t = addAudioTrack(p, sink)!;
+      addAudioClip(p, sink, t.id, { sampleId: 0, start: 0, len: 960 });
+    });
+    // Per-clip diffs on existing Audio tracks: edits, a trim, a move between
+    // audio lanes, a split, a delete, an add; and the strip's key.
+    await roundTrip(({ p, sink, audio }) => {
+      const { loop, vox } = audio!;
+      setAudioClip(p, sink, loop.clips[0].id, { gain: -12, fadeIn: 100, loop: false });
+      trimAudioClipStart(p, sink, vox.clips[0].id, vox.clips[0].start + 96);
+      moveClips(p, sink, [loop.clips[1].id], 960, 1); // Loop -> Vox lane
+      splitClips(p, sink, [vox.clips[0].id], vox.clips[0].start + 200);
+      deleteClips(p, sink, [loop.clips[0].id]);
+      addAudioClip(p, sink, loop.id, { sampleId: 1, start: 7680, len: 100 });
+      setSidechain(p, sink, vox.id, null);
+    }, undefined, { audio: true });
+    // An Audio track removed, and its slot taken by another kind.
+    await roundTrip(({ p, sink, audio }) => {
+      removeTrack(p, sink, audio!.vox.id);
+      addDrumTrack(p, sink);
+    }, undefined, { audio: true });
+  });
+
+  it('diffApply re-sends only the audio clips that changed, keeping their ids', async () => {
+    const r = await rig({ audio: true });
+    const loop = r.audio!.loop as AudioTrack;
+    const [a, b] = loop.clips;
+    const before = serialize(r.p);
+    setAudioClip(r.p, r.sink, a.id, { gain: -20 });
+    const after = serialize(r.p);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, after, before);
+    const at = loop.slot * MAX_CLIPS + a.idx;
+    expect(r.log.map((c) => [c[0], c[1]])).toEqual([[Op.AUDIO_CLIP_SOURCE, at], [Op.AUDIO_CLIP_GAIN, at], [Op.AUDIO_CLIP_SET, at]]);
+    expect(loop.clips[0]).toBe(a);
+    expect(loop.clips[1]).toBe(b);
+    expect(a.gain).toBe(-3);
+    expect(view(r.m, before)).toEqual(loaded(before));
+    expect(r.m.errors).toEqual([]);
+  });
+});

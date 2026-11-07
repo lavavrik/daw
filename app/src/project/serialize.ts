@@ -7,9 +7,9 @@ import type { MixTarget } from '../audio/mixerCatalog';
 import { accepts } from '../state/mixer-actions';
 import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
-import type { ChannelState, DrumTrack, Project, SynthTrack, Track } from '../state/project.svelte';
+import type { AudioTrack, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
 import { SCHEMA_VERSION } from './schema';
-import type { ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJson } from './schema';
+import type { AudioTrackJson, ClipJson, DrumTrackJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
 
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -30,7 +30,7 @@ function mixParams(ch: ChannelState, kind: MixTarget, index: number): MixParamsJ
   return out;
 }
 
-function clipsOf(t: Track): ClipJson[] {
+function clipsOf(t: PatternTrack): ClipJson[] {
   const out: ClipJson[] = [];
   for (const c of t.clips) {
     const ps: { id: string; engineIdx: number }[] = t.patterns;
@@ -41,8 +41,8 @@ function clipsOf(t: Track): ClipJson[] {
 }
 
 /**
- * The project as saved. Samples: only those used by a drum row or a
- * SamplePlayer `sample` param AND whose original file the session has
+ * The project as saved. Samples: only those used by a drum row, a
+ * SamplePlayer `sample` param or an audio clip AND whose original file the session has
  * (p.sampleFiles); a use of any other id is written as "none" (null / -1),
  * since a load could not restore it.
  */
@@ -87,7 +87,18 @@ export function serialize(p: Project): ProjectJson {
     clips: clipsOf(t),
   });
 
-  const tracks = p.tracks.map((t) => (t.kind === 'drum' ? drum(t) : synth(t)));
+  const audio = (t: AudioTrack): AudioTrackJson => ({
+    kind: 'audio',
+    slot: t.slot,
+    name: t.name,
+    color: t.color,
+    clips: t.clips.map((c) => ({
+      idx: c.idx, sample: use(c.sampleId), start: c.start, len: c.len, offset: c.offset, loop: c.loop,
+      gain: c.gain, fadeIn: c.fadeIn, fadeOut: c.fadeOut,
+    })),
+  });
+
+  const tracks = p.tracks.map((t): TrackJson => (t.kind === 'drum' ? drum(t) : t.kind === 'synth' ? synth(t) : audio(t)));
   const slotOf = (id: string | null) => p.tracks.find((t) => t.id === id)?.slot ?? null;
   const mixer = {
     tracks: p.tracks.map((t) => {

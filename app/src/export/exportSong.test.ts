@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { Op } from '../audio/protocol';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
-import { buildFixture, fakeDecoder, nullSink } from '../project/testFixture';
+import { buildAudioFixture, buildFixture, fakeDecoder, nullSink } from '../project/testFixture';
+import { addAudioClip, addAudioTrack } from '../state/audio-actions';
 import { addDrumTrack, setRowSample, setStep } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
 import { addClip } from '../state/song-actions';
@@ -21,6 +22,29 @@ describe('export: what gets rendered', () => {
     // Clips: drums 0..3840 and 3840..11520, synth pattern 2 (2 bars) at 0.
     expect(songEndTicks(serialize(p))).toBe(11520);
     expect(songEndTicks(serialize(new Project()))).toBe(0);
+  });
+
+  it('songEndTicks counts audio clips', async () => {
+    const { p } = await buildFixture();
+    const t = addAudioTrack(p, nullSink)!;
+    addAudioClip(p, nullSink, t.id, { sampleId: 0, start: 20_000, len: 480 });
+    expect(songEndTicks(serialize(p))).toBe(20_480);
+    // Even a song of audio clips only (one whose sample is missing included).
+    const q = new Project();
+    const a = addAudioTrack(q, nullSink)!;
+    addAudioClip(q, nullSink, a.id, { sampleId: null, start: 960, len: 960 });
+    expect(songEndTicks(serialize(q))).toBe(1920);
+  });
+
+  it('decodes audio-clip samples like rows\' and sends their clips', async () => {
+    const { p, ids } = await buildAudioFixture();
+    const { w, deps } = fakeWorker();
+    await exportSong(p, ctx, () => {}, new AbortController().signal, collect().write, deps);
+    const { job } = w.posted as { job: { commands: number[][]; samples: { id: number; frames: number }[] } };
+    expect(job.samples.map((s) => [s.id, s.frames])).toEqual([[ids[0], 30], [ids[1], 31]]); // fakeAudio(30), fakeAudio(31)
+    for (const op of [Op.ADD_AUDIO_TRACK, Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET]) {
+      expect(job.commands.some((c) => c[0] === op)).toBe(true);
+    }
   });
 
   it('frames = song end at the project tempo plus a 2 s tail', async () => {

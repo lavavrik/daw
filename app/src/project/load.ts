@@ -8,11 +8,15 @@
 //      cannot be resumed the load fails here, before anything is blanked.
 //   3. STOP, blank the UI state, RESET_ALL, and wait for the worklet's ack:
 //      sample uploads go by postMessage and must not overtake the reset.
-//   4. upload the samples with compact ids 0..n-1 (old -> new id map).
+//   4. upload the samples with compact ids 0..n-1 (old -> new id map),
+//      recording each one's length and channels (p.sampleMeta) and the
+//      floats it takes (p.arenaFloats: the sample budget starts over, so
+//      samples replaced in the old session no longer count).
 //   5. replay, synchronously: projectCommands (project/commands.ts, the one
 //      replay-order builder shared with undo, export and the audio restart)
 //      gives the commands -- tracks (patterns, steps/notes, current pattern,
-//      rows with their samples, rack, clips) -> MIX_SET by name ->
+//      rows with their samples, rack, clips; Audio tracks and their clips)
+//      -> MIX_SET by name ->
 //      MIX_SET_KEY last -> tempo, metronome, mode, loop and the live input
 //      track (RESET_ALL put the transport back to 124 BPM / Pattern / loop
 //      off / metronome off / no input track, so these are always sent) --
@@ -25,6 +29,8 @@
 // and steps 2, 4 and 5 run on `p` itself: the samples the project uses
 // decoded with the new context and uploaded at their OWN ids, then
 // projectCommands of serialize(p); the unused ones follow later (`rest`).
+// The new engine's arena is empty: the restart sets p.arenaFloats to what
+// replayInto uploaded (Replayed.floats) and `rest` adds the late ones.
 //
 // p.loading is set through state/idle.ts markBusy / markIdle (a default-kit
 // import waiting for the load to end awaits that signal).
@@ -37,7 +43,9 @@ import { markBusy, markIdle } from '../state/idle';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
 import type { ChannelState, Project, SampleFile, Track } from '../state/project.svelte';
 import { sampleFile } from '../state/sampleFiles';
+import { sampleFloats } from '../state/sampleBudget';
 import { projectCommands, trackState } from './commands';
+import type { EngineCommand } from './commands';
 import { serialize } from './serialize';
 import { validate } from './schema';
 import type { MixParamsJson, ProjectJson } from './schema';
@@ -118,16 +126,21 @@ export async function loadProject(
       const ids = new Map<number, number>();
       for (const d of decoded) {
         const id = ids.size;
+        const meta = { seconds: d.channels[0].length / engine.sampleRate, channels: d.channels.length, peaks: null };
+        const floats = sampleFloats(d.channels); // before the upload transfers the buffers away
         const c = await engine.loadSample(id, d.channels);
         // DEFERRED cannot really happen (stopped); the worklet would finish it on its own.
         if (c === Err.OK || c === Err.DEFERRED) {
           ids.set(d.oldId, id);
           p.sampleFiles.set(id, d.file);
+          p.sampleMeta.set(id, meta);
+          p.arenaFloats += floats;
         } else {
           warnings.push(`Sample "${d.file.name}" could not be loaded — ${loadErrorText(c, engine.sampleRate)}`);
         }
       }
       p.nextSampleId = ids.size;
+      p.peaksVersion++;
 
       replay(p, engine, proj, ids, warnings);
     } catch (e) {
@@ -165,6 +178,8 @@ export interface Replayed {
   warnings: string[];
   /** Each used sample's upload result (Err.OK, or why it failed); a sample that could not be decoded has none. */
   codes: Map<number, number>;
+  /** Sample floats the new engine took for them (the restart's p.arenaFloats once it switched). */
+  floats: number;
   /**
    * Decode and upload the samples the project does not use now (only an
    * undo can bring one back: snapshots name samples by id). Call it once
@@ -173,20 +188,25 @@ export interface Replayed {
    * warning (that sample is only needed if an undo brings it back, and then
    * plays nothing). Stops as soon as the session is replaced (p.generation:
    * its ids are someone else's now), another restart starts or succeeds, or
-   * the sample left p.sampleFiles.
+   * the sample left p.sampleFiles. Each sample that lands adds its floats
+   * to p.arenaFloats (the new engine is the current one by then).
    */
   rest(onLanded?: (id: number) => void): Promise<string[]>;
 }
 
 /**
  * The commands that bind sample `id` to what uses it in `p` now (a drum
- * row's SET_ROW_SAMPLE, a SamplePlayer's sample param, ...): those of
- * projectCommands(serialize(p)) that differ between the engine having `id`
- * and not having it. The restart re-sends them when a late (`rest`) upload
- * lands, for an undo that brought the sample back before it was in the
- * arena (the engine refused that binding then). Empty if nothing uses `id`.
- * A binding that only stages a change must also be committed by one of
- * these commands (true of every sample use today).
+ * row's SET_ROW_SAMPLE, a SamplePlayer's sample param, an audio clip, ...):
+ * those of projectCommands(serialize(p)) that differ between the engine
+ * having `id` and not having it. The restart re-sends them when a late
+ * (`rest`) upload lands, for an undo that brought the sample back before it
+ * was in the arena (the engine refused or never played that binding then).
+ * Empty if nothing uses `id`.
+ *
+ * Compared as UNITS, not single commands: an audio clip's AUDIO_CLIP_SOURCE
+ * only stages its change, so the clip's whole SOURCE, GAIN, SET triple
+ * (commands.ts audioClipCommands) is one unit and goes out whole when its
+ * SOURCE differs -- a SOURCE alone would never be committed.
  */
 export function bindingCommands(p: Project, id: number): [number, number, number, number, number][] {
   const json = serialize(p);
@@ -194,14 +214,28 @@ export function bindingCommands(p: Project, id: number): [number, number, number
   const without = new Map(all);
   all.set(id, id);
   without.delete(id);
-  const key = (c: readonly (number | undefined)[]) => c.join(',');
+  const key = (u: EngineCommand[]) => u.map((c) => c.join(',')).join(';');
   const unbound = new Map<string, number>();
-  for (const c of projectCommands(json, without).commands) unbound.set(key(c), (unbound.get(key(c)) ?? 0) + 1);
+  for (const u of units(projectCommands(json, without).commands)) unbound.set(key(u), (unbound.get(key(u)) ?? 0) + 1);
   const out: [number, number, number, number, number][] = [];
-  for (const c of projectCommands(json, all).commands) {
-    const n = unbound.get(key(c)) ?? 0;
-    if (n > 0) unbound.set(key(c), n - 1);
-    else out.push([c[0], c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0]);
+  for (const u of units(projectCommands(json, all).commands)) {
+    const n = unbound.get(key(u)) ?? 0;
+    if (n > 0) unbound.set(key(u), n - 1);
+    else for (const c of u) out.push([c[0], c[1] ?? 0, c[2] ?? 0, c[3] ?? 0, c[4] ?? 0]);
+  }
+  return out;
+}
+
+/** `cmds` grouped into what must be sent together: an audio clip's SOURCE, GAIN, SET; any other command alone. */
+function units(cmds: EngineCommand[]): EngineCommand[][] {
+  const out: EngineCommand[][] = [];
+  for (let i = 0; i < cmds.length; i++) {
+    const c = cmds[i];
+    const commit = cmds[i + 2];
+    if (c[0] === Op.AUDIO_CLIP_SOURCE && commit?.[0] === Op.AUDIO_CLIP_SET && commit[1] === c[1]) {
+      out.push(cmds.slice(i, i + 3));
+      i += 2;
+    } else out.push([c]);
   }
   return out;
 }
@@ -231,6 +265,18 @@ export async function replayInto(
   const codes = new Map<number, number>();
   const files = [...p.sampleFiles].sort((a, b) => a[0] - b[0]);
   const ids = new Map<number, number>();
+  let floats = 0;
+  /**
+   * Length and channels at the new rate (the peaks, a picture of the same
+   * audio, are kept), and the floats; read before the upload transfers the
+   * buffers away.
+   */
+  const measure = (id: number, channels: Float32Array[]) => {
+    const peaks = p.sampleMeta.get(id)?.peaks ?? null;
+    p.sampleMeta.set(id, { seconds: channels[0].length / engine.sampleRate, channels: channels.length, peaks });
+    p.peaksVersion++;
+    return sampleFloats(channels);
+  };
   for (const [id, f] of files) {
     if (!used.has(id)) continue;
     let channels: Float32Array[];
@@ -240,10 +286,13 @@ export async function replayInto(
       warnings.push(`Sample "${f.name}" could not be decoded again`);
       continue;
     }
+    const n = measure(id, channels);
     const c = await engine.loadSample(id, channels);
     codes.set(id, c);
-    if (c === Err.OK || c === Err.DEFERRED) ids.set(id, id);
-    else warnings.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
+    if (c === Err.OK || c === Err.DEFERRED) {
+      ids.set(id, id);
+      floats += n;
+    } else warnings.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
   }
   const pc = projectCommands(serialize(p), ids);
   warnings.push(...pc.warnings);
@@ -266,6 +315,7 @@ export async function replayInto(
         continue;
       }
       if (!current(id, f)) continue; // checked right before the upload is posted
+      const n = measure(id, channels);
       let c: number;
       try {
         c = await engine.loadSample(id, channels);
@@ -274,12 +324,15 @@ export async function replayInto(
         continue;
       }
       if (!current(id, f)) continue;
-      if (c === Err.OK || c === Err.DEFERRED) onLanded?.(id);
+      if (c === Err.OK || c === Err.DEFERRED) {
+        p.arenaFloats += n;
+        onLanded?.(id);
+      }
       else if (c !== Err.OUT_OF_MEMORY) out.push(`Sample "${f.name}" could not be reloaded — ${loadErrorText(c, engine.sampleRate)}`);
     }
     return out;
   };
-  return { warnings, codes, rest };
+  return { warnings, codes, floats, rest };
 }
 
 /** The UI state of a blank engine session (what RESET_ALL leaves). */
@@ -298,6 +351,9 @@ export function blankState(p: Project) {
   p.metronome = false;
   p.nextSampleId = 0;
   p.sampleFiles.clear();
+  p.sampleMeta.clear(); // a new session's ids are not the old ones
+  p.peaksVersion++;
+  p.arenaFloats = 0; // RESET_ALL empties the engine's sample arena
 }
 
 /**

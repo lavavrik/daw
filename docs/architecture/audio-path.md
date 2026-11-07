@@ -245,7 +245,10 @@ leaves the user exactly where they were:
    that brings such a sample back plays nothing for it; when it lands, the
    commands binding it to what uses it now (`bindingCommands`: the
    `projectCommands` that differ with and without that id) are sent again,
-   as no edit (`p.baselining`). Late warnings are dropped if the session
+   as no edit (`p.baselining`). They are compared as units: an audio clip's
+   `AUDIO_CLIP_SOURCE` only stages, so its whole SOURCE, GAIN, SET triple is
+   re-sent (plan 9). The restart also starts the sample budget over:
+   `p.arenaFloats` becomes what it re-uploaded, plus each late upload. Late warnings are dropped if the session
    was replaced or another restart finished meanwhile.
 6. Failure (the hint refused, a start or replay timeout, a replay error): the
    new engine is closed (a start that answers after the timeout is closed when

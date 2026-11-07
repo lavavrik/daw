@@ -2,12 +2,15 @@
 // (engine/tests/export_render.rs): the same fixed job, the same block
 // schedule, the same golden hash. Needs a built engine.wasm: `npm test`
 // builds it first (npm run build:engine).
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { fnv1a32, MAX_PARTS_IN_FLIGHT, parseJob, renderService, renderSong, sampleData } from './render';
 import type { WorkerReply } from './render';
 import { encodeWav24 } from './wav';
 import { engineWasmBytes as wasmBytes } from './testWasm';
+import { exportCommands, exportFrames } from './exportSong';
+import { serialize } from '../project/serialize';
+import { buildAudioFixture } from '../project/testFixture';
 
 const fixture = (f: string) => readFileSync(new URL(`../../../engine/tests/fixtures/${f}`, import.meta.url), 'utf8');
 
@@ -106,5 +109,45 @@ describe('export render core', () => {
     service({ type: 'render', wasm: wasmBytes(), job: j }); // never acked
     await vi.waitFor(() => expect(replies.at(-1)?.type).toBe('done'), { timeout: 2000 });
     expect(replies.filter((r) => r.type === 'part')).toHaveLength(MAX_PARTS_IN_FLIGHT);
+  });
+
+  it('audio render matches native', () => {
+    const j = parseJob(fixture('export_audio.txt'));
+    const { left, right } = renderSong(wasmBytes(), j);
+    expect(left.length).toBe(j.frames);
+    expect(left.some((x) => Math.abs(x) > 0.01)).toBe(true);
+    const golden = fixture('export_audio.hash').trim();
+    expect(fnv1a32(left, right).toString(16).padStart(8, '0')).toBe(golden);
+  });
+
+  it('export_audio.txt is the export command list of the audio test project, frozen', async () => {
+    // engine/tests/export_render.rs renders this file natively; it must stay
+    // what exportCommands builds for project/testFixture.ts buildAudioFixture
+    // (2 Audio tracks: a loop clip, a trimmed and faded clip, a sidechained
+    // strip). Regenerate after an intended change with UPDATE_FIXTURE=1, then
+    // UPDATE_GOLDEN=1 cargo test -p daw-engine --test export_render.
+    const { p, ids } = await buildAudioFixture();
+    const json = serialize(p);
+    const rate = 48000;
+    const lines = [
+      '# Fixed render job shared by engine/tests/export_render.rs (native) and',
+      '# app/src/export/render.test.ts (engine.wasm), like export_render.txt.',
+      '# Frozen: the export command list (exportCommands) of the audio test',
+      '# project (project/testFixture.ts buildAudioFixture: 2 Audio tracks -- a',
+      '# loop clip of a mono sample, a missing-sample clip, a trimmed and faded',
+      '# clip of a stereo sample on a strip sidechained from the first -- 120 BPM,',
+      '# Song mode). Sample data is generated (see export_render.rs); the lengths',
+      '# match the fixture\'s sampleMeta (0.5 s mono, 1 s stereo at 48 kHz).',
+      `sample_rate ${rate}`,
+      `frames ${exportFrames(json, rate)}`,
+      `sample ${ids[0]} ${rate / 2} 1 11`,
+      `sample ${ids[1]} ${rate} 2 12`,
+      ...exportCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands.map(
+        ([op, a = 0, b = 0, c = 0, d = 0]) => `cmd ${op} ${a} ${b} ${c} ${d}`,
+      ),
+    ];
+    const text = `${lines.join('\n')}\n`;
+    if (process.env.UPDATE_FIXTURE) writeFileSync(new URL('../../../engine/tests/fixtures/export_audio.txt', import.meta.url), text);
+    expect(fixture('export_audio.txt')).toBe(text);
   });
 });

@@ -11,8 +11,8 @@
 // only writer of `currentPatternId`, so the two always agree and edits simply
 // target currentPattern(track). No action switches the pattern implicitly.
 import { BAR_TICKS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, Op } from '../audio/protocol';
-import { MAX_ROWS, MAX_STEPS, currentPattern, synthTrack } from './project.svelte';
-import type { DrumPattern, Note, NotePatternState, Project, SynthTrack, Track } from './project.svelte';
+import { MAX_ROWS, MAX_STEPS, currentPattern, isPatternTrack, synthTrack } from './project.svelte';
+import type { DrumPattern, Note, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
 
@@ -208,16 +208,20 @@ export function makeNotePattern(engineIdx: number, name: string, bars: number): 
   return { id: crypto.randomUUID(), engineIdx, name, bars, notes: [] };
 }
 
-const findTrack = (p: Project, trackId: string): Track | null => p.tracks.find((t) => t.id === trackId) ?? null;
+/** The drum or synth track `trackId` (an Audio track has no patterns: null). */
+const findTrack = (p: Project, trackId: string): PatternTrack | null => {
+  const t = p.tracks.find((x) => x.id === trackId);
+  return t && isPatternTrack(t) ? t : null;
+};
 
 /** The pattern `patternId` of `t` (patterns is a union of arrays: widen once here). */
-export function patternOf(t: Track, patternId: string): AnyPattern | null {
+export function patternOf(t: PatternTrack, patternId: string): AnyPattern | null {
   const ps: AnyPattern[] = t.patterns;
   return ps.find((x) => x.id === patternId) ?? null;
 }
 
 /** Lowest free engine pattern slot, or null when all MAX_PATTERNS are used. */
-function freeEngineIdx(t: Track): number | null {
+function freeEngineIdx(t: PatternTrack): number | null {
   const used = new Set(t.patterns.map((x) => x.engineIdx));
   for (let i = 0; i < MAX_PATTERNS; i++) if (!used.has(i)) return i;
   return null;
@@ -227,7 +231,7 @@ function freeEngineIdx(t: Track): number | null {
  * First unused name. `numbered`: "base 1", "base 2", … (new patterns);
  * otherwise "base", "base 2", … (copies).
  */
-function freeName(t: Track, base: string, numbered: boolean): string {
+function freeName(t: PatternTrack, base: string, numbered: boolean): string {
   const names = new Set(t.patterns.map((x) => x.name));
   let n = 1;
   const name = () => (n === 1 && !numbered ? base : `${base} ${n}`);
@@ -236,7 +240,7 @@ function freeName(t: Track, base: string, numbered: boolean): string {
 }
 
 /** "<name> copy", then "<name> copy 2", …: never another pattern's base name. */
-const copyName = (t: Track, name: string) => freeName(t, `${name} copy`, false);
+const copyName = (t: PatternTrack, name: string) => freeName(t, `${name} copy`, false);
 
 /**
  * Makes `patternId` the track's current pattern: the one Pattern mode loops

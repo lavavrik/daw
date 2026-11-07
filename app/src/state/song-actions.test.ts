@@ -6,8 +6,9 @@ import { addDrumTrack, stop } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 import {
-  addClip, deleteClips, duplicateClips, makeUnique, moveClips, patternPosAt, resizeClip, seek, setLoop, setMode,
+  addClip, deleteClips, duplicateClips, makeUnique, moveClips, patternPosAt, resizeClip, seek, setLoop, setMode, splitClips,
 } from './song-actions';
+import { addAudioClip, addAudioTrack } from './audio-actions';
 
 function setup() {
   const sent: number[][] = [];
@@ -132,7 +133,7 @@ describe('clips', () => {
     const b = addClip(p, sink, s1.id, { start: 3840 })!;
     sent.length = 0;
     const copies = duplicateClips(p, sink, [a.id, b.id]);
-    expect(copies.map((c) => [c.idx, c.start, c.len, c.offset, c.patternId])).toEqual([
+    expect(copies.map((c) => [c.idx, c.start, c.len, c.offset, 'patternId' in c && c.patternId])).toEqual([
       [1, 1000, 1000, 20, a.patternId],
       [1, 3840 + 4 * 3840, 4 * 3840, 0, b.patternId],
     ]);
@@ -155,6 +156,99 @@ describe('clips', () => {
     sent.length = 0;
     addClip(p, sink, s1.id, { start: 0, patternId: pat.id, offset: 3 });
     expect(sent).toEqual([[Op.CLIP_SET, MAX_CLIPS, 3 * 16 + 1, 0, 4 * 3840]]);
+  });
+});
+
+describe('audio clips on the timeline (plan 9)', () => {
+  /** setup() plus Audio tracks at slots 3 and 4 (lanes 3, 4) and a 2 s sample 7 at 120 BPM. */
+  function audioSetup() {
+    const s = setup();
+    s.p.tempo = 120; // 1920 ticks per second
+    s.p.sampleMeta.set(7, { seconds: 2, channels: 1, peaks: null });
+    const a3 = addAudioTrack(s.p, s.sink)!;
+    const a4 = addAudioTrack(s.p, s.sink)!;
+    s.sent.length = 0;
+    return { ...s, a3, a4 };
+  }
+  const ops = (sent: number[][]) => sent.map((x) => x[0]);
+
+  it('splitClips splits note and audio clips', () => {
+    const { p, sink, sent, d0, a3 } = audioSetup();
+    const n = addClip(p, sink, d0.id, { start: 0, len: 7680, offset: 240 })!; // pattern: 3840 ticks
+    const a = addAudioClip(p, sink, a3.id, { sampleId: 7, start: 3840, len: 3840 })!;
+    a.fadeIn = 300;
+    a.fadeOut = 600;
+    const outside = addClip(p, sink, d0.id, { start: 20000, len: 100 })!;
+    sent.length = 0;
+    const right = splitClips(p, sink, [n.id, a.id, outside.id], 4800);
+    expect(right).toHaveLength(2);
+    // Note clip: the right half continues in the pattern where the left stopped.
+    expect([n.start, n.len, n.offset]).toEqual([0, 4800, 240]);
+    const [rn, ra] = right;
+    expect(rn).toMatchObject({ start: 4800, len: 2880, offset: (240 + 4800) % 3840 });
+    expect('patternId' in rn && rn.patternId).toBe(n.patternId);
+    // Audio clip: left keeps its fade-in, the right half its fade-out, and
+    // the offset moves on by the left half's length in seconds.
+    expect([a.start, a.len, a.offset, a.fadeIn, a.fadeOut]).toEqual([3840, 960, 0, 300, 0]);
+    expect(ra).toMatchObject({ start: 4800, len: 2880, sampleId: 7, fadeIn: 0, fadeOut: 600 });
+    expect('offset' in ra && ra.offset).toBeCloseTo(0.5, 12);
+    expect(outside.len).toBe(100); // the split tick is outside: untouched
+    expect(ops(sent)).toEqual([
+      Op.CLIP_SET, Op.CLIP_SET,
+      Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET,
+      Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET,
+    ]);
+    // On a clip edge: nothing to split.
+    sent.length = 0;
+    expect(splitClips(p, sink, [n.id], 0)).toEqual([]);
+    expect(splitClips(p, sink, [n.id], 4800)).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it('audio clips move between audio lanes only', () => {
+    const { p, sink, sent, d0, a3, a4 } = audioSetup();
+    const a = addAudioClip(p, sink, a3.id, { sampleId: 7, start: 0 })!;
+    const b = addAudioClip(p, sink, a3.id, { sampleId: 7, start: 3840 })!;
+    addAudioClip(p, sink, a4.id, { sampleId: 7, start: 0 }); // a4 idx 0 is taken
+    const n = addClip(p, sink, d0.id, { start: 0 })!;
+    sent.length = 0;
+    // Onto a drum lane, past the last lane, or with a note clip: refused, nothing moves.
+    expect(moveClips(p, sink, [a.id], 0, -1)).toBe(false); // lane 2: a drum track
+    expect(moveClips(p, sink, [a.id], 0, 2)).toBe(false); // no lane 5
+    expect(moveClips(p, sink, [a.id, n.id], 0, 1)).toBe(false); // a note clip keeps ruling R4
+    expect(sent).toEqual([]);
+    // Audio lane 3 -> 4: re-homed with a free idx there, the UI id kept.
+    const id = a.id;
+    expect(moveClips(p, sink, [a.id], 960, 1)).toBe(true);
+    expect(a3.clips.map((c) => c.id)).toEqual([b.id]);
+    const moved = a4.clips.find((c) => c.id === id)!;
+    expect(moved).toMatchObject({ idx: 1, start: 960, sampleId: 7 });
+    expect(sent).toEqual([
+      [Op.CLIP_REMOVE, 3 * MAX_CLIPS + 0, 0, 0, 0],
+      [Op.AUDIO_CLIP_SOURCE, 4 * MAX_CLIPS + 1, 7, 0, 0],
+      [Op.AUDIO_CLIP_GAIN, 4 * MAX_CLIPS + 1, 1, 0, 0],
+      [Op.AUDIO_CLIP_SET, 4 * MAX_CLIPS + 1, 960, 3840, 0],
+    ]);
+    // In time only, on its lane: SOURCE, GAIN, SET.
+    sent.length = 0;
+    expect(moveClips(p, sink, [b.id], 100)).toBe(true);
+    expect(ops(sent)).toEqual([Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET]);
+  });
+
+  it('resize, delete and duplicate handle audio clips', () => {
+    const { p, sink, sent, a3 } = audioSetup();
+    const a = addAudioClip(p, sink, a3.id, { sampleId: 7, start: 0, len: 960 })!;
+    a.gain = -3;
+    sent.length = 0;
+    expect(resizeClip(p, sink, a.id, { len: 1920, offset: 0.25 })).toBe(true);
+    expect([a.len, a.offset]).toEqual([1920, 0.25]);
+    expect(resizeClip(p, sink, a.id, { len: 0 })).toBe(false);
+    const [copy] = duplicateClips(p, sink, [a.id]);
+    expect(copy).toMatchObject({ idx: 1, start: 1920, len: 1920, offset: 0.25, gain: -3, sampleId: 7 });
+    sent.length = 0;
+    deleteClips(p, sink, [a.id, copy.id]);
+    expect(sent).toEqual([[Op.CLIP_REMOVE, 3 * MAX_CLIPS, 0, 0, 0], [Op.CLIP_REMOVE, 3 * MAX_CLIPS + 1, 0, 0, 0]]);
+    expect(a3.clips).toEqual([]);
   });
 });
 

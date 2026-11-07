@@ -9,7 +9,7 @@
   import type { AudioClock } from '../audio/audioClock';
   import PatternPicker from './PatternPicker.svelte';
   import { onMount } from 'svelte';
-  import { currentPattern } from '../state/project.svelte';
+  import { currentPattern, isPatternTrack } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
@@ -28,6 +28,8 @@
     noteInput?: NoteInput | null;
   } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
+  /** The selected track when it plays patterns (an Audio track has none). */
+  const ptrack = $derived(track && isPatternTrack(track) ? track : null);
   // Which tab is shown follows the selected track's kind: drum -> Step grid;
   // synth -> Piano roll or Instrument, whichever was picked last this session.
   // The Mixer tab is enabled for any selection (or none) and shows the whole
@@ -69,9 +71,9 @@
     let raf = 0;
     const loop = () => {
       let idle = false;
-      if (p.mode === 'song' && track) {
+      if (p.mode === 'song' && ptrack) {
         const t = clock && p.playing ? clock.heardTicks() : NaN;
-        idle = patternPosAt(track, track.currentPatternId, t) === null;
+        idle = patternPosAt(ptrack, ptrack.currentPatternId, t) === null;
       }
       if (idle !== songIdle) songIdle = idle;
       raf = requestAnimationFrame(loop);
@@ -87,10 +89,13 @@
 
 <section class="pane">
   <div class="head">
-    {#if track}
+    {#if ptrack}
+      <span class="swatch" style:background={ptrack.color}></span>
+      <b data-testid="panel-title">{ptrack.name} · {currentPattern(ptrack).name}</b>
+      <PatternPicker {p} {engine} track={ptrack} />
+    {:else if track}
       <span class="swatch" style:background={track.color}></span>
-      <b data-testid="panel-title">{track.name} · {currentPattern(track).name}</b>
-      <PatternPicker {p} {engine} {track} />
+      <b data-testid="panel-title">{track.name}</b>
     {:else}
       <span class="none">No track selected</span>
     {/if}

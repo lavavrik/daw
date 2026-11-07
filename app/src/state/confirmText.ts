@@ -4,12 +4,12 @@
 // track says that its patterns and clips go with it. None says "cannot be
 // undone": since plan 7 every one of them is a single undo step (⌘Z).
 import { currentPattern } from './project.svelte';
-import type { Track } from './project.svelte';
+import type { PatternTrack, Track } from './project.svelte';
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Clear the current pattern's `notes` notes (piano roll "Clear"). */
-export function clearPatternText(track: Track, notes: number): string {
+export function clearPatternText(track: PatternTrack, notes: number): string {
   const pat = currentPattern(track);
   const clips = track.clips.filter((c) => c.patternId === pat.id).length;
   const used =
@@ -22,6 +22,11 @@ export function clearPatternText(track: Track, notes: number): string {
 
 /** Remove `track` (track header ×). */
 export function removeTrackText(track: Track): string {
+  if (track.kind === 'audio') {
+    return track.clips.length === 0
+      ? `Remove track "${track.name}"?`
+      : `Remove track "${track.name}" with its ${plural(track.clips.length, 'clip')}?`;
+  }
   const pats = plural(track.patterns.length, 'pattern');
   const what = track.clips.length === 0
     ? `and its ${pats}`

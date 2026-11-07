@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Err, HostErr } from '../audio/protocol';
+import { Err, HostErr, MAX_ARENA_FLOATS } from '../audio/protocol';
 import { Project } from './project.svelte';
 import { importSample } from './sampleImport';
-import { blankState } from '../project/load';
+import { addAudioClip, addAudioTrack } from './audio-actions';
+import { blankState, loadProject } from '../project/load';
+import { serialize } from '../project/serialize';
+import { fakeEngine } from '../project/testFixture';
 
 function engine(code: number) {
   const loads: number[] = [];
@@ -108,5 +111,62 @@ describe('importSample (Finder drop and library drag share it)', () => {
     };
     expect(await importSample(p3, e3, wav(), () => true)).toEqual(again);
     expect(p3.sampleFiles.size).toBe(0);
+  });
+
+  it('records the sample length and channels (sampleMeta) and counts its floats', async () => {
+    const p = new Project();
+    const v = p.peaksVersion;
+    const r = await importSample(p, engine(Err.OK).e, new File([new Uint8Array(4800)], 'a.wav', { type: 'audio/wav' }), () => true);
+    expect(r.ok).toBe(true);
+    expect(p.sampleMeta.get(0)).toEqual({ seconds: 0.1, channels: 1, peaks: null });
+    expect(p.peaksVersion).toBeGreaterThan(v);
+    expect(p.arenaFloats).toBe(4800);
+  });
+
+  it('import over the sample budget is refused', async () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addAudioTrack(p, sink)!;
+    p.arenaFloats = MAX_ARENA_FLOATS - 3; // 4 floats (the fake file) do not fit
+    const { e, loads } = engine(Err.OK);
+    const r = await importSample(p, e, wav('long.wav'), () => true);
+    expect(r).toEqual({
+      ok: false,
+      error: 'long.wav needs 1 MB of sample memory; 0 MB is free (1 GB limit). Removed samples are freed when the project is reopened.',
+    });
+    expect(loads).toEqual([]); // checked after the decode, before any upload
+    expect(p.sampleFiles.size).toBe(0);
+    expect(p.nextSampleId).toBe(0); // no id taken
+    expect(p.arenaFloats).toBe(MAX_ARENA_FLOATS - 3);
+    // The caller only places a clip for an ok result: nothing is placed.
+    if (r.ok) addAudioClip(p, sink, t.id, { sampleId: r.id, start: 0 });
+    expect(t.clips).toEqual([]);
+  });
+
+  it('an upload the engine refuses gives its floats back', async () => {
+    const p = new Project();
+    await importSample(p, engine(Err.OUT_OF_MEMORY).e, wav(), () => true);
+    expect(p.arenaFloats).toBe(0);
+  });
+
+  it('budget counts leaked samples until reload', async () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addAudioTrack(p, sink)!;
+    const file = (n: number, name: string) => new File([new Uint8Array(n)], name, { type: 'audio/wav' });
+    const a = await importSample(p, engine(Err.OK).e, file(100, 'a.wav'), () => true);
+    const b = await importSample(p, engine(Err.OK).e, file(30, 'b.wav'), () => true);
+    if (!a.ok || !b.ok) throw new Error('import');
+    // Sample a is replaced by b: the arena keeps a's space (a bump allocator).
+    const c = addAudioClip(p, sink, t.id, { sampleId: b.id, start: 0 })!;
+    expect(c.sampleId).toBe(b.id);
+    expect(p.arenaFloats).toBe(130);
+    // A reload re-uploads only what the project uses: a's space is free again.
+    const json = JSON.parse(JSON.stringify(serialize(p)));
+    const bytes = new Map(json.samples.map((s: { id: number; file: string }) => [s.file, p.sampleFiles.get(s.id)!.bytes]));
+    const ctx = engine(Err.OK).e.context;
+    await loadProject(p, fakeEngine(), json, bytes as Map<string, ArrayBuffer>, ctx);
+    expect(p.arenaFloats).toBe(30);
+    expect(p.sampleMeta.get(0)?.seconds).toBeCloseTo(30 / 48000, 12);
   });
 });

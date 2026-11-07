@@ -1,7 +1,7 @@
 // Every user edit: mutate Project AND send the matching engine command.
 // Each exported edit runs its body inside edit() (state/edits.ts): one undo
 // step, nested calls included (docs/architecture/history.md). Same in
-// pattern-, song-, mixer- and rack-actions.ts.
+// pattern-, song-, audio-, mixer- and rack-actions.ts.
 import { BAR_TICKS, Op } from '../audio/protocol';
 import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, newChannel } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';

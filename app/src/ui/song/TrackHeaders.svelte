@@ -44,7 +44,7 @@
         class="main"
         data-testid={`track-${t.slot}`}
         aria-pressed={sel}
-        title="{t.name} — {t.kind === 'drum' ? 'drum track' : `synth track (${t.patchName})`}. Click to edit it below."
+        title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
         onclick={() => {
           selectTrack(p, engine, t.id);
           p.mixerOpen = false; // show this track's editor, not the mixer

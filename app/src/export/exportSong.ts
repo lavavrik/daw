@@ -1,7 +1,8 @@
 // Offline WAV export of the song (docs/architecture/export.md).
 //
 // Main thread: snapshot the project (serialize), decode its samples with the
-// project AudioContext's decodeAudioData (Workers have none) -- the same
+// project AudioContext's decodeAudioData (Workers have none; audio clips'
+// samples included, serialize lists them like rows') -- the same
 // decodeBytes the live load uses, so the engine gets the same data -- build
 // the command list with projectCommands (the one replay-order builder), and
 // hand everything to a dedicated Worker (renderWorker.ts) as transferables.
@@ -74,7 +75,7 @@ const defaultDeps: ExportDeps = {
   },
 };
 
-/** Song end in ticks: the end of the last clip (0 = no clips, nothing to export). */
+/** Song end in ticks: the end of the last clip, pattern or audio clip (0 = no clips, nothing to export). */
 export function songEndTicks(json: ProjectJson): number {
   let end = 0;
   for (const t of json.tracks) for (const c of t.clips) end = Math.max(end, c.start + c.len);

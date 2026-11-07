@@ -1,5 +1,6 @@
-// project.json: the saved form of a Project (schemaVersion 1) and its
-// validator. See docs/architecture/projects.md.
+// project.json: the saved form of a Project (schemaVersion 2) and its
+// validator. See docs/architecture/projects.md. An older file is migrated
+// first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
@@ -10,6 +11,9 @@
 //     sidechain `key.track`), so a restore (load, plan-7 undo) puts every
 //     object back in the same engine slot.
 //   - UUIDs are not stored; a load makes fresh ones.
+//   - Audio clips store their sample by session id like rows do; a clip
+//     whose sample is missing is kept with `sample: null` ("missing
+//     sample", silent), with a warning, so its place in the song survives.
 //   - `validate` never throws and never lets an out-of-range value through:
 //     unknown fields are ignored, a value of the wrong type falls back to its
 //     default, an out-of-range one is clamped, and an object that cannot be
@@ -24,8 +28,11 @@ import { accepts } from '../state/mixer-actions';
 import { validatePatch } from '../state/patches';
 import type { Patch } from '../state/patches';
 import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from '../state/project.svelte';
+import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_AUDIO_OFFSET } from '../state/audio-actions';
+import { migrate } from './migrate';
 
-export const SCHEMA_VERSION = 1;
+/** Plan 9: 2 (Audio tracks). Older files are migrated (migrate.ts). */
+export const SCHEMA_VERSION = 2;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -42,7 +49,7 @@ export interface ProjectJson {
   /** In track-list order. */
   tracks: TrackJson[];
   mixer: MixerJson;
-  /** Every sample the project uses (drum rows and SamplePlayer modules). */
+  /** Every sample the project uses (drum rows, SamplePlayer modules and audio clips). */
   samples: SampleJson[];
   /** Selected track and last-selected synth (the Keys → target), by slot. */
   selection: { track: number | null; synth: number | null };
@@ -115,7 +122,36 @@ export interface ClipJson {
   offset: number;
 }
 
-export type TrackJson = DrumTrackJson | SynthTrackJson;
+/** An Audio track (plan 9): no patterns, rows or rack; just its clips. */
+export interface AudioTrackJson {
+  kind: 'audio';
+  slot: number;
+  name: string;
+  color: string;
+  clips: AudioClipJson[];
+}
+
+export interface AudioClipJson {
+  /** Engine clip slot 0..MAX_CLIPS-1, unique within the track. */
+  idx: number;
+  /** Session sample id (an entry of `samples`), or null: a missing sample (silent). */
+  sample: number | null;
+  /** Song ticks; start + len <= MAX_SONG_TICKS. */
+  start: number;
+  len: number;
+  /** Seconds into the file (sample-rate independent). */
+  offset: number;
+  loop: boolean;
+  /** dB, -60 (= -inf) .. +12. */
+  gain: number;
+  /** Ticks; fadeIn + fadeOut <= len. */
+  fadeIn: number;
+  fadeOut: number;
+}
+
+export type TrackJson = DrumTrackJson | SynthTrackJson | AudioTrackJson;
+/** The kinds that play patterns. */
+export type PatternTrackJson = DrumTrackJson | SynthTrackJson;
 
 /** Mixer params by catalog name (MIX_PARAMS[].name). */
 export type MixParamsJson = Record<string, number>;
@@ -199,8 +235,9 @@ class Reader {
   }
 }
 
-/** Check (and clamp/drop) everything in a parsed project.json. Pure; never throws. */
-export function validate(json: unknown): Validated {
+/** Check (and clamp/drop) everything in a parsed project.json (migrated first). Pure; never throws. */
+export function validate(input: unknown): Validated {
+  const json = migrate(input);
   if (!isObj(json)) return { error: 'Not a project file (expected a JSON object)' };
   const ver = json.schemaVersion;
   if (typeof ver !== 'number' || !Number.isInteger(ver) || ver < 1) {
@@ -244,8 +281,8 @@ export function validate(json: unknown): Validated {
       continue;
     }
     const kind = t.kind;
-    const tname = r.str(t.name, kind === 'synth' ? 'Synth' : 'Drums', 'Track name');
-    if (kind !== 'drum' && kind !== 'synth') {
+    const tname = r.str(t.name, kind === 'synth' ? 'Synth' : kind === 'audio' ? 'Audio' : 'Drums', 'Track name');
+    if (kind !== 'drum' && kind !== 'synth' && kind !== 'audio') {
       r.warn(`Dropped track "${tname}": unknown kind "${String(kind)}"`);
       continue;
     }
@@ -256,7 +293,9 @@ export function validate(json: unknown): Validated {
     else if (t.color !== undefined) r.warn(`Track "${tname}": bad colour "${String(t.color)}"`);
     const at = `Track "${tname}"`;
     const common = { slot, name: tname, color };
-    if (kind === 'drum') {
+    if (kind === 'audio') {
+      tracks.push({ kind, ...common, clips: readAudioClips(r, t.clips, sampleIds, at) });
+    } else if (kind === 'drum') {
       const rows = readRows(r, t.rows, sampleIds, at);
       const patterns = readPatterns(r, t.patterns, at, (p, w) => readDrumPattern(r, p, rows.length, w));
       tracks.push({ kind, ...common, rows, patterns, ...readCurrentAndClips(r, t, patterns, at) });
@@ -402,6 +441,44 @@ function readNotePattern(r: Reader, x: Record<string, unknown>, w: string): Omit
     bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true),
     notes,
   };
+}
+
+function readAudioClips(r: Reader, v: unknown, sampleIds: Set<number>, at: string): AudioClipJson[] {
+  const clips: AudioClipJson[] = [];
+  const taken = new Set<number>();
+  for (const c of arr(v)) {
+    if (!isObj(c)) {
+      r.warn(`${at}: dropped a malformed audio clip`);
+      continue;
+    }
+    const idx = r.index(c.idx, MAX_CLIPS, taken, `${at} clip slot`);
+    if (idx === null) continue;
+    let sample: number | null = null;
+    if (typeof c.sample === 'number' && sampleIds.has(c.sample)) sample = c.sample;
+    else if (c.sample !== null && c.sample !== undefined) {
+      r.warn(`${at}: clip sample ${String(c.sample)} is not in the project (missing sample)`);
+    }
+    const start = r.num(c.start, 0, 0, MAX_SONG_TICKS - 1, `${at} clip start`, true);
+    const len = r.num(c.len, BAR_TICKS, 1, MAX_SONG_TICKS - start, `${at} clip length`, true);
+    let fadeIn = r.num(c.fadeIn, 0, 0, len, `${at} clip fade-in`, true);
+    const fadeOut = r.num(c.fadeOut, 0, 0, len, `${at} clip fade-out`, true);
+    if (fadeIn + fadeOut > len) {
+      r.warn(`${at}: clip fades are longer than the clip (fade-in shortened)`);
+      fadeIn = len - fadeOut;
+    }
+    clips.push({
+      idx,
+      sample,
+      start,
+      len,
+      offset: r.num(c.offset, 0, 0, MAX_AUDIO_OFFSET, `${at} clip offset`),
+      loop: r.bool(c.loop, false, `${at} clip loop`),
+      gain: r.num(c.gain, 0, CLIP_GAIN_MIN_DB, CLIP_GAIN_MAX_DB, `${at} clip gain`),
+      fadeIn,
+      fadeOut,
+    });
+  }
+  return clips;
 }
 
 function readCurrentAndClips(

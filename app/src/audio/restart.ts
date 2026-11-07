@@ -219,6 +219,7 @@ export async function restartAudio<E extends RestartEngine>(
     const r = await within(replayInto(p, e, e.context, used), replayMs, 'restoring the project did not finish');
     deps.unwire();
     deps.wire(e, r.codes);
+    p.arenaFloats = r.floats; // the new engine's arena holds just these (rest adds the late ones)
     p.audioRestarts++;
     void deps.old.close();
     rest = r.rest;

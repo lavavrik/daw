@@ -39,7 +39,7 @@
       channel={t.slot}
       name={t.name}
       color={t.color}
-      subtitle={t.kind === 'drum' ? 'Drums' : `Synth · ${t.patchName}`}
+      subtitle={t.kind === 'drum' ? 'Drums' : t.kind === 'audio' ? 'Audio' : `Synth · ${t.patchName}`}
       selected={t.id === p.selectedTrackId}
       onselect={() => selectTrack(p, engine, t.id)}
     />

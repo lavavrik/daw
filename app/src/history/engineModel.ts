@@ -1,5 +1,6 @@
 // Test helper (not a test): a model of the engine state a command stream
-// builds -- tracks, patterns, rows, racks, clips, mixer, keys, transport --
+// builds -- tracks, patterns, rows, racks, clips, audio clips (staged and
+// committed), mixer, keys, transport --
 // following engine.rs's command semantics. history tests replay "load A,
 // edit, diffApply back" through it and compare with "load A": the same
 // engine state means undo restored everything the engine plays.
@@ -17,13 +18,17 @@ interface Pat {
   notes: Record<number, number[]>;
 }
 interface Slot {
-  kind: 'drum' | 'synth';
+  kind: 'drum' | 'synth' | 'audio';
   current: number;
   patterns: Pat[];
   rows: { sample: number; gain: number; pan: number; mute: number }[];
   modules: Record<number, { kind: number; params: number[] }>;
   cables: Record<number, number>;
   clips: Record<number, number[]>;
+  /** Audio clips as committed by AUDIO_CLIP_SET: [sample, offset, loop, gain, fadeIn, fadeOut, start, len]. */
+  audio: Record<number, number[]>;
+  /** Per clip slot: what SOURCE and GAIN staged ([sample, offset, loop] and [gain, fadeIn, fadeOut]). */
+  staged: Record<number, { source: number[]; gain: number[] }>;
 }
 export interface EngineModel {
   slots: (Slot | null)[];
@@ -39,7 +44,7 @@ export interface EngineModel {
 }
 
 const pat = (): Pat => ({ steps: {}, stepCount: 16, swing: 0, bars: 4, notes: {} });
-const fresh = (kind: 'drum' | 'synth'): Slot => ({
+const fresh = (kind: Slot['kind']): Slot => ({
   kind,
   current: 0,
   patterns: Array.from({ length: MAX_PATTERNS }, pat),
@@ -47,6 +52,8 @@ const fresh = (kind: 'drum' | 'synth'): Slot => ({
   modules: {},
   cables: {},
   clips: {},
+  audio: {},
+  staged: {},
 });
 
 export function blankModel(): EngineModel {
@@ -65,7 +72,7 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
   for (const c of cmds) {
     const [op = 0, a = 0, b = 0, cc = 0, d = 0] = 'op' in c ? [c.op, ...c.args] : c;
     const bad = (why: string) => m.errors.push(`op ${op} [${a},${b},${cc},${d}]: ${why}`);
-    const slotOf = (s: number, kind?: 'drum' | 'synth') => {
+    const slotOf = (s: number, kind?: Slot['kind']) => {
       const t = m.slots[s];
       if (!t || (kind && t.kind !== kind)) {
         bad(`slot ${s} is ${t?.kind ?? 'empty'}`);
@@ -86,11 +93,28 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.SET_MODE: m.mode = a; break;
       case Op.SET_LOOP: m.loop = [a, b]; break;
       case Op.SET_INPUT_TRACK: m.input = a; break;
-      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK:
-        if (op === Op.ADD_DRUM_TRACK && m.input === a) m.input = -1;
-        m.slots[a] = fresh(op === Op.ADD_DRUM_TRACK ? 'drum' : 'synth');
+      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK:
+        // A synth's live input goes when its slot becomes another kind.
+        if (op !== Op.ADD_SYNTH_TRACK && m.input === a) m.input = -1;
+        m.slots[a] = fresh(op === Op.ADD_DRUM_TRACK ? 'drum' : op === Op.ADD_SYNTH_TRACK ? 'synth' : 'audio');
         unslot(a);
         break;
+      case Op.AUDIO_CLIP_SOURCE: case Op.AUDIO_CLIP_GAIN: {
+        const t = slotOf(Math.floor(a / MAX_CLIPS), 'audio');
+        if (!t) break;
+        const s = (t.staged[a % MAX_CLIPS] ??= { source: [-1, 0, 0], gain: [1, 0, 0] });
+        if (op === Op.AUDIO_CLIP_SOURCE) s.source = [b, cc, d];
+        else s.gain = [b, cc, d];
+        break;
+      }
+      case Op.AUDIO_CLIP_SET: {
+        const t = slotOf(Math.floor(a / MAX_CLIPS), 'audio');
+        if (!t) break;
+        const s = t.staged[a % MAX_CLIPS] ?? { source: [-1, 0, 0], gain: [1, 0, 0] };
+        if (s.gain[1] + s.gain[2] > cc) bad('fades longer than the clip');
+        else t.audio[a % MAX_CLIPS] = [...s.source, ...s.gain, b, cc];
+        break;
+      }
       case Op.REMOVE_TRACK:
         m.slots[a] = null;
         if (m.input === a) m.input = -1;
@@ -113,7 +137,12 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.SET_STEP_COUNT: { const t = slotOf(a, 'drum'); if (t) cur(t).stepCount = b; break; }
       case Op.SET_SWING: { const t = slotOf(a, 'drum'); if (t) cur(t).swing = b; break; }
       case Op.SET_PATTERN_BARS: { const t = slotOf(a, 'synth'); if (t) cur(t).bars = b; break; }
-      case Op.SET_CURRENT_PATTERN: { const t = slotOf(a); if (t) t.current = b; break; }
+      case Op.SET_CURRENT_PATTERN: {
+        const t = slotOf(a);
+        if (t?.kind === 'audio') bad('Audio tracks have no patterns');
+        else if (t) t.current = b;
+        break;
+      }
       case Op.COPY_PATTERN: {
         const t = slotOf(a);
         if (t && b !== cc) t.patterns[cc] = structuredClone(t.patterns[b]);
@@ -133,9 +162,19 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
         break;
       }
       case Op.NOTE_CLEAR: { const t = slotOf(a, 'synth'); if (t) cur(t).notes = {}; break; }
-      case Op.CLIP_SET: { const t = slotOf(Math.floor(a / MAX_CLIPS)); if (t) t.clips[a % MAX_CLIPS] = [b, cc, d]; break; }
-      case Op.CLIP_REMOVE: { const t = slotOf(Math.floor(a / MAX_CLIPS)); if (t) delete t.clips[a % MAX_CLIPS]; break; }
-      case Op.CLIP_CLEAR: { const t = slotOf(a); if (t) t.clips = {}; break; }
+      case Op.CLIP_SET: {
+        const t = slotOf(Math.floor(a / MAX_CLIPS));
+        if (t?.kind === 'audio') bad('pattern clip on an Audio track');
+        else if (t) t.clips[a % MAX_CLIPS] = [b, cc, d];
+        break;
+      }
+      case Op.CLIP_REMOVE: {
+        const t = slotOf(Math.floor(a / MAX_CLIPS));
+        // Removes a pattern clip or an audio clip, and resets that slot's staged audio edit.
+        if (t) for (const k of ['clips', 'audio', 'staged'] as const) delete t[k][a % MAX_CLIPS];
+        break;
+      }
+      case Op.CLIP_CLEAR: { const t = slotOf(a); if (t) Object.assign(t, { clips: {}, audio: {}, staged: {} }); break; }
       case Op.RACK_CLEAR: { const t = slotOf(a, 'synth'); if (t) Object.assign(t, { modules: {}, cables: {} }); break; }
       case Op.RACK_ADD_MODULE: {
         const t = slotOf(a, 'synth');
@@ -186,7 +225,9 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
 export function view(m: EngineModel, json: ProjectJson) {
   const slots = m.slots.map((t, s) => {
     if (!t) return null;
-    const used = new Set(json.tracks.find((x) => x.slot === s)?.patterns.map((x) => x.engineIdx) ?? []);
+    if (t.kind === 'audio') return { kind: t.kind, audio: t.audio };
+    const tj = json.tracks.find((x) => x.slot === s);
+    const used = new Set(tj && tj.kind !== 'audio' ? tj.patterns.map((x) => x.engineIdx) : []);
     const patterns = t.patterns.map((x, i) =>
       used.has(i)
         ? t.kind === 'drum' ? { steps: x.steps, stepCount: x.stepCount, swing: x.swing } : { notes: x.notes, bars: x.bars }

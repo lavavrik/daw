@@ -5,6 +5,7 @@ import { projectFingerprint, sampleFilePath, serialize } from './serialize';
 import { sampleFile } from '../state/sampleFiles';
 import { buildFixture } from './testFixture';
 import { Project } from '../state/project.svelte';
+import { addAudioClip, addAudioTrack, setAudioClip } from '../state/audio-actions';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -84,9 +85,10 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 2 };
+    const json = { ...serialize(new Project()), schemaVersion: 3 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
+    expect('error' in r && r.error).toMatch(/schema 3; this one reads up to 2/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
@@ -155,5 +157,52 @@ describe('project schema', () => {
     expect(d.patterns).toHaveLength(1);
     expect(d.currentPattern).toBe(d.patterns[0].engineIdx);
     expect(d.rows).toHaveLength(4);
+  });
+
+  it('validates audio tracks', async () => {
+    const { p } = await buildFixture();
+    const sink = { send: () => true };
+    const a = addAudioTrack(p, sink, { name: 'Vox' })!;
+    p.sampleMeta.set(1, { seconds: 4, channels: 2, peaks: null });
+    const c = addAudioClip(p, sink, a.id, { sampleId: 1, start: 3840 })!;
+    setAudioClip(p, sink, c.id, { offset: 0.25, loop: true, gain: -6, fadeIn: 240, fadeOut: 480 });
+    addAudioClip(p, sink, a.id, { sampleId: 2, start: 0, len: 960 }); // sample 2: only the SamplePlayer used it so far
+    const json = serialize(p);
+    const aj = json.tracks.find((t) => t.kind === 'audio')!;
+    expect(aj).toEqual({
+      kind: 'audio', slot: a.slot, name: 'Vox', color: a.color,
+      clips: [
+        { idx: 0, sample: 1, start: 3840, len: c.len, offset: 0.25, loop: true, gain: -6, fadeIn: 240, fadeOut: 480 },
+        { idx: 1, sample: 2, start: 0, len: 960, offset: 0, loop: false, gain: 0, fadeIn: 0, fadeOut: 0 },
+      ],
+    });
+    // Audio-clip samples are listed under `samples` like rows'.
+    expect(json.samples.map((s) => s.id)).toEqual([0, 1, 2]);
+    // Round-trip.
+    expect(ok(validate(roundJson(json)))).toEqual({ project: roundJson(json), warnings: [] });
+
+    // Bad values: clamped or dropped, with warnings; a missing sample keeps the clip.
+    const bad = roundJson(json) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const at = bad.tracks.findIndex((t: { kind: string }) => t.kind === 'audio');
+    const clips = bad.tracks[at].clips;
+    clips[0].gain = 99;
+    clips[0].offset = -2;
+    clips[0].loop = 'yes';
+    clips[0].fadeIn = clips[0].len; // with fadeOut 480: too long, cut
+    clips[1].sample = 77; // not in the project
+    clips.push({ idx: 0, sample: 1, start: 0, len: 10, offset: 0, loop: false, gain: 0, fadeIn: 0, fadeOut: 0 }); // idx taken
+    clips.push('junk');
+    clips.push({ idx: 5, sample: 1, start: 0, len: 0 }); // length clamped to 1
+    bad.tracks[at].patterns = [{ engineIdx: 0, name: 'x' }]; // unknown on an Audio track: ignored
+    const r = ok(validate(bad));
+    const vj = r.project.tracks[at];
+    if (vj.kind !== 'audio') throw new Error('kind');
+    expect(vj.clips.map((x) => x.idx)).toEqual([0, 1, 5]);
+    expect(vj.clips[0]).toMatchObject({ gain: 12, offset: 0, loop: false, fadeOut: 480 });
+    expect(vj.clips[0].fadeIn + vj.clips[0].fadeOut).toBeLessThanOrEqual(vj.clips[0].len);
+    expect(vj.clips[1].sample).toBeNull();
+    expect(vj.clips[2].len).toBe(1);
+    const w = r.warnings.join('\n');
+    for (const re of [/gain/, /offset/, /loop/, /fade/i, /sample 77/, /slot/, /malformed/]) expect(w).toMatch(re);
   });
 });

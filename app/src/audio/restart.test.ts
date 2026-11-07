@@ -8,6 +8,9 @@ import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
 import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from '../project/testFixture';
 import { setRowSample, setTempo } from '../state/actions';
+import { addAudioClip, addAudioTrack } from '../state/audio-actions';
+import { deleteClips } from '../state/song-actions';
+import { MAX_ARENA_FLOATS } from './protocol';
 import { sampleFile } from '../state/sampleFiles';
 import {
   LATENCY_HINT_KEY, RESTART_TIMEOUT_MS, customHint, hintLabel, loadLatencyHint, parseLatencyHint, replayTimeoutMs, restartAudio,
@@ -361,6 +364,63 @@ describe('restartAudio', () => {
       const upload = e.log.findIndex((x) => 'sample' in x && x.sample === 3);
       expect(e.log.lastIndexOf(binds()[1])).toBeGreaterThan(upload);
       expect([l.p.version, l.p.dirty]).toEqual([version, dirty]); // catching the engine up is no edit
+    });
+
+    it('undo restores an audio clip whose sample is still uploading: the clip is re-sent once it lands, and plays', async () => {
+      const l = await live();
+      // An Audio track whose clip played the unused sample 3 once.
+      const t = addAudioTrack(l.p, l.old)!;
+      const c = addAudioClip(l.p, l.old, t.id, { sampleId: 3, start: 3840, len: 960 })!;
+      deleteClips(l.p, l.old, [c.id]); // sample 3 is unused again: it uploads after the switch
+      vi.useFakeTimers();
+      const { d, started } = deps(l, { timeoutMs: undefined });
+      const slow = {
+        decodeAudioData: async (buf: ArrayBuffer) => {
+          if (new Uint8Array(buf)[0] === 13) await new Promise((r) => setTimeout(r, 20_000));
+          return fakeDecoder.decodeAudioData(buf);
+        },
+      };
+      const start = d.start;
+      d.start = async (h) => {
+        const e = await start(h);
+        e.context = slow as typeof fakeDecoder;
+        return e;
+      };
+      let res: Awaited<ReturnType<typeof restartAudio>> | undefined;
+      void restartAudio(l.p, 'playback', d).then((r) => (res = r));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(res?.error).toBeNull();
+      const e = started[0];
+      const at = t.slot * 256 + c.idx;
+      const sent = (op: number) => e.log.flatMap((x) => ('op' in x && x.op === op && x.args[0] === at ? [x] : []));
+      l.h.undo(); // the clip is back, its sample not in the new engine yet
+      expect(t.clips.map((x) => x.sampleId)).toEqual([3]);
+      expect(sent(Op.AUDIO_CLIP_SET)).toHaveLength(1);
+      const [version, dirty] = [l.p.version, l.p.dirty];
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await res!.later).toEqual([]);
+      // Re-sent after the upload, staging AND commit (a SOURCE alone would only stage).
+      const upload = e.log.findIndex((x) => 'sample' in x && x.sample === 3);
+      expect(upload).toBeGreaterThan(-1);
+      const tail = e.log.slice(upload + 1).flatMap((x) => ('op' in x && x.args[0] === at ? [x.op] : []));
+      expect(tail).toEqual([Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET]);
+      expect(sent(Op.AUDIO_CLIP_SOURCE).at(-1)!.args[1]).toBe(3);
+      // The engine (modelled) has the clip committed on sample 3, which is uploaded: it plays.
+      const m = run(blankModel(), e.log.flatMap((x) => ('op' in x ? [x] : [])));
+      expect(m.errors).toEqual([]);
+      expect(m.slots[t.slot]?.audio[c.idx]?.[0]).toBe(3);
+      expect([l.p.version, l.p.dirty]).toEqual([version, dirty]); // catching the engine up is no edit
+    });
+
+    it('the restart counts the floats it uploads (the budget starts over with the new engine)', async () => {
+      const l = await live();
+      l.p.arenaFloats = MAX_ARENA_FLOATS; // the old engine was full of leaked samples
+      const { d } = deps(l);
+      const r = await restartAudio(l.p, 'interactive', d);
+      await r!.later;
+      // fakeAudio(n) decodes to n frames: used 10, 11, 12, 17 and the late unused 13.
+      expect(l.p.arenaFloats).toBe(10 + 11 + 12 + 17 + 13);
+      expect(l.p.sampleMeta.get(7)).toEqual({ seconds: 17 / 48000, channels: 1, peaks: null });
     });
 
     it('an unused sample nothing points at when it lands: nothing is re-sent', async () => {

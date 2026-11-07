@@ -13,12 +13,12 @@
   import { MAX_PATTERNS } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { currentPattern } from '../state/project.svelte';
-  import type { Project, Track } from '../state/project.svelte';
+  import type { PatternTrack, Project } from '../state/project.svelte';
   import {
     deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
   } from '../state/pattern-actions';
 
-  let { p, engine, track }: { p: Project; engine: AudioEngine; track: Track } = $props();
+  let { p, engine, track }: { p: Project; engine: AudioEngine; track: PatternTrack } = $props();
 
   const cur = $derived(currentPattern(track));
   const used = $derived(track.clips.filter((c) => c.patternId === cur.id).length);

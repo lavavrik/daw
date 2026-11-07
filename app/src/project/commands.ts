@@ -7,7 +7,9 @@
 // Order, on a blank engine (after RESET_ALL):
 //   tracks, each: ADD_*_TRACK -> patterns (drum: select, step count, swing,
 //     steps; synth: select, bars, notes) -> current pattern -> drum rows /
-//     synth rack (patchRack) -> clips
+//     synth rack (patchRack) -> clips; an Audio track: ADD_AUDIO_TRACK ->
+//     per clip AUDIO_CLIP_SOURCE -> AUDIO_CLIP_GAIN -> AUDIO_CLIP_SET (the
+//     staged change and its commit, always together)
 //   -> MIX_SET by name (non-defaults only: RESET_ALL set the defaults)
 //   -> MIX_SET_KEY last (keys need their source tracks and rows)
 //   -> tempo, metronome, mode, loop, live input track (always sent: they
@@ -26,8 +28,9 @@ import { makeDrumPattern, makeNotePattern } from '../state/pattern-actions';
 import { patchRack } from '../state/rack-actions';
 import type { EngineCommand } from '../state/rack-actions';
 import { MAX_NOTES } from '../audio/protocol';
-import type { Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
-import type { MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
+import type { AudioTrack, Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
+import { clipGainLinear } from '../state/audio-actions';
+import type { AudioClipJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
 
 export type { EngineCommand };
 
@@ -73,6 +76,11 @@ export function projectCommands(json: ProjectJson, sampleIds: Map<number, number
 export function trackCommands(tj: TrackJson): EngineCommand[] {
   const out: EngineCommand[] = [];
   const slot = tj.slot;
+  if (tj.kind === 'audio') {
+    out.push([Op.ADD_AUDIO_TRACK, slot]);
+    for (const c of tj.clips) out.push(...audioClipCommands(slot, c));
+    return out;
+  }
   if (tj.kind === 'drum') {
     out.push([Op.ADD_DRUM_TRACK, slot]);
     // Step edits act on the engine's current pattern: select each in turn.
@@ -108,6 +116,21 @@ export const noteCommand = (slot: number, n: { idx: number; pitch: number; vel: 
 export const clipCommand = (slot: number, c: { idx: number; pattern: number; start: number; len: number; offset: number }): EngineCommand =>
   [Op.CLIP_SET, slot * MAX_CLIPS + c.idx, c.offset * 16 + c.pattern, c.start, c.len];
 
+/**
+ * One audio clip: AUDIO_CLIP_SOURCE and AUDIO_CLIP_GAIN stage it, AUDIO_CLIP_SET
+ * commits it (same encoding as audio-actions.ts sendAudioClip). Always all
+ * three: a SOURCE alone would only stage (load.ts bindingCommands relies on
+ * finding them together).
+ */
+export const audioClipCommands = (slot: number, c: AudioClipJson): EngineCommand[] => {
+  const at = slot * MAX_CLIPS + c.idx;
+  return [
+    [Op.AUDIO_CLIP_SOURCE, at, c.sample ?? -1, c.offset, c.loop ? 1 : 0],
+    [Op.AUDIO_CLIP_GAIN, at, clipGainLinear(c.gain), c.fadeIn, c.fadeOut],
+    [Op.AUDIO_CLIP_SET, at, c.start, c.len],
+  ];
+};
+
 /** MIX_SET per non-default param (strips, then returns, then master), then every key. */
 function mixerCommands(project: ProjectJson): EngineCommand[] {
   const out: EngineCommand[] = [];
@@ -141,6 +164,8 @@ function normalize(json: ProjectJson, ids: Map<number, number>, warnings: string
   const sampleId = (old: number | null) => (old === null || old < 0 ? null : (ids.get(old) ?? null));
   const pooled = new Map<string, number>(); // pooled module id -> used by earlier tracks
   const tracks: TrackJson[] = json.tracks.map((tj) => {
+    // An audio clip whose sample did not load stays, as "missing sample" (its own warning says why).
+    if (tj.kind === 'audio') return { ...tj, clips: tj.clips.map((c) => ({ ...c, sample: sampleId(c.sample) })) };
     if (tj.kind === 'drum') return { ...tj, rows: tj.rows.map((r) => ({ ...r, sample: sampleId(r.sample) })) };
     // SamplePlayer `sample` params follow the engine ids (a sample that did
     // not load: none; its own warning says why).
@@ -189,8 +214,23 @@ function normalize(json: ProjectJson, ids: Map<number, number>, warnings: string
  * strip is not included). The state trackCommands builds in the engine.
  */
 export function trackState(tj: TrackJson): Track {
+  if (tj.kind === 'audio') {
+    const t: AudioTrack = {
+      kind: 'audio',
+      id: crypto.randomUUID(),
+      slot: tj.slot,
+      name: tj.name,
+      color: tj.color,
+      clips: tj.clips.map((c) => ({
+        id: crypto.randomUUID(), idx: c.idx, sampleId: c.sample, start: c.start, len: c.len, offset: c.offset,
+        loop: c.loop, gain: c.gain, fadeIn: c.fadeIn, fadeOut: c.fadeOut,
+      })),
+    };
+    return t;
+  }
+  const pt = tj; // a drum or synth track (a closure loses the narrowing)
   const clipsOf = (patterns: { id: string; engineIdx: number }[]): Clip[] =>
-    tj.clips.map((c) => ({
+    pt.clips.map((c) => ({
       id: crypto.randomUUID(), idx: c.idx, patternId: patterns.find((x) => x.engineIdx === c.pattern)!.id,
       start: c.start, len: c.len, offset: c.offset,
     }));

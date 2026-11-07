@@ -16,6 +16,13 @@
 // close before it answers) ends the import with "Audio restarted — drop it
 // again": the bytes never reached the new engine.
 //
+// Sample memory (plan 9, state/sampleBudget.ts): after the decode and before
+// the upload, a file that would pass the engine's 1 GiB budget is refused
+// with the addendum §3.3 text (no id taken, nothing uploaded, so the caller
+// places no clip). An accepted file's floats are counted in p.arenaFloats
+// when its id is taken (given back if the engine refuses it), and its length
+// and channels go into p.sampleMeta.
+//
 // `busy` marks a failure that only says the project was busy (an audio
 // restart, or Project.loading with the session still the same one: an
 // autosave restore still reading, which may fail and leave it). The same
@@ -27,6 +34,7 @@ import type { SampleDecoder } from '../audio/samples';
 import { MAX_SAMPLES } from './project.svelte';
 import type { Project } from './project.svelte';
 import { sampleFile } from './sampleFiles';
+import { fitsBudget, overBudgetText, sampleFloats } from './sampleBudget';
 
 /** The slice of AudioEngine an import needs (tests pass a fake). */
 export interface ImportEngine {
@@ -61,19 +69,26 @@ export async function importSample(
   // A project load started meanwhile: this drop belonged to the old session.
   if (!stillThere()) return { ok: false, error: null };
   if (p.loading) return { ok: false, error: null, busy: true };
+  const floats = sampleFloats(channels);
+  if (!fitsBudget(p, floats)) return { ok: false, error: overBudgetText(p, file.name, floats) };
   if (p.nextSampleId >= MAX_SAMPLES) return { ok: false, error: `Sample limit reached (${MAX_SAMPLES} loads per session)` };
   const gen = p.generation;
   const id = p.nextSampleId++;
-  const code = await engine.loadSample(id, channels);
-  if (restarted()) return again; // uploaded to the old engine (or refused by it, closed)
+  const meta = { seconds: channels[0].length / engine.sampleRate, channels: channels.length, peaks: null };
+  p.arenaFloats += floats; // reserved now: a second drop decoded meanwhile sees it
+  const code = await engine.loadSample(id, channels); // transfers the channel buffers away
+  if (restarted()) return again; // uploaded to the old engine (or refused by it, closed); the restart recounted
   // A New / Open / Restore started (or finished) during the upload: the id
   // belonged to the old session (RESET_ALL dropped the sample); the new
   // session's id `id` is someone else's. Drop it silently.
   if (p.generation !== gen) return { ok: false, error: null };
   if (p.loading) return { ok: false, error: null, busy: true };
   if (code !== Err.OK && code !== Err.DEFERRED) {
+    p.arenaFloats -= floats; // nothing was allocated
     return { ok: false, error: `Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}` };
   }
   p.sampleFiles.set(id, kept);
+  p.sampleMeta.set(id, meta);
+  p.peaksVersion++;
   return { ok: true, id, name: baseName(file.name), deferred: code === Err.DEFERRED };
 }

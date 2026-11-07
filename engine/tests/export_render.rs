@@ -6,7 +6,9 @@
 //! ABI natively, with the identical block schedule, and checks the result
 //! against the golden hash in `fixtures/export_render.hash`; the vitest
 //! `render matches native` (app/src/export/render.test.ts) renders the same
-//! job through `engine.wasm` and checks it against the same file.
+//! job through `engine.wasm` and checks it against the same file. The audio
+//! clip job `fixtures/export_audio.txt` (plan 9) is pinned the same way by
+//! `export_audio.hash` and `audio render matches native`.
 //!
 //! Job (both sides): `engine_new(sample_rate)`; every `sample` line is
 //! allocated, filled (planar) and marked ready; every `cmd` line is sent in
@@ -138,9 +140,10 @@ fn hash(left: &[f32], right: &[f32]) -> u32 {
     h
 }
 
-#[test]
-fn export_render_matches_golden_hash() {
-    let job = parse(&std::fs::read_to_string(fixture("export_render.txt")).expect("fixture"));
+/// Render `fixtures/<name>.txt` natively and check it against
+/// `fixtures/<name>.hash` (`UPDATE_GOLDEN=1` writes the hash).
+fn matches_golden(name: &str) {
+    let job = parse(&std::fs::read_to_string(fixture(&format!("{name}.txt"))).expect("fixture"));
     assert!(job.frames > 0 && !job.commands.is_empty());
     let (l, r) = render(&job, QUANTUM);
     assert_eq!(l.len(), job.frames);
@@ -149,12 +152,27 @@ fn export_render_matches_golden_hash() {
     assert!(l.iter().chain(&r).all(|x| x.is_finite()));
 
     let got = format!("{:08x}", hash(&l, &r));
-    let golden = fixture("export_render.hash");
+    let golden = fixture(&format!("{name}.hash"));
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
         std::fs::write(&golden, format!("{got}\n")).expect("write golden");
     }
     let want = std::fs::read_to_string(&golden).expect("golden hash (UPDATE_GOLDEN=1 writes it)");
-    assert_eq!(got, want.trim(), "native render differs from the golden hash (UPDATE_GOLDEN=1 after an intended engine change)");
+    assert_eq!(got, want.trim(), "native render of {name} differs from the golden hash (UPDATE_GOLDEN=1 after an intended engine change)");
+}
+
+#[test]
+fn export_render_matches_golden_hash() {
+    matches_golden("export_render");
+}
+
+/// Plan 9: the export command list of a project with 2 Audio tracks (a loop
+/// clip, a missing-sample clip, a trimmed and faded clip on a sidechained
+/// strip), frozen by app/src/export/render.test.ts from `exportCommands`;
+/// its own golden hash, asserted by the wasm side too (`audio render
+/// matches native`).
+#[test]
+fn export_audio_render_matches_golden() {
+    matches_golden("export_audio");
 }
 
 #[test]

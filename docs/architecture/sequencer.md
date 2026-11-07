@@ -16,7 +16,7 @@ storage is created in `Engine::new`; no command allocates. Ticks are 960 PPQ,
 | `OP_NOTE_SET` | 28 | `a = slot*1024 + idx`, `b = pitch*128 + vel`, `c = start`, `d = len` |
 | `OP_NOTE_REMOVE` | 29 | `a = slot*1024 + idx` |
 | `OP_NOTE_CLEAR` | 30 | `a = slot` |
-| `OP_PATTERN_BARS` | 31 | bars 1..16 |
+| `OP_SET_PATTERN_BARS` | 31 | bars 1..16 |
 | `OP_PLAY` | | `a` = count-in ticks, 0 or 3840 |
 
 Every command is validated (pitch 0..127, vel 1..127, start < length, len
@@ -36,7 +36,9 @@ pitches. Editing, moving or removing a sounding note releases it.
 ## Count-in
 `OP_PLAY` with `a = 3840` starts the transport at tick -3840. Until tick 0 no
 drum or synth pattern events fire and the metronome clicks even if it is off.
-The recorder records only at tick >= 0.
+The recorder records only at tick >= 0; a note played up to 60 ticks (the
+grace window) before tick 0, i.e. just before recording starts or the count-in
+ends, is pulled to tick 0 instead of being lost.
 
 ## Recording uses heard time
 Audio output has latency (about 250 ms on Bluetooth), so "now" in the engine is
@@ -51,8 +53,7 @@ land earlier), and converts to a tick with the latest telemetry:
 thread can extrapolate at constant tempo. If `getOutputTimestamp()` is
 unusable (`contextTime <= 0`, early or headless), the clock falls back to
 `currentTime - (baseLatency + outputLatency)`. Playheads draw the same heard
-tick. Details that matter: pedal (sustain) aware; a 60-tick grace window pulls
-a note played just before the loop point to the start; length is at least 1
+tick. Details that matter: pedal (sustain) aware; the 60-tick grace window covers ticks in [-60, 0) (see Count-in); length is at least 1
 (jitter-safe); notes overdub (identical pitch and start in a pass is not
 duplicated); "Undo take" removes exactly the notes the last pass added.
 The e2e test `record from the keyboard, notes land on the heard beat`

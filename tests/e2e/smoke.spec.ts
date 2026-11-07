@@ -14,7 +14,8 @@ type DawWindow = {
     Op: Record<string, number>;
     recorder?: { lastTakeIds: string[]; armed: boolean } | null;
     clock?: { heardTicks(): number } | null;
-    project: { tracks: { pattern?: { notes: { pitch: number; start: number; len: number }[] } }[] };
+    project: {
+      tempo: number; tracks: { pattern?: { notes: { pitch: number; start: number; len: number }[] } }[] };
   };
 };
 
@@ -740,6 +741,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   const LATENCY_S = 0.25;
   await page.addInitScript((lat) => {
     AudioContext.prototype.getOutputTimestamp = function (this: AudioContext) {
+      (window as unknown as { __ctx?: AudioContext }).__ctx = this;
       return { contextTime: this.currentTime - lat, performanceTime: performance.now() };
     };
   }, LATENCY_S);
@@ -752,25 +754,36 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'armed');
 
-  // The clock must see the mock (contextTime > 0 needs the context to be >250 ms old).
-  await expect
-    .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.clock?.heardTicks() ?? NaN))
-    .toBeLessThan(1); // sanity: stopped, heard ticks are the idle value
   await page.keyboard.press('Space');
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
 
-  // Wait (by polling the heard clock, no fixed sleeps) until the heard playhead
-  // nears beat 2 (tick 960), then play A (C4) for ~200 ms.
-  const BEAT = 960;
-  await page.waitForFunction(
-    (beat) => ((window as unknown as DawWindow).__daw!.clock!.heardTicks() >= beat - 20),
-    BEAT,
-    { polling: 'raf' },
-  );
+  // INDEPENDENT reference: the "rendered" tick from raw engine telemetry and
+  // ctx.currentTime (never the audioClock, which is what is under test). The
+  // mock captures the context on first use; heardTicks() forces that call.
+  const tempo = await page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tempo);
+  const lateTicks = LATENCY_S * (tempo / 60) * 960; // ~496 at 124 BPM
+  const rawTick = () =>
+    page.evaluate(() => {
+      const w = window as unknown as DawWindow & { __ctx?: AudioContext };
+      w.__daw!.clock!.heardTicks();
+      const t = w.__daw!.engine!.telemetry(); // [2] ticks at [8] frame
+      const ctx = w.__ctx!;
+      const fpt = (ctx.sampleRate * 60) / (w.__daw!.project.tempo * 960);
+      return t[2] + (ctx.currentTime * ctx.sampleRate - t[8]) / fpt;
+    });
   const heardNow = () => page.evaluate(() => (window as unknown as DawWindow).__daw!.clock!.heardTicks());
-  const before = await heardNow();
-  await page.keyboard.down('KeyA');
-  const after = await heardNow();
+
+  // Wait (polling, no fixed sleeps) until the raw tick is one beat + latency, i.e.
+  // beat 2 (tick 960) is just being *heard*.
+  await expect.poll(rawTick, { intervals: [10] }).toBeGreaterThanOrEqual(960 + lateTicks - 20);
+  // Meaningful mock check: the clock reports the heard tick ~latency behind raw.
+  const [r0, h0] = [await rawTick(), await heardNow()];
+  expect(r0 - h0).toBeGreaterThan(lateTicks - 80);
+  expect(r0 - h0).toBeLessThan(lateTicks + 80);
+
+  const rawBefore = await rawTick();
+  await page.keyboard.down('KeyA'); // play A (C4)
+  const rawAfter = await rawTick();
   await page.waitForTimeout(200); // the held length itself; not a sync point
   await page.keyboard.up('KeyA');
   await page.keyboard.press('Space');
@@ -782,12 +795,11 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   expect(notes).toHaveLength(1);
   const n = notes[0];
   expect(n.pitch).toBe(60);
-  // Landed on the heard beat (between the heard ticks sampled around the key press, +-60 grace).
-  expect(n.start).toBeGreaterThanOrEqual(before - 60);
-  expect(n.start).toBeLessThanOrEqual(after + 60);
-  // The naive "currentTime" mapping would land ~ latency * ticks/s later (~496 ticks at 124 BPM).
-  const lateBy = LATENCY_S * (124 / 60) * BEAT;
-  expect(Math.abs(n.start - (after + lateBy))).toBeGreaterThan(300);
+  // Heard time = raw tick minus the latency in ticks (+-60 ticks grace).
+  expect(n.start).toBeGreaterThanOrEqual(rawBefore - lateTicks - 60);
+  expect(n.start).toBeLessThanOrEqual(rawAfter - lateTicks + 60);
+  // And clearly NOT the rendered (~480-500 ticks late) position.
+  expect(n.start).toBeLessThan(rawBefore - 300);
   expect(n.len).toBeGreaterThan(200); // ~200 ms ~ 400 ticks
 
   await page.getByTestId('undo-take').click();

@@ -25,6 +25,10 @@
   import type { MidiStatus } from './input/midi';
   import { banners, flashHint } from './state/banners.svelte';
   import { installSampleLoads } from './state/sampleLoads';
+  import { createProjectSession, markSaved } from './project/session';
+  import type { ProjectSession } from './project/session';
+  import { projectFingerprint } from './project/serialize';
+  import { releaseHeldKeys } from './input/shortcuts';
 
   const project = new Project();
   let engine = $state.raw<AudioEngine | null>(null);
@@ -39,6 +43,17 @@
   let noteInput = $state.raw<NoteInput | null>(null);
   let rec = $state<RecStatus>({ armed: false, state: 'off', takeNotes: 0 });
   let stopWatch: (() => void) | null = null;
+  let session = $state.raw<ProjectSession | null>(null);
+
+  // "● unsaved": the project differs from what was last saved/loaded/new.
+  // (Task 4's autosave will hang off the same change signal.)
+  $effect(() => {
+    const fp = projectFingerprint(project);
+    project.dirty = project.savedFingerprint !== null && fp !== project.savedFingerprint;
+  });
+  $effect(() => {
+    document.title = `${project.dirty ? '● ' : ''}${project.name} — DAW`;
+  });
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, actions: {
@@ -55,7 +70,11 @@
     addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
     setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
     setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
-  } };
+  },
+  // Project save/load with any directory handle (e2e: OPFS). Same code as the Project menu.
+  saveTo: (dir) => (session ? session.saveTo(dir) : Promise.reject(new Error('audio not started'))),
+  openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
+  };
 
   /**
    * Play / Stop for the button and Space. Play while armed with Count-in on
@@ -161,10 +180,21 @@
       if (msg !== null) banners.error = msg;
     };
     addDrumTrack(project, e); // default track so the UI has something to show
+    markSaved(project); // a fresh session has nothing to save yet
+    // New / Open replace the session: stop through the normal path first (the
+    // recorder closes held notes at the heard tick) and release held keys.
+    const s = createProjectSession(project, e, () => {
+      if (project.playing) transportToggle();
+      releaseHeldKeys();
+    });
+    session = s;
     uninstall = installShortcuts(project, e, input, {
       onOctave: (o) => (octave = o),
       onTogglePlay: transportToggle,
       onToggleArm: toggleArm,
+      onSave: () => void s.save(),
+      onSaveAs: () => void s.saveAs(),
+      onOpen: () => void s.open(),
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
@@ -203,8 +233,8 @@
 
 <div class="app">
   {#if engine}
-    {#if recorder}
-      <TopBar p={project} {engine} {octave} {midi} {recorder} {rec} onTogglePlay={transportToggle} onToggleArm={toggleArm} />
+    {#if recorder && session}
+      <TopBar p={project} {engine} {octave} {midi} {recorder} {rec} {session} onTogglePlay={transportToggle} onToggleArm={toggleArm} />
     {/if}
     <div class="main">
       <Browser />

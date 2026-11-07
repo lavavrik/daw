@@ -16,6 +16,12 @@ interface DawActions {
 declare global {
   interface Window {
     /** Always set: lets e2e tests (and the console) drive the engine. */
-    __daw: { engine: AudioEngine | null; Op: typeof Op; clock: AudioClock | null; recorder: Recorder | null; project: Project; actions: DawActions };
+    __daw: {
+      engine: AudioEngine | null; Op: typeof Op; clock: AudioClock | null; recorder: Recorder | null; project: Project; actions: DawActions;
+      /** Project ▸ Save / Open with any directory handle (e2e: OPFS). */
+      saveTo: (dir: FileSystemDirectoryHandle) => Promise<void>;
+      /** Resolves with the load warnings. */
+      openFrom: (dir: FileSystemDirectoryHandle) => Promise<string[]>;
+    };
   }
 }

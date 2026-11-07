@@ -9,7 +9,13 @@
   // count-in and the recorder's stop tick are handled in one place. Count-in
   // and Rec offset persist in localStorage (state/recorder.ts).
   //
-  // Layout: one row that never wraps at 1280 px. Every control is nowrap;
+  // Project menu (left): the project name with a "● unsaved" mark, and New,
+  // Open…, Save (⌘S), Save As… (⇧⌘S). New / Open with unsaved changes ask
+  // inline in the menu (no confirm()); results and errors are banners
+  // (project/session.ts).
+  //
+  // Layout: one row that never wraps at 1280 px (tight since the Project menu:
+  // 5 px gaps, "Metro", narrow BPM field). Every control is nowrap;
   // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
   // the full text in their tooltips.
   import { onMount, untrack } from 'svelte';
@@ -21,6 +27,7 @@
   import type { MidiStatus } from '../input/midi';
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
+  import type { ProjectSession } from '../project/session';
 
   let {
     p,
@@ -31,6 +38,7 @@
     rec,
     onTogglePlay,
     onToggleArm,
+    session,
   }: {
     p: Project;
     engine: AudioEngine;
@@ -41,7 +49,30 @@
     rec: RecStatus;
     onTogglePlay: () => void;
     onToggleArm: () => void;
+    session: ProjectSession;
   } = $props();
+
+  // ---- Project menu --------------------------------------------------------
+  let menu = $state<HTMLDetailsElement | null>(null);
+  /** New/Open waiting for "Discard changes" (only asked while dirty). */
+  let confirming = $state<'new' | 'open' | null>(null);
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  const mod = isMac ? '⌘' : 'Ctrl+';
+  function closeMenu() {
+    confirming = null;
+    if (menu) menu.open = false;
+  }
+  function run(cmd: 'new' | 'open' | 'save' | 'saveAs') {
+    if ((cmd === 'new' || cmd === 'open') && p.dirty && confirming !== cmd) {
+      confirming = cmd;
+      return;
+    }
+    closeMenu();
+    if (cmd === 'new') void session.newProject();
+    else if (cmd === 'open') void session.open();
+    else if (cmd === 'save') void session.save();
+    else void session.saveAs();
+  }
 
   // Mirrors of the recorder's persisted settings (the Recorder is not reactive).
   // Seeded once on purpose: the recorder is created once per session and these
@@ -122,7 +153,28 @@
 </script>
 
 <header class="bar">
-  <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)">
+  <details class="pop proj" bind:this={menu} ontoggle={() => !menu?.open && (confirming = null)}>
+    <summary data-testid="project-menu" title="Project: New, Open, Save">
+      <span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">● unsaved</span>{/if}</span>
+    </summary>
+    <div class="panel menu" role="menu">
+      {#if confirming}
+        <p class="warn">Unsaved changes in "{p.name}" will be lost.</p>
+        <div class="row">
+          <button class="danger" data-testid="project-discard" onclick={() => run(confirming!)}>
+            Discard and {confirming === 'new' ? 'start new' : 'open…'}
+          </button>
+          <button onclick={() => (confirming = null)}>Cancel</button>
+        </div>
+      {:else}
+        <button role="menuitem" data-testid="project-new" onclick={() => run('new')}>New</button>
+        <button role="menuitem" data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
+        <button role="menuitem" data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
+        <button role="menuitem" data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
+      {/if}
+    </div>
+  </details>
+  <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)" data-testid="play">
     {p.playing ? '■ Stop' : '▶ Play'}
   </button>
   <span class="seg" role="group" aria-label="Playback mode" data-testid="mode-toggle" data-mode={p.mode} title="Pattern or Song playback (Shift+L)">
@@ -197,8 +249,8 @@
       onkeydown={(e) => e.key === 'Enter' && commitTempo(e)}
     />
   </label>
-  <button class="metro" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome">
-    Metronome
+  <button class="metro" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome" aria-label="Metronome">
+    Metro
   </button>
   <span class="pill keys" data-testid="keys-target" title="Computer keyboard and MIDI play this track">
     Keys →
@@ -225,7 +277,9 @@
 </header>
 
 <style>
-  .bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow: hidden; }
+  /* overflow-x: clip (not hidden): clips a too-wide row without becoming a
+     scroll container, so the popovers (Project menu, Offset) can drop below. */
+  .bar { display: flex; gap: 5px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
   button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }
@@ -249,10 +303,19 @@
   .pop .panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; width: 240px; padding: 8px 10px; background: #24262c; border: 1px solid #34363e; border-radius: 4px; box-shadow: 0 4px 14px #0008; }
   .pop .panel label { display: flex; align-items: center; gap: 6px; }
   .pop .panel p { margin: 6px 0 0; font-size: 11px; color: #9a9da8; }
+  .proj summary { color: #e4e5ea; font-size: 12px; font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+  .proj .unsaved { color: #f0a23a; font-weight: 400; font-size: 11px; margin-left: 6px; }
+  .proj .menu { width: 230px; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
+  .proj .menu > button { display: flex; justify-content: space-between; text-align: left; background: transparent; border-color: transparent; }
+  .proj .menu > button:hover { background: #33353e; }
+  .proj kbd { font: inherit; font-size: 10px; color: #7d808c; }
+  .proj .warn { margin: 2px 2px 6px; color: #f0a23a; white-space: normal; }
+  .proj .row { display: flex; gap: 6px; }
+  .proj .danger { background: #c92a2a; border-color: #c92a2a; color: #fff; }
   .bpm { display: flex; align-items: center; gap: 6px; }
   .lbl { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
-  input { width: 64px; }
-  .pill { background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
+  input { width: 48px; }
+  .pill { padding: 4px 6px; background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
   .pill.bad { color: #ff6b6b; font-weight: 600; }
   .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 3px; vertical-align: -1px; }
   .pill.keys { color: #c9cbd3; }

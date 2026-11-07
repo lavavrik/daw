@@ -5,7 +5,7 @@
   import { onMount } from 'svelte';
   import { Err, TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
-  import { decodeFile, isProbablyAudio, loadErrorText } from '../audio/samples';
+  import { baseName, decodeBytes, isProbablyAudio, loadErrorText } from '../audio/samples';
   import {
     addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
@@ -85,31 +85,37 @@
   /**
    * Decode first; only then resolve the target row (for "+ Add row" this
    * creates it), so a failed drop leaves state unchanged. Track id is captured
-   * at drop time for both the immediate and the deferred attach.
+   * at drop time for both the immediate and the deferred attach. The file's
+   * original bytes are kept (p.sampleFiles) so a project save writes them
+   * unchanged; decoding gets a copy (decodeAudioData detaches its input).
    */
   async function loadInto(file: File, target: () => string | null) {
     const tid = track.id;
     const fail = () => onerror(`Couldn't load "${file.name}" — not a readable audio file`);
     if (!isProbablyAudio(file)) return fail();
-    let decoded;
+    let bytes: ArrayBuffer;
+    let channels: Float32Array[];
     try {
-      decoded = await decodeFile(file, engine.context);
+      bytes = await file.arrayBuffer();
+      channels = await decodeBytes(bytes.slice(0), file.name, engine.context);
     } catch {
       return fail();
     }
+    const name = baseName(file.name);
     if (p.nextSampleId >= MAX_SAMPLES) return onerror(`Sample limit reached (${MAX_SAMPLES} loads per session)`);
     const id = p.nextSampleId++;
-    const code = await engine.loadSample(id, decoded.channels);
+    const code = await engine.loadSample(id, channels);
     if (code !== Err.OK && code !== Err.DEFERRED) {
       return onerror(`Couldn't load "${file.name}" — ${loadErrorText(code, engine.sampleRate)}`);
     }
+    p.sampleFiles.set(id, { name: file.name, type: file.type, bytes });
     const rowId = target();
     if (!rowId) return onerror(`Row limit reached (${MAX_ROWS})`);
     if (code === Err.OK) {
-      setRowSample(p, engine, tid, rowId, id, decoded.name);
+      setRowSample(p, engine, tid, rowId, id, name);
       onerror(null);
     } else {
-      deferSampleLoad(id, tid, rowId, decoded.name);
+      deferSampleLoad(id, tid, rowId, name);
     }
   }
 
@@ -119,11 +125,12 @@
     const file = e.dataTransfer?.files[0];
     if (file) void loadInto(file, () => rowId);
   }
-  function dropOnAdd(e: DragEvent) {
+  /** Every dropped file gets its own new row, in drop order (one at a time). */
+  async function dropOnAdd(e: DragEvent) {
     e.preventDefault();
     dragOver = null;
-    const file = e.dataTransfer?.files[0];
-    if (file) void loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
+    const files = [...(e.dataTransfer?.files ?? [])];
+    for (const file of files) await loadInto(file, () => addRow(p, engine, track.id)?.id ?? null);
   }
   const allow = (e: DragEvent) => e.preventDefault();
 

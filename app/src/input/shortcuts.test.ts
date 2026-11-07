@@ -4,7 +4,7 @@ import { confirmReleasingKeys, createShortcutHandlers, installShortcuts } from '
 import { createNoteInput } from './noteInput';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void } = {}) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void } = {}) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -24,6 +24,20 @@ const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void } = {}) 
 const key = (code: string, extra: object = {}) => ({ code, target: null, repeat: false, metaKey: false, ctrlKey: false, altKey: false, preventDefault() {}, ...extra }) as unknown as KeyboardEvent;
 
 describe('shortcut handlers', () => {
+  it('Cmd/Ctrl+S saves, Cmd/Ctrl+Shift+S saves as, Cmd/Ctrl+O opens (even while typing; default prevented)', () => {
+    const calls: string[] = [];
+    const { sent, h } = mk({ onSave: () => calls.push('save'), onSaveAs: () => calls.push('as'), onOpen: () => calls.push('open') });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    h.onKeyDown(key('KeyS', { metaKey: true, ...pd }));
+    h.onKeyDown(key('KeyS', { ctrlKey: true, shiftKey: true, ...pd }));
+    h.onKeyDown(key('KeyO', { ctrlKey: true, target: { tagName: 'INPUT', type: 'text' }, ...pd }));
+    h.onKeyDown(key('KeyS', { metaKey: true, repeat: true, ...pd })); // held: once
+    expect(calls).toEqual(['save', 'as', 'open']);
+    expect(prevented).toBe(4);
+    expect(sent).toEqual([]); // no piano note for S
+  });
+
   it('piano key sends note on / off', () => {
     const { sent, h } = mk();
     h.onKeyDown(key('KeyA'));

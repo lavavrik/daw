@@ -127,9 +127,9 @@ test('library sample drag loads into row', async ({ page }) => {
 
   // Click previews (one at a time, with a stop button); it never touches the project.
   await page.getByTestId('lib-sample-bass.wav').click();
-  await expect(page.getByTestId('preview-stop')).toBeVisible();
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
   await page.getByTestId('preview-stop').click();
-  await expect(page.getByTestId('preview-stop')).toBeHidden();
+  await expect(page.getByTestId('preview-stop')).toBeDisabled();
 
   await drag(page, 'lib-sample-drums/kick.wav', 'row-0');
   await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
@@ -148,7 +148,7 @@ test('library sample drag loads into row', async ({ page }) => {
   await expect(page.getByTestId('row-8').getByTestId('row-name')).toHaveText('bass'); // after the default kit's eight
   await expect(page.getByTestId('banner')).toBeHidden();
   await page.getByTestId('lib-sample-drums/kick.wav').click(); // previewing, for the screenshot
-  await expect(page.getByTestId('preview-stop')).toBeVisible();
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
   await page.screenshot({ path: 'test-results/browser.png' });
   await page.getByTestId('preview-stop').click();
 

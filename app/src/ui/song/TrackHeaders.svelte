@@ -6,10 +6,16 @@
   // alone); the second line says what the track is. The × only appears on
   // hover/focus and asks first (InlineConfirm popover under the ×; held piano
   // keys are released before it opens).
+  // M / S on every header mute / solo the track: the same mixer flags as
+  // the strip's M and S (state/mixer-actions toggleMute / toggleSolo), so the
+  // two views always agree and each click is one undo entry. Solo = play
+  // only the soloed tracks (the returns keep playing).
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
   import { removeTrack, selectTrack } from '../../state/actions';
+  import { toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { LANE_H } from './tlMath';
@@ -18,6 +24,9 @@
 
   /** The open question: which track, and the × that asked. */
   let asking = $state<{ track: Track; anchor: HTMLElement } | null>(null);
+
+  /** A track's mixer flag (mute / solo) as shown on its strip. */
+  const flagOn = (t: Track, n: 'mute' | 'solo') => (p.mixer.channels[t.id]?.params[mixParam(n).id] ?? mixParam(n).default) === 1;
 
   function remove(t: Track, anchor: HTMLElement) {
     releaseHeldKeys();
@@ -28,7 +37,9 @@
 <div class="heads" style:--lane-h="{LANE_H}px">
   {#each p.tracks as t (t.id)}
     {@const sel = t.id === p.selectedTrackId}
-    <div class="row" class:sel style:--c={t.color}>
+    {@const muted = flagOn(t, 'mute')}
+    {@const soloed = flagOn(t, 'solo')}
+    <div class="row" class:sel class:muted style:--c={t.color}>
       <button
         class="main"
         data-testid={`track-${t.slot}`}
@@ -50,6 +61,10 @@
           {/if}
         </span>
       </button>
+      <span class="ms">
+        <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
+        <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (and other soloed ones)`} onclick={() => toggleSolo(p, engine, t.id)}>S</button>
+      </span>
       <button class="x" aria-label={`Remove track ${t.name}`} title="Remove track" onclick={(e) => remove(t, e.currentTarget)}>×</button>
     </div>
   {/each}
@@ -87,5 +102,11 @@
   .x { width: 20px; flex: none; border: 0; background: transparent; color: #9a9dab; font-size: 14px; cursor: pointer; opacity: 0; }
   .row:hover .x, .row:focus-within .x, .x:focus-visible { opacity: 1; }
   .x:hover { color: #ff8a92; }
+  .ms { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 2px; }
+  .ms button { width: 16px; height: 16px; padding: 0; border: 1px solid #3a3d48; border-radius: 3px; background: #1a1b20; color: #8d90a0; font: inherit; font-size: 9px; font-weight: 700; line-height: 14px; cursor: pointer; }
+  .ms button:focus-visible { outline: 2px solid #f0a23a; outline-offset: 0; }
+  .m.lit { background: #e0a030; border-color: #e0a030; color: #111; }
+  .s.lit { background: #4fb3e0; border-color: #4fb3e0; color: #111; }
+  .row.muted .txt { opacity: 0.5; }
   .empty { color: #7d808c; margin: 0; padding: 6px 8px; }
 </style>

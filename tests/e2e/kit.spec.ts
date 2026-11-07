@@ -98,6 +98,23 @@ test('Project ▸ New starts from the kit again', async ({ page }) => {
   await expectKickPlays(page);
 });
 
+test('clicking a row name previews its sample in the shared preview bar', async ({ page }) => {
+  await startAudio(page);
+  await expectKit(page);
+  const name = page.getByTestId('row-0').getByTestId('row-name');
+  await expect(name).toHaveText('Kick');
+  await name.click();
+  await expect(name).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('preview-bar')).toContainText('Kick');
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
+  // Previewing is not an edit: no undo entry, no unsaved mark.
+  await expect(page.getByTestId('undo')).toBeDisabled();
+  // Click again stops it.
+  await name.click();
+  await expect(name).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('preview-stop')).toBeDisabled();
+});
+
 test('the Browser always shows the starter kit, beside a library folder', async ({ page }) => {
   test.setTimeout(30_000);
   await startAudio(page);
@@ -121,11 +138,17 @@ test('the Browser always shows the starter kit, beside a library folder', async 
   await expect(page.getByTestId('kit-sample-kick-deep.wav')).toBeVisible();
   await expect(page.getByTestId('kit-sample-stab-cm9.wav')).toBeVisible();
 
-  // Preview (one at a time, never in the project).
+  // Preview (one at a time, never in the project). The preview bar is always
+  // there, so starting/stopping a preview never moves the list under it.
+  const y = async () => (await page.getByTestId('kit-sample-kick-deep.wav').boundingBox())!.y;
+  await expect(page.getByTestId('preview-bar')).toBeVisible();
+  const before = await y();
   await page.getByTestId('kit-sample-kick-deep.wav').click();
-  await expect(page.getByTestId('preview-stop')).toBeVisible();
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
+  expect(await y()).toBe(before);
   await page.getByTestId('preview-stop').click();
-  await expect(page.getByTestId('preview-stop')).toBeHidden();
+  await expect(page.getByTestId('preview-stop')).toBeDisabled();
+  expect(await y()).toBe(before);
 
   // Drag onto "+ Add row": a ninth row with that sample, its bytes kept for Save.
   await expectKit(page);

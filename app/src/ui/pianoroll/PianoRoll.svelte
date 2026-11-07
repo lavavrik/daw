@@ -31,6 +31,8 @@
   // these keys are handled here and stopped (stopPropagation +
   // preventDefault) so they never reach the shortcuts:
   //   Delete / Backspace  delete the selection
+  // (Mouse: right-click a note deletes just that note — one undo entry;
+  // the canvas suppresses the browser's context menu.)
   //   Q                   quantize the selection (or every note) to the grid
   //   Cmd/Ctrl+A          select all
   //   Escape              cancel a drag, else clear the selection
@@ -507,7 +509,24 @@
     if (pt !== null) noteInput?.on(pt, AUDITION_VEL, perfMs, SOURCE);
   }
 
+  /** Right-click: delete the note under the pointer (FL-style). */
+  function erase(e: PointerEvent) {
+    if (!view || drag) return;
+    e.preventDefault();
+    const { x, y, ny } = local(e);
+    if (region(x, y) !== 'notes') return;
+    const hit = hitTest(drawOrder, x, ny, view);
+    if (!hit) return;
+    if (selected.has(hit.id)) {
+      const s = new Set(selected);
+      s.delete(hit.id);
+      selected = s;
+    }
+    deleteNotes(p, engine, track.id, [hit.id]);
+  }
+
   function down(e: PointerEvent) {
+    if (e.button === 2) return erase(e);
     if (e.button !== 0 || !view || !canvas) return;
     e.preventDefault(); // no text selection
     stage?.focus({ preventScroll: true });
@@ -811,7 +830,7 @@
     bind:this={stage}
     tabindex="0"
     role="application"
-    aria-label="Piano roll for {track.name}. Click to draw, Delete removes, Q quantizes, arrows nudge."
+    aria-label="Piano roll for {track.name}. Click to draw, right-click or Delete removes, Q quantizes, arrows nudge."
     onkeydown={key}
   >
     <canvas
@@ -820,6 +839,7 @@
       data-view={view ? JSON.stringify({ ...view, rulerH: RULER_H, velTop }) : ''}
       style:cursor
       onpointerdown={down}
+      oncontextmenu={(e) => e.preventDefault()}
       onpointermove={move}
       onpointerup={up}
       onpointercancel={cancel}

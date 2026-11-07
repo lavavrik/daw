@@ -16,6 +16,7 @@
   import { patternPosAt } from '../state/song-actions';
   import { deferSampleLoad } from '../state/sampleLoads';
   import { importSample } from '../state/sampleImport';
+  import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
   let { p, engine, clock, track, onerror }: {
@@ -25,6 +26,22 @@
     track: DrumTrack;
     onerror: (msg: string | null) => void;
   } = $props();
+
+  // Row preview: clicking a row's sample name plays that sample through the
+  // app-wide preview player (library/sharedPreview — the Browser's preview
+  // bar shows it, with ■ Stop). Raw sample, not the row's gain/pan/mute; it
+  // never touches the pattern or the undo history.
+  $effect(() => bindPreview(engine));
+  const rowKey = (id: number) => `row:${id}`;
+  async function previewRow(sampleId: number, name: string) {
+    const f = p.sampleFiles.get(sampleId);
+    if (!f) return;
+    try {
+      await togglePreview(rowKey(sampleId), name, async () => new Blob([f.bytes], { type: f.type }));
+    } catch {
+      onerror(`Couldn't preview "${name}"`);
+    }
+  }
 
   /** The pattern being edited (steps, step count, swing); rows stay per track. */
   const pat = $derived(currentPattern(track));
@@ -37,9 +54,15 @@
   // entering other cells with the button held applies the same value.
   // Keyboard: Enter on a focused cell is a click with detail 0 (a mouse
   // click has detail >= 1 and was already handled on pointerdown).
+  // Right-click a step clears it (no browser context menu on the cells).
   let paintVel: number | null = null;
 
   function down(e: PointerEvent, rowId: string, step: number, cur: number) {
+    if (e.button === 2) {
+      e.preventDefault();
+      if (cur > 0) setStep(p, engine, track.id, rowId, step, 0);
+      return;
+    }
     if (e.button !== 0) return;
     e.preventDefault(); // no text selection while dragging
     paintVel = cur > 0 ? 0 : e.altKey ? GHOST : FULL;
@@ -165,9 +188,18 @@
       ondragleave={() => dragOver === row.id && (dragOver = null)}
       ondrop={(e) => void dropOnRow(e, row.id)}
     >
-      <span class="name" class:empty={row.sampleId === null} data-testid="row-name" title={row.name}>
-        {row.sampleId === null ? 'drop sample' : row.name}
-      </span>
+      {#if row.sampleId === null}
+        <span class="name empty" data-testid="row-name" title={row.name}>drop sample</span>
+      {:else}
+        {@const sid = row.sampleId}
+        {@const on = previewState.key === rowKey(sid)}
+        <button
+          type="button" class="name prev" class:on data-testid="row-name"
+          title="{row.name} — click to preview{on ? ' (click again to stop)' : ''}"
+          aria-label="Preview {row.name}" aria-pressed={on}
+          onclick={() => void previewRow(sid, row.name)}
+        >{row.name}</button>
+      {/if}
       <button
         class="mute" class:on={row.mute} aria-pressed={row.mute}
         title="Mute {row.name}" aria-label="Mute {row.name}"
@@ -201,6 +233,7 @@
             aria-label="Row {r + 1} step {s + 1}"
             aria-pressed={v > 0}
             onpointerdown={(e) => down(e, row.id, s, v)}
+            oncontextmenu={(e) => e.preventDefault()}
             onpointerenter={() => enter(row.id, s)}
             onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
           ></button>
@@ -241,6 +274,12 @@
   .grid { display: flex; flex-direction: column; gap: 3px; }
   .row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 3px; border: 1px dashed transparent; }
   .row.over, .add.over { border-color: var(--c); background: #24262c; }
+  .name.prev { font: inherit; text-align: left; padding: 0; border: 0; background: transparent; cursor: pointer; }
+  .name.prev:hover, .name.prev.on { color: #9fe0b8; }
+  .name.prev:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
+  /* The ▶ / ■ glyph is CSS, so the name's text stays the sample name. */
+  .name.prev::before { content: '▶'; display: inline-block; width: 12px; font-size: 8px; color: #7d808c; }
+  .name.prev.on::before { content: '■'; color: #9fe0b8; }
   .name { width: 90px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e4e5ea; }
   .name.empty { color: #6a6d79; font-style: italic; }
   .mute { font: inherit; font-size: 10px; width: 22px; height: 22px; border: 0; border-radius: 3px; background: #2a2c33; color: #9a9ca8; cursor: pointer; }

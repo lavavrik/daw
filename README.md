@@ -38,7 +38,9 @@ start audio from a click). The screen has four parts:
 - the **Browser** on the left: your sample library and saved patches, and the
   built-in **Starter kit**;
 - the **timeline** at the top: one lane per track, with **+ Drum track** and
-  **+ Synth track** under the track list;
+  **+ Synth track** under the track list. Each track header has **M** (mute
+  the track) and **S** (solo: play only this track, plus any other soloed
+  ones) — the same switches as the track's mixer strip;
 - the **bottom panel**: the selected track's editor (**Step grid** for drums;
   **Piano roll** or **Instrument** for synths) and the **Mixer** tab.
 
@@ -58,15 +60,18 @@ the last session or opening a project does not add it.
 2. Dropping on **+ Add row** makes a new row. Drop several files at once and
    each gets its own row. The Browser's **Starter kit** section has more
    sounds (a second kick, a sub hit, two chord stabs) to drag in.
-3. Click cells to place steps; click-drag paints. **Alt**-click places a quiet
-   ghost note (drawn dimmer). A focused cell also toggles with **Enter**. For
+3. Click cells to place steps; click-drag paints; right-click a step clears
+   it. **Alt**-click places a quiet ghost note (drawn dimmer). A focused cell
+   also toggles with **Enter**. For
    four-on-the-floor, put the kick on steps 1, 5, 9 and 13 and the hat on 3,
    7, 11 and 15.
 4. Press **Space** to play. The outlined column is the playhead. Change the
    tempo in **BPM** (type a value, then Enter) and try **Metro** (the
    metronome).
 
-Each row has **M** (mute), gain and pan. Under the grid: **Steps** (16, 32 or
+Click a row's name to hear its sample (the Browser's preview bar shows it,
+with **■ Stop**; click the name again to stop). Each row has **M** (mute),
+gain and pan. Under the grid: **Steps** (16, 32 or
 64) and **Swing**. Up to 16 rows per drum track and 32 tracks per project (the
 add buttons grey out at 32).
 
@@ -278,7 +283,8 @@ shaker, tom, two chord stabs and a sub hit, synthesised by
 with the build), and a new project's drum track is made of them. They
 preview and drag like library samples.
 
-- Click a sample (folder or kit) to preview it (**■ Stop** stops); big files
+- Click a sample (folder or kit) to preview it. The preview bar under the
+  library header is always there, so nothing moves; **■ Stop** stops. Big files
   stream instead of loading into memory. Up to 2000 entries per folder are
   listed.
 - Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample
@@ -322,6 +328,7 @@ still work there).
 | **Esc** | Cancel a drag (cable, knob, note, clip, loop) or a keyboard cable pick-up; close a menu or confirmation |
 | **Enter** | On a focused step cell: toggle it. On a focused jack: pick up / connect |
 | **Delete** / Backspace | Piano roll, timeline: delete the selection. Picked-up cable: unplug |
+| **Right-click** | Piano roll: delete that note. Step grid: clear that step |
 | **Q** | Piano roll: quantize |
 | **Cmd/Ctrl+A** | Piano roll, timeline: select all |
 | **Cmd/Ctrl+D** | Timeline: duplicate the selection |

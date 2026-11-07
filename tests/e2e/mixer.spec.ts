@@ -191,6 +191,39 @@ test('solo isolates', async ({ page }) => {
   await page.keyboard.up('KeyA');
 });
 
+test('track header M and S mute / solo the track, in sync with the mixer strip', async ({ page }) => {
+  await startAudio(page);
+  await fourOnTheFloor(page);
+  await synthHoldingNote(page);
+  await page.keyboard.press('Space');
+  await openMixer(page);
+  await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
+
+  // M on the drum track's header: its strip shows muted and goes silent.
+  await page.getByTestId('track-mute-0').click();
+  await expect(page.getByTestId('track-mute-0')).toHaveAttribute('aria-pressed', 'true');
+  await expect(strip(page, 0).getByTestId('mute')).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(1_700);
+  expect((await meterRange(page, 'strip-0', 1_000)).max).toBeLessThan(-90);
+  expect(await meterDb(page, 1)).toBeGreaterThan(-40);
+  // The strip's M unmutes it, and the header follows.
+  await strip(page, 0).getByTestId('mute').click();
+  await expect(page.getByTestId('track-mute-0')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
+
+  // S on the synth's header: only the synth plays.
+  await page.getByTestId('track-solo-1').click();
+  await expect(strip(page, 1).getByTestId('solo')).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(1_700);
+  expect((await meterRange(page, 'strip-0', 1_000)).max).toBeLessThan(-90);
+  expect(await meterDb(page, 1)).toBeGreaterThan(-40);
+  // Undo brings the drums back (one entry per click).
+  await page.keyboard.press('Meta+z');
+  await expect(page.getByTestId('track-solo-1')).toHaveAttribute('aria-pressed', 'false');
+  await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
+  await page.keyboard.up('KeyA');
+});
+
 test('sidechain from kick ducks the synth', async ({ page }) => {
   await startAudio(page);
   await fourOnTheFloor(page);

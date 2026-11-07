@@ -146,6 +146,36 @@ test('delete removes it and playback is silent', async ({ page }) => {
   await page.keyboard.up('KeyA');
 });
 
+test('right-click deletes just the note under the pointer (one undo entry)', async ({ page }) => {
+  await openRoll(page);
+  await draw(page, 0, C3);
+  await draw(page, BEAT, C3);
+  await page.keyboard.press('Escape'); // no selection: the readout counts the notes
+  await expect(readout(page)).toContainText('2 notes');
+  const pt = await at(page, BEAT + 30, C3);
+  await page.mouse.click(pt.x, pt.y, { button: 'right' });
+  await expect(readout(page)).toContainText('1 note');
+  // Right-click on empty grid does nothing (and never draws).
+  const empty = await at(page, 2 * BEAT + 30, C3);
+  await page.mouse.click(empty.x, empty.y, { button: 'right' });
+  await expect(readout(page)).toContainText('1 note');
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('Escape');
+  await expect(readout(page)).toContainText('2 notes');
+});
+
+test('right-click clears a step in the step grid', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  const cell = page.getByTestId('step-0-0');
+  await cell.click();
+  await expect(cell).toHaveAttribute('aria-pressed', 'true');
+  await cell.click({ button: 'right' });
+  await expect(cell).toHaveAttribute('aria-pressed', 'false');
+  await cell.click({ button: 'right' }); // an empty step stays empty
+  await expect(cell).toHaveAttribute('aria-pressed', 'false');
+});
+
 test('length change keeps notes past the end; tab choice is remembered', async ({ page }) => {
   await openRoll(page);
   await draw(page, 3 * 3840, C3); // bar 4

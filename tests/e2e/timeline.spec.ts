@@ -188,7 +188,7 @@ test('loop range wraps', async ({ page }) => {
   const wrap = ticks.findIndex((t, i) => i > 0 && t < ticks[i - 1]);
   expect(wrap).toBeGreaterThan(0); // wrapped back
   expect(Math.min(...ticks.slice(wrap))).toBeGreaterThanOrEqual(BAR); // ...to the loop start
-  await page.getByRole('button', { name: /Stop/ }).click();
+  await page.getByTestId('play').click(); // ■ Stop (transport)
   expect(await page.evaluate(() => (window as any).__daw.project.songPosition)).toBe(BAR); // Stop: loop start
 });
 

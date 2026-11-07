@@ -180,7 +180,7 @@ test('restart keeps project and handles', async ({ page }) => {
 
   // The library handle still works: preview (on the new context) and a drag into a new row.
   await page.getByTestId('lib-sample-bass.wav').click();
-  await expect(page.getByTestId('preview-stop')).toBeVisible();
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
   await page.getByTestId('preview-stop').click();
   await page.getByTestId('track-0').click(); // the drums' step grid
   const preBass = await snapshot(page); // (the selection moved: part of the snapshot)

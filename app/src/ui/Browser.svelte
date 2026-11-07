@@ -25,8 +25,7 @@
   import type { AudioEngine } from '../audio/engine';
   import { STARTER_SAMPLE_MIME, startLibraryDrag } from '../library/drag';
   import { LibraryLostError, library } from '../library/library.svelte';
-  import { createPreview } from '../library/preview';
-  import type { Preview } from '../library/preview';
+  import { bindPreview, clearPreviewCache, previewState, stopPreview, togglePreview } from '../library/sharedPreview.svelte';
   import { listingFromPaths } from '../library/scan';
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
@@ -34,23 +33,12 @@
   let { engine }: { engine: AudioEngine } = $props();
 
   const lib = library.state;
-  let previewing = $state<string | null>(null);
   let error = $state<string | null>(null);
-  let preview: Preview | null = null;
-
-  const pv = () => (preview ??= createPreview(engine.context, (k) => (previewing = k)));
-  // An audio restart (Settings ▸ Apply) closes the context the preview plays
-  // on: drop it, so the next preview is created on the new one.
-  let previewEngine: AudioEngine | null = null;
-  $effect(() => {
-    const e = engine;
-    if (previewEngine !== null && previewEngine !== e) {
-      preview?.stop();
-      preview = null;
-      previewing = null;
-    }
-    previewEngine = e;
-  });
+  // The app-wide preview player (library/sharedPreview: the step grid's rows
+  // play through it too). An audio restart (Settings ▸ Apply) closes the
+  // context it plays on: rebinding drops the old player.
+  $effect(() => bindPreview(engine));
+  const previewing = $derived(previewState.key);
 
   /** Kit previews are keyed "kit:<file>", apart from any library path. */
   const KIT = 'kit:';
@@ -59,10 +47,10 @@
 
   async function toggle(s: LibSample, kit = false) {
     const k = kit ? KIT + s.path : s.path;
-    if (previewing === k) return pv().stop();
+    if (previewing === k) return stopPreview();
     error = null;
     try {
-      await pv().play(k, () => (kit ? starterSample(s.path) : library.sampleBlob(s.path)));
+      await togglePreview(k, s.name, () => (kit ? starterSample(s.path) : library.sampleBlob(s.path)));
     } catch (e) {
       if (e instanceof LibraryLostError) return; // the pane shows "Reconnect folder"
       error = e instanceof Error && e.message.includes(s.name) ? e.message : `Couldn't preview "${s.name}" — not a readable audio file`;
@@ -77,7 +65,7 @@
   // A new listing (refresh, another library) may hold other bytes at the same paths.
   $effect(() => {
     void lib.stamp;
-    preview?.clearCache();
+    clearPreviewCache();
   });
   // Switching library stops the preview (folders start collapsed: the library forgets them).
   let shown = '';
@@ -85,7 +73,7 @@
     const id = `${lib.source}:${lib.name}`;
     if (id === shown) return;
     shown = id;
-    preview?.stop();
+    stopPreview();
     error = null;
   });
 
@@ -100,7 +88,7 @@
     document.addEventListener('visibilitychange', vis);
     return () => {
       document.removeEventListener('visibilitychange', vis);
-      preview?.stop();
+      stopPreview();
     };
   });
 
@@ -152,12 +140,16 @@
     {/if}
   </div>
 
-  {#if previewing}
-    <div class="pv" role="status">
-      <span title={previewing}>▶ {nameOf(previewing)}</span>
-      <button data-testid="preview-stop" onclick={() => preview?.stop()}>■ Stop</button>
-    </div>
-  {/if}
+  <!-- Always shown (fixed height), so starting/stopping a preview never
+       shifts the tree below it. -->
+  <div class="pv" class:idle={!previewing} role="status" data-testid="preview-bar">
+    {#if previewing}
+      <span title={previewing}>▶ {previewState.label ?? nameOf(previewing)}</span>
+    {:else}
+      <span>Click a sample (here or a row's name) to preview</span>
+    {/if}
+    <button data-testid="preview-stop" aria-label="Stop preview" disabled={!previewing} onclick={stopPreview}>■ Stop</button>
+  </div>
   {#if error}
     <div class="err" data-testid="library-error" role="alert">
       <span>{error}</span><button aria-label="Dismiss" onclick={() => (error = null)}>×</button>
@@ -233,6 +225,8 @@
   .icon:hover { color: #fff; }
   .pv { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 3px 6px; border-radius: 3px; background: #23302a; color: #9fe0b8; }
   .pv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pv.idle { background: #22242b; color: #7d808c; }
+  .pv button:disabled { opacity: 0.4; cursor: default; }
   .pv button { font: inherit; font-size: 11px; border: 1px solid currentColor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; padding: 0 6px; }
   .err { display: flex; align-items: flex-start; gap: 6px; margin: 0 8px 6px; padding: 4px 6px; border-radius: 3px; background: #3a1d22; color: #ffb3ba; border: 1px solid #6b2a33; }
   .err span { flex: 1; }

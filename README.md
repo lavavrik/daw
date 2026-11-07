@@ -1,239 +1,369 @@
 # House DAW
 
-A browser DAW: a Rust audio engine compiled to WASM and hosted in an
-AudioWorklet, with a Svelte 5 UI. Design:
-[docs/superpowers/specs/2026-11-06-daw-design.md](docs/superpowers/specs/2026-11-06-daw-design.md).
+A personal browser DAW for making house music: drum step grids, modular synth
+racks, a piano roll with recording, patterns arranged on a song timeline, a
+mixer with sends, sidechain and a master limiter, projects saved to folders,
+undo/redo and WAV export. A Rust audio engine compiled to WASM runs in an
+AudioWorklet; the UI is Svelte 5. Design:
+[docs/superpowers/specs/2026-11-06-daw-design.md](docs/superpowers/specs/2026-11-06-daw-design.md);
+architecture notes per area in [docs/architecture/](docs/architecture/).
 
-## Prerequisites
+**Contents:** [Getting started](#getting-started) ·
+[The first loop](#the-first-loop) · [Synth and rack](#synth-and-rack) ·
+[Recording](#recording) · [Piano roll](#piano-roll) ·
+[Patterns and song](#patterns-and-song) · [Mixer](#mixer) ·
+[Save, open and export](#save-open-and-export) · [Library](#library) ·
+[Undo and redo](#undo-and-redo) · [Shortcuts](#shortcuts) ·
+[Troubleshooting](#troubleshooting) · [Development](#development)
 
-- Rust with the WASM target: `rustup target add wasm32-unknown-unknown`
-- Node 26 and npm
-- Chrome (desktop, macOS); e2e uses `npx playwright install chromium`
+## Getting started
 
-## Commands
+You need:
 
-- `npm install`
-- `npm test` — Rust unit tests (`cargo test --workspace`) + Vitest
-- `npm run build:engine` — builds `app/public/engine.wasm`
-- `npm run dev` — builds the engine, serves on http://localhost:5174
-  (cross-origin isolated: COOP/COEP headers set)
-- `npm run preview` — production build + preview on the same port
-- `npm run test:e2e` — Playwright
+- Rust with the WASM target: `rustup target add wasm32-unknown-unknown`;
+- Node 26 and npm;
+- desktop Chrome (the app uses Web MIDI, the File System Access API and
+  `SharedArrayBuffer`; other browsers are not supported).
 
-## First loop in 60 seconds
+```sh
+npm install
+npm run dev        # builds the engine, serves http://localhost:5174
+```
 
-1. `npm run dev`, open http://localhost:5174, click **Click to start audio**.
-2. Drag a kick from Finder onto the first row (it says "drop sample"; the row
-   takes the file's name). No samples yet? Use the starter kit in
-   `samples/starter/` (open it with `open samples/starter`): two kicks, clap,
-   snare, rim, closed/open hats, shaker, tom, two chord stabs and a sub hit.
-   It is synthesised by `scripts/make-starter-kit.mjs` (original sounds, CC0),
-   so you can tweak the recipes and re-run the script. Drag a hat onto the second row. Dropping on a row
-   that already has a sample replaces it; dropping on **+ Add row** makes a new
-   row for it.
-3. Click cells to place steps (click-drag paints; Alt-click = quiet ghost
-   note, shown dimmer). For four-on-the-floor tick steps 1, 5, 9, 13 on the
-   kick; put the hat on 3, 7, 11, 15 for off-beats.
-4. Press **Space**. The white-outlined column is the playhead. Tempo defaults
-   to 124 BPM; try the metronome and change tempo while playing (it should not
-   click). Dropouts in the top bar should stay 0.
+Open http://localhost:5174 and click **Click to start audio** (browsers only
+start audio from a click). The screen has four parts:
 
-Notes: only audio files are accepted (wav, aif, mp3, flac, ogg, m4a); a
-failed drop shows a dismissable red banner and changes nothing. If you drop a
-very large sample while playing, it loads when you stop (yellow notice). Up to
-256 sample loads per session (every drop uses one, even onto a row that already
-has a sample; reload to start over). The 2 ms fade-out applied to each sample's tail
-avoids clicks from samples that don't end at zero.
+- the **top bar**: the Project menu (the project name, "Untitled" at first),
+  undo/redo, transport, recording, tempo and status;
+- the **Browser** on the left: your sample library and saved patches;
+- the **timeline** at the top: one lane per track, with **+ Drum track** and
+  **+ Synth track** under the track list;
+- the **bottom panel**: the selected track's editor (**Step grid** for drums;
+  **Piano roll** or **Instrument** for synths) and the **Mixer** tab.
 
-## Synth tracks: the rack (Instrument tab)
+A new project starts with one drum track at 124 BPM.
 
-**Play a synth**: click **+ Synth track**, then play with the computer
-keyboard (A-row = white keys, W/E/T/Y/U = black; **Z / X** change octave, shown
-as "Oct" in the top bar) or a MIDI keyboard. Chrome asks for MIDI permission
-the first time; the "MIDI:" pill shows the state. Notes go to the selected
-synth track (selecting drums keeps the last synth). Design notes:
-`docs/architecture/modular.md`.
+## The first loop
 
-**+ Synth track** adds a track with the *Deep Bass* patch; the bottom panel
-shows its rack (code: `app/src/ui/rack/`).
+1. Drag a kick from Finder (or from the Browser, see [Library](#library))
+   onto the first drum row; an empty row says "drop sample", and the row takes
+   the file's name. No samples yet? Click **Use starter kit** in the Browser,
+   or open `samples/starter/` (two kicks, clap, snare, rim, closed and open
+   hats, shaker, tom, two chord stabs and a sub hit; synthesised by
+   `scripts/make-starter-kit.mjs`, CC0).
+2. Drag a hat onto the second row. Dropping on a row that already has a
+   sample replaces it; dropping on **+ Add row** makes a new row. Drop several
+   files at once and each gets its own row.
+3. Click cells to place steps; click-drag paints. **Alt**-click places a quiet
+   ghost note (drawn dimmer). A focused cell also toggles with **Enter**. For
+   four-on-the-floor, put the kick on steps 1, 5, 9 and 13 and the hat on 3,
+   7, 11 and 15.
+4. Press **Space** to play. The outlined column is the playhead. Change the
+   tempo in **BPM** (type a value, then Enter) and try **Metro** (the
+   metronome).
 
-- **Patch** dropdown loads a starter patch (Deep Bass, Chord Stab, Pad, Lead,
-  Pluck), replacing the rack. After any edit "(edited)" appears; **revert**
-  reloads the patch. Loading over edits asks before discarding them.
-- **Knobs**: drag up/down (150 px = full range; Shift = fine), double-click =
-  default, or focus and use the arrow keys (1% steps). The value is always
-  shown under the label. Choice params (wave, filter mode…) are segmented
-  buttons (arrow keys move the selection).
+Each row has **M** (mute), gain and pan. Under the grid: **Steps** (16, 32 or
+64) and **Swing**. Up to 16 rows per drum track and 32 tracks per project (the
+add buttons grey out at 32).
+
+Accepted audio files: wav, aiff, mp3, flac, ogg and m4a. A failed drop shows a
+red banner and changes nothing. A very large sample dropped while playing
+loads when you stop (a yellow notice says so). Each sample's last 2 ms are
+faded out, so a sample that doesn't end at zero never clicks.
+
+## Synth and rack
+
+Click **+ Synth track**: it gets the *Deep Bass* patch and opens the **Piano
+roll**. Play it with the computer keyboard (the home row A S D F G H J K L are
+white keys, W E T Y U O the black keys; **Z** / **X** change the octave, shown
+as **Oct** in the top bar) or a MIDI keyboard. The top bar's **Keys →** shows
+which synth track the keys play: the selected synth track or, while a drum
+track is selected, the synth track selected last.
+
+The **Instrument** tab shows the track's rack: module panels joined by cables.
+Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
+
+- **Patch** loads a starter patch (Deep Bass, Chord Stab, Pad, Lead, Pluck)
+  or one you saved to the library, replacing the rack. After any edit
+  **(edited)** appears; **revert** reloads the patch. Loading over edits asks
+  first (an inline "Discard your edits…?" under the control).
+- **Save patch** stores the rack in the library folder's `patches/` (it needs
+  a library folder, see [Library](#library)); it then shows in **Patch**.
+- **Knobs:** drag up or down (Shift = fine), double-click for the default, or
+  focus and use the arrow keys. The value is shown under the label. Choice
+  parameters (wave, filter mode…) are segmented buttons.
 - **Cables** are coloured by signal: audio blue, pitch orange, gate green,
-  CV purple. Drag from an output to an input to patch (an input takes one
-  cable; a new one replaces it). Grab a cable by its *input* end to move it
-  to another input, or drop it anywhere else to unplug it. You can also drag
-  from an empty input to an output. Escape cancels a cable or knob drag.
-- **+ Add module** (grouped by category; up to 32 modules) and the × on a
-  module header to remove it.
+  CV purple. Drag from an output to an input to patch; an input takes one
+  cable, so a new one replaces the old. Grab a cable by its *input* end to
+  move it to another input, or drop it anywhere else to unplug it. **Esc**
+  cancels a cable or knob drag.
+- **From the keyboard:** Tab to a jack and press **Enter** (or Space) to pick
+  it up, Tab to another jack and press **Enter** to connect. On a connected
+  input, Enter picks up its cable: Enter on another input moves it, **Delete**
+  unplugs it. **Esc** cancels.
+- **+ Add module** (grouped by category; arrow keys move through it) and the
+  × on a module header. Up to 32 modules per rack.
 
-## Record a bassline
+**Effects in the rack.** Besides the sources and shapers, + Add module lists
+**Delay** (tempo-synced, up to 2 s), **Reverb**, **Chorus**, **EQ**,
+**Compressor** (with a sidechain input), **Saturator**, **Attenuator** (level
+and offset, handy for scaling a CV) and the **Sample Player** (plays a project
+sample, optionally pitched from the keys; follow it with an ADSR and a VCA for
+gated notes; drop a sample on its panel). Delay, Reverb and Chorus share
+memory across the project: at most 8 delays, 8 reverbs and 16 choruses over
+all tracks. When a bank is full the menu greys the module out ("All 8 delays
+in use").
 
-1. Click **+ Synth track** (opens the piano roll). Play with the computer keys
-   (A-row) or a MIDI keyboard.
-2. Arm recording with **R** or the **● Rec** button (it turns red). Turn on
-   **Count-in** for one bar of clicks before recording starts (off by default).
-3. Press **Space**. Notes you play are recorded into the track's pattern, which
-   loops; later passes overdub. **Undo take** removes exactly what the last
-   pass added.
-4. Edit in the piano roll: click to draw, drag to move, drag the right edge to
-   resize, **Alt** turns snapping off, **Q** quantizes (selection, or all
-   notes), Delete removes. Grid size and pattern length are in its toolbar.
+Poly patches (Chord Stab, Pad, Pluck) are about 9 dB quieter than the mono
+ones (Deep Bass, Lead) so chords don't clip: raise their faders in the mixer.
 
-**Bluetooth headphones** add ~150-250 ms of delay. Recording maps your key
-presses to what you *heard* (via `getOutputTimestamp`), so notes land on the
-beat anyway. If it still feels early or late, adjust **Rec offset** (ms, in the
-top bar; positive = notes land earlier). Playing live still feels delayed;
-wired headphones or speakers fix that. Design notes:
-`docs/architecture/sequencer.md`.
+## Recording
 
-## Mix
+1. Select a synth track (its name shows after **Keys →**).
+2. Arm with **R** or **● Rec** (it turns red). **Count-in** gives one bar of
+   clicks before recording starts.
+3. Press **Space**. What you play is recorded into the track's current
+   pattern, which loops; each loop overdubs. A note with the same pitch and
+   start as one already in the pattern is not written again, so playing a
+   part twice never stacks hidden duplicates. The sustain pedal works.
+4. **↶ Take** undoes the last recording pass (one pass is one undo step).
 
-Design notes: `docs/architecture/mixer.md`.
+Recording works in **PAT** mode only. Switching the Keys track or the pattern
+mid-pass ends held notes there and records on into the new target.
 
-1. **Mixer tab.** The bottom panel's **Mixer** tab shows one strip per track,
-   the **Reverb** and **Delay** returns and the **Master**. Each strip has the
-   track colour and name (click it to select the track; the mixer stays open),
-   M / S, a fader with a dB readout, pan, a stereo peak meter (peak-hold line,
-   clip light: click to reset) and collapsible **EQ** and **Comp** sections.
-   Selecting a track from the timeline's track list leaves the mixer for that
-   track's editor.
-2. **Sends.** Each track has two send knobs, **Reverb** and **Delay**
-   (Off .. 0 dB). They tap *after* the fader; the **post/pre** button beside a
-   send makes it tap *before* the fader, so the send level stays when you pull
-   the fader down. Muting or soloing out a track also stops its sends (the
-   effect tails still ring out). The Delay return's **Time** is a note length
-   synced to the tempo, at most 2 s: a longer one (1 bar below 120 bpm, 1/2
-   below 60 bpm) plays at 2 s, and the strip shows "(max 2 s)".
-3. **Sidechain pumping, step by step.**
-   1. Put a kick on a drum track's row and make a four-on-the-floor pattern.
-   2. Add a synth track (a pad or chord patch) playing a held chord.
-   3. In the mixer, expand the synth strip's **Comp** and switch it **on**.
-   4. In **Sidechain**, pick the drum track's kick row (shown as
-      "SC: Drums · kick").
-   5. Lower **Threshold** until the strip's gain-reduction meter dips on every
-      kick; raise **Ratio** (4-8) for a deeper duck, shorten **Release** to
-      let the pad swell back before the next kick.
+Recording places notes where you *heard* the beat, using the browser's output
+timestamp, so even Bluetooth headphones (150–250 ms late) record on the beat.
+If notes still land early or late, set **Offset** in the top bar (−200 to 200
+ms; positive = earlier). Design notes:
+[docs/architecture/sequencer.md](docs/architecture/sequencer.md).
+
+## Piano roll
+
+The **Piano roll** tab edits the synth track's current pattern.
+
+- **Mouse:** click empty space to add a note one grid cell long (keep
+  dragging to place it); drag a note to move it, its last few pixels to
+  resize; **Shift**-drag box-selects, **Shift**-click toggles a note in the selection;
+  **Alt** turns snapping off. Click a key on the keyboard at the left to hear
+  it. The lane at the bottom sets velocity: drag a stem up or down.
+- **Keys** (while the roll has focus): **Delete**/Backspace removes the
+  selection, **Q** quantizes (the selection, or every note), **Cmd/Ctrl+A**
+  selects all, **←/→** move by a grid cell, **↑/↓** by a semitone (**Shift**:
+  an octave), **Esc** cancels a drag or clears the selection. Every other key
+  still plays the keyboard piano.
+- **Wheel** scrolls, **Shift+wheel** scrolls time, **Cmd/Ctrl+wheel** zooms.
+- **Toolbar:** **Grid** (snap and new-note length), **Length** (pattern bars;
+  notes past the end are kept but silent, drawn hatched), **Quantize** and
+  **Clear** (asks first).
+
+## Patterns and song
+
+Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.md).
+
+- **Patterns.** Each track has up to 16 patterns. The picker above the editor
+  has **+ New**, **Duplicate**, **Rename** and **Delete** (a pattern used by
+  clips, or a track's last one, can't be deleted). The selected one is the
+  track's *current* pattern.
+- **PAT / SONG** (top bar, or **Shift+L**): PAT loops each track's current
+  pattern; SONG plays the timeline.
+- **Clips.** Click an empty spot in a track's lane to place its current
+  pattern there. Drag a clip's body to move it (beat snap, **Alt** = free),
+  its right edge to repeat or cut it (dashed lines mark repeats), its left
+  edge to trim. **Double-click** a clip to edit its pattern below.
+  **Right-click** for **Make unique** (its own copy of a shared pattern) and
+  Delete. Clips stay on their own track.
+- **Timeline keys** (lanes focused): **Delete** removes, **Cmd/Ctrl+D**
+  duplicates, **Cmd/Ctrl+A** selects all, **←/→** nudge a beat (**Shift**: a
+  bar), **Esc** cancels a drag or clears the selection; **Shift**-drag box
+  selects. Wheel scrolls tracks, Shift+wheel scrolls time, Cmd/Ctrl+wheel
+  zooms; the slider under the lanes scrolls time too.
+- **Ruler.** Click it to set the song position. Drag on it to set a loop of
+  whole bars (it turns **Loop** on); **Loop** toggles it in SONG mode. While
+  playing, the new loop takes effect when you release. Stop returns to the
+  loop start, else to where you started.
+- After the last clip, SONG keeps playing (silence) until you stop.
+- Each track's **×** (on hover) removes it after an inline confirmation.
+
+Limits: 16 patterns and 256 clips per track, 999 bars.
+
+## Mixer
+
+The bottom panel's **Mixer** tab shows one strip per track, the **Reverb** and
+**Delay** returns and the **Master**. Design notes:
+[docs/architecture/mixer.md](docs/architecture/mixer.md).
+
+1. **Strips.** Track colour and name (click to select the track; the mixer
+   stays open), **M** / **S**, a fader with a dB readout (up to +6 dB), pan, a
+   stereo peak meter (peak-hold line; click the clip light to reset) and
+   collapsible **EQ** and **Comp** sections. Selecting a track in the timeline
+   switches back to its editor.
+2. **Sends.** Two send knobs per strip, **Reverb** and **Delay**. They tap
+   after the fader; the **post/pre** button beside a send taps before it, so
+   the send level stays when you pull the fader down. A muted or soloed-out
+   track sends nothing new (tails still ring out). The Delay return's
+   **Time** is a tempo-synced note length, at most 2 s; a longer one plays at
+   2 s and the strip shows "(max 2 s)".
+3. **Sidechain pumping.**
+   1. Put a kick on a drum row with a four-on-the-floor pattern.
+   2. Add a synth track playing a held chord (Pad or Chord Stab).
+   3. Expand the synth strip's **Comp** and switch it on.
+   4. In **Sidechain**, pick the kick row (shown as "SC: Drums · kick").
+   5. Lower **Threshold** until the gain-reduction meter dips on every kick;
+      raise **Ratio** (4–8) for a deeper duck; shorten **Release** to let the
+      pad swell back before the next kick.
    Up to 8 distinct drum rows can be sidechain keys at once.
-4. **Master limiter.** The Master strip has a **Ceiling** knob (default
-   -0.3 dB) and a **Limiter GR** readout: the output never goes above the
-   ceiling. The master light turns amber (LIMIT) when the limiter works hard
-   (more than 1 dB of reduction) and red only when the output actually
-   reaches the ceiling; click it to reset. The limiter delays the output by
-   1.5 ms; the playhead and recording take that into account.
-5. **Gain-staging tips.** Poly patches (Chord Stab, Pad, Pluck) are about 9 dB
-   quieter than the mono ones (Deep Bass, Lead): raise their faders (up to
-   +6 dB) instead of lowering everything else. Keep meters peaking around
-   -12 .. -6 dB on the strips and let the limiter only catch the occasional
-   peak; if GR sits above 3-4 dB, turn some faders down. The pan law keeps
-   centre at unity and gives +3 dB at a hard pan.
+4. **Master limiter.** **Ceiling** (default −0.3 dB) and a **Limiter GR**
+   readout; the output never goes above the ceiling. The master light turns
+   amber (**LIMIT**) when the limiter takes more than 1 dB and red only when
+   the output reaches the ceiling (click to reset).
+5. **Gain staging.** Keep strips peaking around −12 to −6 dB and let the
+   limiter catch only the odd peak; if Limiter GR sits above 3–4 dB, pull some
+   faders down. Centre pan is unity; a hard pan is +3 dB on one side.
 
-## Arrange a song
+## Save, open and export
 
-Design notes: `docs/architecture/arrangement.md`.
+Design notes: [docs/architecture/projects.md](docs/architecture/projects.md),
+[docs/architecture/export.md](docs/architecture/export.md).
 
-1. **Patterns.** Every track has patterns (up to 16): use the picker above the
-   step grid / piano roll (**+ New**, **Duplicate**, **Rename**, **Delete**).
-   The one selected is the track's *current* pattern; in **PAT** mode it simply
-   loops, as before.
-2. **Clips.** Click an empty spot in a track's lane in the timeline (top
-   centre) to place its current pattern at that bar; drag the clip's right edge
-   to repeat it (dashed lines mark each repeat) or cut it. Drag the body to
-   move (beat snap, **Alt** = free), the left edge to trim. Clips stay on
-   their own track. **Double-click** a clip to edit its pattern below.
-   **Right-click** a clip for **Make unique** (own copy of a shared pattern, so
-   edits don't change the other clips) and Delete.
-3. **PAT / SONG.** The toggle in the top bar (or **Shift+L**) switches between
-   looping each track's current pattern and playing the timeline. Click the
-   ruler to set the song position; in SONG press **Space**. Recording is
-   disabled in SONG.
-4. **Loop.** Drag on the ruler to loop whole bars (turns **Loop** on); the
-   Loop button toggles it (SONG only). Stop returns to the loop start, else to
-   where you started.
-
-Timeline keys (while its lanes are focused): **Delete** removes, **Cmd/Ctrl+D**
-duplicates, **Cmd/Ctrl+A** selects all, **← / →** nudge a beat (**Shift**: a
-bar), **Escape** cancels a drag / clears the selection, **Shift-drag** box
-selects. Wheel scrolls tracks, **Shift+wheel** scrolls time, **Cmd/Ctrl+wheel**
-zooms; the slider in the footer scrolls time too. Limits: 16 patterns and 256
-clips per track, 999 bars.
-
-## Save, open, autosave
-
-Design notes: `docs/architecture/projects.md`.
-
-A project is a folder. Click the project name at the top left (it starts as
-"Untitled") for the menu: **New**, **Open…**, **Save**, **Save As…**
-(**Cmd/Ctrl+S**, **Shift+Cmd/Ctrl+S**, **Cmd/Ctrl+O**). Chrome asks you to pick
-a folder:
+A project is a folder:
 
 ```
 My Song/
-  project.json      tracks, patterns, rack patches, mixer, tempo…
+  project.json      tracks, patterns, racks, mixer, tempo…
   samples/          the original sample files, byte for byte
 ```
 
-A **● unsaved** mark appears next to the name after any edit and goes away on
-Save (or when edits bring it back to the saved state). New, Open… and
-Cmd/Ctrl+O ask in the Project menu before discarding unsaved changes (or an
-unanswered **Restore last session** offer). Save As into a folder that already
-holds a project asks "Replace the project in …?" first: its project.json and
-the samples it lists are replaced. Closing or reloading the tab with
-unsaved changes to a project that has a folder asks first (the browser's own
-"Leave site?").
+Click the project name at the top left for the **Project** menu: **New**,
+**Open…** (**Cmd/Ctrl+O**), **Save** (**Cmd/Ctrl+S**), **Save As…**
+(**Shift+Cmd/Ctrl+S**) and **Export WAV…**. Chrome asks for a folder the first
+time you save.
 
-**Autosave** runs on its own a few seconds after you stop editing, into the
-browser's private storage (not your project folder). After a crash or a closed
-tab, the next start shows **Restore last session** / **Start fresh** above the
-editors. A restored session is still "● unsaved" and has no folder yet; Save
-asks for one. Autosave works in one tab at a time: a second tab shows
-"Autosave is off — this project is open in another tab".
+- **● unsaved** next to the name marks unsaved edits; it goes away on Save, or
+  when undo brings the project back to the saved state.
+- **New** and **Open…** ask in the menu before discarding unsaved changes.
+  Save As into a folder that already holds a project asks "Replace the project
+  in …?" first. Closing the tab with unsaved changes to a saved project asks
+  too (Chrome's own "Leave site?").
+- **Autosave** runs a few seconds after you stop editing, into the browser's
+  private storage (not your folder). After a crash or a closed tab, the next
+  start offers **Restore last session** or **Start fresh**. A restored session
+  is still unsaved and has no folder until you save. Only one tab autosaves;
+  a second one says "Autosave is off — this project is open in another tab".
+- There is no Cmd/Ctrl+N (Chrome keeps it): use Project ▸ **New**.
 
-## Export WAV
+**Export WAV…** renders the song (SONG mode, from the start to the end of the
+last clip plus a 2 s tail) to a 24-bit stereo WAV at the project's sample
+rate, named `<project name> <YYYY-MM-DD>.wav`. Chrome asks where to save; a
+banner shows progress with **Cancel**. The metronome is never in the export
+and the loop is ignored. It renders in the background faster than real time
+with the same engine you hear, so you can keep working (it exports the
+project as it was when you clicked). A song without clips says so instead of
+writing an empty file.
 
-Design notes: `docs/architecture/export.md`.
+## Library
 
-Project menu ▸ **Export WAV…** renders the song (SONG mode, from the start to
-the end of the last clip plus a 2 s tail) to a 24-bit stereo WAV at the
-project's sample rate, named `<project name> <YYYY-MM-DD>.wav`. Chrome asks
-where to save first; a banner shows the progress with **Cancel**. The
-**metronome is never in the export**, and the loop is ignored. It renders in
-the background, faster than real time, with the same engine you hear, so you
-can keep working (it exports the project as it was when you clicked). A song
-without clips says so instead of writing an empty file.
+The **Browser** pane is one library for every project. Click **Choose library
+folder…** once (any folder; sub-folders open as you browse them) or **Use
+starter kit** for the bundled sounds (read-only). **↻** rescans the folder.
 
-## Your sample library
+- Click a sample to preview it (**■ Stop** stops); big files stream instead of
+  loading into memory. Up to 2000 entries per folder are listed.
+- Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample
+  Player** module. It is copied into the project (Save writes it to
+  `samples/`), so projects stay self-contained.
+- **Patches** lists the patches saved with **Save patch**; load them from a
+  synth track's **Patch** dropdown.
+- After a browser restart Chrome may withdraw access to the folder: the pane
+  shows **Reconnect folder**; one click grants it again. If the folder moved,
+  use **Choose another folder…**.
 
-The **Browser** pane shows one library for every project. Click **Choose
-library folder…** once (any folder; sub-folders are browsed lazily) or **Use
-starter kit** for the bundled sounds. Click a sample to preview it; big files
-stream instead of loading into memory. **↻** rescans the folder.
+## Undo and redo
 
-After a browser restart Chrome may withdraw access to the folder: the pane then
-shows **Reconnect folder**; one click grants it again. Same if the folder was
-moved or deleted (use **Change folder…**).
+**↶** / **↷** in the top bar (hover for what they undo, e.g. "Undo Move
+notes"), **Cmd/Ctrl+Z** and **Shift+Cmd/Ctrl+Z** (or **Ctrl+Y**). Everything
+saved in the project is undoable: steps, notes, clips, patterns, racks,
+cables, knobs, mixer settings, tempo, adding and removing tracks. One drag is
+one step; one recording pass is one step. Selecting a track or pattern is not
+an edit. In a text field the keys undo the text instead. Up to 200 steps;
+opening or starting a project clears the history. Design notes:
+[docs/architecture/history.md](docs/architecture/history.md).
 
-Drag a sample onto a drum row, onto **+ Add row**, or onto a **Sample Player**
-module in the rack. It is copied into the project (the **Save** copies it into
-`samples/`), so projects stay self-contained. **Save patch** in the Instrument
-tab stores the rack as `patches/<name>.json` in the library; it then shows up
-in the **Patch** dropdown.
+## Shortcuts
 
-## Effects in the rack
+Global shortcuts are ignored while you type in a text field (Save and Open
+still work there).
 
-**+ Add module** in the Instrument tab lists the effects (grouped by category): **Delay**
-(tempo-synced, up to 2 s), **Reverb**, **Chorus**; plus **EQ** and
-**Compressor** (sidechain input included), **Saturator** (*Shaping*) and
-**Attenuator** (*Utility*: level and offset, handy for scaling a CV), and the
-**Sample Player** (*Source*: plays a project sample, optionally pitched from the
-keys; follow it with an ADSR + VCA for gated notes).
+| Key | Action |
+|---|---|
+| **Space** | Play / Stop |
+| **A S D F G H J K L** / **W E T Y U O** | Keyboard piano: white / black keys |
+| **Z** / **X** | Octave down / up |
+| **R** | Record arm |
+| **Shift+L** | PAT / SONG |
+| **Cmd/Ctrl+Z** | Undo |
+| **Shift+Cmd/Ctrl+Z**, **Ctrl+Y** | Redo |
+| **Cmd/Ctrl+S** | Save |
+| **Shift+Cmd/Ctrl+S** | Save As… |
+| **Cmd/Ctrl+O** | Open… |
+| **Esc** | Cancel a drag (cable, knob, note, clip, loop) or a keyboard cable pick-up; close a menu or confirmation |
+| **Enter** | On a focused step cell: toggle it. On a focused jack: pick up / connect |
+| **Delete** / Backspace | Piano roll, timeline: delete the selection. Picked-up cable: unplug |
+| **Q** | Piano roll: quantize |
+| **Cmd/Ctrl+A** | Piano roll, timeline: select all |
+| **Cmd/Ctrl+D** | Timeline: duplicate the selection |
+| **← →** | Piano roll: move by a grid cell. Timeline: nudge a beat (**Shift**: a bar) |
+| **↑ ↓** | Piano roll: transpose a semitone (**Shift**: an octave) |
+| **Alt** (while dragging) | No snap (piano roll, clips); Alt-click a step: ghost note |
+| **Shift**-drag | Box select (piano roll, timeline) |
+| **Cmd/Ctrl+wheel** | Zoom (piano roll, timeline) |
 
-Delay, Reverb and Chorus use memory shared by the whole project: at most **8
-delays, 8 reverbs and 16 chorus** in total over all tracks. When a bank is full
-the menu greys the module ("All 8 delays in use"). Design notes:
-`docs/architecture/modular.md`.
+## Troubleshooting
+
+**Playing feels late with Bluetooth headphones.** Bluetooth adds 100–300 ms
+that no setting can remove. The **⚙** button in the top bar shows the total
+output latency (amber above 40 ms) and opens the audio settings, which say
+"High output latency — Bluetooth headphones?" when that is likely. For playing
+live, use wired headphones or speakers. Recording still lands on the beat (see
+[Recording](#recording)); fine-tune with **Offset** if needed.
+
+**Crackles or dropouts.** The top bar's **CPU** readout turns red when audio
+blocks were missed. Open **⚙** and pick a larger **Latency**: **Balanced** or
+**Playback (most stable)**, or **Custom…** with a buffer in ms, then
+**Apply**. Applying restarts audio and stops playback; the project stays as it
+is. The panel shows what the browser chose (sample rate, base and output
+latency).
+
+**MIDI keyboard does nothing.** Chrome asks for MIDI permission the first time;
+the **MIDI:** pill in the top bar shows the state. If it says "blocked", allow
+MIDI in Chrome's site settings (the icon left of the address bar ▸ Site
+settings ▸ MIDI devices) and reload. "no device": plug the keyboard in; it is
+picked up without a reload. "unsupported": use Chrome. Notes play the track
+shown after **Keys →**; select a synth track first. All MIDI channels are
+heard (omni).
+
+**"Sample limit reached".** A session can load 256 samples (every drop uses
+one, even a replacement). Save, then Project ▸ **Open…** the project again (or
+reload) to start counting from what it uses.
+
+**"Audio engine stopped".** The engine hit an error; click **reload** in the
+red top-bar message. After the reload, autosave offers **Restore last
+session** if there were unsaved edits.
+
+**The library says "Reconnect folder".** Chrome withdrew folder access after a
+restart; click it to grant access again.
+
+## Development
+
+- `npm test`: `svelte-check` (types and Svelte warnings, fails on either),
+  Rust tests (`cargo test --workspace`), the engine build, then Vitest.
+  Vitest also runs from `app/` (`app/vitest.config.ts` reuses the root
+  config).
+- `npm run build:engine`: builds `app/public/engine.wasm`.
+- `npm run dev`: engine + Vite on http://localhost:5174 (cross-origin
+  isolated: COOP/COEP headers set).
+- `npm run preview`: production build + preview on the same port.
+- `npm run test:e2e`: Playwright (`npx playwright install chromium` once). It
+  reuses a server already on :5174, else starts `npm run preview`. The
+  `serial` project (real-time and CPU assertions) runs after the rest, in one
+  worker.
+- Follow-ups and decisions per plan: [docs/followups/](docs/followups/).

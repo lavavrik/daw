@@ -3,15 +3,16 @@ import { BACKLOG_LIMIT, CommandSender, STALL_MS } from './sendQueue';
 
 /**
  * A ring of `cap - 1` usable records (like CommandRing) that the "audio
- * thread" empties on block(); timers run on tick(); time is set by hand.
+ * thread" empties on block(); timers run on tick(); time (h.time.now) is set by hand.
  */
 function harness(cap = 8) {
   const ring: number[][] = [];
   const got: number[][] = [];
   const timers: (() => void)[] = [];
   const stalls: (string | null)[] = [];
+  const time = { now: 0 };
   const h = {
-    now: 0,
+    time,
     ring,
     got,
     stalls,
@@ -23,7 +24,7 @@ function harness(cap = 8) {
         return true;
       },
       schedule: (fn) => void timers.push(fn),
-      now: () => h.now,
+      now: () => time.now,
       onStall: (m) => stalls.push(m),
     }),
     /** One audio block: the worklet drains everything queued. */
@@ -70,12 +71,12 @@ describe('CommandSender', () => {
   it('a ring that stays full for > STALL_MS reports a stall once, and recovery', () => {
     const h = harness(4);
     for (let i = 0; i < 10; i++) h.sender.send(i);
-    h.now = STALL_MS - 1;
+    h.time.now = STALL_MS - 1;
     h.tick();
     expect(h.stalls).toEqual([]);
-    h.now = STALL_MS + 1;
+    h.time.now = STALL_MS + 1;
     h.tick();
-    h.now += 1000;
+    h.time.now += 1000;
     h.tick();
     expect(h.stalls).toHaveLength(1);
     expect(h.stalls[0]).toMatch(/audio engine/i);

@@ -239,8 +239,10 @@ Order:
      dense in the app (point i of the saved list is idx i), so the snapshot
      carries them.
    - The state: each owner's lanes as in `to`; a lane kept on its engine
-     lane and target keeps its UI id, and so do its points kept on their
-     idx; unchanged owners are not touched.
+     lane and target keeps its UI id. Its points keep theirs matched by
+     **tick** first (a delete compacts idx, so a kept point can come back at
+     another idx), then by idx for a point whose old tick is gone (moved in
+     place); unchanged owners are not touched.
 4. **Transport** (tempo, metronome, loop, mode), selection, and
    `SET_INPUT_TRACK` only if the live input changed.
 
@@ -299,8 +301,8 @@ removed notes`).
   whole track), `undo/redo lane edits` (point edits, lanes added on a track
   and the Master row, a lane removed and its engine lane re-used for
   another target, two lanes trading targets, points rewritten over the old
-  ticks) and `diffApply sends point removals before point sets and keeps
-  point ids`. The engine model validates lane targets (existing,
+  ticks), `diffApply sends point removals before point sets and keeps
+  point ids` and `undo keeps each point's UI id on its own point`. The engine model validates lane targets (existing,
   automatable, one lane each), point ranges and unique ticks, and clears
   lanes with their track, module or rack like the engine.
 - `state/automation.test.ts` `pointCommands: random lane diffs never hit a

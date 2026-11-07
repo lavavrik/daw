@@ -4,7 +4,8 @@ import { moduleDef, paramIndex } from '../audio/catalog';
 import { liveInputTrack } from '../state/actions';
 import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
-import { loadProject, ProjectLoadError } from './load';
+import { bindingCommands, loadProject, ProjectLoadError, units } from './load';
+import { addLane, addPoint } from '../state/automation-actions';
 import { projectCommands } from './commands';
 import { createHistory } from '../history/history';
 import { setTempo } from '../state/actions';
@@ -296,6 +297,44 @@ describe('loadProject', () => {
     const again = projectCommands(serialize(p), new Map(json.samples.map((s) => [s.id, s.id])));
     expect(again.commands.filter((c) => c[0] >= Op.AUTO_LANE_SET && c[0] <= Op.AUTO_LANE_ENABLE).map(([op, a = 0, b = 0, c = 0, d = 0]) => [op, a, b, c, d]))
       .toEqual(auto.map((x) => [x.op, ...x.args]));
+  });
+
+  it('units() keeps each lane whole: AUTO_LANE_SET, its points, AUTO_LANE_ENABLE', async () => {
+    const { p: src } = await buildFixture();
+    await addAudioFixture(src);
+    addAutomationFixture(src);
+    const json = roundJson(serialize(src));
+    const cmds = projectCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands;
+    const us = units(cmds);
+    expect(us.flat()).toEqual(cmds); // nothing lost, nothing reordered
+    const lanes = us.filter((u) => u[0][0] === Op.AUTO_LANE_SET);
+    expect(lanes.map((u) => u.map((c) => c[0]))).toEqual([
+      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
+      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
+      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
+      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
+    ]);
+    for (const u of lanes) for (const c of u.slice(1)) expect(Math.floor((c[0] === Op.AUTO_POINT_SET ? c[1]! / 512 : c[1]!))).toBe(u[0][1]);
+    // No lane command is left outside its lane's unit; an audio clip's triple stays one unit too.
+    expect(us.filter((u) => u.length === 1 && u[0][0] >= Op.AUTO_POINT_SET && u[0][0] <= Op.AUTO_LANE_ENABLE)).toEqual([]);
+    expect(us.filter((u) => u[0][0] === Op.AUDIO_CLIP_SOURCE).every((u) => u.map((c) => c[0]).join() === [Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET].join())).toBe(true);
+    // A lane without points is one unit of SET + ENABLE; two lanes in a row never merge.
+    expect(units([[Op.AUTO_LANE_SET, 0, 1, 0, 0], [Op.AUTO_LANE_ENABLE, 0, 1], [Op.AUTO_LANE_SET, 1, 1, 1, 0], [Op.AUTO_POINT_SET, 512, 0, 0, 0], [Op.AUTO_LANE_ENABLE, 1, 0]]))
+      .toEqual([[[Op.AUTO_LANE_SET, 0, 1, 0, 0], [Op.AUTO_LANE_ENABLE, 0, 1]], [[Op.AUTO_LANE_SET, 1, 1, 1, 0], [Op.AUTO_POINT_SET, 512, 0, 0, 0], [Op.AUTO_LANE_ENABLE, 1, 0]]]);
+  });
+
+  it('bindingCommands re-sends a SamplePlayer\'s sample, never the lanes on its track', async () => {
+    const { p, synth } = await buildFixture();
+    const sp = synth.modules.find((m) => m.kind === moduleDef('sample_player').kind)!;
+    // Lanes on the SamplePlayer's own gain and on the track's fader.
+    const gain = addLane(p, nullSink, synth.id, { kind: 'rack', module: sp.idx, param: 'gain' })!;
+    addPoint(p, nullSink, gain.id, { tick: 0, value: 0.2 });
+    addPoint(p, nullSink, gain.id, { tick: 3840, value: 0.9 });
+    const fader = addLane(p, nullSink, synth.id, { kind: 'mix', param: 'fader' })!;
+    addPoint(p, nullSink, fader.id, { tick: 960, value: -6 });
+    const out = bindingCommands(p, 2); // sample 2: only the SamplePlayer uses it
+    expect(out).toEqual([[Op.RACK_SET_PARAM, synth.slot, sp.idx, paramIndex(moduleDef('sample_player'), 'sample'), 2]]);
+    expect(out.some((c) => c[0] >= Op.AUTO_LANE_SET && c[0] <= Op.AUTO_OVERRIDE)).toBe(false);
   });
 
   it('a lane on a module the FX pool drops goes with it', async () => {

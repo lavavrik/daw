@@ -443,19 +443,15 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
   }
 
   // The state: each owner's lanes as in `to`, reusing the UI ids of lanes
-  // kept on their engine lane and target, and of points kept on their idx.
+  // kept on their engine lane and target, and of their points (reusePoints).
   const reuse = (old: AutomationLane[], lanes: LaneJson[]): AutomationLane[] | null => {
     if (same(old.map(laneJson), lanes)) return null; // unchanged: leave the state alone
     const fresh = lanesState(lanes);
     return fresh.map((l) => {
       const o = old.find((x) => x.lane === l.lane && JSON.stringify(laneJson(x).target) === JSON.stringify(laneJson(l).target));
       if (!o) return l;
-      const byIdx = new Map(o.points.map((x) => [x.idx, x]));
       o.enabled = l.enabled;
-      o.points = l.points.map((x) => {
-        const op = byIdx.get(x.idx);
-        return op ? Object.assign(op, { tick: x.tick, value: x.value, hold: x.hold }) : x;
-      });
+      o.points = reusePoints(o.points, l.points);
       return o;
     });
   };
@@ -476,4 +472,35 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
     // Keep `to`'s order across channels.
     p.mixer.automation = to.mixer.automation.map((mj) => lanes.find((x) => x.lane.lane === mj.lane)!);
   }
+}
+
+/**
+ * `fresh` (a lane's wanted points) with the UI objects (ids) of `old` where
+ * they are the same point, so a selection by id stays on the right point.
+ * First by TICK (a tick is a point's identity within a lane: a delete
+ * compacts idx, so a kept point may come back at another idx); then, for
+ * the rest, by idx: an old point whose own tick is not in `fresh` (so it
+ * was not matched by tick) takes the wanted point at its idx (a point moved
+ * in place). Each old object is used at most once.
+ */
+function reusePoints<P extends { idx: number; tick: number; value: number; hold: boolean }>(old: P[], fresh: P[]): P[] {
+  const byTick = new Map(old.map((x) => [x.tick, x]));
+  const byIdx = new Map(old.map((x) => [x.idx, x]));
+  const used = new Set<P>();
+  const pick = fresh.map((x) => {
+    const o = byTick.get(x.tick);
+    if (o) used.add(o);
+    return o ?? null;
+  });
+  return fresh.map((x, i) => {
+    let o = pick[i];
+    if (!o) {
+      const c = byIdx.get(x.idx);
+      if (c && !used.has(c)) {
+        used.add(c);
+        o = c;
+      }
+    }
+    return o ? Object.assign(o, { idx: x.idx, tick: x.tick, value: x.value, hold: x.hold }) : x;
+  });
 }

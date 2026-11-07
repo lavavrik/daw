@@ -236,6 +236,13 @@ describe('project schema', () => {
     auto.push({ lane: lanes.fader.lane, enabled: true, target: { mix: 'pan' }, points: [] }); // engine lane taken
     auto.push({ lane: 64, enabled: true, target: { mix: 'pan' }, points: [] }); // engine lane out of range
     bad.tracks[0].automation.push({ lane: 46, enabled: true, target: { rack: [0, 'level'] }, points: [] }); // rack on drums
+    bad.tracks.push({
+      kind: 'audio', slot: 9, name: 'Vox', color: '#ff6b6b', clips: [],
+      automation: [
+        { lane: 50, enabled: true, target: { rack: [0, 'gain'] }, points: [] }, // an Audio slot has no rack
+        { lane: 51, enabled: true, target: { mix: 'fader' }, points: [[0, -6, 0]] }, // its strip: fine
+      ],
+    });
     bad.mixer.automation.push({ channel: 'reverb', lane: 47, enabled: true, target: { mix: 'delay_feedback' }, points: [] }); // not on the Reverb
     bad.mixer.automation.push({ channel: 'bus', lane: 48, enabled: true, target: { mix: 'fader' }, points: [] }); // no such channel
     bad.mixer.automation.push({ channel: 'delay', lane: 49, enabled: true, target: { mix: 'delay_feedback' }, points: [[0, 0.5, 0]] }); // fine
@@ -246,6 +253,9 @@ describe('project schema', () => {
     expect(vj.automation[1].enabled).toBe(true);
     expect(r.project.tracks[0].automation.map((l) => l.lane)).toEqual([lanes.send.lane]); // the rack lane on drums: dropped
     expect(r.project.mixer.automation.map((l) => [l.channel, l.lane])).toEqual([['master', lanes.ceiling.lane], ['delay', 49]]);
+    const vox = r.project.tracks.find((t) => t.kind === 'audio')!;
+    expect(vox.automation.map((l) => [l.lane, l.target])).toEqual([[51, { mix: 'fader' }]]);
+    expect(r.warnings).toContainEqual(expect.stringMatching(/Track "Vox".*gain: only synth tracks have a rack/));
     const w = r.warnings.join('\n');
     for (const re of [/tick 3840/, /clamped/, /malformed/, /mute/, /wobble/, /mode/, /module 30/, /no target/, /already has a lane/,
       /lane \d+.*taken/, /64/, /level/, /delay_feedback/, /bus/, /enabled/i]) {

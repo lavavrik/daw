@@ -26,7 +26,7 @@
 // sidechain keys (a key beyond them is dropped), each with a warning, and a
 // rack lane whose module was one of those dropped effects goes too; the
 // returned `project` is the normalized one the commands realize.
-import { AUTO_KIND, MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, keyCode, packAutoParam } from '../audio/protocol';
+import { MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, keyCode } from '../audio/protocol';
 import { fxPoolSlots, moduleDef } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
 import { validatePatch } from '../state/patches';
@@ -36,7 +36,7 @@ import type { EngineCommand } from '../state/rack-actions';
 import { MAX_NOTES } from '../audio/protocol';
 import type { AudioTrack, AutomationLane, Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
 import { clipGainLinear } from '../state/audio-actions';
-import { MASTER_CHANNEL_INDEX } from '../state/automation';
+import { MASTER_CHANNEL_INDEX, laneSet } from '../state/automation';
 import type { AudioClipJson, LaneJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
 
 export type { EngineCommand };
@@ -162,16 +162,14 @@ function mixerCommands(project: ProjectJson): EngineCommand[] {
  * AUTO_LANE_SET, the points, AUTO_LANE_ENABLE for one lane of mixer channel
  * `channel` (a track's slot, or MASTER_CHANNEL_INDEX) and, for a rack target, of
  * the synth track whose `patch` is given (the module's catalog id names the
- * param index). Grouped as one unit by load.ts units().
+ * param index). The AUTO_LANE_SET comes from state/automation.ts laneSet,
+ * the one builder live lanes use too. Grouped as one unit by load.ts units().
  */
 export function laneCommands(lj: LaneJson, channel: number, patch: { modules: { idx: number; id: string }[] } | null): EngineCommand[] {
-  let set: EngineCommand;
-  if ('mix' in lj.target) set = [Op.AUTO_LANE_SET, lj.lane, AUTO_KIND.MIX, channel, mixParam(lj.target.mix).id];
-  else {
-    const [mod, name] = lj.target.rack;
-    const id = patch!.modules.find((m) => m.idx === mod)!.id;
-    set = [Op.AUTO_LANE_SET, lj.lane, AUTO_KIND.RACK, channel, packAutoParam(mod, moduleDef(id).params.findIndex((d) => d.name === name))];
-  }
+  const set = 'mix' in lj.target
+    ? laneSet(lj.lane, channel, { kind: 'mix', param: lj.target.mix }, null)
+    : laneSet(lj.lane, channel, { kind: 'rack', module: lj.target.rack[0], param: lj.target.rack[1] },
+      patch!.modules.find((m) => m.idx === (lj.target as { rack: [number, string] }).rack[0])!.id);
   return [
     set,
     ...lj.points.map(([tick, value, hold], i): EngineCommand => [Op.AUTO_POINT_SET, autoPoint(lj.lane, i), tick, value, hold]),

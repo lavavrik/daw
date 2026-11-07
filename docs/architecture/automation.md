@@ -239,6 +239,9 @@ export tests named in projects.md, history.md and export.md.
   which also rules out every choice and flag. `targetDef(owner, target)` is
   the same rule for one target.
 - `laneCount(p)`, `freeLane(p)`, `projectLanes(p)`.
+- `laneSet(lane, channel, target, moduleKind)`: the one `AUTO_LANE_SET`
+  builder (`packAutoParam` for rack targets). `laneSetCommand` (live lanes)
+  and `commands.ts laneCommands` (saved lanes) both use it.
 - `pointCommands(lane, from, to)`: the commands from one point set (idx →
   `[tick, value, hold]`) to another. **All `AUTO_POINT_REMOVE`s first** (an
   idx that goes, or whose tick changes), **then the `AUTO_POINT_SET`s** (new
@@ -287,5 +290,8 @@ changes nothing and sends nothing.
   automation path of their own. `load.ts units()` keeps a lane's commands
   in one unit.
 - **Undo** (history.md, `diffApply` step 3b): lanes by engine lane; clear,
-  then re-target; points by idx with `pointCommands`.
+  then re-target; points by idx with `pointCommands`. The point UI objects
+  (ids) are matched by tick first, then by idx for a point whose old tick
+  is gone, so a selection stays on its point when a delete had compacted
+  the idx.
 

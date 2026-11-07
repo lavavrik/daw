@@ -378,4 +378,34 @@ describe('diffApply', () => {
     diffApply(r.p, r.sink, before, before);
     expect(r.log).toEqual([]);
   });
+
+  it('undo keeps each point\'s UI id on its own point (matched by tick when its idx moved)', async () => {
+    const r = await rig({ auto: true });
+    const f = r.lanes!.fader; // ticks 0, 3840, 5760 at idx 0, 1, 2
+    const [a, b, c] = f.points.map((x) => ({ id: x.id, tick: x.tick }));
+    const A = serialize(r.p);
+    // Deleting the first point moves the last (5760) from idx 2 down into idx 0.
+    deletePoints(r.p, r.sink, f.id, [a.id]);
+    expect(f.points.map((x) => [x.tick, x.idx])).toEqual([[3840, 1], [5760, 0]]);
+    const B = serialize(r.p);
+    diffApply(r.p, r.sink, B, A);
+    expect(r.m.errors).toEqual([]);
+    // The point at 5760 is back at idx 2 and is still c; 3840 is still b; 0 is a new point.
+    const byTick = new Map(f.points.map((x) => [x.tick, x]));
+    expect(byTick.get(c.tick)!.id).toBe(c.id);
+    expect(byTick.get(b.tick)!.id).toBe(b.id);
+    expect(byTick.get(a.tick)!.id).not.toBe(c.id);
+    expect(new Set(f.points.map((x) => x.id)).size).toBe(3);
+    diffApply(r.p, r.sink, A, B);
+    expect(f.points.find((x) => x.tick === c.tick)!.id).toBe(c.id);
+    expect(f.points.find((x) => x.tick === b.tick)!.id).toBe(b.id);
+    expect(view(r.m, B)).toEqual(loaded(B));
+    // A point moved in place (same idx, new tick that no other point had) keeps its id.
+    const before = serialize(r.p);
+    movePoints(r.p, r.sink, f.id, [b.id], 100, 0);
+    const after = serialize(r.p);
+    diffApply(r.p, r.sink, after, before);
+    expect(f.points.find((x) => x.tick === b.tick)!.id).toBe(b.id);
+    expect(r.m.errors).toEqual([]);
+  });
 });

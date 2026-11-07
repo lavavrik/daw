@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { moduleDef } from '../audio/catalog';
 import { toPos } from '../ui/rack/knobMath';
-import { automatableParams, laneCount, laneValueAt, nextBreakpoint, pointCommands, thin } from './automation';
+import { automatableParams, laneCount, laneSetCommand, laneValueAt, nextBreakpoint, pointCommands, thin } from './automation';
+import { laneCommands } from '../project/commands';
+import { trackPatch } from './patches';
+import { AUTO_KIND, MIX_MASTER, packAutoParam } from '../audio/protocol';
+import { paramIndex } from '../audio/catalog';
 import type { PointTuple } from './automation';
 import { MAX_AUTO_POINTS, Op } from '../audio/protocol';
 import { blankModel, run } from '../history/engineModel';
@@ -105,6 +109,27 @@ describe('automation (pure)', () => {
     expect(names(automatableParams('reverb'))).not.toContain('delay_feedback');
     expect(names(automatableParams('delay'))).toEqual(expect.arrayContaining(['delay_feedback', 'delay_high_cut', 'pan']));
     expect(names(automatableParams('delay'))).not.toContain('delay_time');
+  });
+
+  it('one AUTO_LANE_SET builder: the live lane and its saved form encode the same target', () => {
+    const p = new Project();
+    const synth = addSynthTrack(p, nullSink)!;
+    const drums = addDrumTrack(p, nullSink)!;
+    const patch = trackPatch(synth, (id) => id);
+    const json = (t: { kind: 'mix'; param: string } | { kind: 'rack'; module: number; param: string }) => ({
+      lane: 5, enabled: true, points: [] as [number, number, 0 | 1][],
+      target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] as [number, string] },
+    });
+    for (const { target } of automatableParams(synth)) {
+      expect(laneSetCommand(5, synth, target)).toEqual(laneCommands(json(target), synth.slot, patch)[0]);
+    }
+    for (const { target } of automatableParams('master')) {
+      expect(laneSetCommand(5, 'master', target)).toEqual(laneCommands(json(target), MIX_MASTER, null)[0]);
+    }
+    const filter = synth.modules.find((m) => m.kind === moduleDef('filter').kind)!;
+    expect(laneSetCommand(7, synth, { kind: 'rack', module: filter.idx, param: 'cutoff' }))
+      .toEqual([Op.AUTO_LANE_SET, 7, AUTO_KIND.RACK, synth.slot, packAutoParam(filter.idx, paramIndex(moduleDef('filter'), 'cutoff'))]);
+    expect(laneSetCommand(1, drums, { kind: 'mix', param: 'pan' })).toEqual([Op.AUTO_LANE_SET, 1, AUTO_KIND.MIX, drums.slot, 1]);
   });
 
   it('laneCount counts every track\'s lanes and the Master row\'s', () => {

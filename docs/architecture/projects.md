@@ -290,7 +290,9 @@ notice banner after the load (all of them in the console):
      them. A rack lane whose module the FX-pool check dropped is dropped
      with it (a warning). `load.ts units()` keeps a lane's commands
      together as one unit (like an audio clip's triple), so the late-upload
-     rebind (`bindingCommands`) never splits one;
+     rebind (`bindingCommands`) never splits one (`load.test.ts`: `units()
+     keeps each lane whole`, and `bindingCommands re-sends a SamplePlayer's
+     sample, never the lanes on its track`);
    - `SET_TEMPO`, `SET_METRONOME`, `SET_MODE`, `SET_LOOP`, `SET_INPUT_TRACK`
      — always, because RESET_ALL put the engine back to 124 BPM / Pattern /
      loop off / metronome off / no input.

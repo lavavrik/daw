@@ -11,10 +11,10 @@
 //   automatableParams / targetDef   what a lane may drive, by catalog name.
 //   pointCommands    the engine commands that turn one lane's points into
 //                    another set: removals first (see there).
-import { MAX_AUTO_LANES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint } from '../audio/protocol';
+import { AUTO_KIND, MAX_AUTO_LANES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, packAutoParam } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
-import { MIX_PARAMS } from '../audio/mixerCatalog';
+import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
 import { fromPos, toPos } from '../ui/rack/knobMath';
 import type { CurveDef } from '../ui/rack/knobMath';
@@ -194,19 +194,25 @@ export function freeLane(p: Project): number | null {
 }
 
 /**
- * AUTO_LANE_SET for a lane of `owner` on `target` (which must be valid for
- * it: targetDef): kind 1 = mix (channel, param id), kind 2 = rack (slot,
- * module * 16 + param index).
+ * THE AUTO_LANE_SET builder (live lanes here, saved ones in commands.ts
+ * laneCommands): kind MIX = mixer channel `channel` and the param's id;
+ * kind RACK = synth slot `channel` and packAutoParam(module, param index in
+ * the catalog of module kind `moduleKind`, a catalog id or number).
  */
+export function laneSet(
+  lane: number, channel: number, target: AutoTarget, moduleKind: string | number | null,
+): [number, number, number, number, number] {
+  if (target.kind === 'mix') return [Op.AUTO_LANE_SET, lane, AUTO_KIND.MIX, channel, mixParam(target.param).id];
+  const param = moduleDef(moduleKind!).params.findIndex((d) => d.name === target.param);
+  return [Op.AUTO_LANE_SET, lane, AUTO_KIND.RACK, channel, packAutoParam(target.module, param)];
+}
+
+/** AUTO_LANE_SET for a lane of `owner` on `target` (which must be valid for it: targetDef). */
 export function laneSetCommand(lane: number, owner: AutoOwner, target: AutoTarget): [number, number, number, number, number] {
-  if (target.kind === 'mix') {
-    const def = MIX_PARAMS.find((d) => d.name === target.param)!;
-    return [Op.AUTO_LANE_SET, lane, 1, mixChannel(owner).index, def.id];
-  }
+  if (target.kind === 'mix') return laneSet(lane, mixChannel(owner).index, target, null);
   const t = owner as Track;
   const m = t.kind === 'synth' ? t.modules.find((x) => x.idx === target.module) : undefined;
-  const param = m ? moduleDef(m.kind).params.findIndex((d) => d.name === target.param) : -1;
-  return [Op.AUTO_LANE_SET, lane, 2, t.slot, target.module * 16 + param];
+  return laneSet(lane, t.slot, target, m!.kind);
 }
 
 /**

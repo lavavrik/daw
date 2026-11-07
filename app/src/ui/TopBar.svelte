@@ -223,7 +223,7 @@
 <header class="bar">
   <details class="pop proj" bind:this={menu} ontoggle={() => !menu?.open && (confirming = null)}>
     <summary data-testid="project-menu" title="Project: New, Open, Save">
-      <span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">● unsaved</span>{/if}</span>
+      <span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">●<span class="long">{' '}unsaved</span></span>{/if}</span>
     </summary>
     <div class="panel menu" role="menu">
       {#if confirming}
@@ -353,7 +353,7 @@
     </span>
   {/if}
   <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-    CPU {cpu}%<span class="long"> · {dropouts} drop</span>
+    CPU {cpu}%<span class="long">{' '}· {dropouts} drop</span>
   </span>
   <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
     <summary
@@ -376,15 +376,19 @@
   /* Narrow windows degrade in steps, never clipping a control (e2e
      layout.spec.ts at 1440 / 1280 / 1024): the long readouts (Keys target,
      MIDI device) are capped with an ellipsis (full text in the tooltip);
-     below 1400 px they shrink further and CPU drops its "· N drop" tail
-     (kept while there are dropouts); if it still doesn't fit, the bar wraps
+     below 1400 px they shrink further, CPU drops its "· N drop" tail (kept
+     while there are dropouts) and "● unsaved" becomes "●" (tooltip: Unsaved
+     changes), leaving ~80 px of slack at 1280 px in the widest state
+     (playing, unsaved); Play/Stop has a fixed width so starting playback
+     never re-flows the bar. If it still doesn't fit, the bar wraps
      onto a second row. overflow-x: clip (not hidden) stays as the last guard:
      it never becomes a scroll container, so the popovers can drop below. */
   .bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
   .pill.keys, .pill.midi { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 1399px) {
     .pill.keys, .pill.midi { max-width: 110px; }
-    .pill:not(.bad) .long { display: none; }
+    .pill:not(.bad) .long, .unsaved .long { display: none; }
+    .proj summary { max-width: 160px; }
   }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
@@ -399,6 +403,7 @@
   .seg button:last-child { border-radius: 0 4px 4px 0; }
   .small { font-size: 11px; padding: 4px 8px; }
   .hist button { padding: 4px 5px; }
+  .play { min-width: 68px; }
   .rec { min-width: 84px; color: #e06666; }
   .rec.armed { background: #c92a2a; border-color: #c92a2a; color: #fff; font-weight: 700; }
   .rec.live { animation: rec-pulse 1s ease-in-out infinite; }

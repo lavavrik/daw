@@ -2,8 +2,9 @@ import { expect, test } from '@playwright/test';
 
 // The top bar degrades gracefully on narrow windows (plan 7 Task 5): nothing
 // is clipped off the right edge; less important readouts get shorter first,
-// and below that the bar wraps onto a second row. The essentials stay
-// visible at every width.
+// and below that the bar wraps onto a second row (never at 1280 px and up,
+// where a wrap would move the editors when playback starts). The essentials
+// stay visible at every width.
 
 const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'mode-toggle', 'rec-button', 'settings-button'];
 
@@ -13,9 +14,13 @@ for (const width of [1440, 1280, 1024]) {
     await page.goto('/');
     await page.getByRole('button', { name: 'Click to start audio' }).click();
     await expect(page.getByTestId('play')).toBeVisible();
-    // Worst case: a synth track is the Keys target (its name shows in the bar).
-    await page.getByTestId('add-synth-track').click();
-    await expect(page.getByTestId('keys-target')).toContainText('Synth');
+    // Worst case: the longest Keys text ("(no synth track)"), an unsaved
+    // project (SONG mode is an edit), and playing (Stop is wider than Play).
+    await page.getByTestId('mode-song').click();
+    await expect(page.getByTestId('keys-target')).toContainText('no synth track');
+    await expect(page.getByTestId('project-name')).toContainText('unsaved');
+    await page.getByTestId('play').click();
+    await expect(page.getByTestId('play')).toContainText('Stop');
     const out = await page.evaluate(() => {
       const bar = document.querySelector('header')!;
       const b = bar.getBoundingClientRect();

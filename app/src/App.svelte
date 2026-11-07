@@ -12,7 +12,7 @@
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
   import { addDrumTrack, addRow, liveInputTrack, play, setRowSample, setStep, stop } from './state/actions';
-  import { addSynthTrack } from './state/rack-actions';
+  import { addSynthTrack, rollbackRefusedAdd } from './state/rack-actions';
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
   import { STARTER_PATCHES } from './state/patches';
@@ -155,6 +155,11 @@
     // Session-lifetime: deferred sample loads must land even while the step
     // grid is unmounted (a synth track selected).
     uninstallLoads = installSampleLoads(project, e);
+    // The engine refused a pooled effect (FX pool full): undo it in the UI.
+    e.onRackAddRefused = (slot, idx, kind) => {
+      const msg = rollbackRefusedAdd(project, slot, idx, kind);
+      if (msg !== null) banners.error = msg;
+    };
     addDrumTrack(project, e); // default track so the UI has something to show
     uninstall = installShortcuts(project, e, input, {
       onOctave: (o) => (octave = o),

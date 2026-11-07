@@ -27,13 +27,15 @@
   // connect pair) is sent. Drops on anything that is not a matching jack
   // unplug a carried cable / cancel a new one.
   import { tick } from 'svelte';
-  import { CATALOG, fxPoolSlots, moduleDef } from '../../audio/catalog';
+  import { CATALOG, moduleDef } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
   import { confirmReleasingKeys } from '../../input/shortcuts';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { Project, SynthTrack } from '../../state/project.svelte';
-  import { addModule, connect, disconnect, fxSlotsFree, loadPatch, removeModule, setParam } from '../../state/rack-actions';
+  import {
+    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam,
+  } from '../../state/rack-actions';
   import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
@@ -304,10 +306,7 @@
    * (shared by all tracks) is in use, e.g. "All 8 delays in use"; "" if it can.
    */
   function poolFullNote(md: ModuleDef): string {
-    const slots = fxPoolSlots(md);
-    if (slots === null || fxSlotsFree(p, md.id) > 0) return '';
-    const name = md.name.toLowerCase();
-    return `All ${slots} ${name}${name.endsWith('s') ? 'es' : 's'} in use`;
+    return fxSlotsFree(p, md.id) > 0 ? '' : fxPoolFullText(md);
   }
 
   async function add(id: string) {

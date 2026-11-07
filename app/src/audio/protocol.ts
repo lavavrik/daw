@@ -116,6 +116,9 @@ export const HostErr = {
   ENGINE_STOPPED: -100,
   /** A deferred load was evicted from the full 32-entry retry queue. */
   QUEUE_FULL: -101,
+  /** A deferred load was dropped by RESET_ALL (project load) before it ran:
+   *  the session it belonged to is gone, so it is moot (not an error). */
+  RESET: -102,
 } as const;
 
 /** Largest block (frames) the engine renders per call (lib.rs MAX_BLOCK). */

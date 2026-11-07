@@ -44,7 +44,8 @@ describe('loadErrorText', () => {
     expect(loadErrorText(Err.BAD_INDEX, 48000)).toContain('sample limit');
     expect(loadErrorText(HostErr.QUEUE_FULL, 48000)).toContain('drop it again');
     expect(loadErrorText(HostErr.ENGINE_STOPPED, 48000)).toContain('reload');
-    for (const c of [Err.BAD_VALUE, Err.OUT_OF_MEMORY, Err.BAD_INDEX, HostErr.QUEUE_FULL, HostErr.ENGINE_STOPPED]) {
+    expect(loadErrorText(HostErr.RESET, 48000)).toContain('new project');
+    for (const c of [Err.BAD_VALUE, Err.OUT_OF_MEMORY, Err.BAD_INDEX, HostErr.QUEUE_FULL, HostErr.ENGINE_STOPPED, HostErr.RESET]) {
       expect(loadErrorText(c, 44100)).not.toMatch(/code/);
     }
   });

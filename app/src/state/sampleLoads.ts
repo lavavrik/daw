@@ -7,7 +7,7 @@
 // (BottomPanel), and a load that settled while it was gone would be lost (no
 // row assigned, the "will load when playback stops" notice stuck forever).
 // So the pending map and the handler live here, installed once from App.
-import { Err } from '../audio/protocol';
+import { Err, HostErr } from '../audio/protocol';
 import { loadErrorText } from '../audio/samples';
 import { setRowSample } from './actions';
 import type { CommandSink } from './actions';
@@ -40,8 +40,9 @@ export function installSampleLoads(p: Project, engine: SampleLoadEngine): () => 
     if (!w) return;
     pending.delete(id);
     // The track or row may have been removed meanwhile; setRowSample is a no-op then.
+    // RESET: dropped by an engine reset (project load); its session is gone.
     if (code === Err.OK) setRowSample(p, engine, w.tid, w.rowId, id, w.name);
-    else banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`;
+    else if (code !== HostErr.RESET) banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, engine.sampleRate)}`;
     if (pending.size === 0) banners.notice = null;
   };
   return () => {

@@ -21,7 +21,8 @@ type WorkletMessage =
   | { type: 'error'; message: string }
   | { type: 'engine-error'; message: string }
   | { type: 'sample-result'; id: number; code: number }
-  | { type: 'sample-loaded'; id: number; code: number };
+  | { type: 'sample-loaded'; id: number; code: number }
+  | { type: 'rack-add-refused'; slot: number; idx: number; kind: number };
 
 /** Chrome's AudioContext.playbackStats (not in lib.dom; feature-detected). */
 type WithPlaybackStats = { playbackStats?: { underrunEvents?: number } };
@@ -33,6 +34,12 @@ export class AudioEngine {
    * Err.OK (now playable) or the failure (an Err / HostErr code).
    */
   onSampleLoaded?: (id: number, code: number) => void;
+  /**
+   * The engine refused a RACK_ADD_MODULE because the kind's FX-pool bank was
+   * full (Err.OUT_OF_MEMORY): roll the optimistic add back (rack-actions
+   * `rollbackRefusedAdd`). Rare: the UI only sends adds it counts as fitting.
+   */
+  onRackAddRefused?: (slot: number, idx: number, kind: number) => void;
   /** Fires once if the engine stops working after start (see `failure`). */
   onError?: (message: string) => void;
   /**
@@ -95,6 +102,8 @@ export class AudioEngine {
           }
           case 'sample-loaded':
             return this.onSampleLoaded?.(m.id, m.code);
+          case 'rack-add-refused':
+            return this.onRackAddRefused?.(m.slot, m.idx, m.kind);
         }
       };
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Err, Op } from '../audio/protocol';
+import { Err, HostErr, Op } from '../audio/protocol';
 import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { banners } from './banners.svelte';
@@ -54,6 +54,20 @@ describe('deferred sample loads (session lifetime)', () => {
     expect(banners.notice).toBeNull();
     expect(t.rows[0].sampleId).toBeNull();
     expect(t.rows[1].sampleId).toBe(2);
+    undo();
+  });
+  it('a load dropped by an engine reset (project load) settles silently', () => {
+    const p = new Project();
+    const { e } = fakeEngine();
+    const undo = installSampleLoads(p, e);
+    const t = addDrumTrack(p, e)!;
+    banners.error = null;
+    deferSampleLoad(4, t.id, t.rows[0].id, 'a');
+    e.onSampleLoaded!(4, HostErr.RESET);
+    expect(banners.error).toBeNull();
+    expect(banners.notice).toBeNull();
+    expect(pendingSampleLoads()).toBe(0);
+    expect(t.rows[0].sampleId).toBeNull();
     undo();
   });
 });

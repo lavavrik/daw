@@ -11,10 +11,19 @@
 //     instance half-updated) is fatal: the instance is dropped, output goes
 //     silent, and {type:'engine-error'} tells the UI to ask for a reload.
 //     Every 'sample' request still gets exactly one reply, with its original id.
+//   - Command results are not sent back, except two rare cases handled right
+//     after the command (one-offs, so posting/allocating there is acceptable):
+//     a RACK_ADD_MODULE refused with OUT_OF_MEMORY (FX pool full) is reported
+//     as {type:'rack-add-refused', slot, idx, kind} so the UI can roll its
+//     optimistic add back, and a successful RESET_ALL drops the deferred
+//     sample loads (they belong to the session it ended) and answers each
+//     with HostErr.RESET.
 
 import { CommandRing } from './ring';
 import { applyMeters, meterFall } from './meterBallistics';
-import { Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN } from './protocol';
+import {
+  Err, HostErr, MAX_BLOCK, MIX_CHANNELS, MIX_METER_STRIDE, Op, RECORD_WORDS, TELEMETRY, TELEMETRY_LEN,
+} from './protocol';
 
 // --- AudioWorkletGlobalScope (not in lib.dom) -------------------------------
 declare const sampleRate: number;
@@ -157,12 +166,17 @@ class DawEngineProcessor extends AudioWorkletProcessor {
     this.tele[TELEMETRY.peakL] = 0;
     this.tele[TELEMETRY.peakR] = 0;
     this.port.postMessage({ type: 'engine-error', message: String(e) });
+    this.dropPending(HostErr.ENGINE_STOPPED);
+  }
+
+  /** Answer and forget every deferred load (fatal path, engine reset). */
+  private dropPending(code: number): void {
     while (this.pLen > 0) {
       const s = this.pHead;
       this.pData[s] = null;
       this.pHead = (s + 1) % PENDING_CAP;
       this.pLen--;
-      this.port.postMessage({ type: 'sample-loaded', id: this.pId[s], code: HostErr.ENGINE_STOPPED });
+      this.port.postMessage({ type: 'sample-loaded', id: this.pId[s], code });
     }
   }
 
@@ -189,7 +203,14 @@ class DawEngineProcessor extends AudioWorkletProcessor {
 
       // 1. Drain UI commands. Invalid ones return an error code, never trap.
       const c = this.cmd;
-      while (this.ring.pop(c)) ex.engine_command(this.h, c[0], c[1], c[2], c[3], c[4]);
+      while (this.ring.pop(c)) {
+        const code = ex.engine_command(this.h, c[0], c[1], c[2], c[3], c[4]);
+        if (c[0] === Op.RACK_ADD_MODULE && code === Err.OUT_OF_MEMORY) {
+          this.port.postMessage({ type: 'rack-add-refused', slot: c[1], idx: c[2], kind: c[3] });
+        } else if (c[0] === Op.RESET_ALL && code === Err.OK) {
+          this.dropPending(HostErr.RESET);
+        }
+      }
 
       // 2. Render.
       const l = out[0];

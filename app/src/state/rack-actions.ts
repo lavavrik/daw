@@ -97,6 +97,35 @@ export function fxSlotsFree(p: Project, kind: string | number): number {
 }
 
 /**
+ * "All 8 delays in use": why a pooled module kind cannot be added once its
+ * FX-pool bank is full ("" for unpooled kinds).
+ */
+export function fxPoolFullText(def: { name: string; kind: number }): string {
+  const slots = fxPoolSlots(moduleDef(def.kind));
+  if (slots === null) return '';
+  const name = def.name.toLowerCase();
+  return `All ${slots} ${name}${name.endsWith('s') ? 'es' : 's'} in use`;
+}
+
+/**
+ * The engine refused RACK_ADD_MODULE (slot, idx, kind) with OUT_OF_MEMORY
+ * (the worklet reports it, see AudioEngine.onRackAddRefused): its FX-pool
+ * bank was full although `fxSlotsFree` counted a free slot. The engine hands
+ * a slot over from a queued Remove/Clear of the same rack, so this only
+ * happens when the slot is held elsewhere (e.g. another track's module still
+ * in its removal fade). Roll the optimistic add back in state only (the
+ * engine added nothing, so no command) and return the pool-full message;
+ * null if that module is no longer there (already removed or replaced).
+ */
+export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: number): string | null {
+  const t = p.tracks.find((x): x is SynthTrack => x.kind === 'synth' && x.slot === slot);
+  if (!t || !t.modules.some((m) => m.idx === idx && m.kind === kind)) return null;
+  t.modules = t.modules.filter((m) => m.idx !== idx);
+  t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
+  return fxPoolFullText(moduleDef(kind)) || `No room for another ${moduleDef(kind).name}`;
+}
+
+/**
  * Lowest free idx; null when the rack is full, the kind's FX-pool slots are
  * all in use (the engine would refuse it), or the track/kind is unknown.
  */

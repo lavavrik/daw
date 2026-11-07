@@ -3,7 +3,10 @@ import { Op, packPort } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, liveInputTrack, removeTrack, selectTrack } from './actions';
-import { addModule, addSynthTrack, connect, disconnect, fxSlotsFree, loadPatch, removeModule, setParam } from './rack-actions';
+import {
+  addModule, addSynthTrack, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule,
+  rollbackRefusedAdd, setParam,
+} from './rack-actions';
 import { STARTER_PATCHES } from './patches';
 
 function fake() {
@@ -192,5 +195,27 @@ describe('input track selection', () => {
     loadPatch(p, sink, t.id, STARTER_PATCHES[4]);
     expect(sent[0]).toEqual([Op.RACK_CLEAR, t.slot, 0, 0, 0]);
     expect(t.patchName).toBe('Pluck');
+  });
+  it('rollbackRefusedAdd undoes an add the engine refused (FX pool full)', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const t = addSynthTrack(p, sink)!;
+    const delay = moduleDef('delay');
+    const idx = addModule(p, sink, t.id, 'delay')!;
+    const out = t.modules.find((m) => moduleDef(m.kind).id === 'out')!;
+    connect(p, sink, t.id, { m: idx, port: 0 }, { m: out.idx, port: 0 });
+    const cables = t.cables.length;
+    sent.length = 0;
+    // The worklet reports (slot, idx, kind) of the refused RACK_ADD_MODULE.
+    expect(rollbackRefusedAdd(p, t.slot, idx, delay.kind)).toBe('All 8 delays in use');
+    expect(t.modules.some((m) => m.idx === idx)).toBe(false);
+    expect(t.cables.length).toBe(cables - 1); // its cables go too
+    expect(sent).toEqual([]); // nothing to undo in the engine: it added nothing
+    // Already gone, another kind there, or no such track: nothing to do.
+    expect(rollbackRefusedAdd(p, t.slot, idx, delay.kind)).toBeNull();
+    expect(rollbackRefusedAdd(p, t.slot, out.idx, delay.kind)).toBeNull();
+    expect(rollbackRefusedAdd(p, 31, 0, delay.kind)).toBeNull();
+    expect(fxPoolFullText(moduleDef('chorus'))).toBe('All 16 choruses in use');
+    expect(fxPoolFullText(moduleDef('eq'))).toBe('');
   });
 });

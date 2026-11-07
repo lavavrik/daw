@@ -68,6 +68,8 @@ export function loadErrorText(code: number, sampleRate: number): string {
       return 'too many samples were waiting for playback to stop — drop it again';
     case HostErr.ENGINE_STOPPED:
       return 'the audio engine has stopped (reload the page)';
+    case HostErr.RESET:
+      return 'a new project was loaded before it could load';
     default:
       return `unexpected engine error (code ${code})`;
   }

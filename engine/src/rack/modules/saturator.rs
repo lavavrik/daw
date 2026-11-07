@@ -13,7 +13,8 @@
 //!   low levels. There is no output compensation (follow it with a VCA).
 //! * **Mix**: `out = x + mix·(wet − x)`; mix 1 (default) is fully wet.
 //!
-//! Channels follow `in` (min 1). Drive, tone and mix are smoothed per sample.
+//! Channels follow `in` (min 1). Drive, tone and mix are smoothed per sample
+//! (the drive gain is computed once per sub-block while drive is settled).
 
 use super::filter::tanh_fast;
 use super::{default, param, Smooth};
@@ -29,6 +30,8 @@ const TONE: usize = 2;
 const TONE_HZ: f32 = 800.0;
 /// Pre-gain at drive 1 (dB).
 const DRIVE_DB: f32 = 24.0;
+/// `g = 10^(drive·DRIVE_DB/20) = exp(drive·DRIVE_LN)`: one `exp`, not `powf`.
+const DRIVE_LN: f32 = DRIVE_DB / 20.0 * std::f32::consts::LN_10;
 
 #[derive(Clone)]
 pub struct Saturator {
@@ -62,8 +65,12 @@ impl Saturator {
         out.channels = channels;
         let (dt, mt, tt) = (param(params, K, DRIVE), param(params, K, MIX), param(params, K, TONE));
         let a = self.a;
+        // Drive settled (the smoother snaps onto its target): one gain for
+        // the whole sub-block instead of an `exp` per sample.
+        let settled = self.drive.value() == dt;
+        let g_block = (self.drive.value() * DRIVE_LN).exp();
         for i in 0..RACK_BLOCK {
-            let g = 10f32.powf(self.drive.next(dt) * DRIVE_DB / 20.0);
+            let g = if settled { g_block } else { (self.drive.next(dt) * DRIVE_LN).exp() };
             let mix = self.mix.next(mt);
             let tilt = 2.0 * self.tone.next(tt) - 1.0;
             for (ch, row) in out.data.iter_mut().take(channels).enumerate() {

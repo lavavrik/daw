@@ -148,7 +148,7 @@
     onclick={onToggleArm}
     disabled={p.mode === 'song' && !rec.armed}
     title={p.mode === 'song'
-      ? 'Recording works in Pattern mode'
+      ? 'Recording works in Pattern mode (Shift+L)'
       : 'Record arm (R). Records into the Keys → track\'s current pattern while playing.'}
   >{recLabel}</button>
   <button

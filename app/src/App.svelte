@@ -19,7 +19,7 @@
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
-  import { banners } from './state/banners.svelte';
+  import { banners, flashHint } from './state/banners.svelte';
   import { installSampleLoads } from './state/sampleLoads';
 
   const project = new Project();
@@ -77,7 +77,12 @@
     if (recorder && clock) recorder.onInputChanged(clock.heardTicks());
   });
 
+  /** R / Rec button. Song mode can't arm (recording is Pattern-mode only): say so briefly. */
   function toggleArm() {
+    if (recorder && project.mode === 'song' && !recorder.armed) {
+      flashHint('Recording works in Pattern mode (Shift+L)');
+      return;
+    }
     recorder?.toggleArm();
     refreshRec();
   }

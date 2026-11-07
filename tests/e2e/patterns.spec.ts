@@ -122,7 +122,12 @@ test('PAT/SONG toggle visible and switches mode', async ({ page }) => {
   await expect(page.getByTestId('mode-song')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('loop-toggle')).toBeEnabled();
   await expect(page.getByTestId('rec-button')).toBeDisabled();
-  await expect(page.getByTestId('rec-button')).toHaveAttribute('title', 'Recording works in Pattern mode');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('title', 'Recording works in Pattern mode (Shift+L)');
+  // R in Song mode does not arm; it says why, briefly.
+  await page.keyboard.press('r');
+  await expect(page.getByTestId('flash-hint')).toHaveText('Recording works in Pattern mode (Shift+L)');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('flash-hint')).toHaveCount(0, { timeout: 5000 });
   await page.getByTestId('mode-pat').click();
   expect(await mode()).toBe('pattern');
 
@@ -144,9 +149,13 @@ test('Song mode playhead only shows while a clip of the pattern plays', async ({
   });
   await page.getByTestId('mode-song').click();
   await expect(page.getByTestId('song-hint')).toBeVisible(); // stopped: nothing plays this pattern
+  // The hint lives in the header's fixed status line: toggling it must never move the editor.
+  const gridTop = () => page.locator('.cell').first().evaluate((el) => el.getBoundingClientRect().top);
+  const top = await gridTop();
   await page.getByRole('button', { name: /Play/ }).click();
   // Bar 1 is empty: no column; then the clip starts and the playhead appears.
   await expect(page.locator('.cell.playhead').first()).toBeVisible({ timeout: 6000 });
   await expect(page.getByTestId('song-hint')).toBeHidden();
+  expect(await gridTop()).toBe(top);
   await expect(page.locator('.cell.playhead').first()).toBeHidden({ timeout: 6000 }); // after the clip ends
 });

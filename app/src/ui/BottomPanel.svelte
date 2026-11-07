@@ -35,7 +35,10 @@
   }
 
   // Song-mode hint: shown while the edited pattern is not playing at the
-  // playhead (no clip of it under the playhead, or stopped).
+  // playhead (no clip of it under the playhead, or stopped). It flips on and
+  // off during playback, so it lives in the header's status line (fixed
+  // height, toggled with visibility): the editor below must never move
+  // because of it (a jumping grid causes misclicks).
   let songIdle = $state(false);
   onMount(() => {
     let raf = 0;
@@ -52,6 +55,8 @@
     return () => cancelAnimationFrame(raf);
   });
 
+  const songHint = 'Song mode plays clips — playhead shows where a clip of this pattern plays';
+
   // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
 
@@ -64,6 +69,13 @@
     {:else}
       <span class="none">No track selected</span>
     {/if}
+    <!-- Status line: flashed hints (banners.hint) win over the Song-mode hint. -->
+    <span class="status">
+      <span class="hint" class:off={!songIdle || banners.hint !== null} data-testid="song-hint" title={songHint} aria-hidden={!songIdle || banners.hint !== null}>{songHint}</span>
+      {#if banners.hint !== null}
+        <span class="hint flash" data-testid="flash-hint" role="status">{banners.hint}</span>
+      {/if}
+    </span>
     <span class="tabs">
       <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'}>Step grid</button>
       <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
@@ -82,9 +94,6 @@
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
       </div>
     {/if}
-    {#if songIdle}
-      <div class="banner hint" data-testid="song-hint">Song mode plays clips — playhead shows where a clip of this pattern plays</div>
-    {/if}
     {#if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
@@ -100,7 +109,13 @@
   .head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
   .none { color: #7d808c; }
-  .tabs { margin-left: auto; display: flex; gap: 2px; }
+  .tabs { display: flex; gap: 2px; }
+  /* Takes the free space between the picker and the tabs; children are
+     absolutely placed, so their text never changes the header's size. */
+  .status { position: relative; flex: 1 1 0; min-width: 0; align-self: stretch; }
+  .status .hint { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); color: #9aa6c4; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status .hint.off { visibility: hidden; }
+  .status .flash { color: #ffd98a; }
   .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
   .tab.active { background: #f0a23a; color: #111; }
   .tab:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -108,6 +123,5 @@
   .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
   .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
-  .hint { background: #1f2430; color: #9aa6c4; border: 1px solid #2f3850; font-size: 11px; }
   .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
 </style>

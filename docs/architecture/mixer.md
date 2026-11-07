@@ -183,6 +183,22 @@ bit for bit like a new mixer (`reset_all_clears_mixer_tails_and_master`). The
 engine fades its last output sample over 5 ms across the reset, so cutting
 the tails never clicks.
 
+## Slot reuse (adding a track)
+
+`ADD_*_TRACK` over a track (or over a removed one still fading out) is a
+removal (`Mixer::slot_removed`): the strip resets to the defaults but *holds*
+its old gains, gate and inserts for the 2 ms fade plus one rack sub-block, so
+the old track fades out through the settings it was mixed with, then glides
+to the new ones. On an **empty** slot whose strip has no hold or tail left,
+nothing sounds through it, so `Mixer::slot_added` skips the hold and marks
+the strip *fresh* until its first block: every setting sent before that block
+(a project load's or the export's `MIX_SET`s) jumps into place instead of
+ramping, and applies from the track's first sample whatever the call size
+(`add_track_then_mix_set_applies_immediately`,
+`render_is_call_size_independent`). Before plan 7 the hold applied here too
+and ended on a call boundary, so a project's mutes and faders were ignored
+for the engine's first call (see `export.md`).
+
 ## Gain staging
 
 Faders are -inf..+6 dB; the master limiter catches what is left. Poly starter

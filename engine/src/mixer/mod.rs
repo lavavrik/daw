@@ -192,6 +192,14 @@ impl Ramp {
         self.value
     }
 
+    /// Jump to `target` at once (no ramp).
+    fn snap(&mut self, target: f32) {
+        self.value = target;
+        self.target = target;
+        self.left = 0;
+        self.step = 0.0;
+    }
+
     /// At rest at exactly `v`.
     fn rests_at(&self, v: f32) -> bool {
         self.left == 0 && self.value == v
@@ -241,6 +249,19 @@ impl Insert {
             self.idle = false;
         }
     }
+
+    /// Fully on / off at once. Switched off, `reset` clears the DSP now (it
+    /// would otherwise wait for `run_insert` to see the mix at rest at 0, and
+    /// a snap back on before that would start from stale state).
+    fn snap<D>(&mut self, on: bool, dsp: &mut D, reset: fn(&mut D)) {
+        self.mix.snap(if on { 1.0 } else { 0.0 });
+        if on {
+            self.idle = false;
+        } else if !self.idle {
+            self.idle = true;
+            reset(dsp);
+        }
+    }
 }
 
 /// One channel strip (tracks, returns and the master share the type; each
@@ -264,6 +285,13 @@ pub(crate) struct Strip {
     /// slot was removed (the old track's 2 ms fade-out passes through the
     /// strip it was mixed with), before gliding to the reset values.
     hold: usize,
+    /// The strip's slot got a new track while nothing sounded through it
+    /// (`Mixer::slot_added`), and no block has run through it since: its
+    /// gains, gate and inserts jump to new settings instead of ramping (the
+    /// ramps exist to avoid clicks, and there is nothing to click yet). So a
+    /// project replay (load, export) mixes from its first sample with the
+    /// project's settings, whatever the engine's call size.
+    fresh: bool,
 }
 
 impl Strip {
@@ -282,6 +310,7 @@ impl Strip {
             send_b: Ramp::new(0.0, gain_len),
             tail: 0,
             hold: 0,
+            fresh: false,
         };
         for p in &PARAMS {
             s.values[p.id as usize] = p.default;
@@ -330,6 +359,15 @@ impl Strip {
     /// (`Ramp::set` ignores an unchanged target).
     fn retarget(&mut self) {
         let (l, r) = pan_gains(self.v(P_FADER), self.v(P_PAN));
+        if self.fresh {
+            self.gl.snap(l);
+            self.gr.snap(r);
+            self.send_a.snap(send_gain(self.v(P_SEND_A)));
+            self.send_b.snap(send_gain(self.v(P_SEND_B)));
+            self.eq_ins.snap(self.flag(P_EQ_ON), &mut self.eq, Eq3::reset);
+            self.comp_ins.snap(self.flag(P_COMP_ON), &mut self.comp, Compressor::reset);
+            return;
+        }
         self.gl.set(l);
         self.gr.set(r);
         self.send_a.set(send_gain(self.v(P_SEND_A)));
@@ -607,6 +645,33 @@ impl Mixer {
         self.reset_channel(slot);
     }
 
+    /// Slot `slot` gets a new track (`ADD_*_TRACK`); `was_empty`: it held
+    /// none. If nothing sounds through its strip (an empty slot whose strip
+    /// has no removal hold or tail left: a fresh engine, a load after
+    /// `RESET_ALL`, a slot long unused), the strip resets to the defaults at
+    /// once and stays `fresh` until its first block, so the track's mixer
+    /// settings apply from its first sample. Otherwise (replacing a track,
+    /// or a removed one still fading) it is a removal: `slot_removed`.
+    pub fn slot_added(&mut self, slot: usize, was_empty: bool) {
+        let quiet = self.strips.get(slot).is_some_and(|s| slot < MAX_TRACKS && s.hold == 0 && s.tail == 0);
+        if !(was_empty && quiet) {
+            self.slot_removed(slot);
+            return;
+        }
+        let fade = self.gate_len;
+        for s in self.strips.iter_mut().take(MAX_TRACKS) {
+            if s.key.source() == Some(slot) {
+                s.key = Key::None;
+                s.comp.release_to_unity(fade);
+            }
+        }
+        if let Some(s) = self.strips.get_mut(slot) {
+            s.fresh = true;
+            s.gate.snap(1.0);
+        }
+        self.reset_channel(slot);
+    }
+
     /// Reassign the key slots: one per distinct keyed drum row.
     fn rebuild_keys(&mut self) {
         for rk in self.row_keys.iter_mut() {
@@ -683,7 +748,9 @@ impl Mixer {
                 continue;
             }
             let muted = st.flag(P_MUTE) || (solo && !st.flag(P_SOLO));
-            if st.hold == 0 {
+            if st.fresh {
+                st.gate.snap(if muted { 0.0 } else { 1.0 });
+            } else if st.hold == 0 {
                 st.gate.set(if muted { 0.0 } else { 1.0 });
             }
             buses.eq(st, n);
@@ -700,6 +767,7 @@ impl Mixer {
             let gr = if st.comp_ins.idle { 0.0 } else { st.comp.gain_reduction_db() };
             write_meter(meters, ch, pl, pr, gr);
             st.count_hold(n);
+            st.fresh = false;
         }
 
         // Returns: send bus -> effect (100% wet) -> EQ -> fader/pan/mute.

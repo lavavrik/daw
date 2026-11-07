@@ -542,24 +542,26 @@ impl Engine {
             // Resets the slot to defaults and silences its voices (a synth
             // track there fades out first).
             Command::AddDrumTrack { slot } => {
+                let was_empty = self.kind(slot) == SlotKind::Empty;
                 if self.kind(slot) == SlotKind::Synth {
                     self.clear_slot(slot);
                 }
                 self.drums.add_track(slot);
                 self.set_kind(slot, SlotKind::Drum);
                 self.clear_clips(slot);
-                self.mixer.slot_removed(slot);
+                self.mixer.slot_added(slot, was_empty);
             }
             // Empty patch (a drum track there fades out first; a synth patch
             // there is cleared with a fade).
             Command::AddSynthTrack { slot } => {
+                let was_empty = self.kind(slot) == SlotKind::Empty;
                 if self.kind(slot) == SlotKind::Drum {
                     self.clear_slot(slot);
                 }
                 self.synths.add_track(slot);
                 self.set_kind(slot, SlotKind::Synth);
                 self.clear_clips(slot);
-                self.mixer.slot_removed(slot);
+                self.mixer.slot_added(slot, was_empty);
             }
             // Works for both kinds (and is a no-op on an empty slot, except
             // that drum state is marked inactive as before).

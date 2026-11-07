@@ -762,5 +762,122 @@ fn mixer_delay_reverb_unchanged() {
     r.extend_from_slice(&r2);
     assert!(l.iter().chain(&r).all(|x| x.is_finite()));
     assert!(l[48000..].iter().any(|x| x.abs() > 0.01), "the returns are heard");
-    assert_eq!((fingerprint(&l), fingerprint(&r)), (260100827811768916, 5996882931469960278));
+    // Re-recorded in plan 7 (export fix): a new track's strip now takes its
+    // settings from the first sample (`Mixer::slot_added`), so the sends no
+    // longer glide up from off over the first block. With the old
+    // ADD-as-removal path forced, this still gives the plan-6 values
+    // (260100827811768916, 5996882931469960278): the returns are unchanged.
+    assert_eq!((fingerprint(&l), fingerprint(&r)), (17261538962147757256, 7669865106360089702));
+}
+
+/// Render `frames` in `engine.process` calls of `call` frames.
+fn render_calls(e: &mut Engine, frames: usize, call: usize) -> (Vec<f32>, Vec<f32>) {
+    let (mut ol, mut or) = (Vec::new(), Vec::new());
+    let (mut l, mut r) = ([0.0f32; crate::MAX_BLOCK], [0.0f32; crate::MAX_BLOCK]);
+    let mut done = 0;
+    while done < frames {
+        let n = call.min(frames - done);
+        e.process(&mut l[..n], &mut r[..n]);
+        ol.extend_from_slice(&l[..n]);
+        or.extend_from_slice(&r[..n]);
+        done += n;
+    }
+    (ol, or)
+}
+
+#[test]
+fn add_track_then_mix_set_applies_immediately() {
+    // A project load / the export: ADD_*_TRACK on an empty slot, then its
+    // mixer settings, then PLAY with a hit on frame 0. Nothing sounded
+    // through the strip, so there is no removal hold and no glide from the
+    // defaults: the settings hold from the very first sample.
+    for call in [16, 128, 1024] {
+        // Muted: silent from sample 0.
+        let mut e = Engine::new(SR);
+        load(&mut e, 0, 4800, |_| 0.9);
+        drums(&mut e, 0, 0, 0, &[0]);
+        mix(&mut e, 0, P_MUTE, 1.0);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (l, r) = render_calls(&mut e, 4800, call);
+        assert!(l.iter().chain(&r).all(|&x| x == 0.0), "call {call}: a muted track sounded: peak {}", peak(&l));
+
+        // Fader at its minimum (off): silent from sample 0 too.
+        let mut e = Engine::new(SR);
+        load(&mut e, 0, 4800, |_| 0.9);
+        drums(&mut e, 0, 0, 0, &[0]);
+        mix(&mut e, 0, P_FADER, -60.0);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (l, r) = render_calls(&mut e, 4800, call);
+        assert!(l.iter().chain(&r).all(|&x| x == 0.0), "call {call}: fader off sounded: peak {}", peak(&l));
+
+        // Fader -40 dB, panned hard left: -40 dB (x sqrt 2 for the pan law)
+        // of the unity mix, from the first sample (after the limiter
+        // latency), nothing right.
+        let mut e = Engine::new(SR);
+        load(&mut e, 0, 4800, |_| 0.9);
+        drums(&mut e, 0, 0, 0, &[0]);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (unity, _) = render_calls(&mut e, 4800, call);
+        let mut e = Engine::new(SR);
+        load(&mut e, 0, 4800, |_| 0.9);
+        drums(&mut e, 0, 0, 0, &[0]);
+        mix(&mut e, 0, P_FADER, -40.0);
+        mix(&mut e, 0, P_PAN, -1.0);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (l, r) = render_calls(&mut e, 4800, call);
+        let lat = e.latency();
+        assert!(peak(&r) == 0.0, "call {call}: hard left leaked right: {}", peak(&r));
+        let want = peak(&unity) * std::f32::consts::SQRT_2 * 0.01;
+        assert!((peak(&l) - want).abs() < want * 1e-3, "call {call}: -40 dB from the start: {} vs {want}", peak(&l));
+        assert!((l[lat].abs() - want).abs() < want * 1e-3, "call {call}: at -40 dB on frame 0 (after the latency): {}", l[lat]);
+    }
+}
+
+#[test]
+fn replacing_a_sounding_slot_still_holds_its_strip() {
+    // Live behaviour unchanged: ADD over a track that is sounding (or a
+    // removed one still fading) keeps the old strip settings until its fade
+    // is over, so a muted track's fade never leaks.
+    let mut e = Engine::new(SR);
+    sine_patch(&mut e, 0, 0.8);
+    hold(&mut e, 0, 48.0);
+    render(&mut e, 4800);
+    mix(&mut e, 0, P_MUTE, 1.0);
+    let (l, _) = render(&mut e, 1280);
+    assert!(l[400..].iter().all(|&x| x == 0.0), "muted");
+    ok(e.command(OP_ADD_SYNTH_TRACK, 0.0, 0.0, 0.0, 0.0)); // replaces the sounding synth
+    let (l, r) = render(&mut e, 4800);
+    assert!(l.iter().chain(&r).all(|&x| x == 0.0), "the muted fade leaked: {}", peak(&l));
+}
+
+#[test]
+fn render_is_call_size_independent() {
+    // A drum track and a synth (EQ, comp, sends, mute toggled by a later
+    // command at a frame both call sizes share), rendered in 128- and
+    // 1024-frame calls: bit-identical.
+    let build = || {
+        let mut e = Engine::new(SR);
+        load(&mut e, 0, 4800, |i| ((i as f32) * 0.05).sin() * 0.9 * (1.0 - i as f32 / 4800.0));
+        drums(&mut e, 0, 0, 0, &[0, 4, 8, 12]);
+        mix(&mut e, 0, P_FADER, -6.0);
+        mix(&mut e, 0, P_SEND_A, -10.0);
+        mix(&mut e, 0, P_EQ_ON, 1.0);
+        mix(&mut e, 0, P_EQ_LOW, 6.0);
+        sine_patch(&mut e, 1, 0.5);
+        mix(&mut e, 1, P_COMP_ON, 1.0);
+        mix(&mut e, 1, P_COMP_THRESHOLD, -30.0);
+        mix(&mut e, 1, P_PAN, 0.4);
+        mix(&mut e, 1, P_SEND_B, -6.0);
+        ok(e.command(OP_MIX_SET_KEY, 1.0, 1.0, 0.0, 0.0)); // ducked by drum row 0
+        hold(&mut e, 1, 45.0);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        e
+    };
+    let mut a = build();
+    let mut b = build();
+    let (la, ra) = render_calls(&mut a, 48 * 1024, 128);
+    let (lb, rb) = render_calls(&mut b, 48 * 1024, 1024);
+    let first = la.iter().zip(&lb).chain(ra.iter().zip(&rb)).position(|(x, y)| x.to_bits() != y.to_bits());
+    assert_eq!(first, None, "128- vs 1024-frame calls differ");
+    assert!(peak(&la) > 0.05);
 }

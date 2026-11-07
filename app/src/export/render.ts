@@ -60,11 +60,12 @@ export class RenderError extends Error {}
 
 /**
  * Frames per engine_process call: the AudioWorklet render quantum, the size
- * the live worklet always calls with. The engine's output depends on the
- * call size (some work runs once per call, e.g. the mixer processes each
- * call as one block; measured: 1024-frame calls differ from 128-frame
- * calls from frame 128 on), so the export calls with the live size and is
- * sample-identical to the live engine for the same command stream.
+ * the live worklet always calls with. A project replay renders the same in
+ * any call size (engine Mixer::slot_added: a track added to an empty slot
+ * takes its strip settings from its first sample; pinned by
+ * export_render_is_call_size_independent), but replacing a sounding track
+ * holds its strip for a fade counted per call, so the export stays on the
+ * live schedule anyway.
  */
 export const ENGINE_QUANTUM = 128;
 

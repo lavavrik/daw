@@ -72,14 +72,26 @@ Player is silent live and in the file alike.
 
 ## Determinism and the native reference
 The render is deterministic: the same wasm, the same command list and the
-same `engine_process` call sizes give the same samples. The call size
-matters: some engine work runs once per call (the mixer processes each call
-as one block), so 1024-frame calls differ from 128-frame calls (measured: from frame 128 on,
-by up to 0.12). The Worker therefore renders 1024-frame blocks (progress
-granularity) **as 128-frame calls**, the AudioWorklet quantum the live
-worklet always uses (`render.ts ENGINE_QUANTUM`), so the export is
-sample-identical to the live engine for the same command stream. Cost:
-none measurable (~56× real time either way).
+same `engine_process` call sizes give the same samples. The Worker renders
+1024-frame blocks (progress granularity) **as 128-frame calls**, the
+AudioWorklet quantum the live worklet always uses (`render.ts
+ENGINE_QUANTUM`), so it is on the live engine's exact schedule.
+
+Call size used to matter for a replay: `ADD_*_TRACK` treated the slot as a
+removal and held its mixer strip (old settings, no `MIX_SET` applied) for the
+2 ms removal fade plus a rack sub-block, counted per whole call, so a
+project's mute / fader / pan / sends / inserts only applied from the end of
+the engine's first call — 128 frames live, 1024 in a 1024-frame call — and
+then glided from the defaults. A muted track with a hit on frame 0 was
+audible at the start of every load and export. Fixed in the engine
+(`Mixer::slot_added`): a track added to an **empty** slot whose strip has no
+hold or tail left (nothing sounds through it) gets no hold, and its strip
+stays *fresh* until its first block: gains, gate and inserts jump to the
+settings sent before it instead of ramping. Replacing a sounding track (or
+one still fading after removal) keeps the hold, unchanged live. The fixture
+now renders bit-identically in 128- and 1024-frame calls
+(`export_render_is_call_size_independent`); the hold for replaced tracks is
+still counted per call, which is why the export keeps the live 128.
 
 Pinned by a shared fixture, `engine/tests/fixtures/export_render.txt` (the
 export command list of the project test fixture, frozen, with generated

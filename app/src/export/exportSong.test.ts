@@ -3,7 +3,11 @@ import { Op } from '../audio/protocol';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import { buildFixture, fakeDecoder, nullSink } from '../project/testFixture';
-import { addDrumTrack } from '../state/actions';
+import { addDrumTrack, setRowSample, setStep } from '../state/actions';
+import { setMix } from '../state/mixer-actions';
+import { addClip } from '../state/song-actions';
+import { sampleFile } from '../state/sampleFiles';
+import { fakeAudio } from '../project/testFixture';
 import { Project } from '../state/project.svelte';
 import { ExportError, exportCommands, exportFileName, exportFrames, exportSong, songEndTicks } from './exportSong';
 import type { RenderWorker } from './exportSong';
@@ -134,5 +138,26 @@ describe('exportSong', () => {
     const json = serialize(p);
     expect(job.commands).toEqual(exportCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands);
     expect(job.samples.map((s) => s.id)).toEqual([0, 1, 2]);
+  });
+
+  it('muted track at song start is silent in the export', async () => {
+    // A hit on frame 0 of a muted drum track: the strip's mute must hold from
+    // the first sample (not after the engine's first block).
+    const p = new Project();
+    const d = addDrumTrack(p, nullSink)!;
+    p.sampleFiles.set(0, await sampleFile('kick.wav', 'audio/wav', fakeAudio(200))); // 200 frames of 0.5
+    setRowSample(p, nullSink, d.id, d.rows[0].id, 0, 'kick');
+    setStep(p, nullSink, d.id, d.rows[0].id, 0, 127);
+    addClip(p, nullSink, d.id, { start: 0 });
+    const sound = async () => {
+      const blob = await exportSong(p, ctx, () => {}, new AbortController().signal, fakeWorker().deps);
+      return new Uint8Array(await blob.arrayBuffer(), 44).some((b) => b !== 0);
+    };
+    expect(await sound()).toBe(true); // audible unmuted
+    setMix(p, nullSink, d.id, 'mute', 1);
+    expect(await sound()).toBe(false);
+    setMix(p, nullSink, d.id, 'mute', 0);
+    setMix(p, nullSink, d.id, 'fader', -60); // the fader's minimum is off
+    expect(await sound()).toBe(false);
   });
 });

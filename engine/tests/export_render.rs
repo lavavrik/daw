@@ -96,7 +96,7 @@ fn fnv1a(h: u32, bytes: &[u8]) -> u32 {
     bytes.iter().fold(h, |h, &b| (h ^ b as u32).wrapping_mul(16777619))
 }
 
-fn render(job: &Job) -> (Vec<f32>, Vec<f32>) {
+fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
     let e = engine_new(job.sample_rate);
     for &(id, frames, channels, seed) in &job.samples {
         let data = sample_data(frames, channels, seed);
@@ -116,9 +116,9 @@ fn render(job: &Job) -> (Vec<f32>, Vec<f32>) {
     let (mut left, mut right) = (Vec::with_capacity(total), Vec::with_capacity(total));
     let mut done = 0;
     while done < total {
-        let n = (total - done).min(QUANTUM);
+        let n = (total - done).min(call);
         engine_process(e, n as u32);
-        // SAFETY: the out buffers hold MAX_BLOCK (>= QUANTUM) floats each.
+        // SAFETY: the out buffers hold MAX_BLOCK (>= call) floats each.
         let (l, r) = unsafe {
             (core::slice::from_raw_parts(engine_out_left(e), n), core::slice::from_raw_parts(engine_out_right(e), n))
         };
@@ -142,7 +142,7 @@ fn hash(left: &[f32], right: &[f32]) -> u32 {
 fn export_render_matches_golden_hash() {
     let job = parse(&std::fs::read_to_string(fixture("export_render.txt")).expect("fixture"));
     assert!(job.frames > 0 && !job.commands.is_empty());
-    let (l, r) = render(&job);
+    let (l, r) = render(&job, QUANTUM);
     assert_eq!(l.len(), job.frames);
     let peak = l.iter().chain(&r).fold(0.0f32, |p, x| p.max(x.abs()));
     assert!(peak > 0.01, "the reference render is not silent (peak {peak})");
@@ -160,8 +160,20 @@ fn export_render_matches_golden_hash() {
 #[test]
 fn export_render_is_deterministic() {
     let job = parse(&std::fs::read_to_string(fixture("export_render.txt")).expect("fixture"));
-    let (l1, r1) = render(&job);
-    let (l2, r2) = render(&job);
+    let (l1, r1) = render(&job, QUANTUM);
+    let (l2, r2) = render(&job, QUANTUM);
+    assert_eq!(hash(&l1, &r1), hash(&l2, &r2));
+}
+
+#[test]
+fn export_render_is_call_size_independent() {
+    // Since `Mixer::slot_added` (a track added to an empty slot takes its
+    // strip settings from its first sample), the export job renders
+    // bit-identically in 128- and 1024-frame calls. The export still calls
+    // with 128 (the live quantum) to stay on the live schedule.
+    let job = parse(&std::fs::read_to_string(fixture("export_render.txt")).expect("fixture"));
+    let (l1, r1) = render(&job, QUANTUM);
+    let (l2, r2) = render(&job, daw_engine::MAX_BLOCK);
     assert_eq!(hash(&l1, &r1), hash(&l2, &r2));
 }
 

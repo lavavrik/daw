@@ -41,6 +41,7 @@ export interface RenderWorker {
   postMessage(msg: RenderRequest, transfer: Transferable[]): void;
   onmessage: ((e: MessageEvent<WorkerReply>) => void) | null;
   onerror: ((e: ErrorEvent) => void) | null;
+  onmessageerror: ((e: MessageEvent) => void) | null;
   terminate(): void;
 }
 
@@ -48,7 +49,16 @@ export interface ExportDeps {
   worker(): RenderWorker;
   /** The engine.wasm bytes (the same file the worklet runs). */
   wasm(): Promise<ArrayBuffer>;
+  /** No message from the Worker for this long = it is stuck (default STALL_MS). */
+  stallMs?: number;
 }
+
+/**
+ * The Worker posts progress every 0.25 s of audio (and once right after its
+ * setup), i.e. every few milliseconds at ~50× real time: 10 s of silence
+ * means it hung or died without an error event.
+ */
+export const STALL_MS = 10_000;
 
 const defaultDeps: ExportDeps = {
   worker: () => new Worker(new URL('./renderWorker.ts', import.meta.url), { type: 'module' }) as RenderWorker,
@@ -130,23 +140,34 @@ export async function exportSong(
 
   const worker = deps.worker();
   return new Promise<Blob>((resolve, reject) => {
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
     const finish = (fn: () => void) => {
+      clearTimeout(watchdog);
       signal.removeEventListener('abort', onAbort);
       worker.terminate();
       fn();
     };
+    const fail = (why: string) => finish(() => reject(new ExportError(`Export failed — ${why}`)));
+    const alive = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => fail('the render stopped responding'), deps.stallMs ?? STALL_MS);
+    };
     const onAbort = () => finish(() => reject(aborted()));
     signal.addEventListener('abort', onAbort);
+    worker.onmessageerror = () => fail('a message from the render worker could not be read');
     worker.onerror = (e) => {
       e.preventDefault?.();
-      finish(() => reject(new ExportError(`Export failed — the render worker crashed${e.message ? ` (${e.message})` : ''}`)));
+      fail(`the render worker crashed${e.message ? ` (${e.message})` : ''}`);
     };
     worker.onmessage = (e) => {
       const m = e.data;
-      if (m.type === 'progress') onProgress(m.fraction);
-      else if (m.type === 'done') finish(() => resolve(m.wav));
-      else if (m.type === 'error') finish(() => reject(new ExportError(`Export failed — ${m.message}`)));
+      if (m.type === 'progress') {
+        alive();
+        onProgress(m.fraction);
+      } else if (m.type === 'done') finish(() => resolve(m.wav));
+      else if (m.type === 'error') fail(m.message);
     };
+    alive();
     worker.postMessage({ type: 'render', wasm, job }, [wasm, ...samples.map((s) => s.data.buffer)]);
   });
 }

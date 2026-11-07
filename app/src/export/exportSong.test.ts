@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Op } from '../audio/protocol';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
@@ -18,13 +18,14 @@ import type { WorkerReply } from './render';
 const ctx = { ...fakeDecoder, sampleRate: 48000 };
 
 /** A Worker stand-in running the real render core in this thread (asynchronously, like a Worker). */
-function fakeWorker(o: { hold?: boolean } = {}) {
+function fakeWorker(o: { hold?: boolean; stallMs?: number } = {}) {
   const w = {
     created: 0,
     terminated: false,
     posted: null as unknown,
     onmessage: null as ((e: MessageEvent<WorkerReply>) => void) | null,
     onerror: null as ((e: ErrorEvent) => void) | null,
+    onmessageerror: null as ((e: MessageEvent) => void) | null,
     postMessage(msg: unknown) {
       w.posted = msg;
       if (o.hold) return; // never answers (cancel test)
@@ -43,6 +44,7 @@ function fakeWorker(o: { hold?: boolean } = {}) {
       return w as unknown as RenderWorker;
     },
     wasm: async () => engineWasmBytes(),
+    stallMs: o.stallMs,
   };
   return { w, deps };
 }
@@ -159,5 +161,26 @@ describe('exportSong', () => {
     setMix(p, nullSink, d.id, 'mute', 0);
     setMix(p, nullSink, d.id, 'fader', -60); // the fader's minimum is off
     expect(await sound()).toBe(false);
+  });
+
+  it('a worker that stops answering fails the export with a message (and is terminated)', async () => {
+    const { p } = await buildFixture();
+    const { w, deps } = fakeWorker({ hold: true, stallMs: 30 });
+    const err = await exportSong(p, ctx, () => {}, new AbortController().signal, deps).catch((e) => e);
+    expect(err).toBeInstanceOf(ExportError);
+    expect(err.message).toBe('Export failed — the render stopped responding');
+    expect(w.terminated).toBe(true);
+  });
+
+  it('a message the page cannot read (messageerror) fails the export', async () => {
+    const { p } = await buildFixture();
+    const { w, deps } = fakeWorker({ hold: true });
+    const run = exportSong(p, ctx, () => {}, new AbortController().signal, deps);
+    await vi.waitFor(() => expect(w.onmessageerror).not.toBeNull());
+    w.onmessageerror!({} as MessageEvent);
+    const err = await run.catch((e) => e);
+    expect(err).toBeInstanceOf(ExportError);
+    expect(err.message).toBe('Export failed — a message from the render worker could not be read');
+    expect(w.terminated).toBe(true);
   });
 });

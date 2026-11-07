@@ -43,9 +43,13 @@ with the same engine the AudioWorklet runs, and saves a 24-bit PCM WAV.
    (`engine_sample_alloc` / copy / `engine_sample_ready`), sends the commands
    (a refused command is ignored, as the live worklet does), and renders in
    **1024-frame blocks** (`MAX_BLOCK`), each as eight 128-frame
-   `engine_process` calls like the live worklet's (see below). It posts
-   progress every 0.25 s of audio, encodes the WAV (`wav.ts encodeWav24`) and
-   posts the Blob.
+   `engine_process` calls like the live worklet's (see below). Each block is
+   encoded to 24-bit straight away (`wav.ts Wav24Writer`: the header is final
+   up front since the frame count is known; ~1 s byte chunks become the
+   Blob's parts), so the Worker never holds the song as floats or the file
+   twice. It posts progress at its start, every 0.25 s of audio and at the
+   end, then the Blob. In all exceptional cases the Worker is terminated
+   (see Errors), including a 10 s stall watchdog.
 4. Progress and **Cancel** are a banner in the bottom panel
    (`banners.exporting`). Cancel aborts the `AbortSignal`, which
    **terminates the Worker**. On cancel or failure a file the dialog created
@@ -64,6 +68,8 @@ an export. Speed: the 4-track test fixture renders at ~56× real time in Node
 | A sample's bytes no longer decode | Export failed — sample "x.wav" could not be decoded |
 | The Worker's engine refuses a sample | Export failed — sample N could not be loaded (engine code …) |
 | The Worker crashed | Export failed — the render worker crashed (…) |
+| A Worker message could not be deserialized (`messageerror`) | Export failed — a message from the render worker could not be read |
+| No message from the Worker for 10 s (`STALL_MS`; it posts at its start and every 0.25 s of audio) | Export failed — the render stopped responding |
 | Cancel | "Export cancelled" (status-line hint) |
 
 A sample that failed to load into the session never reaches `p.sampleFiles`,

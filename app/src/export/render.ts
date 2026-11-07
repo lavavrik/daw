@@ -139,14 +139,15 @@ export function renderSong(wasm: BufferSource, job: RenderJob): { left: Float32A
 
 /**
  * The Worker's whole job: render, encode each block as it comes
- * (Wav24Writer), reply. Progress goes out every 0.25 s of rendered audio and
- * once at the end (fraction 1); then exactly one 'done' or 'error'.
+ * (Wav24Writer), reply. Progress goes out at the start (0), every 0.25 s of
+ * rendered audio and at the end (1); then exactly one 'done' or 'error'.
  */
 export function handleRenderMessage(msg: unknown, post: (reply: WorkerReply) => void): void {
   const m = msg as RenderRequest;
   if (m?.type !== 'render') return;
   try {
     const { job } = m;
+    post({ type: 'progress', fraction: 0 }); // alive (exportSong's stall watchdog)
     const wav = new Wav24Writer(job.frames, job.sampleRate);
     const every = Math.max(1, Math.round(job.sampleRate / 4));
     let next = every;

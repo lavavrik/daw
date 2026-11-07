@@ -148,7 +148,7 @@
     {:else}
       <span>Click a sample (here or a row's name) to preview</span>
     {/if}
-    <button data-testid="preview-stop" aria-label="Stop preview" disabled={!previewing} onclick={stopPreview}>■ Stop</button>
+    <button data-testid="preview-stop" title="Stop the preview" disabled={!previewing} onclick={stopPreview}>■ Stop</button>
   </div>
   {#if error}
     <div class="err" data-testid="library-error" role="alert">

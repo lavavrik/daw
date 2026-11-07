@@ -513,6 +513,7 @@
   function erase(e: PointerEvent) {
     if (!view || drag) return;
     e.preventDefault();
+    stage?.focus({ preventScroll: true }); // Delete etc. work after a right-click too
     const { x, y, ny } = local(e);
     if (region(x, y) !== 'notes') return;
     const hit = hitTest(drawOrder, x, ny, view);

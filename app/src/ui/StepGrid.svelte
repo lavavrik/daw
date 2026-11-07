@@ -32,10 +32,15 @@
   // bar shows it, with ■ Stop). Raw sample, not the row's gain/pan/mute; it
   // never touches the pattern or the undo history.
   $effect(() => bindPreview(engine));
-  const rowKey = (id: number) => `row:${id}`;
+  // Keyed by content hash, not sample id: ids restart with every New / Open /
+  // restore, and the player caches decoded audio by key.
+  const rowKey = (id: number) => `row:${p.sampleFiles.get(id)?.hash ?? `${p.generation}:${id}`}`;
   async function previewRow(sampleId: number, name: string) {
     const f = p.sampleFiles.get(sampleId);
-    if (!f) return;
+    if (!f) {
+      onerror(`"${name}" is still loading — try again in a moment`);
+      return;
+    }
     try {
       await togglePreview(rowKey(sampleId), name, async () => new Blob([f.bytes], { type: f.type }));
     } catch {

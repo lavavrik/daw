@@ -27,15 +27,25 @@
   // connect pair) is sent. Drops on anything that is not a matching jack
   // unplug a carried cable / cancel a new one.
   import { tick } from 'svelte';
-  import { CATALOG, moduleDef } from '../../audio/catalog';
+  import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
   import { confirmReleasingKeys } from '../../input/shortcuts';
-  import { STARTER_PATCHES } from '../../state/patches';
+  import { baseName } from '../../audio/samples';
+  import { droppedFiles } from '../../library/drag';
+  import { LibraryLostError, library } from '../../library/library.svelte';
+  import { patchFileName } from '../../library/scan';
+  import { warningsText } from '../../project/session';
+  import { banners, flashHint } from '../../state/banners.svelte';
+  import { markEdited } from '../../state/edits';
+  import { STARTER_PATCHES, trackPatch } from '../../state/patches';
+  import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import {
     addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam,
   } from '../../state/rack-actions';
+  import { deferSampleAssign } from '../../state/sampleLoads';
+  import { importSample } from '../../state/sampleImport';
   import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
@@ -244,26 +254,167 @@
     removeModule(p, engine, track.id, idx);
     edited.add(track.id);
   }
+  // ---- patches: starter + library --------------------------------------------
+  // The dropdown lists the starter patches, then the library's patches/*.json
+  // (values "lib:<path>"; a library patch's name is its file name). Save
+  // patch is refused under a starter name, so a name picks one option.
+  const LIB = 'lib:';
+  const lib = library.state;
+  const libPatches = $derived(lib.source === 'folder' ? (lib.tree?.patches ?? []) : []);
+  const isStarter = (name: string) => STARTER_PATCHES.some((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+  /** The option showing the current patch. */
+  const selValue = $derived.by(() => {
+    if (STARTER_PATCHES.some((x) => x.name === track.patchName)) return track.patchName;
+    const lp = libPatches.find((x) => x.name === track.patchName);
+    return lp ? LIB + lp.path : track.patchName;
+  });
+  /** What the last patch load dropped or clamped (validatePatch), shown inline. */
+  let patchNote = $state<string | null>(null);
+
   /**
-   * Replaces the rack. With unsaved edits it asks first: a stray arrow key on
-   * a focused select (Windows/Linux change the value without opening it) or
-   * a misclick must not silently throw work away. Undo arrives in plan 6.
+   * Replaces the rack with a starter patch (by name) or a library patch
+   * ("lib:<path>": read, then validated by loadPatch like any patch from
+   * outside). With unsaved edits it asks first: a stray arrow key on a
+   * focused select (Windows/Linux change the value without opening it) or a
+   * misclick must not silently throw work away. False if declined or the
+   * file could not be read (the banner says why).
    */
-  function load(name: string): boolean {
-    const patch = STARTER_PATCHES.find((x) => x.name === name);
-    if (!patch) return false;
+  async function load(value: string): Promise<boolean> {
     // confirmReleasingKeys: a piano key held during the dialog would hang.
     if (isEdited && !confirmReleasingKeys(`Discard your edits to "${track.patchName}"?`)) return false;
-    loadPatch(p, engine, track.id, patch);
-    edited.delete(track.id);
+    const tid = track.id;
+    let patch: unknown;
+    let name: string;
+    if (value.startsWith(LIB)) {
+      const path = value.slice(LIB.length);
+      name = path.slice(path.lastIndexOf('/') + 1).replace(/\.json$/i, '');
+      try {
+        patch = await library.readPatch(path);
+      } catch (e) {
+        // Lost folder: the Browser says "Reconnect folder"; no second message.
+        if (!(e instanceof LibraryLostError)) patchNote = `Couldn't load "${name}" — ${e instanceof Error ? e.message : String(e)}`;
+        return false;
+      }
+      // The file name is the patch's name (what the dropdown shows).
+      if (typeof patch === 'object' && patch !== null && !Array.isArray(patch)) patch = { ...patch, name };
+    } else {
+      patch = STARTER_PATCHES.find((x) => x.name === value);
+      if (!patch) return false;
+      name = value;
+    }
+    const warnings = loadPatch(p, engine, tid, patch);
+    edited.delete(tid);
+    if (warnings.length) console.warn(`Patch "${name}":`, warnings);
+    patchNote = warnings.length ? warningsText(`Loaded "${name}" without what was invalid`, warnings) : null;
     return true;
   }
-  function pickPatch(e: Event) {
+  async function pickPatch(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
     sel.blur(); // give the keys back to the piano at once
-    if (!load(sel.value)) sel.value = track.patchName; // declined: show the current patch again
+    if (!(await load(sel.value))) sel.value = selValue; // declined / failed: show the current patch again
   }
-  const revert = () => load(track.patchName);
+  const revert = () => void load(selValue);
+
+  // ---- Save patch (to the library's patches/) ----------------------------------
+  /** The inline save form; `exists`: that file is there, ask before replacing. */
+  let saving = $state<{ name: string; error: string | null; exists: boolean; busy: boolean } | null>(null);
+  const saveTitle = $derived(
+    lib.writable
+      ? "Save this rack to the library folder's patches/"
+      : lib.source === 'folder' && lib.status === 'lost'
+        ? 'Reconnect the library folder to save patches'
+        : 'Choose a library folder to save patches',
+  );
+  function openSave() {
+    saving = { name: isStarter(track.patchName) ? '' : track.patchName, error: null, exists: false, busy: false };
+    void tick().then(() => document.querySelector<HTMLInputElement>('[data-testid="patch-save-name"]')?.select());
+  }
+  async function save(replace = false) {
+    const s = saving;
+    if (!s || s.busy) return;
+    const file = patchFileName(s.name);
+    if (!file) return void (s.error = 'Give the patch a name');
+    const name = file.slice(0, -'.json'.length);
+    if (isStarter(name)) return void (s.error = `"${name}" is a starter patch — pick another name`);
+    const tid = track.id;
+    const t = synthTrack(p, tid);
+    if (!t) return;
+    s.busy = true;
+    try {
+      // Sample ids belong to this session: a library patch keeps no sample.
+      const r = await library.savePatch(name, { ...trackPatch(t, () => -1), name }, { replace });
+      if (r === 'exists') {
+        s.exists = true;
+        s.error = null;
+        return;
+      }
+      saving = null;
+      if (t.patchName !== name) {
+        t.patchName = name; // the rack is now that library patch (sends no command)
+        markEdited(p);
+      }
+      edited.delete(tid);
+      flashHint(`Saved patch "${name}" to the library`);
+    } catch (e) {
+      s.exists = false;
+      s.error = e instanceof LibraryLostError
+        ? 'The library folder is out of reach — reconnect it in the Browser'
+        : `Couldn't save — ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      s.busy = false;
+    }
+  }
+  function saveKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') void save();
+    else if (e.key === 'Escape') saving = null;
+  }
+
+  // ---- Sample Player: sample picker + drop ---------------------------------------
+  /** Bumped to re-read p.sampleFiles (a plain Map) when a picker opens or a drop lands. */
+  let sampleTick = $state(0);
+  /** The project's loaded samples by name ("kick", or "kick #3" when names repeat). */
+  const sampleOptions = $derived.by(() => {
+    void p.version;
+    void p.loading;
+    void sampleTick;
+    const list = [...p.sampleFiles].map(([id, f]) => ({ id, name: baseName(f.name) })).sort((a, b) => a.id - b.id);
+    const count = new Map<string, number>();
+    for (const s of list) count.set(s.name, (count.get(s.name) ?? 0) + 1);
+    return list.map((s) => (count.get(s.name)! > 1 ? { ...s, name: `${s.name} #${s.id}` } : s));
+  });
+  const SAMPLE_PARAM = paramIndex(moduleDef('sample_player'), 'sample');
+
+  /** A sample dropped on Sample Player `idx`: import it (same path as a step-grid drop), then assign it. */
+  async function dropSample(e: DragEvent, idx: number) {
+    let files: File[];
+    try {
+      files = await droppedFiles(e);
+    } catch (err) {
+      banners.error = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    if (!files[0]) return;
+    const tid = track.id;
+    const kind = moduleDef('sample_player').kind;
+    const alive = () => !!synthTrack(p, tid)?.modules.some((m) => m.idx === idx && m.kind === kind);
+    const r = await importSample(p, engine, files[0], alive);
+    if (!r.ok) {
+      if (r.error) banners.error = r.error;
+      return;
+    }
+    const assign = (id: number) => {
+      if (!alive()) return;
+      setParam(p, engine, tid, idx, SAMPLE_PARAM, id);
+      edited.add(tid);
+      sampleTick++;
+    };
+    if (r.deferred) deferSampleAssign(r.id, r.name, assign);
+    else {
+      assign(r.id);
+      banners.error = null;
+    }
+  }
+
   /** A focused <select> type-aheads on letters: the piano keys must not change the patch. */
   function selectKey(e: KeyboardEvent) {
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
@@ -324,19 +475,29 @@
   <div class="bar">
     <label class="patch">
       <span>Patch</span>
-      <select data-testid="patch-select" value={track.patchName} onchange={pickPatch} onkeydown={selectKey}>
-        {#if !STARTER_PATCHES.some((x) => x.name === track.patchName)}
+      <select data-testid="patch-select" value={selValue} onchange={pickPatch} onkeydown={selectKey}>
+        {#if selValue === track.patchName && !STARTER_PATCHES.some((x) => x.name === track.patchName)}
           <option value={track.patchName} disabled>{track.patchName || '—'}</option>
         {/if}
-        {#each STARTER_PATCHES as sp (sp.name)}
-          <option value={sp.name}>{sp.name}</option>
-        {/each}
+        <optgroup label="Starter">
+          {#each STARTER_PATCHES as sp (sp.name)}
+            <option value={sp.name}>{sp.name}</option>
+          {/each}
+        </optgroup>
+        {#if libPatches.length}
+          <optgroup label="Library">
+            {#each libPatches as lp (lp.path)}
+              <option value={LIB + lp.path}>{lp.name}</option>
+            {/each}
+          </optgroup>
+        {/if}
       </select>
     </label>
     {#if isEdited}
       <span class="edited" data-testid="patch-edited" title="Changed since the patch was loaded">(edited)</span>
       <button class="link" onclick={revert} title={`Reload ${track.patchName}, discarding your changes`}>revert</button>
     {/if}
+    <button class="add" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
     <div class="addwrap">
       <button
         class="add"
@@ -371,6 +532,29 @@
     </span>
   </div>
 
+  {#if saving}
+    {@const sv = saving}
+    <div class="note save" role="group" aria-label="Save patch">
+      {#if sv.exists}
+        <span data-testid="patch-replace">A patch named "{sv.name.trim()}" is already in the library. Replace it?</span>
+        <button class="ok" data-testid="patch-replace-ok" disabled={sv.busy} onclick={() => void save(true)}>Replace</button>
+        <button data-testid="patch-replace-cancel" onclick={() => (sv.exists = false)}>Cancel</button>
+      {:else}
+        <label>Save patch as
+          <input data-testid="patch-save-name" bind:value={sv.name} maxlength="64" placeholder="Patch name" onkeydown={saveKey} />
+        </label>
+        <button class="ok" data-testid="patch-save-ok" disabled={sv.busy} onclick={() => void save()}>Save</button>
+        <button onclick={() => (saving = null)}>Cancel</button>
+      {/if}
+      {#if sv.error}<span class="bad" role="alert">{sv.error}</span>{/if}
+    </div>
+  {/if}
+  {#if patchNote}
+    <div class="note" data-testid="patch-warnings" role="status">
+      <span>{patchNote}</span><button aria-label="Dismiss" onclick={() => (patchNote = null)}>×</button>
+    </div>
+  {/if}
+
   <div class="rail" data-testid="rail" bind:this={rail}>
     <div class="content" bind:this={content}>
       {#each modules as m (m.idx)}
@@ -383,6 +567,9 @@
           onremove={() => remove(m.idx)}
           onjackdown={(e, dir, port) => jackDown(e, m.idx, dir, port)}
           tempo={p.tempo}
+          samples={moduleDef(m.kind).id === 'sample_player' ? sampleOptions : null}
+          onsampledrop={moduleDef(m.kind).id === 'sample_player' ? (e) => void dropSample(e, m.idx) : undefined}
+          onsamplesopen={() => sampleTick++}
         />
       {/each}
       {#if modules.length === 0}
@@ -426,6 +613,16 @@
   .legend span { display: flex; align-items: center; gap: 3px; }
   .legend i { width: 12px; height: 3px; border-radius: 2px; }
 
+  .add:disabled { opacity: 0.45; cursor: not-allowed; }
+  .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
+  .note > span { flex: 1; min-width: 0; }
+  .note button { font: inherit; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
+  .note button[aria-label='Dismiss'] { border: 0; }
+  .note .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
+  .note.save { background: #1f2127; color: #c9cbd3; border-color: #3a3d48; }
+  .note label { display: flex; align-items: center; gap: 6px; }
+  .note input { font: inherit; width: 160px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 4px; }
+  .note .bad { flex-basis: 100%; color: #ffb3ba; }
   .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; background: #101114; border-radius: 4px; }
   .content { position: relative; display: flex; align-items: stretch; gap: 4px; width: max-content; min-width: 100%; box-sizing: border-box; padding: 6px; }
   .empty { color: #7d808c; margin: 8px; }

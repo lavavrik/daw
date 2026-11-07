@@ -4,14 +4,22 @@
   // a × to remove it; then its params (choice params as segmented controls,
   // the rest as knobs), then the input jacks, then the output jacks on a dark
   // plate (VCV convention: outputs are the boxed ones).
+  //
+  // Sample Player: its `sample` param (a sample-pool id, -1 = none) is a
+  // dropdown of the project's loaded samples instead of a knob, and the
+  // whole panel accepts a sample dropped on it (Finder file or library
+  // sample; Rack.svelte imports it and assigns it).
   import type { ModuleDef } from '../../audio/catalog';
+  import { isSampleDrag } from '../../library/drag';
   import type { RackModule } from '../../state/project.svelte';
   import { delayClampNote } from '../mixer/mixMath';
   import { categoryColor } from './cables';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
 
-  let { module, def, title, isConnected, onparam, onremove, onjackdown, tempo = 120 }: {
+  let {
+    module, def, title, isConnected, onparam, onremove, onjackdown, tempo = 120, samples = null, onsampledrop, onsamplesopen,
+  }: {
     module: RackModule;
     def: ModuleDef;
     /** Display name, numbered when the rack has several of a kind ("Oscillator 2"). */
@@ -22,24 +30,77 @@
     onjackdown: (e: PointerEvent, dir: 'in' | 'out', port: number) => void;
     /** Transport BPM, for the Delay's "(max 2 s)" note. */
     tempo?: number;
+    /** Sample Player only: the project's samples for the `sample` dropdown. */
+    samples?: { id: number; name: string }[] | null;
+    /** Sample Player only: a sample was dropped on the panel (default already prevented). */
+    onsampledrop?: (e: DragEvent) => void;
+    /** Sample Player only: the dropdown is about to open (refresh `samples`). */
+    onsamplesopen?: () => void;
   } = $props();
+
+  /** The `sample` param, shown as a dropdown (Sample Player). */
+  const sampleIdx = $derived(samples ? def.params.findIndex((pd) => pd.name === 'sample') : -1);
+  const sampleValue = $derived(sampleIdx >= 0 ? module.params[sampleIdx] : -1);
+  let dropping = $state(false);
+  function over(e: DragEvent) {
+    if (!onsampledrop || !isSampleDrag(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    dropping = true;
+  }
+  function drop(e: DragEvent) {
+    if (!onsampledrop || !isSampleDrag(e)) return;
+    e.preventDefault();
+    dropping = false;
+    onsampledrop(e);
+  }
+  function pickSample(e: Event) {
+    const sel = e.currentTarget as HTMLSelectElement;
+    sel.blur(); // give the keys back to the piano at once
+    onparam(sampleIdx, Number(sel.value));
+  }
+  /** A focused <select> type-aheads on letters: the piano keys must not change the sample. */
+  function selectKey(e: KeyboardEvent) {
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
+  }
 
   /** Extra line under a control: the Delay division clamped to 2 s (shared
    * with the mixer delay: same table, same rule). */
   const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
   const color = $derived(categoryColor(def.category));
-  const choices = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.pd.choices.length));
-  const knobs = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => !x.pd.choices.length));
+  const shown = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.i !== sampleIdx));
+  const choices = $derived(shown.filter((x) => x.pd.choices.length));
+  const knobs = $derived(shown.filter((x) => !x.pd.choices.length));
   // 1 knob: 1 column; up to 4: 2 columns; more: 4 (keeps the rail short).
   const cols = $derived(knobs.length <= 1 ? 1 : knobs.length <= 4 ? 2 : 4);
 </script>
 
-<div class="panel" data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}>
+<div
+  class="panel" class:dropping data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
+  ondragenter={over} ondragover={over} ondragleave={() => (dropping = false)} ondrop={drop}
+>
   <header>
     <span class="title">{title}</span>
     <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}>×</button>
   </header>
+  {#if samples && sampleIdx >= 0}
+    <label class="smp" title="Drop a sample here (library or Finder), or pick one the project has">
+      <span>Sample</span>
+      <select
+        data-testid={`sample-${module.idx}`} value={sampleValue} onchange={pickSample} onkeydown={selectKey}
+        onfocus={onsamplesopen} onpointerdown={onsamplesopen}
+      >
+        <option value={-1}>— none —</option>
+        {#if sampleValue >= 0 && !samples.some((s) => s.id === sampleValue)}
+          <option value={sampleValue} disabled>#{sampleValue} (missing)</option>
+        {/if}
+        {#each samples as s (s.id)}
+          <option value={s.id}>{s.name}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
   {#if def.params.length}
     <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>
       {#each choices as { pd, i } (pd.name)}
@@ -80,6 +141,9 @@
 </div>
 
 <style>
+  .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
+  .smp { display: flex; flex-direction: column; gap: 2px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #8d90a0; }
+  .smp select { font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; max-width: 120px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 2px; }
   .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
   header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); }
   .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }

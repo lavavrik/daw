@@ -12,7 +12,8 @@
   import type { AudioEngine } from './audio/engine';
   import { Project } from './state/project.svelte';
   import { addDrumTrack, addRow, liveInputTrack, play, setRowSample, setStep, stop } from './state/actions';
-  import { addSynthTrack, rollbackRefusedAdd } from './state/rack-actions';
+  import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
+  import { library } from './library/library.svelte';
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
   import { STARTER_PATCHES } from './state/patches';
@@ -176,7 +177,10 @@
     addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
     setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
     setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
+    loadPatch: (trackId, patch) => (engine ? loadPatch(project, engine, trackId, patch) : []),
   },
+  // The Browser's library (e2e: attach an OPFS folder as start-up would a stored one).
+  library,
   // Project save/load with any directory handle (e2e: OPFS). Same code as the Project menu.
   saveTo: (dir) => (session ? session.saveTo(dir) : Promise.reject(new Error('audio not started'))),
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
@@ -355,7 +359,7 @@
     };
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
-      if (!e.defaultPrevented) banners.error = 'Drop onto a step-grid row to load a sample';
+      if (!e.defaultPrevented) banners.error = 'Drop onto a step-grid row, "+ Add row" or a Sample Player to load a sample';
       e.preventDefault();
     };
     window.addEventListener('dragover', over);
@@ -381,7 +385,7 @@
       </div>
     {/if}
     <div class="main">
-      <Browser />
+      <Browser {engine} />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
         <div class="bottom"><BottomPanel p={project} {engine} {clock} {noteInput} /></div>

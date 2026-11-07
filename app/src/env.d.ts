@@ -6,6 +6,7 @@ import type { Op } from './audio/protocol';
 import type { Recorder } from './state/recorder';
 import type { Clip, Project } from './state/project.svelte';
 import type { Autosave } from './project/autosave';
+import type { Library } from './library/library.svelte';
 
 /** Real state actions bound to the project + engine, for e2e tests (App.svelte). */
 interface DawActions {
@@ -25,6 +26,8 @@ declare global {
       openFrom: (dir: FileSystemDirectoryHandle) => Promise<string[]>;
       /** The OPFS autosave (e2e: lastSaved, flush). */
       autosave: Autosave;
+      /** The Browser's library (e2e: attach(handle) with an OPFS folder). */
+      library: Library;
     };
   }
 }

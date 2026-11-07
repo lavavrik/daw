@@ -48,8 +48,9 @@ const SAX: Patch = {
     { idx: 2, id: 'osc', params: { wave: 1, pw: 0.4, fine: 5, fm: 0.002 } },
     // Tone mix: saw forward, square underneath.
     { idx: 3, id: 'mixer', params: { lvl1: 0.75, lvl2: 0.3 } },
-    // The body: alto-sax resonances; they barely follow the note (track 0.15), the mod wheel lifts them.
-    { idx: 4, id: 'formant', params: { f1: 520, f2: 1480, f3: 2650, q: 4, g2: 0.9, g3: 0.7, track: 0.15, cv_amt: 0.5, mix: 0.75 } },
+    // The body: alto-sax resonances, fully wet (≥ 9 dB above the 0.7–1.15 / 1.9–2.2 kHz troughs); they barely
+    // follow the note (track 0.15), the mod wheel lifts them.
+    { idx: 4, id: 'formant', params: { f1: 520, f2: 1480, f3: 2650, q: 4, g2: 0.9, g3: 0.7, track: 0.15, cv_amt: 0.5 } },
     // Brightness: LP12 opened by the filter envelope (onset overshoot, velocity → brighter).
     { idx: 5, id: 'filter', params: { mode: 1, cutoff: 800, reso: 0.1, cv_amt: 3 } },
     // Reedy grit.
@@ -67,7 +68,7 @@ const SAX: Patch = {
     // Breath amp.
     { idx: 12, id: 'vca' },
     // Breath envelope: an 8 ms chiff that leads the tone, then a quiet steady hiss.
-    { idx: 13, id: 'adsr', params: { attack: 0.008, decay: 0.15, sustain: 0.3, release: 0.1, vel_amt: 0.8 } },
+    { idx: 13, id: 'adsr', params: { attack: 0.008, decay: 0.15, sustain: 0.3, release: 0.1, vel_amt: 0.5 } },
     // Vibrato: a 5.2 Hz sine.
     { idx: 14, id: 'lfo', params: { wave: 0, rate: 5.2 } },
     // Vibrato depth: the oscillators' fm (0.002 → about ±17 cents at full depth).

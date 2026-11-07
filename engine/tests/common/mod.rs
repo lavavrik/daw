@@ -46,32 +46,39 @@ pub struct HousePatch {
     pub cmds: Vec<[f64; 5]>,
 }
 
-/// Every patch of the fixture, in order.
+/// Every patch of the fixture, in order. Panics on a patch without a
+/// `phrase` line (a stale or hand-edited fixture), rather than guessing one.
 pub fn house_patches() -> Vec<HousePatch> {
-    let mut out: Vec<HousePatch> = Vec::new();
+    let mut out: Vec<(String, Option<Phrase>, Vec<[f64; 5]>)> = Vec::new();
     for line in HOUSE_FIXTURE.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if let Some(name) = line.strip_prefix("patch ") {
-            out.push(HousePatch { name: name.to_string(), phrase: Phrase::Lead, cmds: Vec::new() });
+            out.push((name.to_string(), None, Vec::new()));
             continue;
         }
         let last = out.last_mut().expect("line before the first patch");
         if let Some(p) = line.strip_prefix("phrase ") {
-            last.phrase = match p {
+            assert!(last.1.is_none(), "patch {:?} has two phrase lines", last.0);
+            last.1 = Some(match p {
                 "chord4" => Phrase::Chord4,
                 "chord5" => Phrase::Chord5,
                 "bass" => Phrase::Bass,
                 "lead" => Phrase::Lead,
                 other => panic!("unknown phrase {other:?}"),
-            };
+            });
             continue;
         }
         let nums: Vec<f64> = line.split_whitespace().map(|x| x.parse().expect("number")).collect();
         assert_eq!(nums.len(), 5, "bad fixture line {line:?}");
-        last.cmds.push([nums[0], nums[1], nums[2], nums[3], nums[4]]);
+        last.2.push([nums[0], nums[1], nums[2], nums[3], nums[4]]);
     }
-    out
+    out.into_iter()
+        .map(|(name, phrase, cmds)| {
+            let phrase = phrase.unwrap_or_else(|| panic!("house patch {name:?} has no phrase line in the fixture"));
+            HousePatch { name, phrase, cmds }
+        })
+        .collect()
 }

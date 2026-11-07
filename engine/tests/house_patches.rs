@@ -34,7 +34,25 @@ use daw_engine::protocol::{
 };
 use daw_engine::rack::catalog::{spec, ModuleKind};
 
-const SR: f32 = 48000.0;
+/// The test sample rate: 48 kHz, or `HOUSE_SR` at build time to check every
+/// measurement at another rate, e.g.
+/// `HOUSE_SR=44100 cargo test -p daw-engine --test house_patches`
+/// (cargo rebuilds when it changes).
+const SR: f32 = match option_env!("HOUSE_SR") {
+    Some(s) => parse_hz(s),
+    None => 48000.0,
+};
+
+const fn parse_hz(s: &str) -> f32 {
+    let b = s.as_bytes();
+    let (mut i, mut n) = (0, 0u32);
+    while i < b.len() {
+        assert!(b[i].is_ascii_digit(), "HOUSE_SR: a whole number of Hz");
+        n = n * 10 + (b[i] - b'0') as u32;
+        i += 1;
+    }
+    n as f32
+}
 const BLOCK: usize = 128;
 /// Master gain 0.1 instead of 0.8: output × 8 is the pre-limiter signal.
 const PRE: f32 = 8.0;
@@ -130,6 +148,12 @@ fn run(e: &mut Engine, events: &[(f32, Ev)], dur: f32) -> Render {
     Render { m, peak }
 }
 
+/// When an event at `t` s takes effect in a [`run`] render: the first block
+/// start at or after it.
+fn onset(t: f32) -> f32 {
+    ((t * SR) as usize).div_ceil(BLOCK) as f32 * BLOCK as f32 / SR
+}
+
 /// Press `notes` at velocity `vel` at 0, release them after `hold` s, and
 /// render `release` s more.
 fn play(e: &mut Engine, notes: &[u8], vel: u8, hold: f32, release: f32) -> Render {
@@ -212,6 +236,54 @@ fn harmonics(r: &Render, f0: f32, at: f32, window: usize) -> Vec<f32> {
     out
 }
 
+/// Mean power (A²) of harmonics 1, 2, … of `f0` over Hann windows of 4096
+/// samples (hop 1024) between `a` and `b` s. Average over at least one beat
+/// of any detuned layer (the Sax's +5 ct square beats at 0.76 Hz at C4), so a
+/// harmonic's value does not depend on where one window happens to fall.
+fn harmonic_power(r: &Render, f0: f32, a: f32, b: f32) -> Vec<f32> {
+    let (start, end) = (r.at(a), r.at(b));
+    let mut acc: Vec<f64> = Vec::new();
+    let mut n = 0;
+    let mut s = start;
+    while s + FFT_N <= end {
+        let h = harmonics(r, f0, s as f32 / SR, FFT_N);
+        if acc.is_empty() {
+            acc = vec![0.0; h.len()];
+        }
+        acc.iter_mut().zip(&h).for_each(|(x, y)| *x += (*y as f64).powi(2));
+        n += 1;
+        s += 1024;
+    }
+    assert!(n > 0, "span too short");
+    acc.iter().map(|x| (x / n as f64) as f32).collect()
+}
+
+/// Harmonic-only spectral centroid (Hz) between `a` and `b` s: each harmonic
+/// k·f0 (50 Hz–10 kHz) weighted by its magnitude, `√` of the Welch power
+/// within ±f0/4 of it (so vibrato stays inside its band and inharmonic
+/// breath noise between the harmonics does not count).
+fn harmonic_centroid(r: &Render, f0: f32, a: f32, b: f32) -> f32 {
+    let p = spectrum(r, a, b);
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    let mut k = 1;
+    while k as f32 * f0 <= 10000.0 {
+        let fk = k as f32 * f0;
+        if fk >= 50.0 {
+            let mag = p
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| (*i as f32 * BIN_HZ - fk).abs() <= 0.25 * f0)
+                .map(|x| *x.1)
+                .sum::<f64>()
+                .sqrt();
+            num += fk as f64 * mag;
+            den += mag;
+        }
+        k += 1;
+    }
+    (num / den) as f32
+}
+
 /// In-place radix-2 FFT.
 fn fft(re: &mut [f64], im: &mut [f64]) {
     let n = re.len();
@@ -273,7 +345,9 @@ fn spectrum(r: &Render, a: f32, b: f32) -> Vec<f64> {
 }
 
 /// Magnitude-weighted spectral centroid (Hz) over 50 Hz–10 kHz, between `a`
-/// and `b` s.
+/// and `b` s. (The Sax uses [`harmonic_centroid`]: its breath noise would
+/// dominate this one.)
+#[allow(dead_code)] // used by the Task 4 character checks
 fn centroid(r: &Render, a: f32, b: f32) -> f32 {
     let p = spectrum(r, a, b);
     let (mut num, mut den) = (0.0f64, 0.0f64);
@@ -290,6 +364,14 @@ fn centroid(r: &Render, a: f32, b: f32) -> f32 {
 /// RMS over consecutive 5 ms frames.
 fn rms_env_5ms(r: &Render) -> Vec<f32> {
     r.m.chunks_exact((0.005 * SR) as usize).map(rms).collect()
+}
+
+/// RMS over sliding `win` s windows every 5 ms (entry i starts at i × 5 ms).
+/// For level comparisons: a 5 ms frame holds only ~1.3 periods of C4, so its
+/// RMS alone jitters by about ±1 dB with the waveform's phase.
+fn rms_env_sliding(r: &Render, win: f32) -> Vec<f32> {
+    let (w, hop) = ((win * SR) as usize, (0.005 * SR) as usize);
+    (0..).map(|i| i * hop).take_while(|s| s + w <= r.m.len()).map(|s| rms(&r.m[s..s + w])).collect()
 }
 
 /// f0 (Hz) per 40 ms frame (10 ms hop) lying fully between `a` and `b` s, as
@@ -434,6 +516,7 @@ fn house_patches_release_to_silence() {
 // ---- Sax acceptance (plan 11 *Sax recipe*; C4, vel 100 unless stated) ------------
 
 /// Sax module indices (`housePatches.ts`); [`sax`] checks them against the fixture.
+const SAX_MIDI: (usize, ModuleKind) = (0, ModuleKind::MidiIn);
 const SAX_FORMANT: (usize, ModuleKind) = (4, ModuleKind::Formant);
 const SAX_BREATH_VCA: (usize, ModuleKind) = (12, ModuleKind::Vca);
 const SAX_VIB_VCA: (usize, ModuleKind) = (15, ModuleKind::Vca);
@@ -441,7 +524,7 @@ const SAX_VIB_VCA: (usize, ModuleKind) = (15, ModuleKind::Vca);
 /// The Sax loaded, its module map checked; optionally vibrato and/or breath off.
 fn sax(vibrato: bool, breath: bool) -> Engine {
     let p = patch("Sax");
-    for m in [SAX_FORMANT, SAX_BREATH_VCA, SAX_VIB_VCA] {
+    for m in [SAX_MIDI, SAX_FORMANT, SAX_BREATH_VCA, SAX_VIB_VCA] {
         assert_eq!(kind_at(&p, m.0), Some(m.1), "Sax module {} is not {:?}: update the indices here", m.0, m.1);
     }
     let mut e = load("Sax");
@@ -469,22 +552,27 @@ fn sax_formant_peaks() {
     let (f1, f2, f3) = (sax_formant("f1"), sax_formant("f2"), sax_formant("f3"));
     for note in [60u8, 55] {
         let f0 = hz(note);
-        let r = play(&mut sax(false, true), &[note], 100, 1.0, 0.0);
-        let a = harmonics(&r, f0, 0.8, 4096);
-        // Saw-normalised envelope: a saw's harmonics fall as 1/k, so A_k·k is flat for a raw saw.
-        let e: Vec<(f32, f32)> = a.iter().enumerate().map(|(i, &x)| ((i + 1) as f32 * f0, db(x * (i + 1) as f32))).collect();
+        // Held 2.6 s; harmonic power averaged over 0.4–2.4 s (more than one
+        // beat of the +5 ct square: 1.3 s at C4, 1.75 s at G3).
+        let r = play(&mut sax(false, true), &[note], 100, 2.6, 0.0);
+        let pw = harmonic_power(&r, f0, 0.4, 2.4);
+        // Saw-normalised envelope E_k = 20·log10(A_k·k): a saw's harmonics fall as 1/k, so it is flat for a raw saw.
+        let e: Vec<(f32, f32)> =
+            pw.iter().enumerate().map(|(i, &x)| ((i + 1) as f32 * f0, 10.0 * x.max(1e-24).log10() + db((i + 1) as f32))).collect();
         let max_in = |lo: f32, hi: f32| e.iter().filter(|(f, _)| (lo..=hi).contains(f)).map(|x| x.1).fold(f32::MIN, f32::max);
-        let trough = e
-            .iter()
-            .filter(|(f, _)| (700.0..=1150.0).contains(f) || (1900.0..=2200.0).contains(f))
-            .map(|x| x.1)
-            .fold(f32::MAX, f32::min);
+        // The trough level: the median E over the harmonics in both trough
+        // bands (not the min, which a single oscillator null can set).
+        let mut tr: Vec<f32> =
+            e.iter().filter(|(f, _)| (700.0..=1150.0).contains(f) || (1900.0..=2200.0).contains(f)).map(|x| x.1).collect();
+        tr.sort_by(f32::total_cmp);
+        assert!(!tr.is_empty(), "no harmonic in the trough bands");
+        let trough = if tr.len() % 2 == 1 { tr[tr.len() / 2] } else { 0.5 * (tr[tr.len() / 2 - 1] + tr[tr.len() / 2]) };
         let peaks = [f1, f2, f3].map(|f| max_in(0.8 * f, 1.2 * f));
         eprintln!(
             "Sax note {note}: E_k {:?}",
             e.iter().take(16).map(|(f, d)| format!("{f:.0}:{d:.1}")).collect::<Vec<_>>()
         );
-        eprintln!("Sax note {note}: peaks {peaks:?} dB vs trough {trough:.1} dB");
+        eprintln!("Sax note {note}: peaks {peaks:?} dB vs trough median {trough:.1} dB (sr {SR})");
         for (i, pk) in peaks.iter().enumerate() {
             assert!(pk - trough >= 3.0, "note {note}: peak f{} {pk:.1} dB is not 3 dB above the trough {trough:.1} dB", i + 1);
         }
@@ -496,10 +584,10 @@ fn sax_brightness_tracks_velocity() {
     let c = |vel: u8| {
         let r = play(&mut sax(true, true), &[60], vel, 1.0, 0.0);
         eprintln!("Sax vel {vel}: momentary {:.1} dBFS", momentary_db(&r));
-        centroid(&r, 0.5, 1.0)
+        harmonic_centroid(&r, hz(60), 0.5, 1.0)
     };
     let (c40, c100, c127) = (c(40), c(100), c(127));
-    eprintln!("Sax centroid: vel 40 {c40:.0} Hz, vel 100 {c100:.0} Hz, vel 127 {c127:.0} Hz");
+    eprintln!("Sax harmonic centroid: vel 40 {c40:.0} Hz, vel 100 {c100:.0} Hz, vel 127 {c127:.0} Hz");
     assert!((900.0..=1800.0).contains(&c100), "vel 100 centroid {c100:.0} Hz outside 0.9–1.8 kHz");
     assert!(c127 >= 1.2 * c40, "vel 127 centroid {c127:.0} is not 1.2 × vel 40's {c40:.0}");
 }
@@ -533,9 +621,17 @@ fn sax_vibrato_is_delayed() {
     let slope = late_track.iter().zip(&late).map(|(t, v)| (t.0 - tm) * (v - vm)).sum::<f32>()
         / late_track.iter().map(|t| (t.0 - tm).powi(2)).sum::<f32>();
     let d: Vec<f32> = late_track.iter().zip(&late).map(|(t, v)| v - vm - slope * (t.0 - tm)).collect();
-    let crossings = d.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
-    let span = late_track.last().unwrap().0 - late_track[0].0;
-    let rate = crossings as f32 / (2.0 * span);
+    // Crossing times, linearly interpolated between frames; the rate is the
+    // half-cycles between the first and last crossing over their distance.
+    let xs: Vec<f32> = (1..d.len())
+        .filter(|&i| (d[i - 1] < 0.0) != (d[i] < 0.0))
+        .map(|i| {
+            let (t0, t1) = (late_track[i - 1].0, late_track[i].0);
+            t0 + (t1 - t0) * d[i - 1] / (d[i - 1] - d[i])
+        })
+        .collect();
+    assert!(xs.len() >= 3, "too few vibrato crossings: {}", xs.len());
+    let rate = (xs.len() - 1) as f32 / (2.0 * (xs[xs.len() - 1] - xs[0]));
     eprintln!("Sax vibrato: 0–0.2 s {early_pp:.1} ct p-p; 0.8–1.6 s {late_pp:.1} ct p-p at {rate:.2} Hz");
     assert!(early_pp < 6.0, "vibrato before 0.2 s: {early_pp:.1} cents p-p");
     assert!((20.0..=50.0).contains(&late_pp), "vibrato depth {late_pp:.1} cents p-p outside 20–50");
@@ -578,7 +674,8 @@ fn sax_legato_glides() {
     let t = 0.5f32;
     let ev = [(0.0, Ev::On(60, 100)), (t, Ev::On(62, 100)), (t + 0.1, Ev::Off(60)), (1.2, Ev::Off(62))];
     let r = run(&mut sax(false, true), &ev, 1.2);
-    let env = rms_env_5ms(&r);
+    // 20 ms windows (≥ 5 periods) every 5 ms; entry i covers i·5 ms .. i·5 + 20 ms.
+    let env = rms_env_sliding(&r, 0.02);
     let mean = |a: f32, b: f32| db(env[(a / 0.005) as usize..(b / 0.005) as usize].iter().sum::<f32>() / ((b - a) / 0.005));
     let reference = mean(t - 0.1, t).min(mean(t + 0.15, t + 0.25));
     let dip = env[(t / 0.005) as usize..((t + 0.15) / 0.005) as usize].iter().map(|&x| db(x)).fold(f32::MAX, f32::min);
@@ -602,14 +699,24 @@ fn sax_legato_glides() {
     }
     assert!(after[arrive..].iter().all(|x| x.1.abs() <= 5.0), "leaves D4 after arriving: {after:?}");
 
-    // Separated by 50 ms of silence: a jump.
+    // Separated by 50 ms of silence: a jump. The one 40 ms frame starting at
+    // the onset (centred at +20 ms) must already be D4 in Legato; the same
+    // notes with glide_mode Always (A/B) glide through it, so this can fail.
     let t2 = 0.35f32;
+    let on = onset(t2);
     let ev = [(0.0, Ev::On(60, 100)), (0.3, Ev::Off(60)), (t2, Ev::On(62, 100)), (0.8, Ev::Off(62))];
-    let r = run(&mut sax(false, true), &ev, 0.8);
-    let first = f0_track(&r, t2 + 0.02, 0.8, 0.7 * c4, 1.4 * d4)[0];
-    let off = cents(first.1, d4);
-    eprintln!("Sax separated: first frame after 20 ms (centre {:.0} ms) {off:.1} ct from D4", (first.0 - t2) * 1e3);
-    assert!(off.abs() <= 5.0, "a separated note glides: {off:.1} cents from D4 after 20 ms");
+    let separated = |always: bool| {
+        let mut e = sax(false, true);
+        set(&mut e, SAX_MIDI, "glide_mode", if always { 0.0 } else { 1.0 });
+        let r = run(&mut e, &ev, 0.8);
+        let fr = f0_track(&r, on, on + 0.04, 0.7 * c4, 1.4 * d4);
+        assert_eq!(fr.len(), 1);
+        (fr[0].0 - on, cents(fr[0].1, d4))
+    };
+    let ((centre, legato), (_, always)) = (separated(false), separated(true));
+    eprintln!("Sax separated: frame centred {:.0} ms after the onset: Legato {legato:.1} ct, Always {always:.1} ct from D4", centre * 1e3);
+    assert!(legato.abs() <= 5.0, "a separated note glides in Legato: {legato:.1} cents from D4 at +20 ms");
+    assert!(always.abs() > 5.0, "the check can't tell Legato from Always ({always:.1} cents with Always)");
 }
 
 #[test]
@@ -617,7 +724,7 @@ fn sax_mod_wheel_brightens() {
     // The mod wheel stands in for a breath controller (Formant cv: up to +0.5 oct).
     let r0 = play(&mut sax(false, true), &[60], 100, 1.0, 0.0);
     let r1 = run(&mut sax(false, true), &[(0.0, Ev::Mod(1.0)), (0.0, Ev::On(60, 100)), (1.0, Ev::Off(60))], 1.0);
-    let (c0, c1) = (centroid(&r0, 0.5, 1.0), centroid(&r1, 0.5, 1.0));
-    eprintln!("Sax mod wheel: centroid {c0:.0} Hz → {c1:.0} Hz");
+    let (c0, c1) = (harmonic_centroid(&r0, hz(60), 0.5, 1.0), harmonic_centroid(&r1, hz(60), 0.5, 1.0));
+    eprintln!("Sax mod wheel: harmonic centroid {c0:.0} Hz → {c1:.0} Hz");
     assert!(c1 > 1.05 * c0, "mod wheel does not brighten: {c0:.0} → {c1:.0} Hz");
 }

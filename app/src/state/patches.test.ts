@@ -143,6 +143,27 @@ describe('validatePatch', () => {
     expect(trackPatch(t, (id) => id).modules[1].params!.sample).toBe(3);
   });
 
+  it('a patch saved before plan 11 loads with the new defaults', () => {
+    // ADSR `delay`/`vel_amt` and MIDI In `glide_mode` were appended in plan
+    // 11; an older patch (project or library) has none of them.
+    const old = {
+      name: 'Old',
+      modules: [
+        { idx: 0, id: 'midi_in', params: { voices: 1, mode: 1, glide: 0.05, bend: 2 } },
+        { idx: 1, id: 'adsr', params: { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.3 } },
+        { idx: 2, id: 'out' },
+      ],
+      cables: [{ from: [0, 'gate'], to: [1, 'gate'] }],
+    };
+    const r = validatePatch(old);
+    expect(r.warnings).toEqual([]);
+    const p = new Project();
+    const t = addSynthTrack(p, { send: () => true }, 'S', r.patch)!;
+    const out = trackPatch(t, () => -1);
+    expect(out.modules[0].params).toMatchObject({ mode: 1, glide: 0.05, glide_mode: 0 });
+    expect(out.modules[1].params).toMatchObject({ attack: 0.01, release: 0.3, delay: 0, vel_amt: 0 });
+  });
+
   it('drops pooled effects beyond the free FX-pool budget', () => {
     const modules = Array.from({ length: 5 }, (_, i) => ({ idx: i, id: 'delay' }));
     const r = validatePatch({ name: 'D', modules, cables: [] }, { fxFree: (id) => (id === 'delay' ? 3 : Infinity) });

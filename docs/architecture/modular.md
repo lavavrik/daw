@@ -39,9 +39,32 @@ replaces it).
   one-sub-block gate gap so envelopes retrigger.
 - **Mono**: legato (overlapping notes do not retrigger) with optional glide (last-note priority);
   glide is the time to cover 99% of the interval (1% remains).
+  `glide_mode` picks which notes glide: **Always** (the default, as before
+  plan 11) glides every note, including one started from silence;
+  **Legato** glides only a note pressed while another is held (the gate
+  stays high), so a note from silence jumps to its pitch. That is the house
+  "slide" (Acid Line, Sax). Poly ignores both modes.
 - The ladder filter (LP24) is characterful on purpose: a saturator inside the
   feedback loop makes the resonant peak compress with input level (ruling
   R10; see `rack/modules/filter.rs`). Cutoff is smoothed in the log domain.
+
+## Envelopes
+
+The ADSR (`rack/modules/adsr.rs`) runs Idle → Delay → Attack → Decay →
+Sustain → Release per channel. Plan 11 appended (indices unchanged):
+
+- `delay` (0..4 s, 0 = off): a rising gate holds the current level for
+  `delay`, then attacks. A falling gate during it releases from that level;
+  a retrigger restarts it; a held gate (legato) never does. Used for delayed
+  vibrato (the Sax).
+- input `vel` and `vel_amt`: `env = level × (1 − vel_amt + vel_amt × v)`,
+  with `v` latched at the rising gate (unconnected = 1), so a note's dynamic
+  holds through it; the latched value glides over 5 ms so a voice steal at a
+  sounding level never steps. Patch MIDI In `vel` into it for velocity
+  brightness or loudness.
+- With `delay` 0, `vel_amt` 0 the output is bit-identical to the
+  pre-plan-11 envelope (pinned by `adsr_defaults_are_bit_identical`), so old
+  patches and export hashes are unchanged.
 
 ## Declicked edits and smoothing
 
@@ -53,11 +76,11 @@ once but the output still ramps up from 0. Adding a module (it has no cables
 yet) applies immediately unless edits are already queued.
 Parameters marked `smooth` in the catalog glide over 5 ms. Integer and
 choice parameters (osc wave/octave/unison, filter mode, LFO wave/sync/
-division, MIDI In voices/mode/bend) switch the signal in a step, so they are
+division, MIDI In voices/mode/bend/glide_mode) switch the signal in a step, so they are
 declicked like structural edits: queued behind the 2 ms fade-out while
 sounding, applied, faded back in (on a silent rack: applied at once, output
 ramps up from 0). Re-sending the current value is a no-op and never dips the
-output. The remaining non-`smooth` continuous params (tune, fine, ADSR times,
+output. The remaining non-`smooth` continuous params (tune, fine, ADSR times incl. delay,
 glide, LFO rate) apply at once: they change a rate, not a level, so phase and
 envelopes stay continuous, and fading them would dip the output on every step
 of a knob drag.

@@ -28,6 +28,13 @@
 //! * `glide` moves the pitch exponentially toward the target. Convention
 //!   (same as the ADSR): the remaining distance is 1% after `glide` seconds,
 //!   i.e. `tau = glide / ln(100)`. Poly mode ignores glide. `glide` 0 = off.
+//! * `glide_mode` (plan 11) decides which notes glide. Each mono note-on sets
+//!   a `gliding` flag: **Always** (0, the default and the pre-plan-11
+//!   behaviour) sets it on every note; **Legato** (1) only when another note
+//!   is held (the gate is already high), so a note from silence jumps to its
+//!   pitch and only overlapping notes slide (the house "slide"). Without the
+//!   flag the pitch snaps to the target. Returning to a held note on release
+//!   keeps the flag of the last note-on. Poly ignores both modes.
 //!
 //! # Common
 //! * Pitch bend (`Bend`, -1..1 times the `bend` range in semitones) and the
@@ -48,6 +55,7 @@ const VOICES: usize = 0;
 const MODE: usize = 1;
 const GLIDE: usize = 2;
 const BEND: usize = 3;
+const GLIDE_MODE: usize = 4;
 const K: ModuleKind = ModuleKind::MidiIn;
 
 /// Depth of the mono held-note stack (oldest entries drop when exceeded).
@@ -120,6 +128,10 @@ pub struct MidiIn {
     /// Mono: current (gliding) pitch and whether it was ever set.
     mono_pitch: f32,
     mono_init: bool,
+    /// Mono: the current note glides (see `glide_mode`).
+    gliding: bool,
+    /// `glide_mode` is Legato (synced from the params like `mode`).
+    legato: bool,
     mono_vel: Smooth,
     pedal: bool,
     /// Raw bend -1..1 and mod wheel 0..1, plus the values at the end of the
@@ -153,6 +165,8 @@ impl MidiIn {
             stack_len: 0,
             mono_pitch: 0.0,
             mono_init: false,
+            gliding: true,
+            legato: false,
             mono_vel: Smooth::new(sr, 0.0),
             pedal: false,
             bend: 0.0,
@@ -207,6 +221,7 @@ impl MidiIn {
             }
         }
         self.n_voices = n;
+        self.legato = param(params, K, GLIDE_MODE) >= 0.5;
     }
 
     /// Deliver one event; `params` are the module's current param values.
@@ -267,6 +282,8 @@ impl MidiIn {
         self.stack[self.stack_len] = Held { note, down: true };
         self.stack_len += 1;
         let v = &mut self.voices[0];
+        // Legato mode glides only a note pressed while another is held.
+        self.gliding = !self.legato || v.gate;
         if !v.gate {
             // Fresh press from silence (not legato).
             v.retrig |= v.emitted;
@@ -370,6 +387,9 @@ impl MidiIn {
             let target = self.voices[0].pitch;
             let glide = param(params, K, GLIDE).clamp(0.0, 2.0);
             let coef = if glide > 0.0 { 1.0 - (-LN_100 / (glide * self.sr)).exp() } else { 1.0 };
+            if !self.gliding {
+                self.mono_pitch = target;
+            }
             let g = self.voices[0].gate_out();
             let vel_target = self.voices[0].vel;
             for i in 0..RACK_BLOCK {
@@ -734,5 +754,122 @@ mod tests {
         r.ev(NoteEvent::On { note: 60, vel: 0 });
         r.block();
         assert_eq!(r.gate(0), 0.0);
+    }
+
+    // ---- plan 11: glide modes --------------------------------------------
+
+    /// A frozen model of the mono pitch before plan 11 (glide always on):
+    /// last-note priority over the held keys, then per sample
+    /// `p += (target − p)·coef`, snapping within 1e-7. Do not edit.
+    struct RefMono {
+        held: Vec<u8>,
+        target: f32,
+        p: Option<f32>,
+        coef: f32,
+    }
+
+    impl RefMono {
+        fn on(&mut self, n: u8) {
+            self.held.retain(|&h| h != n);
+            self.held.push(n);
+            self.retarget();
+        }
+        fn off(&mut self, n: u8) {
+            self.held.retain(|&h| h != n);
+            self.retarget();
+        }
+        fn retarget(&mut self) {
+            if let Some(&top) = self.held.last() {
+                self.target = (top as f32 - 60.0) / 12.0;
+                self.p.get_or_insert(self.target);
+            }
+        }
+        fn block(&mut self) -> [f32; RACK_BLOCK] {
+            let mut out = [0.0; RACK_BLOCK];
+            let Some(mut p) = self.p else { return out };
+            for o in out.iter_mut() {
+                let d = self.target - p;
+                p = if d.abs() < 1e-7 { self.target } else { p + d * self.coef };
+                *o = p;
+            }
+            self.p = Some(p);
+            out
+        }
+    }
+
+    #[test]
+    fn midi_in_glide_always_is_unchanged() {
+        // glide_mode Always (0) and a pre-plan-11 param slice (no glide_mode
+        // entry at all) both match the frozen model sample-exactly.
+        for short in [false, true] {
+            let mut r = Rig::new();
+            r.p[MODE] = 1.0;
+            r.p[GLIDE] = 0.05;
+            r.p[GLIDE_MODE] = 0.0;
+            let coef = 1.0 - (-LN_100 / (0.05 * SR)).exp();
+            let mut m = RefMono { held: Vec::new(), target: 0.0, p: None, coef };
+            // (block, note, on): from silence, legato up, back, release,
+            // then a fresh note from silence (which glides in Always).
+            let script: &[(usize, u8, bool)] =
+                &[(0, 48, true), (20, 55, true), (60, 55, false), (100, 48, false), (130, 60, true), (200, 67, true)];
+            let n = if short { 4 } else { MAX_PARAMS };
+            for b in 0..260 {
+                for &(_, note, on) in script.iter().filter(|s| s.0 == b) {
+                    let ev = if on { NoteEvent::On { note, vel: 100 } } else { NoteEvent::Off { note } };
+                    r.m.note(ev, &r.p[..n]);
+                    if on { m.on(note) } else { m.off(note) }
+                }
+                r.m.process(&r.p[..n], &mut r.outs);
+                let want = m.block();
+                if m.p.is_some() {
+                    for (i, (got, want)) in r.outs[PITCH].data[0].iter().zip(want).enumerate() {
+                        assert_eq!(got.to_bits(), want.to_bits(), "short {short} block {b} i {i}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legato_mode_glides_only_on_overlap() {
+        let mut r = Rig::new();
+        r.p[MODE] = 1.0;
+        r.p[GLIDE] = 0.1;
+        r.p[GLIDE_MODE] = 1.0;
+        r.on(60);
+        r.block();
+        assert_eq!(r.outs[PITCH].data[0][0], 0.0, "first note: at pitch at once");
+        // Overlapped 60 -> 62: glides.
+        r.on(62);
+        r.block();
+        let first = r.outs[PITCH].data[0][0];
+        assert!(first > 0.0 && first < 1.0 / 12.0, "glides from 60: {first}");
+        for _ in 0..(0.3 * SR) as usize / RACK_BLOCK {
+            r.block();
+        }
+        assert!((r.pitch(0) - 2.0 / 12.0).abs() < 1e-3);
+        // Released, then 62 -> 60 pressed from silence: jumps within one sample.
+        r.off(62);
+        r.off(60);
+        r.block();
+        assert_eq!(r.gate(0), 0.0);
+        r.on(60);
+        r.block();
+        assert_eq!(r.outs[PITCH].data[0][0], 0.0, "from silence: no glide");
+        // Released, 60 off then 62 on (not overlapping): jumps.
+        r.off(60);
+        r.block();
+        r.on(62);
+        r.block();
+        assert_eq!(r.outs[PITCH].data[0][0], 2.0 / 12.0, "not overlapping: jumps");
+        // Poly ignores both modes (no glide), as before.
+        let mut p = Rig::new();
+        p.p[GLIDE] = 0.1;
+        p.p[GLIDE_MODE] = 1.0;
+        p.on(60);
+        p.block();
+        p.on(64);
+        p.block();
+        assert_eq!(p.outs[PITCH].data[1][0], 4.0 / 12.0);
     }
 }

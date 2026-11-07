@@ -12,7 +12,8 @@
         {"name":"voices","label":"Voices","min":1,"max":16,"default":8,"integer":true,"curve":"lin","unit":"","choices":[],"smooth":false},
         {"name":"mode","label":"Mode","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Poly","Mono"],"smooth":false},
         {"name":"glide","label":"Glide","min":0,"max":2,"default":0,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false},
-        {"name":"bend","label":"Bend range","min":0,"max":12,"default":2,"integer":true,"curve":"lin","unit":"st","choices":[],"smooth":false}
+        {"name":"bend","label":"Bend range","min":0,"max":12,"default":2,"integer":true,"curve":"lin","unit":"st","choices":[],"smooth":false},
+        {"name":"glide_mode","label":"Glide mode","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Always","Legato"],"smooth":false}
       ]},
     {"kind":1,"id":"osc","name":"Oscillator","category":"source",
       "inputs":[{"name":"pitch","signal":"pitch"},{"name":"fm","signal":"audio"},{"name":"pw","signal":"cv"}],
@@ -44,13 +45,15 @@
         {"name":"drive","label":"Drive","min":0,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
       ]},
     {"kind":4,"id":"adsr","name":"ADSR","category":"shaping",
-      "inputs":[{"name":"gate","signal":"gate"}],
+      "inputs":[{"name":"gate","signal":"gate"},{"name":"vel","signal":"cv"}],
       "outputs":[{"name":"env","signal":"cv"}],
       "params":[
         {"name":"attack","label":"Attack","min":0.001,"max":10,"default":0.005,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false},
         {"name":"decay","label":"Decay","min":0.001,"max":10,"default":0.2,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false},
         {"name":"sustain","label":"Sustain","min":0,"max":1,"default":0.7,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
-        {"name":"release","label":"Release","min":0.001,"max":10,"default":0.3,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false}
+        {"name":"release","label":"Release","min":0.001,"max":10,"default":0.3,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false},
+        {"name":"delay","label":"Delay","min":0,"max":4,"default":0,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false},
+        {"name":"vel_amt","label":"Velocity","min":0,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
       ]},
     {"kind":5,"id":"vca","name":"VCA","category":"shaping",
       "inputs":[{"name":"in","signal":"audio"},{"name":"cv","signal":"cv"}],

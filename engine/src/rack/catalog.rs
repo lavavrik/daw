@@ -215,6 +215,9 @@ static MIDI_IN: ModuleSpec = ModuleSpec {
         // Exp knob that starts at 0 (= off): the UI maps 0 -> min exactly.
         exp("glide", "Glide", 0.0, 2.0, 0.0, "s"),
         int("bend", "Bend range", 0.0, 12.0, 2.0, "st"),
+        // Mono only (plan 11): Always glides every note; Legato glides only a
+        // note pressed while another is held (a note from silence jumps).
+        choice("glide_mode", "Glide mode", &["Always", "Legato"], 0.0),
     ],
 };
 
@@ -328,13 +331,19 @@ static ADSR: ModuleSpec = ModuleSpec {
     id: "adsr",
     name: "ADSR",
     category: "shaping",
-    inputs: &[port("gate", Signal::Gate)],
+    // `vel` (plan 11): per-voice velocity 0..1, latched at the rising gate;
+    // unconnected reads as 1. Channels still follow `gate` only.
+    inputs: &[port("gate", Signal::Gate), port("vel", Signal::Cv)],
     outputs: &[port("env", Signal::Cv)],
     params: &[
         exp("attack", "Attack", 0.001, 10.0, 0.005, "s"),
         exp("decay", "Decay", 0.001, 10.0, 0.2, "s"),
         lin("sustain", "Sustain", 0.0, 1.0, 0.7, true),
         exp("release", "Release", 0.001, 10.0, 0.3, "s"),
+        // Appended in plan 11 (indices 4, 5). Exp knob from 0 (= off), like glide.
+        exp("delay", "Delay", 0.0, 4.0, 0.0, "s"),
+        // env = level × (1 − vel_amt + vel_amt × vel).
+        lin("vel_amt", "Velocity", 0.0, 1.0, 0.0, true),
     ],
 };
 
@@ -730,6 +739,29 @@ mod tests {
             ]
         );
         assert!(s.params[1].smooth, "gain is smoothed");
+    }
+
+    #[test]
+    fn appended_ports_and_params_keep_indices() {
+        let at = |ps: &[ParamSpec], n: &str| ps.iter().position(|p| p.name == n);
+        let port_at = |ps: &[PortSpec], n: &str| ps.iter().position(|p| p.name == n);
+        let adsr = spec(ModuleKind::Adsr);
+        assert_eq!(port_at(adsr.inputs, "gate"), Some(0));
+        assert_eq!(port_at(adsr.inputs, "vel"), Some(1));
+        assert_eq!(adsr.inputs[1].signal, Signal::Cv);
+        for (n, i) in [("attack", 0), ("decay", 1), ("sustain", 2), ("release", 3), ("delay", 4), ("vel_amt", 5)] {
+            assert_eq!(at(adsr.params, n), Some(i), "adsr.{n}");
+        }
+        let d = &adsr.params[4];
+        assert_eq!((d.label, d.min, d.max, d.default, d.curve, d.unit, d.smooth), ("Delay", 0.0, 4.0, 0.0, Curve::Exp, "s", false));
+        let v = &adsr.params[5];
+        assert_eq!((v.label, v.min, v.max, v.default, v.curve, v.smooth, v.integer), ("Velocity", 0.0, 1.0, 0.0, Curve::Lin, true, false));
+        let midi = spec(ModuleKind::MidiIn);
+        for (n, i) in [("voices", 0), ("mode", 1), ("glide", 2), ("bend", 3), ("glide_mode", 4)] {
+            assert_eq!(at(midi.params, n), Some(i), "midi_in.{n}");
+        }
+        let g = &midi.params[4];
+        assert_eq!((g.label, g.choices, g.default), ("Glide mode", &["Always", "Legato"][..], 0.0));
     }
 
     #[test]

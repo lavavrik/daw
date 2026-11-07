@@ -4,6 +4,7 @@ import { clampParam, moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
 import { MAX_TRACKS, TRACK_COLORS } from './project.svelte';
 import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
+import { DEFAULT_PATTERN_BARS } from './pattern-actions';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { STARTER_PATCHES } from './patches';
@@ -35,9 +36,11 @@ export function addSynthTrack(
     patchName: '',
     modules: [],
     cables: [],
+    pattern: { bars: DEFAULT_PATTERN_BARS, notes: [] },
   });
   const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
   sink.send(Op.ADD_SYNTH_TRACK, slot);
+  sink.send(Op.SET_PATTERN_BARS, slot, DEFAULT_PATTERN_BARS);
   loadPatch(p, sink, track.id, patch);
   selectTrack(p, sink, track.id);
   return track;

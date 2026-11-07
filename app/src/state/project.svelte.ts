@@ -53,6 +53,20 @@ export interface RackCable {
   to: { m: number; port: number };
 }
 
+/** One sequenced note. `idx` is the engine note slot (0..MAX_NOTES-1) within the track. */
+export interface Note {
+  id: string;
+  idx: number;
+  /** 0..127 */
+  pitch: number;
+  /** 1..127 */
+  vel: number;
+  /** Ticks from pattern start (960 PPQ). */
+  start: number;
+  /** Ticks, 1..61440. */
+  len: number;
+}
+
 export interface SynthTrack {
   kind: 'synth';
   id: string;
@@ -63,6 +77,8 @@ export interface SynthTrack {
   patchName: string;
   modules: RackModule[];
   cables: RackCable[];
+  /** Looping note pattern; notes at/after bars*BAR_TICKS are kept but do not play. */
+  pattern: { bars: number; notes: Note[] };
 }
 
 export type Track = DrumTrack | SynthTrack;

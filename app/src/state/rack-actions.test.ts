@@ -30,7 +30,9 @@ describe('rack actions', () => {
     expect(t.kind).toBe('synth');
     expect(t.slot).toBe(1);
     expect(sent[0]).toEqual([Op.ADD_SYNTH_TRACK, 1, 0, 0, 0]);
-    expect(sent[1][0]).toBe(Op.RACK_CLEAR);
+    expect(sent[1]).toEqual([Op.SET_PATTERN_BARS, 1, 4, 0, 0]);
+    expect(sent[2][0]).toBe(Op.RACK_CLEAR);
+    expect(t.pattern).toEqual({ bars: 4, notes: [] });
     expect(sent[sent.length - 1]).toEqual([Op.SET_INPUT_TRACK, 1, 0, 0, 0]);
     const firstConnect = ops(sent).indexOf(Op.RACK_CONNECT);
     expect(ops(sent).lastIndexOf(Op.RACK_ADD_MODULE)).toBeLessThan(firstConnect);

@@ -3,6 +3,7 @@
 # commands addSynthTrack sends on a fresh project, one per line: op a b c d.
 patch Deep Bass
 17 0 0 0 0
+31 0 4 0 0
 23 0 0 0 0
 18 0 0 0 0
 18 0 1 1 0
@@ -38,6 +39,7 @@ patch Deep Bass
 24 0 0 0 0
 patch Chord Stab
 17 0 0 0 0
+31 0 4 0 0
 23 0 0 0 0
 18 0 0 0 0
 18 0 1 1 0
@@ -66,6 +68,7 @@ patch Chord Stab
 24 0 0 0 0
 patch Pad
 17 0 0 0 0
+31 0 4 0 0
 23 0 0 0 0
 18 0 0 0 0
 18 0 1 1 0
@@ -96,6 +99,7 @@ patch Pad
 24 0 0 0 0
 patch Lead
 17 0 0 0 0
+31 0 4 0 0
 23 0 0 0 0
 18 0 0 0 0
 18 0 1 1 0
@@ -125,6 +129,7 @@ patch Lead
 24 0 0 0 0
 patch Pluck
 17 0 0 0 0
+31 0 4 0 0
 23 0 0 0 0
 18 0 0 0 0
 18 0 1 1 0

@@ -68,7 +68,7 @@ describe('clips', () => {
     sent.length = 0;
     const copy = makeUnique(p, sink, d0.id, a.id)!;
     expect(copy.engineIdx).toBe(1);
-    expect(copy.name).toBe('Pattern 2');
+    expect(copy.name).toBe('Pattern 1 copy');
     expect(a.patternId).toBe(copy.id);
     expect(d0.clips[1].patternId).toBe(pat0.id); // the other clip keeps the original
     expect(d0.currentPatternId).toBe(pat0.id); // does not change what is being edited
@@ -79,40 +79,35 @@ describe('clips', () => {
     expect(makeUnique(p, sink, d0.id, 'nope')).toBeNull();
   });
 
-  it('moveClips refuses cross-kind lanes', () => {
-    const { p, sink, sent, d0 } = setup();
+  it('moveClips refuses cross-kind lanes (and, for now, every lane move: ruling R4)', () => {
+    const { p, sink, sent, d0, d2 } = setup();
     const c = addClip(p, sink, d0.id, { start: 0 })!;
     sent.length = 0;
     expect(moveClips(p, sink, [c.id], 3840, 1)).toBe(false); // d0 -> s1 (synth)
     expect(moveClips(p, sink, [c.id], 0, -1)).toBe(false); // no lane above
+    expect(moveClips(p, sink, [c.id], 0, 2)).toBe(false); // d0 -> d2, same kind: refused too
     expect(sent).toEqual([]);
+    expect(d2.clips).toEqual([]);
     expect(d0.clips).toHaveLength(1);
     expect(c.start).toBe(0);
   });
 
-  it('moveClips moves in time (group clamped to the song) and to a same-kind lane', () => {
-    const { p, sink, sent, d0, d2 } = setup();
+  it('moveClips moves in time, the group clamped to the song; repeated ids count once', () => {
+    const { p, sink, sent, d0 } = setup();
     const a = addClip(p, sink, d0.id, { start: 3840 })!;
     const b = addClip(p, sink, d0.id, { start: 7680 })!;
     sent.length = 0;
-    expect(moveClips(p, sink, [a.id, b.id], -10000)).toBe(true); // clamped: a lands on 0
+    expect(moveClips(p, sink, [a.id, b.id, a.id], -10000)).toBe(true); // clamped: a lands on 0
     expect([a.start, b.start]).toEqual([0, 3840]);
     expect(sent).toEqual([
       [Op.CLIP_SET, 0, 0, 0, 3840],
       [Op.CLIP_SET, 1, 0, 3840, 3840],
     ]);
     sent.length = 0;
-    // d0 -> d2 (two lanes down, both drums): removed on slot 0, set on slot 2.
-    // The pattern maps by name ("Pattern 1" exists on d2).
-    expect(moveClips(p, sink, [b.id], 3840, 2)).toBe(true);
-    expect(d0.clips.map((c) => c.id)).toEqual([a.id]);
-    expect(d2.clips).toHaveLength(1);
-    const moved = d2.clips[0];
-    expect([moved.idx, moved.start, moved.patternId]).toEqual([0, 7680, d2.patterns[0].id]);
-    expect(sent).toEqual([
-      [Op.CLIP_REMOVE, 0 * MAX_CLIPS + 1, 0, 0, 0],
-      [Op.CLIP_SET, 2 * MAX_CLIPS + 0, 0, 7680, 3840],
-    ]);
+    expect(moveClips(p, sink, [b.id], MAX_SONG_TICKS)).toBe(true); // clamped to the song end
+    expect(b.start + b.len).toBe(MAX_SONG_TICKS);
+    expect(moveClips(p, sink, [b.id], 0)).toBe(true); // no change: nothing sent
+    expect(sent).toHaveLength(1);
   });
 
   it('resizeClip edits start/len/offset; invalid values are refused', () => {
@@ -146,7 +141,8 @@ describe('clips', () => {
       [Op.CLIP_SET, MAX_CLIPS + 1, 0, 19200, 15360],
     ]);
     sent.length = 0;
-    deleteClips(p, sink, [a.id, b.id, 'nope']);
+    deleteClips(p, sink, [a.id, b.id, 'nope', a.id]); // a repeated id must not remove another clip
+
     expect(sent).toEqual([[Op.CLIP_REMOVE, 0, 0, 0, 0], [Op.CLIP_REMOVE, MAX_CLIPS, 0, 0, 0]]);
     expect(d0.clips.map((c) => c.idx)).toEqual([1]);
     expect(s1.clips.map((c) => c.idx)).toEqual([1]);

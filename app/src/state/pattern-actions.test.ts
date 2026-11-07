@@ -243,7 +243,7 @@ describe('pattern CRUD', () => {
     renamePattern(p, sink, t.id, p0.id, '  Verse  ');
     sent.length = 0;
     const c = (duplicatePattern(p, sink, t.id, p0.id) as NotePatternState);
-    expect([c.engineIdx, c.name, c.bars]).toEqual([1, 'Verse 2', 3]);
+    expect([c.engineIdx, c.name, c.bars]).toEqual([1, 'Verse copy', 3]);
     expect(c.notes.map((x) => [x.idx, x.pitch, x.start, x.len, x.vel])).toEqual([[0, 60, 10, 100, 100]]);
     expect(c.notes[0].id).not.toBe(p0.notes[0].id); // deep copy
     expect(t.currentPatternId).toBe(c.id);
@@ -253,8 +253,11 @@ describe('pattern CRUD', () => {
     toggleStep(p, sink, d.id, d.rows[2].id, 7);
     const dc = (duplicatePattern(p, sink, d.id) as DrumPattern);
     expect(dc.steps[2][7]).toBe(100);
+    expect(dc.name).toBe('Pattern 1 copy');
     toggleStep(p, sink, d.id, d.rows[2].id, 7);
     expect([dc.steps[2][7], d.patterns[0].steps[2][7]]).toEqual([0, 100]);
+    // Copies never take another pattern's base name; repeated copies are numbered.
+    expect(duplicatePattern(p, sink, d.id, d.patterns[0].id)!.name).toBe('Pattern 1 copy 2');
   });
 
   it('renamePattern trims; empty names are refused', () => {

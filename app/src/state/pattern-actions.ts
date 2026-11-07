@@ -200,8 +200,8 @@ function freeEngineIdx(t: Track): number | null {
 }
 
 /**
- * First unused name. `numbered`: "base 1", "base 2", … (new patterns, copies
- * of "Pattern 3"); otherwise "base", "base 2", … (copies of "Verse").
+ * First unused name. `numbered`: "base 1", "base 2", … (new patterns);
+ * otherwise "base", "base 2", … (copies).
  */
 function freeName(t: Track, base: string, numbered: boolean): string {
   const names = new Set(t.patterns.map((x) => x.name));
@@ -211,11 +211,8 @@ function freeName(t: Track, base: string, numbered: boolean): string {
   return name();
 }
 
-/** Name for a copy of `name`: "Pattern 3" -> next free "Pattern N"; "Verse" -> "Verse 2". */
-function copyName(t: Track, name: string): string {
-  const m = /^(.*\S) \d+$/.exec(name);
-  return m ? freeName(t, m[1], true) : freeName(t, name, false);
-}
+/** "<name> copy", then "<name> copy 2", …: never another pattern's base name. */
+const copyName = (t: Track, name: string) => freeName(t, `${name} copy`, false);
 
 /**
  * Makes `patternId` the track's current pattern: the one Pattern mode loops

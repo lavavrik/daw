@@ -3,8 +3,8 @@ import { BAR_TICKS, MAX_NOTES, Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { NotePatternState, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
-import { selectTrack } from './actions';
-import { newPattern, selectPattern } from './pattern-actions';
+import { removeTrack, selectTrack } from './actions';
+import { deletePattern, newPattern, selectPattern } from './pattern-actions';
 import { setMode } from './song-actions';
 import { Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync } from './recorder';
 
@@ -517,19 +517,79 @@ describe('recorderFor (real project + actions)', () => {
     expect(p0.notes).toEqual([]);
     // NOTE_SET reached the engine while p1 was still its current pattern.
     expect(sent.map((x) => x.slice(0, 2))).toEqual([[Op.NOTE_SET, t.slot * MAX_NOTES], [Op.SET_CURRENT_PATTERN, t.slot]]);
-    // Undo of a take whose pattern is no longer current is refused (the take is kept).
+    // Undo of a take whose pattern is no longer current selects it (visibly, no switch back), then deletes.
     sent.length = 0;
-    rec.undoLastTake();
-    expect(p1.notes).toHaveLength(1);
-    expect(rec.lastTakeIds).toHaveLength(1);
-    expect(sent).toEqual([]);
-    selectPattern(p, sink, t.id, p1.id);
+    expect(rec.status().takeNotes).toBe(1);
     rec.undoLastTake();
     expect(p1.notes).toEqual([]);
+    expect(t.currentPatternId).toBe(p1.id);
+    expect(rec.lastTakeIds).toEqual([]);
+    expect(sent.map((x) => x.slice(0, 2))).toEqual([[Op.SET_CURRENT_PATTERN, t.slot], [Op.NOTE_REMOVE, t.slot * MAX_NOTES]]);
     // Song mode: arming is a no-op.
     rec.toggleArm();
     setMode(p, sink, 'song');
     rec.toggleArm();
     expect(rec.armed).toBe(false);
+  });
+
+  it('undo switching back while a note is held: the held note closes into its pattern as the new take', () => {
+    const sent: number[][] = [];
+    const sink = { send(op: number, a = 0, b = 0, c = 0, d = 0) { sent.push([op, a, b, c, d]); return true; } };
+    const p = new Project();
+    const t = addSynthTrack(p, sink)!;
+    const [p0] = t.patterns;
+    const p1 = newPattern(p, sink, t.id) as NotePatternState;
+    selectPattern(p, sink, t.id, p0.id);
+    const clock = fakeClock();
+    const rec = recorderFor(p, sink, clock);
+    p.beforePatternSwitch = (id) => rec.onPatternChanging(id, clock.heardTicks());
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    rec.noteOn(60, 100, 100);
+    rec.noteOff(60, 200); // take on p0
+    selectPattern(p, sink, t.id, p1.id);
+    rec.noteOn(64, 100, 300); // held in p1
+    clock.now = 500;
+    sent.length = 0;
+    rec.undoLastTake();
+    expect(p0.notes).toEqual([]);
+    expect(p1.notes.map((n) => [n.pitch, n.start, n.len])).toEqual([[64, 300, 200]]);
+    expect(t.currentPatternId).toBe(p0.id);
+    // The held note's take survives the undo of the older one.
+    expect([rec.lastTakePatternId, rec.lastTakeIds.length]).toEqual([p1.id, 1]);
+    expect(sent.map((x) => x[0])).toEqual([Op.NOTE_SET, Op.SET_CURRENT_PATTERN, Op.NOTE_REMOVE]);
+    rec.noteOff(64, 900); // already closed: nothing more
+    expect(p1.notes).toHaveLength(1);
+  });
+
+  it('a take whose pattern or track is gone is dropped (Undo disabled, nothing sent)', () => {
+    const sent: number[][] = [];
+    const sink = { send(op: number, a = 0, b = 0, c = 0, d = 0) { sent.push([op, a, b, c, d]); return true; } };
+    const p = new Project();
+    const t = addSynthTrack(p, sink)!;
+    const p1 = newPattern(p, sink, t.id) as NotePatternState;
+    const clock = fakeClock();
+    const rec = recorderFor(p, sink, clock);
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    rec.noteOn(60, 100, 100);
+    rec.noteOff(60, 200); // take on p1
+    expect(rec.status().takeNotes).toBe(1);
+    expect(deletePattern(p, sink, t.id, p1.id)).toBe(true);
+    expect(rec.status().takeNotes).toBe(0);
+    sent.length = 0;
+    rec.undoLastTake();
+    expect(sent).toEqual([]);
+    expect(rec.lastTakeIds).toEqual([]);
+    rec.onInputChanged(300); // as App does after the pattern/track changes
+    rec.noteOn(62, 100, 400);
+    rec.noteOff(62, 500); // take on p0
+    expect(rec.status().takeNotes).toBe(1);
+    removeTrack(p, sink, t.id);
+    expect(rec.status().takeNotes).toBe(0);
+    sent.length = 0;
+    rec.undoLastTake();
+    expect(sent).toEqual([]);
+    expect(rec.lastTakeIds).toEqual([]);
   });
 });

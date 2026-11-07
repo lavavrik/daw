@@ -124,6 +124,8 @@ export const MAX_CLIPS = 256;
 export const MAX_SONG_TICKS = 999 * 3840;
 /** Ticks per bar, 4/4 at 960 PPQ (lib.rs BAR_TICKS); also the count-in length. */
 export const BAR_TICKS = 3840;
+/** Ticks per drum step, a 1/16 note (lib.rs STEP_TICKS). */
+export const STEP_TICKS = 240;
 
 /** Ports per module in a packed port argument (protocol.rs PORT_STRIDE). */
 export const PORT_STRIDE = 16;

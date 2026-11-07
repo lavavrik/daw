@@ -68,10 +68,13 @@ and every edit sends its engine command (`pattern-actions.ts`,
   act on `currentPattern(track)`, which is then always the engine's current
   pattern. No action switches it implicitly.
 - `newPattern` selects the new pattern, then sends the copied lengths.
-  `duplicatePattern` and `makeUnique` use `COPY_PATTERN`.
-- Clip moves to another lane are allowed only between tracks of the same
-  kind. Patterns belong to tracks, so the clip then uses the destination's
-  pattern of the same name, or else its current pattern.
+  `duplicatePattern` and `makeUnique` use `COPY_PATTERN` and name the copy
+  "<name> copy" (then "<name> copy 2", …).
+- Clips move only in time for now: every move to another lane is refused.
+  Patterns belong to tracks and the engine cannot copy one across tracks,
+  so any mapping would silently change what the clip plays. Once a real
+  cross-track copy exists, lane moves can be allowed between tracks of the
+  same kind.
 
 ## Event generation and wrapping
 Each block, the engine finds the pattern events whose tick falls in the block's
@@ -190,7 +193,9 @@ that track mid-pass works the same way: `selectPattern` calls
 `Project.beforePatternSwitch` *before* the engine switches, so held notes are
 written into the old pattern. The take is keyed by (track, pattern), and so is
 the overdub duplicate set, which is cleared only at pass start and on undo.
-"Undo take" is refused while the take's pattern is not current. Recording is
+"Undo take" for a pattern that is not current first selects that pattern
+(a visible switch that is never undone), then deletes. A take whose track or
+pattern was removed is dropped, and Undo is disabled. Recording is
 disabled in Song mode: arming is a no-op, and entering Song mode closes held
 notes.
 A UI Play starts the recording pass at once;

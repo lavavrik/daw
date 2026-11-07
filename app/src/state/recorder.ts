@@ -39,14 +39,16 @@
 //   cleared only at pass start and by undo.
 // - A *take* is the notes added to one (track, pattern) since the last
 //   retarget; undoLastTake() removes exactly those. An empty pass does not
-//   replace the previous take. Undo is refused (the take is kept) while its
-//   pattern is not the track's current one -- the engine edits only that.
+//   replace the previous take. Undo of a take whose pattern is not current
+//   first selects that pattern (a visible switch, never switched back: the
+//   engine edits only the current one); a take whose track or pattern is gone
+//   is dropped (status().takeNotes = 0, Undo disabled).
 import { BAR_TICKS, MAX_NOTES } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
 import { liveInputTrack } from './actions';
 import type { CommandSink } from './actions';
-import { addNote, deleteNotes } from './pattern-actions';
-import { currentPattern } from './project.svelte';
+import { addNote, deleteNotes, patternOf, selectPattern } from './pattern-actions';
+import { currentPattern, synthTrack } from './project.svelte';
 import type { NotePatternState, Project, SynthTrack } from './project.svelte';
 import type { NoteListener } from '../input/noteInput';
 
@@ -69,8 +71,13 @@ export interface RecorderDeps {
   addNote(
     trackId: string, patternId: string, o: { pitch: number; start: number; len: number; vel: number },
   ): { id: string } | null;
-  /** False when refused (pattern no longer current); the take is then kept. */
-  deleteNotes(trackId: string, patternId: string, ids: string[]): boolean | void;
+  /**
+   * Removes a take: selects `patternId` if it is not current (this may call
+   * onPatternChanging, closing held notes into a new take), then deletes.
+   */
+  deleteNotes(trackId: string, patternId: string, ids: string[]): void;
+  /** False once the take's track or pattern was removed (default: true). */
+  patternExists?(trackId: string, patternId: string): boolean;
   /** True in Song mode: recording is disabled. */
   songMode?(): boolean;
   /** The pattern is full (MAX_NOTES); called once per pass. */
@@ -241,10 +248,15 @@ export class Recorder implements NoteListener {
   }
 
   undoLastTake() {
-    if (this.lastTakeTrackId && this.lastTakePatternId && this.lastTakeIds.length) {
-      if (this.deps.deleteNotes(this.lastTakeTrackId, this.lastTakePatternId, this.lastTakeIds) === false) return;
+    // Captured first: selecting the take's pattern may close held notes into
+    // a NEW take (onPatternChanging), which must survive this undo.
+    const ids = this.lastTakeIds;
+    const trackId = this.lastTakeTrackId;
+    const patternId = this.lastTakePatternId;
+    if (trackId && patternId && ids.length && this.#takeAlive()) {
+      this.deps.deleteNotes(trackId, patternId, [...ids]);
     }
-    this.lastTakeIds = [];
+    if (this.lastTakeIds === ids) this.lastTakeIds = [];
     this.#takeStarted = false; // later notes in this pass form a new take
     this.#written.clear(); // and may be re-recorded at the same spots
   }
@@ -260,7 +272,14 @@ export class Recorder implements NoteListener {
       // Negative heard ticks without a count-in are just output latency after Play.
       state = this.deps.clock.heardTicks() >= 0 ? 'recording' : this.countIn ? 'count-in' : 'armed';
     }
-    return { armed: this.armed, state, takeNotes: this.lastTakeIds.length };
+    return { armed: this.armed, state, takeNotes: this.#takeAlive() ? this.lastTakeIds.length : 0 };
+  }
+
+  /** The last take's track and pattern still exist. */
+  #takeAlive(): boolean {
+    const t = this.lastTakeTrackId;
+    const pat = this.lastTakePatternId;
+    return !!t && !!pat && (this.deps.patternExists?.(t, pat) ?? true);
   }
 
   #beginPass() {
@@ -344,7 +363,15 @@ export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock,
     clock,
     target: () => liveInputTrack(p),
     addNote: (trackId, patternId, o) => addNote(p, sink, trackId, o, patternId),
-    deleteNotes: (trackId, patternId, ids) => deleteNotes(p, sink, trackId, ids, patternId),
+    deleteNotes: (trackId, patternId, ids) => {
+      // Visible switch to the take's pattern (selectPattern is the only
+      // switcher); unknown track/pattern: nothing to delete.
+      if (selectPattern(p, sink, trackId, patternId)) deleteNotes(p, sink, trackId, ids, patternId);
+    },
+    patternExists: (trackId, patternId) => {
+      const t = synthTrack(p, trackId);
+      return !!t && !!patternOf(t, patternId);
+    },
     songMode: () => p.mode === 'song',
     onFull,
   });

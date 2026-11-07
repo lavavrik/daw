@@ -9,7 +9,7 @@
 // whole selection stays in the song. Snapping is the UI's job, not done here.
 import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
 import { patternLength } from './project.svelte';
-import type { Clip, DrumPattern, NotePatternState, Project, Track } from './project.svelte';
+import type { Clip, Project, Track } from './project.svelte';
 import type { CommandSink } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
 
@@ -18,10 +18,10 @@ export const MAX_OFFSET = 61439;
 
 const findTrack = (p: Project, trackId: string): Track | null => p.tracks.find((t) => t.id === trackId) ?? null;
 
-/** Every clip in `ids` that exists, with its track, in `ids` order. */
+/** Every clip in `ids` that exists, with its track, in `ids` order; repeated ids count once. */
 function findClips(p: Project, ids: string[]): { t: Track; c: Clip }[] {
   const out: { t: Track; c: Clip }[] = [];
-  for (const id of ids) {
+  for (const id of new Set(ids)) {
     for (const t of p.tracks) {
       const c = t.clips.find((x) => x.id === id);
       if (c) {
@@ -73,48 +73,23 @@ export function addClip(
 }
 
 /**
- * Moves clips by `dTicks` (clamped so the group stays in 0..MAX_SONG_TICKS)
- * and `dLane` tracks (index in p.tracks). A lane move is allowed only onto an
- * existing track of the same kind; otherwise nothing moves and it returns
- * false. Patterns belong to tracks, so a clip moved to another lane uses the
- * destination's pattern of the same name, else its current pattern. Lane
- * moves keep clip ids (selection survives) and get a new engine idx there.
+ * Moves clips by `dTicks`, clamped so the group stays in 0..MAX_SONG_TICKS.
+ * Lane moves (`dLane` != 0) are refused (false, nothing moves) for now:
+ * patterns belong to tracks and the engine cannot copy one across tracks, so
+ * any mapping would silently change what the clip plays (ruling R4). The
+ * parameter stays so the timeline can call it; a real cross-track pattern
+ * copy can enable it later (same-kind lanes only).
  */
 export function moveClips(p: Project, sink: CommandSink, ids: string[], dTicks: number, dLane = 0): boolean {
   const found = findClips(p, ids);
-  if (!found.length || !Number.isFinite(dTicks) || !Number.isInteger(dLane)) return false;
-  const moves = found.map(({ t, c }) => ({ t, c, dest: p.tracks[p.tracks.indexOf(t) + dLane] as Track | undefined }));
-  if (moves.some((m) => !m.dest || m.dest.kind !== m.t.kind)) return false;
-  let dt = Math.round(dTicks);
+  if (!found.length || !Number.isFinite(dTicks) || dLane !== 0) return false;
   const minStart = Math.min(...found.map(({ c }) => c.start));
   const maxEnd = Math.max(...found.map(({ c }) => c.start + c.len));
-  dt = Math.min(MAX_SONG_TICKS - maxEnd, Math.max(-minStart, dt));
-
-  if (dLane === 0) {
-    if (dt === 0) return true;
-    for (const { t, c } of found) {
-      c.start += dt;
-      sendClip(sink, t, c);
-    }
-    return true;
-  }
-  // Lane move: every destination must have room after its own clips leave.
-  for (const d of new Set(moves.map((m) => m.dest!))) {
-    const leaving = moves.filter((m) => m.t === d).length;
-    const arriving = moves.filter((m) => m.dest === d).length;
-    if (d.clips.length - leaving + arriving > MAX_CLIPS) return false;
-  }
-  for (const { t, c } of moves) {
-    sink.send(Op.CLIP_REMOVE, t.slot * MAX_CLIPS + c.idx);
-    t.clips.splice(t.clips.indexOf(c), 1);
-  }
-  for (const { t, c, dest } of moves) {
-    const d = dest!;
-    const name = patternOf(t, c.patternId)?.name;
-    const ps: (DrumPattern | NotePatternState)[] = d.patterns;
-    const pat = ps.find((x) => x.name === name) ?? patternOf(d, d.currentPatternId)!;
-    d.clips.push({ id: c.id, idx: freeClipIdx(d)!, patternId: pat.id, start: c.start + dt, len: c.len, offset: c.offset });
-    sendClip(sink, d, d.clips[d.clips.length - 1]);
+  const dt = Math.min(MAX_SONG_TICKS - maxEnd, Math.max(-minStart, Math.round(dTicks)));
+  if (dt === 0) return true;
+  for (const { t, c } of found) {
+    c.start += dt;
+    sendClip(sink, t, c);
   }
   return true;
 }

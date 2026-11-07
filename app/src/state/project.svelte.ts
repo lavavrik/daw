@@ -1,5 +1,6 @@
 // Reactive project state (Svelte 5 runes). Mutate only through actions.ts so
 // every UI edit is mirrored to the audio engine.
+import { BAR_TICKS, STEP_TICKS } from '../audio/protocol';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -10,7 +11,7 @@ export const DEFAULT_PATTERN_BARS = 4;
 /** Engine sample slots; sample ids are never reused within a session. */
 export const MAX_SAMPLES = 256;
 /** Default loop range: bars 1-4. */
-export const DEFAULT_LOOP_END = 4 * 3840;
+export const DEFAULT_LOOP_END = 4 * BAR_TICKS;
 
 /** 8 colours that read well on the dark UI; track colour = TRACK_COLORS[slot % 8]. */
 export const TRACK_COLORS: string[] = [
@@ -166,10 +167,14 @@ export function currentPattern(t: SynthTrack): NotePatternState;
 export function currentPattern(t: Track): DrumPattern | NotePatternState;
 export function currentPattern(t: Track): DrumPattern | NotePatternState {
   const ps: (DrumPattern | NotePatternState)[] = t.patterns;
-  return ps.find((x) => x.id === t.currentPatternId) ?? ps[0];
+  const pat = ps.find((x) => x.id === t.currentPatternId);
+  if (!pat && (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV) {
+    console.error(`currentPattern: track ${t.name} has no pattern ${t.currentPatternId} (invariant broken)`);
+  }
+  return pat ?? ps[0];
 }
 
 /** Pattern length in ticks (drum: stepCount sixteenths; synth: bars). */
 export function patternLength(pat: DrumPattern | NotePatternState): number {
-  return 'stepCount' in pat ? pat.stepCount * 240 : pat.bars * 3840;
+  return 'stepCount' in pat ? pat.stepCount * STEP_TICKS : pat.bars * BAR_TICKS;
 }

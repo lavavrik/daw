@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
-  PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS,
+  PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -50,6 +50,11 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
   });
+  it('STEP_TICKS matches', () => {
+    const m = read('lib.rs').match(/pub const STEP_TICKS: f64 = ([\d.]+);/);
+    expect(Number(m?.[1])).toBe(STEP_TICKS);
+  });
+
   it('BAR_TICKS matches', () => {
     const m = read('lib.rs').match(/pub const BAR_TICKS: f64 = ([\d.]+);/);
     expect(Number(m?.[1])).toBe(BAR_TICKS);

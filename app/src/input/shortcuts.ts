@@ -130,8 +130,9 @@ export function createShortcutHandlers(
       // in the dialog). Documented choice: ignore, don't cancel the confirm.
       const tab = TAB_CODES[e.code];
       if (tab && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.altKey === e.code.startsWith('Digit')) {
-        e.preventDefault(); // F6 would focus the address bar
-        if (e.repeat || isTyping(e.target) || inDialog(e.target)) return;
+        if (isTyping(e.target) || inDialog(e.target)) return; // key stays with the field/dialog
+        e.preventDefault(); // F6 would focus the address bar; a held Alt+digit must not type
+        if (e.repeat) return;
         opts.onTab?.(tab);
         return;
       }

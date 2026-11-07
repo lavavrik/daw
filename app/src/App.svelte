@@ -19,7 +19,7 @@
   import { addNote } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
   import { STARTER_PATCHES } from './state/patches';
-  import { installShortcuts } from './input/shortcuts';
+  import { installShortcuts, type PanelTab } from './input/shortcuts';
   import { connectMidi } from './input/midi';
   import { DEFAULT_OCTAVE } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
@@ -69,7 +69,7 @@
   let restarting = $state(false);
   /** The top bar: ⌘O goes through its Project menu (the same "Discard and open…" guard). */
   let topBar = $state.raw<{ request(cmd: 'new' | 'open'): void } | null>(null);
-  let bottomPanel = $state.raw<{ pickTab(t: 'step' | 'pianoroll' | 'instrument' | 'mixer'): void } | null>(null);
+  let bottomPanel = $state.raw<{ pickTab(t: PanelTab): void } | null>(null);
 
   // "● unsaved": every edit command sets project.dirty and bumps
   // project.version (state/edits.ts, via engine.onCommand); once edits pause,

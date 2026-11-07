@@ -224,10 +224,13 @@ describe('shortcut handlers', () => {
   it('tab shortcuts are ignored while typing or while a confirmation is open', () => {
     const tabs: string[] = [];
     const { h } = mk({ onTab: (t) => tabs.push(t) });
-    h.onKeyDown(key('Digit1', { altKey: true, target: { tagName: 'INPUT', type: 'text' } }));
-    h.onKeyDown(key('F7', { target: { tagName: 'TEXTAREA' } }));
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    h.onKeyDown(key('Digit1', { altKey: true, target: { tagName: 'INPUT', type: 'text' }, ...pd }));
+    h.onKeyDown(key('F7', { target: { tagName: 'TEXTAREA' }, ...pd }));
     const inConfirm = { tagName: 'BUTTON', closest: (sel: string) => (sel.includes('alertdialog') ? {} : null) };
-    h.onKeyDown(key('F9', { target: inConfirm }));
+    h.onKeyDown(key('F9', { target: inConfirm, ...pd }));
     expect(tabs).toEqual([]);
+    expect(prevented).toBe(0); // the browser/OS keeps the key where the app does nothing
   });
 });

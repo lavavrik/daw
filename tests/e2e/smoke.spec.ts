@@ -329,7 +329,14 @@ test('deferred drop while playing: notice, loads on Stop, no dropouts', async ({
   await page.waitForTimeout(1000); // keep playing with the load parked
   const during = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
   expect(during).toBe(before);
+  // Select a synth track first: the step grid unmounts, but the pending load
+  // is session state (state/sampleLoads.ts) and must still land on Stop.
+  await page.getByTestId('add-synth-track').click();
+  await expect(page.getByTestId('rack')).toBeVisible();
+  await expect(page.getByTestId('row-0')).toHaveCount(0);
   await page.keyboard.press('Space'); // Stop -> retry (grows memory)
+  await expect(page.getByTestId('notice')).toBeHidden();
+  await page.getByTestId('track-0').click(); // back to the drums
   await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('kick');
   await expect(page.getByTestId('notice')).toBeHidden();
   await expect(page.getByTestId('banner')).toBeHidden();
@@ -655,4 +662,7 @@ test('four synth tracks stay under budget', async ({ page }) => {
   expect(cpu).toBeGreaterThan(0);
   expect(cpu).toBeLessThan(0.6);
   expect(drop).toBe(before.dropouts);
+  // The drones must actually be rendering (a silent graph would be cheap).
+  expect(await slot(page, 5)()).toBeGreaterThan(0); // peakL
+  expect(await slot(page, 6)()).toBeGreaterThan(0); // peakR
 });

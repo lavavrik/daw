@@ -51,8 +51,26 @@ fades out over 2 ms (`DECLICK_SECONDS`), the queue applies at a sub-block
 boundary, then it fades in over 2 ms. On a silent rack the edit applies at
 once but the output still ramps up from 0. Adding a module (it has no cables
 yet) applies immediately unless edits are already queued.
-Parameters marked `smooth` in the catalog glide over 5 ms; others apply
-at once.
+Parameters marked `smooth` in the catalog glide over 5 ms. Integer and
+choice parameters (osc wave/octave/unison, filter mode, LFO wave/sync/
+division, MIDI In voices/mode/bend) switch the signal in a step, so they are
+declicked like structural edits: queued behind the 2 ms fade-out while
+sounding, applied, faded back in (on a silent rack: applied at once, output
+ramps up from 0). Re-sending the current value is a no-op and never dips the
+output. The remaining non-`smooth` continuous params (tune, fine, ADSR times,
+glide, LFO rate) apply at once: they change a rate, not a level, so phase and
+envelopes stay continuous, and fading them would dip the output on every step
+of a knob drag.
+
+## Levels
+
+Out sums every poly channel unnormalised (8 voices at full level would be
+8x one voice), times `level`. The poly starter patches therefore set a low
+Out `level` (Chord Stab 0.4, Pad 0.25, Pluck 0.3) so a 4-note chord (5 for
+Pad) peaks below ~0.9 before the master clamp. `engine/tests/starter_patches.rs`
+replays each starter patch's exact UI command list from
+`engine/tests/fixtures/starter_patches.txt` (generated and parity-checked by
+`app/src/state/patches.fixture.test.ts`) and asserts this.
 
 ## Adding a module
 
@@ -87,5 +105,5 @@ Native (`cargo test --release -p daw-engine --test perf -- --ignored
 --nocapture`): about 8.5% of the audio budget for 4 tracks x 13 modules x 8
 voices. The e2e `four synth tracks stay under budget` runs four drone patches
 (8 voices, 2 saw oscs with unison 2, LP24 + LFO, VCA) in Chromium and
-requires CPU telemetry below 60% with no new dropouts or errors; it measured
-about 7%.
+requires CPU telemetry below 60%, audible output (peak L/R > 0), and no new
+dropouts or errors; a single run measured about 7%.

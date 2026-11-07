@@ -4,9 +4,17 @@
 // Pure core (no DOM types, unit-tested) + a thin browser glue at the bottom.
 //
 // Chain: perf timestamp -> (getOutputTimestamp) -> audible context time
-//        -> (latest worklet telemetry {ticks, frame}) -> tick.
+//        -> (telemetry history {ticks, frame}) -> tick.
 // Telemetry: `ticks` is the playhead at the start of the next block, and
 // `frame` the context frame where that applies. Count-in ticks are negative.
+//
+// Why a history: the heard frame lies one output latency (~250 ms on
+// Bluetooth) *behind* the newest telemetry. Extrapolating backwards from the
+// newest snapshot is wrong right after a jump of the playhead (loop wrap,
+// seek, mode switch): it would report `loop_start - latency` while the user
+// still hears the loop end. So the clock keeps the last snapshots it saw
+// (sampled on every query, i.e. every rAF of a playhead) and extrapolates
+// from the newest one at or before the heard frame.
 
 import { TELEMETRY } from './protocol';
 
@@ -46,6 +54,86 @@ export function heardContextTimeFallback(
   return currentTime - (baseLatency + outputLatency);
 }
 
+// ---- telemetry history ----------------------------------------------------
+
+/** One telemetry reading: `ticks` applies at context frame `frame`. */
+interface Snapshot {
+  frame: number;
+  ticks: number;
+  playing: boolean;
+  bpm: number;
+}
+
+export interface TelemetryHistory {
+  /** Store a reading (ignored if `frame` equals the newest one's). */
+  record(frame: number, ticks: number, playing: boolean, bpm: number): void;
+  /** Tick at context `frame` (NaN while empty); see `createTelemetryHistory`. */
+  ticksAt(frame: number, sr: number): number;
+  /** Snapshots held (tests). */
+  size(): number;
+}
+
+/** Default ring size: 4 playheads polling at 60 Hz each keep > 1 s. */
+export const HISTORY_SIZE = 256;
+/**
+ * A snapshot more than this many seconds older than the next one is stale
+ * (nobody polled, e.g. a hidden tab: the run between them may hold jumps), so
+ * the next one is used instead.
+ */
+export const MAX_SNAPSHOT_GAP_S = 0.1;
+
+/**
+ * Ring of the last `capacity` telemetry snapshots. `ticksAt(frame)`
+ * extrapolates at constant tempo from the newest snapshot at or before
+ * `frame`, so a frame before a jump reads the run it was heard in. Falls back
+ * to back-extrapolating from the *next* snapshot (the pre-history behaviour)
+ * when: no snapshot is that old, the chosen one was stopped (a parked
+ * playhead does not advance, but the next run started somewhere between), or
+ * it is stale (`MAX_SNAPSHOT_GAP_S`). A frame lower than the newest one's (a
+ * new AudioContext) clears the ring.
+ */
+export function createTelemetryHistory(capacity = HISTORY_SIZE): TelemetryHistory {
+  const ring: Snapshot[] = [];
+  let head = 0; // index of the oldest once full
+  const at = (i: number): Snapshot => ring[(head + i) % ring.length]; // i = 0 oldest
+  return {
+    record(frame, ticks, playing, bpm) {
+      if (!Number.isFinite(frame) || !Number.isFinite(ticks)) return;
+      const n = ring.length;
+      if (n > 0) {
+        const newest = at(n - 1);
+        if (frame === newest.frame) return;
+        if (frame < newest.frame) {
+          ring.length = 0;
+          head = 0;
+        }
+      }
+      const s = { frame, ticks, playing, bpm };
+      if (ring.length < capacity) ring.push(s);
+      else {
+        ring[head] = s;
+        head = (head + 1) % capacity;
+      }
+    },
+    ticksAt(frame, sr) {
+      const n = ring.length;
+      if (n === 0) return NaN;
+      let i = n - 1;
+      while (i >= 0 && at(i).frame > frame) i--;
+      let s: Snapshot;
+      if (i < 0) s = at(0);
+      else if (i === n - 1) s = at(i);
+      else {
+        const next = at(i + 1);
+        const stale = next.frame - at(i).frame > MAX_SNAPSHOT_GAP_S * sr;
+        s = !at(i).playing || stale ? next : at(i);
+      }
+      return ticksAtContextTime(frame / sr, s, sr, s.bpm);
+    },
+    size: () => ring.length,
+  };
+}
+
 // ---- browser glue ---------------------------------------------------------
 
 /** The slice of AudioEngine the clock needs (keeps this testable/mocked). */
@@ -65,6 +153,12 @@ export interface AudioClock {
 }
 
 export function createAudioClock(src: ClockSource, getBpm: () => number): AudioClock {
+  // Every query samples the telemetry first (the playheads query every rAF).
+  const history = createTelemetryHistory();
+  const sample = () => {
+    const t = src.telemetry();
+    history.record(t[TELEMETRY.frame], t[TELEMETRY.ticks], t[TELEMETRY.playing] === 1, getBpm());
+  };
   const ticksFor = (perfMs: number, offsetMs: number): number => {
     const ts = src.outputTimestamp();
     let c: number;
@@ -77,8 +171,8 @@ export function createAudioClock(src: ClockSource, getBpm: () => number): AudioC
       c = heardContextTimeFallback(f.currentTime, f.baseLatency, f.outputLatency) - offsetMs / 1000;
       c -= (performance.now() - perfMs) / 1000;
     }
-    const t = src.telemetry();
-    return ticksAtContextTime(c, { ticks: t[TELEMETRY.ticks], frame: t[TELEMETRY.frame] }, src.sampleRate, getBpm());
+    sample();
+    return history.ticksAt(c * src.sampleRate, src.sampleRate);
   };
   return {
     heardTicks: () => ticksFor(performance.now(), 0),

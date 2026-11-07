@@ -181,7 +181,7 @@
       <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloed ? `${name} is soloed — click to unsolo` : `Solo ${name} (other tracks are muted; returns keep playing)`} data-testid="solo" onclick={() => toggleSolo(p, engine, target)}>S</button>
     {/if}
     {#if kind !== 'master'}
-      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid="analyse" onclick={() => analyserBus().toggle(channel, target)}>∿</button>
+      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}>∿</button>
     {/if}
   </div>
 

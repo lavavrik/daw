@@ -264,8 +264,9 @@ SONG mode, at their recorded speed.
   samples (dots); the wheel scrolls; double-click shows the whole clip. The
   corner says how much is visible ("2.6 ms · 125 samples"); samples that hit
   full scale are marked red. Click it and use **+**/**−**, **←**/**→** and
-  **0** from the keyboard. Sample-level zoom works for files up to ~11 min of
-  48 kHz stereo (256 MB decoded); longer ones stop at 256 samples per pixel.
+  **0** from the keyboard. Every file you can load zooms down to single
+  samples (up to 256 MB decoded, the same limit as a sample: ~11 min of
+  48 kHz stereo).
   An audio track has no Step grid, Piano roll or Instrument.
 - Audio tracks are silent in PAT mode. Each has its own mixer strip (fader,
   sends, inserts, sidechain key).
@@ -360,6 +361,53 @@ The bottom panel's **Mixer** tab shows one strip per track, the **Reverb** and
 5. **Gain staging.** Keep strips peaking around −12 to −6 dB and let the
    limiter catch only the odd peak; if Limiter GR sits above 3–4 dB, pull some
    faders down. Centre pan is unity; a hard pan is +3 dB on one side.
+
+## Seeing the sound
+
+Design notes and measured costs:
+[docs/architecture/visuals.md](docs/architecture/visuals.md). Everything
+here only looks: none of it changes what you hear or what is saved.
+
+- **Scope** (a rack module: **+ Add module ▸ Utility ▸ Scope**). Patch
+  anything into **A** (orange) and **B** (cyan): an oscillator, the VCA's
+  output, an envelope, an LFO. Poly cables are summed, as the Out would hear
+  them. **Time/div** sets the window (0.1–100 ms per division); **Trigger
+  Auto** locks a periodic wave to its rising zero crossing (*no trig* in the
+  corner means nothing crossed: it free-runs), **Free** just scrolls. For
+  slow things (LFOs, envelopes, a whole bar) switch **Sync** on and pick a
+  **Division**: while playing, the screen shows exactly one division, on the
+  beat. **Gain A/B** scale the traces (▲/▼ when one goes off screen), **XY**
+  plots A against B, and a click freezes the picture. Up to 8 Scopes in the
+  whole project (the add menu says "All 8 scopes in use"); adding, cabling or
+  removing one never clicks. Scopes live in synth racks; for a drum or
+  audio track use the analyser.
+- **Analyser** (Mixer tab, right of the Master). A spectrum of the Master
+  with peak-hold dots, a goniometer (mono is a vertical line, wide stereo a
+  cloud) and a correlation bar (+1 mono, 0 wide, −1 out of phase: trouble on
+  a mono club system). **∿** on any strip shows that strip's spectrum
+  instead; press it again (or **Master**) to go back. Hover the spectrum for
+  the frequency, the nearest note and the level ("55 Hz · A1 · −8.2 dB"):
+  handy for tuning a kick to the bass. Which strip is shown is not saved and
+  not an edit.
+- **Top bar spectrum.** A small Master spectrum beside the CPU pill; click
+  it to open the mixer.
+- **Waveforms.** The Clip tab shows the clip from the whole file down to
+  single samples (see *Audio tracks*); **≈** on a drum row shows that row's
+  sample under the grid (zoom the same way; no playhead or trim markers,
+  rows have no such settings yet).
+- **Shape previews.** ADSR and LFO modules draw their shape above the knobs
+  and say the times ("5ms·200ms·70%·300ms", "2.00 Hz · 500 ms" or "1/4 ·
+  500 ms" when synced). The ADSR's time axis is squeezed (√t) so a 1 ms
+  attack is visible beside a 4 s release; the label has the real times. A
+  dashed curve shows the softest note when **Velocity** is up. Automation
+  moves them too.
+- **Voice LEDs.** In the Instrument tab's bar, one LED per voice of the
+  patch: lit with the voice's level, ringed while its key is held. Three
+  notes of a chord light three LEDs; a voice still ringing after release
+  stays lit until it fades.
+- **Cost.** All of it together stays under 2 % of the main thread while a
+  big mix plays, draws at most 60 times a second, stops in a hidden tab and
+  off screen, and stops entirely once the app is stopped and silent.
 
 ## Save, open and export
 

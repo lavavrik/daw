@@ -554,3 +554,265 @@ test('four house tracks stay under budget', async ({ page }) => {
   expect(await slot(page, 7)()).toBe(err0);
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts())).toBe(drop0);
 });
+
+// ---- Plan 12: visuals --------------------------------------------------------
+
+type VisWindow = {
+  __daw: {
+    engine: { dropouts(): number; failure: string | null; telemetry(): Float64Array; sampleRate: number };
+    project: { selectedTrackId: string | null; tracks: { id: string; slot: number; kind: string }[] };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    actions: Record<string, (...args: any[]) => any>;
+    vis: {
+      stats(): { busyMs: number; wallMs: number; frames: number };
+      drawn(): number;
+      running(): boolean;
+      scopeHead(track: number, idx: number): number;
+    };
+  };
+};
+
+/** Nothing focused: Space is the transport again, not a click on the focused button. */
+const blur = (page: Page) => page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+async function addRackModule(page: Page, id: string) {
+  await page.getByRole('button', { name: '+ Add module' }).click();
+  await page.getByTestId(`add-${id}`).click();
+  await expect(page.getByTestId('add-menu')).toBeHidden();
+}
+
+/** A cable by keyboard patching (Enter on one jack, Enter on the other). */
+async function patch(page: Page, from: string, to: string) {
+  await page.getByTestId(from).focus();
+  await page.keyboard.press('Enter');
+  await page.getByTestId(to).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(0);
+}
+
+/**
+ * Plan 12 (Review Focus 1 and 2 in the browser): a Scope added, cabled to A
+ * and B, every param changed (choices included), unplugged and removed while
+ * the rack sounds. Scope edits apply at once without a declick and never
+ * touch the sound; here: no dropouts, no engine error, and the scope ran.
+ * Serial because a dropout count only means something on an idle CPU.
+ */
+test('scope edits while playing cause no dropouts', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await expect(page.getByTestId('rack')).toBeVisible();
+  const track = await page.evaluate(() => {
+    const { project, actions } = (window as unknown as VisWindow).__daw;
+    const t = project.tracks.find((x) => x.id === project.selectedTrackId)!;
+    for (let i = 0; i < 16; i++) actions.addNote(t.id, { pitch: 36 + (i % 4) * 3, start: i * 240, len: 200, vel: 110 });
+    return t.slot;
+  });
+  const drop0 = await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts());
+  const err0 = await slot(page, 7)();
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1);
+  await addRackModule(page, 'scope'); // Deep Bass has 8 modules: the Scope is 8
+  await patch(page, 'jack-1-out-out', 'jack-8-in-a');
+  await patch(page, 'jack-5-out-env', 'jack-8-in-b');
+  await page.getByTestId('scope-8').scrollIntoViewIfNeeded();
+  await expect.poll(() => page.evaluate((s) => (window as unknown as VisWindow).__daw.vis.scopeHead(s, 8), track)).toBeGreaterThan(0);
+  for (const k of ['time', 'gain_a', 'gain_b']) {
+    await page.getByTestId(`knob-8-${k}`).focus();
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowUp');
+  }
+  for (const [k, choice] of [['trig', 'Free'], ['sync', 'Sync'], ['division', '1 bar'], ['mode', 'XY'], ['mode', 'A+B']]) {
+    await page.getByTestId(`knob-8-${k}`).getByRole('radio', { name: choice, exact: true }).click();
+  }
+  await expect(page.getByTestId('scope-8')).toHaveAttribute('data-readout', '1 bar · sync');
+  // Unplug A (pick it up from the input, drop it with Delete), then remove the module.
+  await page.getByTestId('jack-8-in-a').focus();
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Delete');
+  await page.waitForTimeout(300);
+  await page.getByTestId('module-8').getByRole('button', { name: 'Remove Scope' }).click();
+  await expect(page.getByTestId('module-8')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  await blur(page);
+  await page.keyboard.press('Space');
+  expect(await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts())).toBe(drop0);
+  expect(await slot(page, 7)()).toBe(err0);
+  expect(await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.failure)).toBeNull();
+});
+
+/**
+ * Plan 12 Review Focus 3: the visuals' main-thread cost, measured by the
+ * frame loop itself (window.__daw.vis.stats(): time inside the consumers /
+ * the time the loop ran, last 5 s), while the spec-6 mix plus one Audio
+ * track plays in Song mode. One 8 s phase per surface, each with the top
+ * bar's master spectrum on as always:
+ *   top bar     the Step grid (no other visual on screen);
+ *   mixer       every strip meter and the analyser on the Master (spectrum,
+ *               goniometer, correlation);
+ *   instrument  a Chord Stab rack: voice LEDs and the ADSR preview;
+ *   scopes      8 scopes on one track, all on screen (a wide window), each
+ *               cabled to the oscillator;
+ *   clip tab    the waveform at 1000 frames/px with the playhead moving.
+ * Each must stay under 5 %, with no new dropouts and the engine inside the
+ * spec-6 budget (CPU < 60 %, blocks >= 95 % of real time). Stopped and idle
+ * (before anything plays, and after Stop once the master is digital silence
+ * again: the returns' tails take ~16 s) the loop pauses: the visuals cost
+ * nothing.
+ */
+test('visuals stay under 5% of the main thread', async ({ page }) => {
+  test.setTimeout(300_000);
+  await startAudio(page);
+  await expect(page.getByTestId('tl-lane-0')).toBeVisible();
+  // The app open and idle (nothing played yet): the loop pauses within a second or so.
+  await expect.poll(() => page.evaluate(() => (window as unknown as VisWindow).__daw.vis.running()), { timeout: 3000, intervals: [100] }).toBe(false);
+  const stem = await dropLongAudio(page, 'stem', 60, 110);
+  const { synths, drums } = await buildSpec6(page);
+  // 64 bars of clips (well past the phases), then Song mode.
+  const laid = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    let n = 0;
+    for (const t of project.tracks.filter((t) => t.kind !== 'audio')) {
+      for (let start = 0; start < 64 * 3840; ) {
+        const c = a.addClip(t.id, { start });
+        if (!c) return -1;
+        start += c.len;
+        n++;
+      }
+    }
+    return n;
+  });
+  expect(laid).toBeGreaterThan(0);
+  await page.keyboard.press('Shift+L');
+  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
+
+  // 8 scopes on the first synth track, each fed by its oscillator (Chord Stab: Osc 1; Scopes 6..13).
+  await page.getByTestId(`track-${synths[0]}`).click();
+  await page.keyboard.press('Alt+3');
+  await expect(page.getByTestId('rack')).toBeVisible();
+  for (let i = 0; i < 8; i++) {
+    await addRackModule(page, 'scope');
+    await patch(page, 'jack-1-out-out', `jack-${6 + i}-in-a`);
+  }
+  await expect(page.locator('[data-testid^="scope-"]')).toHaveCount(8);
+
+  /** One phase: `ms` of playing, then the frame loop's share and the engine's budget. */
+  const phase = async (label: string, ms = 8000) => {
+    const drop0 = await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts());
+    const err0 = await slot(page, 7)();
+    const run = await page.evaluate(
+      (ms) =>
+        new Promise<{ cpu: number[]; share: number }>((resolve) => {
+          const eng = (window as unknown as VisWindow).__daw.engine;
+          const cpu: number[] = [];
+          const b0 = eng.telemetry()[0];
+          const t0 = performance.now();
+          const id = setInterval(() => {
+            cpu.push(eng.telemetry()[3]);
+            if (performance.now() - t0 >= ms) {
+              clearInterval(id);
+              const secs = (performance.now() - t0) / 1000;
+              resolve({ cpu, share: ((eng.telemetry()[0] - b0) * 128) / eng.sampleRate / secs });
+            }
+          }, 250);
+        }),
+      ms,
+    );
+    const s = await page.evaluate(() => (window as unknown as VisWindow).__daw.vis.stats());
+    const share = s.busyMs / s.wallMs;
+    const cpuMax = Math.max(...run.cpu);
+    console.log(
+      `VIS ${label}: main thread ${(share * 100).toFixed(2)}% (${s.busyMs.toFixed(1)} ms in ${s.frames} frames over ${(s.wallMs / 1000).toFixed(1)} s, ` +
+        `${(s.busyMs / Math.max(1, s.frames)).toFixed(3)} ms/frame); engine cpu max ${(cpuMax * 100).toFixed(1)}%, blocks ${(run.share * 100).toFixed(1)}%`,
+    );
+    expect(s.frames).toBeGreaterThan(100); // the loop really ran (~300 frames in 5 s)
+    expect(share).toBeLessThan(0.05);
+    expect(cpuMax).toBeLessThan(0.6);
+    expect(run.share).toBeGreaterThanOrEqual(0.95);
+    expect(await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts())).toBe(drop0);
+    expect(await slot(page, 7)()).toBe(err0);
+  };
+  const seek0 = () => page.evaluate(() => (window as unknown as VisWindow).__daw.actions.seek(0));
+
+  await blur(page); // Space on a focused jack would pick it up
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1);
+  await page.waitForTimeout(2000); // warm-up
+
+  // Top bar only.
+  await page.getByTestId(`track-${drums[0]}`).click();
+  await page.keyboard.press('Alt+1');
+  await expect(page.getByTestId('row-0')).toBeVisible();
+  await expect(page.getByTestId('topbar-spectrum')).toBeVisible();
+  await phase('top bar');
+
+  // The mixer: every meter, the analyser on the Master.
+  await page.getByTestId('mixer-tab').click();
+  await expect(page.getByTestId('analyser')).toHaveAttribute('data-source', 'master');
+  await expect(page.getByTestId('analyser')).toBeVisible();
+  await phase('mixer + analyser (Master)');
+
+  // The Instrument tab without scopes: voice LEDs, the ADSR preview.
+  await page.getByTestId(`track-${synths[1]}`).click();
+  await page.keyboard.press('Alt+3');
+  await expect(page.getByTestId('voice-leds')).toBeVisible();
+  await expect(page.getByTestId('shape-adsr')).toBeVisible();
+  await phase('instrument: voice LEDs + ADSR preview');
+
+  // 8 scopes, all on screen.
+  await page.setViewportSize({ width: 3400, height: 900 });
+  await page.getByTestId(`track-${synths[0]}`).click();
+  await page.keyboard.press('Alt+3');
+  await page.getByTestId('scope-6').scrollIntoViewIfNeeded();
+  const onScreen = await page.evaluate(() => {
+    const rail = document.querySelector('[data-testid="rail"]')!.getBoundingClientRect();
+    return [...document.querySelectorAll('[data-testid^="scope-"]')].filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.right > rail.left && r.left < rail.right && r.bottom > 0 && r.top < innerHeight;
+    }).length;
+  });
+  console.log(`VIS scopes on screen: ${onScreen} of 8`);
+  expect(onScreen).toBe(8);
+  await expect.poll(() => page.evaluate((s) => (window as unknown as VisWindow).__daw.vis.scopeHead(s, 13), synths[0])).toBeGreaterThan(0);
+  await phase('instrument: 8 scopes + LEDs + ADSR preview');
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  // The Clip tab: the stem's waveform at 1000 frames/px from its start, the playhead running through it.
+  await page.getByTestId(`track-${stem}`).click();
+  await page.keyboard.press('Alt+5');
+  const wave = page.getByTestId('cliptab-wave');
+  await expect(wave).toBeVisible();
+  const fpp = async () => Number(await wave.locator('canvas').getAttribute('data-fpp'));
+  await expect.poll(fpp).toBeGreaterThan(1000);
+  for (let i = 0; i < 12 && Math.abs((await fpp()) - 1000) > 0.5; i++) {
+    const f = await fpp();
+    const d = Math.max(-69, Math.min(69, Math.log(1000 / f) / 0.01));
+    // ⌘-wheel at the left edge: the view keeps starting at the clip's start.
+    await wave.locator('canvas').evaluate((c, d) => {
+      const b = c.getBoundingClientRect();
+      c.dispatchEvent(new WheelEvent('wheel', { deltaY: d, metaKey: true, bubbles: true, cancelable: true, clientX: b.left, clientY: b.top + 10 }));
+    }, d);
+    await page.waitForTimeout(50);
+  }
+  expect(Math.abs((await fpp()) - 1000)).toBeLessThan(1);
+  await seek0();
+  const head = wave.locator('.ph');
+  await expect(head).toBeVisible();
+  const x0 = await head.evaluate((el) => (el as HTMLElement).style.transform);
+  await expect.poll(() => head.evaluate((el) => (el as HTMLElement).style.transform)).not.toBe(x0);
+  await phase('clip tab at 1000 frames/px, playhead moving');
+
+  // Stopped and idle (top bar only): nothing moves, so the loop pauses.
+  await page.getByTestId(`track-${drums[0]}`).click();
+  await page.keyboard.press('Alt+1');
+  await blur(page);
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(0);
+  const tStop = Date.now();
+  await expect.poll(() => page.evaluate(() => (window as unknown as VisWindow).__daw.vis.running()), { timeout: 30_000, intervals: [100] }).toBe(false);
+  console.log(`VIS paused ${((Date.now() - tStop) / 1000).toFixed(1)} s after Stop`);
+  const d0 = await page.evaluate(() => (window as unknown as VisWindow).__daw.vis.drawn());
+  await page.waitForTimeout(2000);
+  const d1 = await page.evaluate(() => (window as unknown as VisWindow).__daw.vis.drawn());
+  console.log(`VIS idle (stopped, top bar): ${d1 - d0} frames drawn in 2 s`);
+  expect(d1).toBe(d0);
+});

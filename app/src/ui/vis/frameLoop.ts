@@ -20,7 +20,8 @@
 //   last 5 s, where wallMs counts only the time the loop was running (a
 //   paused loop neither costs nor dilutes the ratio), so busyMs / wallMs is
 //   the honest main-thread share (window.__daw.vis.stats(), the serial e2e
-//   budget).
+//   budget). drawn() (frames since start) and running() let a test see a
+//   pause directly; the 5 s window would only drain.
 // - The strip tap (OP_VIS_TAP) is chosen here too: setTap(ch) sends it to
 //   the attached engine and remembers it, and attach() re-sends it to a new
 //   engine (an audio restart starts with the tap off), like the want mask.
@@ -82,6 +83,12 @@ export interface FrameLoop {
    */
   setTap(ch: number): void;
   stats(): FrameStats;
+  /** The strip tap last chosen (-1: off or never chosen). An e2e hook (window.__daw.vis). */
+  tap(): number;
+  /** Frames drawn since the loop was made: stands still while paused (e2e). */
+  drawn(): number;
+  /** True while the rAF is scheduled (an engine, a visible document, a consumer on screen). */
+  running(): boolean;
 }
 
 /** Rolling stats window (ms). */
@@ -244,6 +251,9 @@ export function createFrameLoop(env: FrameEnv): FrameLoop {
       }
       return { busyMs: b, wallMs, frames: n };
     },
+    tap: () => tap ?? -1,
+    drawn: () => count,
+    running: () => raf !== 0,
   };
 }
 

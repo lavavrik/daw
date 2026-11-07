@@ -9,7 +9,7 @@ import type { Autosave } from './project/autosave';
 import type { Library } from './library/library.svelte';
 import type { History } from './history/history';
 import type { ProjectJson } from './project/schema';
-import type { FrameStats } from './ui/vis/frameLoop';
+import type { VisHooks } from './ui/vis/visHooks';
 
 /** Real state actions bound to the project + engine, for e2e tests (App.svelte). */
 interface DawActions {
@@ -23,8 +23,8 @@ declare global {
     /** Always set: lets e2e tests (and the console) drive the engine. */
     __daw: {
       engine: AudioEngine | null; Op: typeof Op; clock: AudioClock | null; recorder: Recorder | null; project: Project; actions: DawActions;
-      /** The shared visual frame loop (ui/vis/frameLoop.ts): its cost over a rolling 5 s. */
-      vis: { stats: () => FrameStats };
+      /** The visuals' e2e hooks (ui/vis/visHooks.ts): frame-loop cost, want mask, scope heads, analyser. */
+      vis: VisHooks;
       /** Project ▸ Save / Open with any directory handle (e2e: OPFS). */
       saveTo: (dir: FileSystemDirectoryHandle) => Promise<void>;
       /** Resolves with the load warnings. */

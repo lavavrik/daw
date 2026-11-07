@@ -343,11 +343,14 @@ Consequences worth knowing:
   `copyVis` (`app/src/audio/visCopy.ts`): it reads the want mask the UI's
   frame loop writes into the vis SAB and copies only those parts (the output
   into the master ring, the tap into the tap ring, voice levels with meter
-  ballistics), each ring's head published with `Atomics.store` after its
-  data. With nothing on screen the mask is 0 and step 4b is one
+  ballistics, and the new entries and headers of every owned Scope slot from
+  `engine_scopes` / `engine_scope_hdr`), each ring's head published with
+  `Atomics.store` after its data. With nothing on screen the mask is 0 and step 4b is one
   `Atomics.load`. The frame loop pauses off screen and in a hidden tab, and
   the mixer meters ride on it: their clip lights only latch what a running
-  frame sees. See `docs/architecture/visuals.md`.
+  frame sees. Measured with everything open while the spec-6 mix plays,
+  the visuals take ≤ 2 % of the main thread and add no dropouts (serial
+  e2e). See `docs/architecture/visuals.md`.
 - **Mixer params** are a catalog (`engine/mixer_catalog.json`, golden-tested
   like the rack catalog): `MIX_SET` (41) validates against it, `MIX_SET_KEY`
   (42) sets a sidechain key, `MIX_RESET` (43) restores a channel's defaults.

@@ -15,7 +15,8 @@
   // - XY plots (A, B) mids as dots, the newest brightest (a short trail).
   // - Readout "5 ms/div" or "1/4 · sync"; tags "no trig" (Auto found no
   //   crossing: free-running) and "idle" (no new entries for 250 ms: the
-  //   rack is not rendering; the last frame stays, dimmed).
+  //   rack is not rendering; the last frame stays, dimmed). Both are also on
+  //   the button as data-readout / data-tag (e2e).
   // - Click freezes (UI only, not saved; ❚❚). The window choice is
   //   scopeMath.ts (trigger, sync grid, readable range).
   import { onMount } from 'svelte';
@@ -45,6 +46,7 @@
   const DIVISIONS = moduleDef('scope').params[2].choices;
 
   let canvas: HTMLCanvasElement;
+  let box: HTMLButtonElement;
   let frozen = $state(false);
 
   // Views over visSab, made once per engine (subarray allocates).
@@ -237,7 +239,11 @@
     c.font = '9px system-ui, sans-serif';
     c.fillStyle = '#8d90a0';
     c.textBaseline = 'alphabetic';
-    c.fillText(readout(params[0] ?? 5, sync, division), 4, H - 4);
+    const text = readout(params[0] ?? 5, sync, division);
+    c.fillText(text, 4, H - 4);
+    // What the canvas says, for tests and the curious (written only on a redraw).
+    if (box.dataset.readout !== text) box.dataset.readout = text;
+    if (box.dataset.tag !== tag) box.dataset.tag = tag;
     if (isXY) c.fillText('XY', W - 16, H - 4);
     if (tag) {
       c.fillStyle = tag === 'idle' ? '#6f7280' : '#ff8a92';
@@ -250,7 +256,7 @@
 </script>
 
 <button
-  class="scope" class:frozen data-testid={`scope-${idx}`} aria-pressed={frozen}
+  class="scope" class:frozen bind:this={box} data-testid={`scope-${idx}`} aria-pressed={frozen}
   aria-label={frozen ? 'Scope frozen: click to run' : 'Scope: click to freeze'} title={frozen ? 'Frozen — click to run' : 'Click to freeze'}
   onclick={() => (frozen = !frozen)}
 >

@@ -190,7 +190,10 @@ and return strip has a "∿" toggle (*Show in analyser*): one at a time,
 pressing it again goes back to the Master; view state, not saved, not an
 edit. The analyser bus sends the choice as `OP_VIS_TAP` (only while the
 panel is mounted), re-sends it after an audio restart, and falls back to the
-Master when the track is removed. See *Analyser* in
+Master when the track is removed. The mixer with every meter and the
+analyser on the Master costs ~1.5 % of the main thread while the spec-6 mix
+plays (serial e2e). Test ids: `analyser`, `analyser-strip-<channel>` (the
+∿), `analyser-spectrum`, `analyser-readout`. See *Analyser* in
 `docs/architecture/visuals.md`.
 
 ## Engine reset

@@ -357,7 +357,7 @@
       Audio engine stopped — <button onclick={() => location.reload()}>reload</button>
     </span>
   {/if}
-  <button class="mini" data-testid="mini-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
+  <button class="mini" data-testid="topbar-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
     <Spectrum need="mini" width={64} height={18} />
   </button>
   <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">

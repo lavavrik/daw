@@ -52,6 +52,7 @@
   import { createAutoBus, provideAutoBus } from './ui/autoBus';
   import { frameLoop } from './ui/vis/frameLoop';
   import { analyserBus } from './ui/vis/analyserBus';
+  import { createVisHooks } from './ui/vis/visHooks';
   import { visWake } from './ui/vis/visWake';
   import AutoMenu from './ui/AutoMenu.svelte';
   import { laneView } from './ui/song/laneView.svelte';
@@ -323,7 +324,7 @@
   };
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
-  window.__daw = { engine: null, Op, clock: null, recorder: null, project, vis: { stats: () => frameLoop().stats() }, actions: {
+  window.__daw = { engine: null, Op, clock: null, recorder: null, project, vis: createVisHooks({ engine: () => engine, loop: frameLoop(), bus: analyserBus() }), actions: {
     // Real song actions for e2e (no-ops before audio starts).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
     // Song position (as a ruler click does), e.g. a mid-clip seek timed in the audio clips e2e.

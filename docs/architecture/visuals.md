@@ -13,7 +13,12 @@ stereo,analyserBus}.ts`, `{Spectrum,Goniometer}.svelte`,
 `app/src/ui/vis/{waveMath.ts,WaveformView.svelte}`,
 `app/src/audio/fineSamples.ts`; shape previews and voice LEDs:
 `app/src/ui/vis/shapes.ts`, `app/src/ui/rack/{ShapePreview,VoiceLeds}.svelte`,
-`engine/tests/shapes.rs` (fixture `engine/tests/fixtures/shapes.json`).
+`engine/tests/shapes.rs` (fixture `engine/tests/fixtures/shapes.json`);
+the Scope: `engine/src/rack/modules/scope.rs`, `engine/src/fx_pool.rs`
+(the bank), `app/src/ui/vis/scopeMath.ts`, `app/src/ui/rack/ScopeView.svelte`;
+idling: `app/src/ui/vis/{idleDriver,waveDriver,visWake}.ts`; the e2e hooks:
+`app/src/ui/vis/visHooks.ts`. End-to-end: `tests/e2e/visuals.spec.ts` and,
+for anything timed (dropouts, the budget), `tests/e2e/serial.spec.ts`.
 
 ## Data path
 
@@ -104,12 +109,62 @@ each engine; `unwireEngine` detaches it):
   starts with the tap off), like the want mask;
 - a consumer that throws is removed and logged once.
 
+**The budget.** Every frame-loop visual together may use at most 5 % of the
+main thread (`busyMs / wallMs`), with everything open. The serial e2e
+`visuals stay under 5% of the main thread` measures it per surface while the
+spec-6 mix plus an Audio track plays in Song mode (8 s each, the last 5 s
+counted; the top-bar spectrum is on in every phase). Headless Chromium on
+the dev machine (Apple silicon), plan 12 Task 6:
+
+| Surface on screen | Main thread | Per drawn frame |
+|---|---|---|
+| top bar only (Step grid tab) | 0.8 % | 0.13 ms |
+| Mixer: every meter (9 tracks, 2 returns, Master) + analyser on the Master (spectrum, goniometer, correlation) | 1.5 % | 0.26 ms |
+| Instrument tab: voice LEDs + ADSR preview | 0.9 % | 0.15 ms |
+| Instrument tab with 8 Scopes on screen (+ LEDs, preview) | 1.9 % | 0.31 ms |
+| Clip tab waveform at 1000 frames/px, playhead moving | 1.0 % | 0.16 ms |
+| stopped and silent | 0 (the loop pauses) | — |
+
+No phase added a dropout, and the engine stayed inside the spec-6 budget
+(CPU max 17–28 %, blocks at 100 % of real time). If a new visual pushes a
+phase near 5 %, lower its rate (`hz: 30`) or its resolution first; a Worker
+for the FFT is the last resort (see `docs/followups/plan-12.md`).
+
 Consumers draw their canvas or DOM directly, never through Svelte state
 (the MeterBus rule). The mixer meters are one: `MixerView` registers its
 MeterBus tick with want 0 (the meters have their own SAB) and the mixer
 element, instead of running its own rAF. A paused loop reads nothing, so the
 mixer's clip / LIMIT lights do not latch an over that happened (and fell
 away) while the mixer was off screen or the tab hidden.
+
+## Scope
+
+The Scope module's screen (`ScopeView.svelte`, 168 × 96 px in its
+ModulePanel above the knobs). The engine side — the sink rule, min/max
+entries, decimation, the sync grid, the bank of 8 — is in
+`docs/architecture/modular.md` *Scope (18)*; here is what the UI does.
+
+- **Finding its data.** The view is a frame-loop consumer with want bit 8
+  on its canvas. The worklet mirrors every *owned* scope slot (entries from
+  the mirrored head to the engine head, then the header, then the head with
+  `Atomics.store`); the view finds its slot by the header's owner (track
+  slot, module idx: `findScope`) and reads only `[max(epoch, head − 2048 +
+  VIS_GUARD), head)` (`readable`).
+- **The window** (`scopeMath.scopeWindow`): Sync with a valid grid shows the
+  last whole division, copied out of the ring when its line passes and held
+  until the next (`createSyncHold`); otherwise Auto triggers on the latest
+  rising zero crossing of A's mid (a Schmitt trigger at 2 % of A's
+  peak-to-peak) whose window ends inside the readable range, and Free (or no
+  crossing: *no trig*) shows the newest entries.
+- **Drawing:** a line at decim 1, else the filled min..max band; B only while
+  connected; gain with ▲/▼ clip marks; XY dots (the newest 256); the readout
+  ("5 ms/div", "1/4 · sync") and tags (*no trig*, *idle* after 250 ms with no
+  new entries: the last frame stays, dimmed). It redraws only when the head,
+  the slot, a param or idle changes, so a stopped rack costs a few
+  comparisons per frame. A click freezes it. Test hooks: `scope-<idx>` with
+  `data-readout` and `data-tag` (what the canvas says).
+- **Cost:** 8 Scopes on screen add ~1 % of the main thread (the budget
+  table above).
 
 ## Analyser
 
@@ -225,11 +280,11 @@ thread on every block whether anyone looks or not, and a Worker would
 need a second copy and a message per frame. On the main thread the
 analysis runs only while a view is on screen, at 30 Hz: a 4096-point FFT
 plus 80 bands takes ~0.05 ms (Node), and digital silence (a stopped
-transport) skips the FFT. Measured in headless Chromium while playing
-(`window.__daw.vis.stats()`, every frame-loop visual together): top bar
-only 0.33 % of the main thread; mixer + analyser on the Master (goniometer
-included) + top bar 1.5 %; the same on a strip 0.8 % — within the 5 %
-budget.
+transport) skips the FFT. Measured in headless Chromium while the spec-6 mix
+plays (the budget table above): top bar only 0.8 % of the main thread; the
+mixer with the analyser on the Master (goniometer included) plus the top bar
+1.5 %. Twice the analysis rate would still fit; a Worker FFT is a follow-up
+only if it ever does not.
 
 
 ## Waveforms
@@ -267,7 +322,10 @@ someone zooms into it.
 
 **The budget.** `fineSamples` keeps one sample, up to 256 MiB of floats
 (about 11 minutes of 48 kHz stereo); a new sample evicts the old before it
-decodes. Decodes run one at a time (`decodeAudioData` cannot be cancelled):
+decodes. The budget equals the engine's per-sample cap
+(`MAX_SAMPLE_FLOATS`, 64 Mi floats = 256 MiB: ~23 min mono / ~11 min stereo
+at 48 kHz), so every sample the engine accepted fits and zooms to single
+samples; a longer file is refused at the drop ("too long"). Decodes run one at a time (`decodeAudioData` cannot be cancelled):
 a request made meanwhile waits, the overtaken result is dropped when it
 lands, and only the newest waiting request starts, so two samples' floats
 never sit in memory together. Views hold their sample (`retain`) while
@@ -275,7 +333,10 @@ mounted; the last to let go releases the floats (abandoning a running
 decode), and a project load clears them (`blankState`). A file whose
 floats would not fit (estimated from `sampleMeta` before decoding) is never
 decoded: the zoom stops at 256 frames per pixel with the note
-"Sample-level zoom: files up to 256 MB". A failed decode is remembered and
+"Sample-level zoom: files up to 256 MB". With today's equal limits that
+only guards an estimate that is off (`sampleMeta` vs the decoded length);
+it is pinned by unit tests (`fineSamples.test.ts`, `waveMath.test.ts`
+*zoom is clamped…*), not e2e, since no loadable file reaches it. A failed decode is remembered and
 the view keeps the peaks at the same limit; one that failed because an
 audio restart closed the context is not (the next engine decodes it). While the floats decode, level
 0 is drawn stretched, never a blank.
@@ -411,7 +472,58 @@ while on screen. `visWake.ts` brings the idle ones back: `setPlaying(true)`
 on Play (App follows `project.playing`), and `wake()` on a played note-on
 (`noteInput.ts`, QWERTY and MIDI, also while stopped), on any edit
 (`project.version`: a patch that drones without a note) and on a new engine.
-A release tail after Stop keeps them awake while it is still visible.
+A release tail after Stop keeps them awake while it is still visible: the
+analyser waits for digital silence (exact zeros) in the master ring, so with
+the spec-6 mix's reverb and delay returns the loop paused ~16 s after Stop
+(serial e2e); an app that has played nothing pauses within a second.
 Pinned by `idleDriver.test.ts` and `analyserBus.test.ts` (`the mini
 spectrum leaves the loop…`: with the bus and the LEDs on one real frame
 loop, no rAF is pending once both are idle).
+
+## Tests and e2e hooks
+
+`window.__daw.vis` (`ui/vis/visHooks.ts`, read-only):
+
+- `stats()` — `{ busyMs, wallMs, frames }` over the last 5 s (the budget);
+- `drawn()`, `running()` — frames drawn since start, whether the rAF is
+  scheduled (a pause shows at once; the 5 s window only drains);
+- `want()` — the want mask in visSab;
+- `scopeHead(track, idx)` — the mirrored head of that Scope (−1: none);
+- `analyser.peakHz()` — the centre of the panel's loudest band (null:
+  silence); `analyser.tap()` — the strip tap given to the engine (−1 off).
+
+Test ids: `scope-<idx>`, `analyser`, `analyser-strip-<channel>` (a strip's
+∿), `analyser-spectrum`, `analyser-readout`, `topbar-spectrum`,
+`cliptab-wave`, `row-wave-<r>`, `row-wave-btn-<r>`, `wave-zoom-text`,
+`shape-adsr`, `shape-lfo`, `voice-leds`, `voice-led-<k>`.
+`tests/e2e/visuals.spec.ts` drives each visual in the app (a triggered saw
+on a Scope, the ninth Scope greyed, the analyser finding A5 and naming it on
+hover, the strip toggle and back without an edit, the top bar pausing when
+the page hides, the Clip-tab zoom to dots, fit and keys and the playhead,
+the drum-row strip, the ADSR preview following Release, three of eight LEDs
+for a chord); `serial.spec.ts` has Scope edits while playing (no dropouts)
+and the budget.
+
+## Adding a visual
+
+1. **A consumer.** `frameLoop().add({ want, el, hz, frame })` from the
+   component's `onMount` (return the remover). Pass the element that is the
+   visual (`el`), so it stops off screen; `hz: 30` for analysis. In `frame`
+   write the canvas / DOM directly and only when something changed; never
+   allocate per frame. If it only shows sound, idle it when stopped and
+   quiet (`idleDriver.ts`, woken by `visWake()`); if it only shows edits,
+   register only while dirty (`waveDriver.ts`).
+2. **A want bit**, if it needs new audio data: the next bit in `VIS_WANT`
+   (`visLayout.ts`), and a branch in `copyVis` (`visCopy.ts`) that copies
+   only while the bit is set. With the bit clear the worklet must write
+   nothing.
+3. **A ring**, if the data is a stream: a region in `visLayout.ts` (the one
+   place offsets are computed; bump the layout test), a power-of-two size,
+   an `i32` head in the header published with `Atomics.store` after the
+   data, and readers that load the head first and stay `VIS_GUARD` away from
+   the oldest end. Engine data comes from a preallocated block (`vis.rs`,
+   `engine_vis`) or the FX pool, written on the audio thread without
+   allocating and without touching the signal (a test that the sound is
+   bit-identical with it on).
+4. **Measure it:** add or extend a phase in `serial.spec.ts`
+   (*visuals stay under 5% of the main thread*) and update the table above.

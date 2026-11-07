@@ -383,6 +383,11 @@ two-input oscilloscope drawn live in its own panel (`ScopeView.svelte`).
 - **Idle.** A Scope runs only while its rack renders (the track is active
   or still sounding), like every module; when no new entries arrive for
   250 ms the view keeps the last frame, dimmed, tagged *idle*.
+- **Tests in the app.** `tests/e2e/visuals.spec.ts` (*scope shows a
+  triggered saw*: the head advances, "5 ms/div", no *no trig*, a trace over
+  many rows; *a ninth scope is greyed out*) and `serial.spec.ts` (*scope
+  edits while playing cause no dropouts*; 8 Scopes on screen cost ~1 % of
+  the main thread). The view's UI side is in `visuals.md` *Scope*.
 
 ## Adding a module
 

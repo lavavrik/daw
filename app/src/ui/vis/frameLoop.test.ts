@@ -249,6 +249,32 @@ describe('frameLoop', () => {
     expect(sent.at(-1)).toEqual(['d', 33]);
   });
 
+  it('reports the chosen tap, the frames drawn so far and whether it runs (e2e hooks)', () => {
+    const f = fakeEnv();
+    const loop = createFrameLoop(f.env);
+    expect(loop.tap()).toBe(-1); // never chosen: off
+    loop.attach(engine().eng);
+    expect(loop.running()).toBe(false); // no consumer
+    loop.setTap(5);
+    expect(loop.tap()).toBe(5);
+    loop.setTap(-1);
+    expect(loop.tap()).toBe(-1);
+    const off = loop.add({ want: VIS_WANT.master, frame: () => {} });
+    expect(loop.running()).toBe(true);
+    for (let i = 0; i < 10; i++) f.frame();
+    expect(loop.drawn()).toBe(10);
+    // Hidden: nothing is drawn, the count stands still (unlike the 5 s stats window).
+    f.setHidden(true);
+    expect(loop.running()).toBe(false);
+    for (let i = 0; i < 10; i++) f.frame();
+    expect(loop.drawn()).toBe(10);
+    f.setHidden(false);
+    f.frame();
+    expect(loop.drawn()).toBe(11);
+    off();
+    expect(loop.running()).toBe(false);
+  });
+
   it('a throwing consumer is dropped, the rest keep running', () => {
     const f = fakeEnv();
     const loop = createFrameLoop(f.env);

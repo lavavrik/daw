@@ -29,6 +29,11 @@ export interface MixerCatalog {
   version: number;
   channels: { tracks: number; reverb: number; delay: number; master: number };
   params: MixParamDef[];
+  /**
+   * Synced delay: each delay_time choice's length in quarter-note beats, and
+   * the engine's maximum delay time (a longer division is clamped to it).
+   */
+  delay: { divisionBeats: number[]; maxSeconds: number };
 }
 
 export const MIXER_CATALOG = raw as MixerCatalog;

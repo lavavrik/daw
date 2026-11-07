@@ -26,6 +26,12 @@ describe('mixer catalog', () => {
     expect(clampParam(mixParam('fader'), NaN)).toBe(0);
     expect(clampParam(mixParam('mute'), 0.4)).toBe(0);
   });
+  it('delay division beats: one per delay_time choice, 3/16 = 0.75 beats', () => {
+    const d = mixParam('delay_time');
+    expect(MIXER_CATALOG.delay.divisionBeats).toHaveLength(d.choices.length);
+    expect(MIXER_CATALOG.delay.divisionBeats[d.default]).toBe(0.75);
+    expect(MIXER_CATALOG.delay.maxSeconds).toBe(2);
+  });
   it('mixParam throws on unknown', () => {
     expect(() => mixParam('nope')).toThrow();
   });

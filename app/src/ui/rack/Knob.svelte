@@ -22,7 +22,7 @@
   import { dragPos, formatValue, fromPos, keyStep, toPos } from './knobMath';
   import type { KnobDef } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color = '#f0a23a', testid }: {
+  let { def, value, onchange, moduleName = '', color = '#f0a23a', testid, note = '' }: {
     /** A rack ParamDef or a mixer MixParamDef. */
     def: KnobDef;
     value: number;
@@ -32,6 +32,8 @@
     /** Value-arc colour (the module's category colour). */
     color?: string;
     testid?: string;
+    /** Extra line under the label, e.g. the mixer delay's "(max 2 s)"; "" = none. */
+    note?: string;
   } = $props();
 
   const name = $derived(`${moduleName} ${def.label}`.trim());
@@ -167,6 +169,7 @@
       {/each}
     </div>
     <span class="label">{def.label}</span>
+    {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
   </div>
 {:else}
   <div
@@ -178,7 +181,7 @@
     aria-valuemin={def.min}
     aria-valuemax={def.max}
     aria-valuenow={shown}
-    aria-valuetext={readout}
+    aria-valuetext={note ? `${readout} ${note}` : readout}
     title={`${name}: ${readout} — drag up/down (Shift = fine), double-click = reset`}
     data-testid={testid}
     style:--c={color}
@@ -199,6 +202,7 @@
     </svg>
     <span class="label">{def.label}</span>
     <span class="readout">{readout}</span>
+    {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
   </div>
 {/if}
 
@@ -213,6 +217,7 @@
   .cap { fill: #34363e; stroke: #50535e; stroke-width: 1; }
   .ptr { stroke: #e8e9ee; stroke-width: 2; stroke-linecap: round; }
   .label { font-size: 10px; color: #a3a6b3; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .note { font-size: 9px; color: #f0a43a; white-space: nowrap; }
   .readout { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7d9e0; background: #15161a; border-radius: 2px; padding: 0 3px; min-width: 40px; text-align: center; white-space: nowrap; }
 
   .choice { display: flex; flex-direction: column; align-items: center; gap: 2px; grid-column: 1 / -1; }

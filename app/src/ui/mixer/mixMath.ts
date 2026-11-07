@@ -1,6 +1,6 @@
 // Mixer maths (pure; unit-tested in mixMath.test.ts): the fader law, fader
 // gestures, the dB readout, the meter scale, peak hold and the clip test.
-import { mixParam } from '../../audio/mixerCatalog';
+import { MIXER_CATALOG, mixParam } from '../../audio/mixerCatalog';
 
 const FADER = mixParam('fader');
 
@@ -144,4 +144,18 @@ export function masterLight(lin: number, ceilingDb: number, grDb: number): Maste
 /** The worse of two lights (clip > limit > off): the light latches its worst state. */
 export function worseLight(a: MasterLight, b: MasterLight): MasterLight {
   return a === 'clip' || b === 'clip' ? 'clip' : a ?? b;
+}
+
+/**
+ * Note for the Delay return's Time readout: the engine clamps a synced delay
+ * to MIXER_CATALOG.delay.maxSeconds (2 s, the ring it allocates once), so a
+ * division longer than that at `bpm` (1 bar below 120 bpm, 1/2 below 60)
+ * plays at 2 s. Returns "(max 2 s)" then, else "".
+ */
+export function delayClampNote(division: number, bpm: number): string {
+  const { divisionBeats, maxSeconds } = MIXER_CATALOG.delay;
+  const beats = divisionBeats[division];
+  if (beats === undefined || !(bpm > 0)) return '';
+  // A small tolerance: exactly 2 s (1 bar at 120 bpm) is not clamped.
+  return (beats * 60) / bpm > maxSeconds + 1e-6 ? `(max ${maxSeconds} s)` : '';
 }

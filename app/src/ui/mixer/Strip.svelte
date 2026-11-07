@@ -23,7 +23,7 @@
   import Meter from './Meter.svelte';
   import Section from './Section.svelte';
   import type { MeterBus } from './meterBus';
-  import { SCALE_TICKS, faderPos, formatDb } from './mixMath';
+  import { SCALE_TICKS, delayClampNote, faderPos, formatDb } from './mixMath';
 
   let { p, engine, bus, target, kind, channel, name, color = null, subtitle = '', selected = false, onselect }: {
     p: Project;
@@ -174,7 +174,9 @@
   {#if fxKnobs.length}
     <Section title={target === 'reverb' ? 'Reverb' : 'Delay'} {name} testid="fx">
       {#each fxKnobs as d (d.id)}
-        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} onchange={(v) => set(d.name, v)} />
+        <!-- Synced delay times are clamped to 2 s by the engine: say so. -->
+        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} onchange={(v) => set(d.name, v)}
+          note={d.name === 'delay_time' ? delayClampNote(val(d.name), p.tempo) : ''} />
       {/each}
     </Section>
   {/if}

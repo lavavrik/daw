@@ -107,7 +107,9 @@ Design notes: `docs/architecture/mixer.md`.
    (Off .. 0 dB). They tap *after* the fader; the **post/pre** button beside a
    send makes it tap *before* the fader, so the send level stays when you pull
    the fader down. Muting or soloing out a track also stops its sends (the
-   effect tails still ring out).
+   effect tails still ring out). The Delay return's **Time** is a note length
+   synced to the tempo, at most 2 s: a longer one (1 bar below 120 bpm, 1/2
+   below 60 bpm) plays at 2 s, and the strip shows "(max 2 s)".
 3. **Sidechain pumping, step by step.**
    1. Put a kick on a drum track's row and make a four-on-the-floor pattern.
    2. Add a synth track (a pad or chord patch) playing a held chord.

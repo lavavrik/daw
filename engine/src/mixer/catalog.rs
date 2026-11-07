@@ -344,7 +344,12 @@ pub fn mixer_catalog_json() -> String {
         o.push_str(if i == 0 { "\n    " } else { ",\n    " });
         o.push_str(&param_json(p));
     }
-    o.push_str("\n  ]\n}\n");
+    o.push_str("\n  ],\n  \"delay\": {\"divisionBeats\": [");
+    let beats: Vec<String> = DELAY_DIVISION_BEATS.iter().map(|&b| num(b)).collect();
+    o.push_str(&beats.join(","));
+    // The engine clamps a synced time to this (dsp::delay::MAX_SECONDS); the
+    // UI shows "(max 2 s)" when a division is longer at the current tempo.
+    o.push_str(&format!("], \"maxSeconds\": {}}}\n}}\n", num(crate::dsp::delay::MAX_SECONDS)));
     o
 }
 

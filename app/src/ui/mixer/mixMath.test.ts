@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mixParam } from '../../audio/mixerCatalog';
 import {
-  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, holdStep, isClip, masterLight, worseLight,
+  FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, delayClampNote, holdStep, isClip, masterLight, worseLight,
   linToDb, meterPos,
 } from './mixMath';
 
@@ -118,5 +118,16 @@ describe('peak hold', () => {
     expect(h.db).toBe(-5);
     h = holdStep(h, -30, 600 + PEAK_HOLD_MS + 1);
     expect(h).toEqual({ db: -30, t: 600 + PEAK_HOLD_MS + 1 });
+  });
+});
+
+describe('delay clamp note', () => {
+  it('shows "(max 2 s)" when the synced division is longer than 2 s at the tempo', () => {
+    const div = (label: string) => mixParam('delay_time').choices.indexOf(label);
+    expect(delayClampNote(div('1 bar'), 120)).toBe(''); // exactly 2 s
+    expect(delayClampNote(div('1 bar'), 119)).toBe('(max 2 s)');
+    expect(delayClampNote(div('1/2'), 60)).toBe('');
+    expect(delayClampNote(div('1/2'), 59)).toBe('(max 2 s)');
+    expect(delayClampNote(div('3/16'), 40)).toBe('');
   });
 });

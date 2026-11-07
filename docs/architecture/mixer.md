@@ -38,6 +38,13 @@ EQ and compressor are bypassed by default and crossfade over 5 ms; once fully
 off their state is reset. Fader, pan and send changes ramp over 5 ms, mute/solo
 over 2 ms. Returns are 100% wet; track solo never mutes a return.
 
+The Delay's time is a tempo-synced division (`delay_time` choices; their
+lengths in beats are exported as `delay.divisionBeats` in the golden JSON).
+The ring is allocated once for **2 s** (`dsp::delay::MAX_SECONDS`, exported as
+`delay.maxSeconds`), so a division longer than 2 s at the current tempo (1 bar
+below 120 bpm, 1/2 below 60 bpm) is clamped to 2 s; the Delay strip then shows
+"(max 2 s)" under Time (`mixMath.delayClampNote`).
+
 ## Channel numbering
 
 `MIX_CHANNELS = 35`: 0..31 are the track slots (the engine's slot, shared by

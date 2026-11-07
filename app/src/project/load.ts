@@ -9,7 +9,8 @@
 //   3. STOP, blank the UI state, RESET_ALL, and wait for the worklet's ack:
 //      sample uploads go by postMessage and must not overtake the reset.
 //   4. upload the samples with compact ids 0..n-1 (old -> new id map),
-//      recording each one's length and channels (p.sampleMeta) and the
+//      recording each one's length, channels and waveform peaks (p.sampleMeta;
+//      the peaks are computed in step 2, audio/peaks.ts) and the
 //      floats it takes (p.arenaFloats: the sample budget starts over, so
 //      samples replaced in the old session no longer count).
 //   5. replay, synchronously: projectCommands (project/commands.ts, the one
@@ -41,7 +42,8 @@ import { mixParam } from '../audio/mixerCatalog';
 import type { CommandSink } from '../state/actions';
 import { markBusy, markIdle } from '../state/idle';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
-import type { ChannelState, Project, SampleFile, Track } from '../state/project.svelte';
+import type { ChannelState, Peaks, Project, SampleFile, Track } from '../state/project.svelte';
+import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
 import { sampleFloats } from '../state/sampleBudget';
 import { projectCommands, trackState } from './commands';
@@ -96,7 +98,7 @@ export async function loadProject(
 
   markBusy(p);
   try {
-    const decoded: { oldId: number; file: SampleFile; channels: Float32Array[] }[] = [];
+    const decoded: { oldId: number; file: SampleFile; channels: Float32Array[]; peaks: Peaks }[] = [];
     for (const s of proj.samples) {
       const bytes = sampleBytes.get(s.file);
       if (!bytes) {
@@ -105,8 +107,11 @@ export async function loadProject(
       }
       try {
         // decodeAudioData detaches its input: decode a copy, keep the original.
-        const channels = await decodeBytes(bytes.slice(0), s.name, ctx);
-        decoded.push({ oldId: s.id, file: await sampleFile(s.name, s.type, bytes), channels }); // hash: async
+        const decodedChannels = await decodeBytes(bytes.slice(0), s.name, ctx);
+        const file = await sampleFile(s.name, s.type, bytes); // hash: async
+        // Waveform peaks before the upload transfers the buffers (audio/peaks.ts; cached by hash).
+        const { peaks, channels } = await peaksFor(decodedChannels, file.hash);
+        decoded.push({ oldId: s.id, file, channels, peaks });
       } catch {
         warnings.push(`Sample "${s.name}" could not be decoded (${s.file})`);
       }
@@ -126,7 +131,7 @@ export async function loadProject(
       const ids = new Map<number, number>();
       for (const d of decoded) {
         const id = ids.size;
-        const meta = { seconds: d.channels[0].length / engine.sampleRate, channels: d.channels.length, peaks: null };
+        const meta = { seconds: d.channels[0].length / engine.sampleRate, channels: d.channels.length, peaks: d.peaks };
         const floats = sampleFloats(d.channels); // before the upload transfers the buffers away
         const c = await engine.loadSample(id, d.channels);
         // DEFERRED cannot really happen (stopped); the worklet would finish it on its own.

@@ -89,7 +89,8 @@ describe('loadProject', () => {
     }
     // The sidechain from an Audio track (whole track) goes last, with the other keys.
     expect(ops.filter((x) => x.op === Op.MIX_SET_KEY)).toHaveLength(3);
-    expect(p.sampleMeta.get(ids[1])).toMatchObject({ channels: 1, peaks: null }); // what the (fake) decode gave
+    expect(p.sampleMeta.get(ids[1])).toMatchObject({ channels: 1, peaks: { framesPerPeak: 256 } }); // what the (fake) decode gave; peaks before the upload
+    expect(p.sampleMeta.get(ids[1])!.peaks!.levels[0]).toHaveLength(1);
 
     // A clip whose sample is missing from the folder is kept as "missing sample" (-1), with a warning.
     const files = filesOf(json, src);

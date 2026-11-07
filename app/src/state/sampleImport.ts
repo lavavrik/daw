@@ -21,7 +21,9 @@
 // with the addendum §3.3 text (no id taken, nothing uploaded, so the caller
 // places no clip). An accepted file's floats are counted in p.arenaFloats
 // when its id is taken (given back if the engine refuses it), and its length
-// and channels go into p.sampleMeta.
+// and channels go into p.sampleMeta, with the waveform peaks (audio/peaks.ts:
+// computed after the decode and before the upload, in a Worker for a big
+// file, cached by content hash).
 //
 // `busy` marks a failure that only says the project was busy (an audio
 // restart, or Project.loading with the session still the same one: an
@@ -32,7 +34,8 @@ import { Err } from '../audio/protocol';
 import { baseName, decodeBytes, isProbablyAudio, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
 import { MAX_SAMPLES } from './project.svelte';
-import type { Project } from './project.svelte';
+import type { Peaks, Project } from './project.svelte';
+import { peaksFor } from '../audio/peaks';
 import { sampleFile } from './sampleFiles';
 import { fitsBudget, overBudgetText, sampleFloats } from './sampleBudget';
 
@@ -65,6 +68,14 @@ export async function importSample(
     return restarted() ? again : unreadable;
   }
   const kept = await sampleFile(file.name, file.type, bytes); // hashed async, before the id is taken
+  // Waveform peaks (audio/peaks.ts) before the upload transfers the channels
+  // away; a big file goes to a Worker and its buffers come back in `channels`.
+  let peaks: Peaks;
+  try {
+    ({ peaks, channels } = await peaksFor(channels, kept.hash));
+  } catch {
+    return restarted() ? again : unreadable;
+  }
   if (restarted()) return again;
   // A project load started meanwhile: this drop belonged to the old session.
   if (!stillThere()) return { ok: false, error: null };
@@ -74,7 +85,7 @@ export async function importSample(
   if (p.nextSampleId >= MAX_SAMPLES) return { ok: false, error: `Sample limit reached (${MAX_SAMPLES} loads per session)` };
   const gen = p.generation;
   const id = p.nextSampleId++;
-  const meta = { seconds: channels[0].length / engine.sampleRate, channels: channels.length, peaks: null };
+  const meta = { seconds: channels[0].length / engine.sampleRate, channels: channels.length, peaks };
   p.arenaFloats += floats; // reserved now: a second drop decoded meanwhile sees it
   const code = await engine.loadSample(id, channels); // transfers the channel buffers away
   if (restarted()) return again; // uploaded to the old engine (or refused by it, closed); the restart recounted

@@ -118,7 +118,9 @@ describe('importSample (Finder drop and library drag share it)', () => {
     const v = p.peaksVersion;
     const r = await importSample(p, engine(Err.OK).e, new File([new Uint8Array(4800)], 'a.wav', { type: 'audio/wav' }), () => true);
     expect(r.ok).toBe(true);
-    expect(p.sampleMeta.get(0)).toEqual({ seconds: 0.1, channels: 1, peaks: null });
+    expect(p.sampleMeta.get(0)).toMatchObject({ seconds: 0.1, channels: 1 });
+    // Waveform peaks, computed before the upload took the channels: 4800 frames = 19 pairs.
+    expect(p.sampleMeta.get(0)!.peaks!.levels[0][0]).toHaveLength(2 * 19);
     expect(p.peaksVersion).toBeGreaterThan(v);
     expect(p.arenaFloats).toBe(4800);
   });

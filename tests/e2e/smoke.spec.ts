@@ -746,7 +746,9 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   await page.keyboard.press('Space');
   const rec = page.getByTestId('rec-button');
   await expect(rec).toHaveText('Count-in…');
-  expect(await slot(page, 2)()).toBeLessThan(0); // engine started at -3840 ticks
+  // Engine started at -3840 ticks (the label shows as soon as Play is sent, up
+  // to a block before the engine applies PLAY, so poll).
+  await expect.poll(slot(page, 2), { timeout: 1_000 }).toBeLessThan(0);
   // One bar at 124 bpm is ~1.9 s.
   await expect(rec).toHaveAttribute('data-state', 'recording', { timeout: 5_000 });
   await page.keyboard.press('Space');

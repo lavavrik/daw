@@ -14,6 +14,7 @@
   import StepGrid from './StepGrid.svelte';
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
+  import MixerView from './mixer/MixerView.svelte';
   import type { NoteInput } from '../input/noteInput';
   import { banners } from '../state/banners.svelte';
 
@@ -25,13 +26,18 @@
     noteInput?: NoteInput | null;
   } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
-  const later = 'Coming in a later milestone';
   // Which tab is shown follows the selected track's kind: drum -> Step grid;
   // synth -> Piano roll or Instrument, whichever was picked last this session.
+  // The Mixer tab is enabled for any selection (or none) and shows the whole
+  // mixer; it stays open while tracks are selected (from its strip names or
+  // the track list) until another tab is clicked.
   let synthTab = $state(lastSynthTab);
-  const active = $derived(track?.kind === 'synth' ? synthTab : track?.kind === 'drum' ? 'step' : null);
+  let mixerOpen = $state(false);
+  const editorTab = $derived(track?.kind === 'synth' ? synthTab : track?.kind === 'drum' ? 'step' : null);
+  const active = $derived(mixerOpen ? 'mixer' : editorTab);
   function pickSynthTab(t: 'pianoroll' | 'instrument') {
     synthTab = lastSynthTab = t;
+    mixerOpen = false;
   }
 
   // Song-mode hint: shown while the edited pattern is not playing at the
@@ -77,10 +83,10 @@
       {/if}
     </span>
     <span class="tabs">
-      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'}>Step grid</button>
+      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? '' : 'Select a drum track'} onclick={() => (mixerOpen = false)}>Step grid</button>
       <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
       <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? '' : 'Select a synth track'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
-      <button class="tab" disabled title={later}>Mixer</button>
+      <button class="tab" class:active={active === 'mixer'} title="All tracks, the Reverb and Delay returns and the Master" data-testid="mixer-tab" onclick={() => (mixerOpen = true)}>Mixer</button>
     </span>
   </div>
   <div class="body">
@@ -94,7 +100,9 @@
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
       </div>
     {/if}
-    {#if track && track.kind === 'drum'}
+    {#if mixerOpen}
+      <MixerView {p} {engine} />
+    {:else if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
       {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}

@@ -20,7 +20,7 @@ export const PROJECT_FILE = 'project.json';
 const TMP_FILE = 'project.json.tmp';
 const SAMPLES_DIR = 'samples';
 
-type Writable = { write(data: ArrayBuffer | string): Promise<void>; close(): Promise<void>; abort?(): Promise<void> };
+type Writable = { write(data: ArrayBuffer | ArrayBufferView | string): Promise<void>; close(): Promise<void>; abort?(): Promise<void> };
 type MovableFile = FileSystemFileHandle & { move?: (dir: FileSystemDirectoryHandle, name: string) => Promise<void> };
 type Entries = { entries(): AsyncIterable<[string, FileSystemHandle]> };
 
@@ -40,16 +40,52 @@ export async function pickProjectFolder(): Promise<FileSystemDirectoryHandle | n
   }
 }
 
-async function writeFile(dir: FileSystemDirectoryHandle, name: string, data: ArrayBuffer | string) {
+/**
+ * Large files are written in pieces of this size, each its own awaited
+ * write(): handing the browser one huge buffer copies it on the UI thread in
+ * one go (plan 6 review focus 3: autosave never blocks the UI > 50 ms).
+ */
+export const WRITE_CHUNK = 1 << 20;
+
+/**
+ * Write `data` as the whole content of `dir`/`name`. Chrome's writable
+ * streams write to a swap file and replace the target atomically on close():
+ * an interrupted write leaves the previous content (or, for a new name, an
+ * empty file).
+ */
+export async function writeFile(dir: FileSystemDirectoryHandle, name: string, data: ArrayBuffer | string, chunkBytes = WRITE_CHUNK) {
   const fh = await dir.getFileHandle(name, { create: true });
   const w = (await fh.createWritable()) as unknown as Writable;
   try {
-    await w.write(data);
+    if (typeof data === 'string' || data.byteLength <= chunkBytes) await w.write(data);
+    else for (let o = 0; o < data.byteLength; o += chunkBytes) {
+      await w.write(new Uint8Array(data, o, Math.min(chunkBytes, data.byteLength - o)));
+    }
     await w.close();
   } catch (e) {
     await w.abort?.().catch(() => {});
     throw e;
   }
+}
+
+/**
+ * Move `dir`/`tmpName` over `dir2`/`name` (a rename: atomic). Where the
+ * handle cannot move (or will not replace an existing file), `name` is
+ * written whole from the tmp (atomic on close, see writeFile) and the tmp
+ * removed.
+ */
+export async function replaceWith(
+  tmpDir: FileSystemDirectoryHandle, tmpName: string, dir: FileSystemDirectoryHandle, name: string,
+) {
+  const tmp = (await tmpDir.getFileHandle(tmpName)) as MovableFile;
+  if (typeof tmp.move === 'function') {
+    try {
+      await tmp.move(dir, name);
+      return;
+    } catch { /* not supported here (or the target exists): copy instead */ }
+  }
+  await writeFile(dir, name, await (await tmp.getFile()).text());
+  await tmpDir.removeEntry(tmpName);
 }
 
 async function readBytes(fh: FileSystemFileHandle): Promise<ArrayBuffer> {
@@ -115,18 +151,7 @@ export async function writeProject(dir: FileSystemDirectoryHandle, json: unknown
   }
 
   await writeFile(dir, TMP_FILE, JSON.stringify(json, null, 1));
-  const tmp = (await dir.getFileHandle(TMP_FILE)) as MovableFile;
-  let moved = false;
-  if (typeof tmp.move === 'function') {
-    try {
-      await tmp.move(dir, PROJECT_FILE);
-      moved = true;
-    } catch { /* not supported here (or the target exists): copy instead */ }
-  }
-  if (!moved) {
-    await writeFile(dir, PROJECT_FILE, await (await tmp.getFile()).text());
-    await dir.removeEntry(TMP_FILE);
-  }
+  await replaceWith(dir, TMP_FILE, dir, PROJECT_FILE);
 
   for (const name of previous) {
     if (!keep.has(name)) await samples.removeEntry(name).catch(() => {}); // already gone: fine
@@ -152,19 +177,28 @@ export async function readProject(dir: FileSystemDirectoryHandle): Promise<{ jso
   } catch {
     throw new Error(`project.json in "${dir.name}" is not valid JSON`);
   }
+  return { json, files: await readListedSamples(dir, json) };
+}
+
+/**
+ * The sample files `json` (a project.json, not yet validated) lists, read
+ * from `dir`/samples/: "samples/<name>" -> bytes. A missing one is simply
+ * absent (loadProject warns); nothing else is read.
+ */
+export async function readListedSamples(dir: FileSystemDirectoryHandle, json: unknown): Promise<Map<string, ArrayBuffer>> {
   const files = new Map<string, ArrayBuffer>();
   const v = validate(json); // only for the list of sample paths (safe names)
-  if ('error' in v || v.project.samples.length === 0) return { json, files };
+  if ('error' in v || v.project.samples.length === 0) return files;
   let samples: FileSystemDirectoryHandle;
   try {
     samples = await dir.getDirectoryHandle(SAMPLES_DIR);
   } catch {
-    return { json, files };
+    return files;
   }
   for (const s of v.project.samples) {
     try {
       files.set(s.file, await readBytes(await samples.getFileHandle(s.file.slice(SAMPLES_DIR.length + 1))));
     } catch { /* missing: loadProject warns */ }
   }
-  return { json, files };
+  return files;
 }

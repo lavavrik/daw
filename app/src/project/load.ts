@@ -143,8 +143,9 @@ export async function loadProject(
  *
  * Every sample in p.sampleFiles is decoded from its in-memory original
  * bytes with `ctx` (the new context: it resamples to the new rate) and
- * uploaded at the id it already has -- used or not, since an undo may bring
- * an unused one back, and undo snapshots name samples by id. Then the
+ * uploaded at the id it already has -- the ones the project uses first (if
+ * the arena runs out, what is heard now wins), then the unused ones, since
+ * an undo may bring one back and undo snapshots name samples by id. Then the
  * commands of projectCommands(serialize(p)) are sent, synchronously, after
  * the last upload (a row's sample must be in the arena before
  * SET_ROW_SAMPLE). No RESET_ALL: a new engine is blank (and a reset would
@@ -160,7 +161,8 @@ export async function replayInto(
 ): Promise<{ warnings: string[]; codes: Map<number, number> }> {
   const warnings: string[] = [];
   const codes = new Map<number, number>();
-  const files = [...p.sampleFiles].sort((a, b) => a[0] - b[0]);
+  const used = new Set(serialize(p).samples.map((s) => s.id));
+  const files = [...p.sampleFiles].sort((a, b) => Number(used.has(b[0])) - Number(used.has(a[0])) || a[0] - b[0]);
   const decoded: { id: number; name: string; channels: Float32Array[] }[] = [];
   for (const [id, f] of files) {
     try {

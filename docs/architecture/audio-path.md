@@ -176,35 +176,47 @@ A context's latency hint is fixed when it is created, so **Apply** builds a new
 memory — no reload, no disk read. `restartAudio` (`app/src/audio/restart.ts`)
 sequences it; App (`applyAudioSettings`) owns the wiring:
 
+The old engine keeps running until the new one is fully up, so any failure
+leaves the user exactly where they were:
+
 1. Runs under the project session's one-operation guard
    (`session.exclusive`; never during an Open / Save / restore) and not during a
-   WAV export. `p.loading` is set for the whole restart: the "Restarting
-   audio…" overlay blocks edits; shortcuts, undo and sample imports already
-   respect it.
+   WAV export. The autosave is flushed first. Then `p.loading` and
+   `p.restarting` are set for the whole restart: the "Restarting audio…"
+   overlay blocks edits; shortcuts, undo and sample imports respect it (an
+   import overlapping a restart ends with "Audio restarted — drop … again").
 2. Stop the transport through App's Stop path (the recorder closes held notes
    at the heard tick) and release held keys.
-3. `unwireEngine`: cancel the per-engine rAF loop (`watchTransport`). Then
-   `AudioEngine.close()`: pending uploads and reset waits settle with
-   `ENGINE_STOPPED`, later `send()`s go nowhere (and mark no edit), the node is
-   disconnected and the context closed.
-4. `AudioEngine.start({ latencyHint })`. If the device refuses the hint, start
-   again with the previous one and say so (if that fails too: "Audio could not
-   restart — save, then reload"; the autosave is flushed).
-5. `replayInto` (`app/src/project/load.ts`): every `p.sampleFiles` entry
-   (the in-memory original bytes) is decoded with the **new** context and
-   uploaded at the id it already has — used or not, since undo snapshots name
-   samples by id — then the commands of `projectCommands(serialize(p))` (the
-   one replay-order builder) are sent. No `RESET_ALL`: the engine is new.
-   `p` itself is not touched, so track ids, selection, name, folder handle,
-   the "● unsaved" mark, `version` and the undo history all carry over.
-6. `wireEngine(new engine)`, in the same task as the last replayed command:
-   `engine` (a prop: TopBar, Browser, song area, editors and the mixer's meter
-   loop read it each time), a new `AudioClock` (telemetry history is per
-   engine), `onCommand` / `onCommandStall` / `onRackAddRefused`, deferred
-   sample loads moved over and settled from the upload results
-   (`rebindSampleLoads`), and the transport watch. TopBar re-attaches
-   `onError` and the Browser drops its preview player (it played on the old
-   context).
+3. `AudioEngine.start({ latencyHint })` **while the old engine still runs**
+   (two contexts for a moment), within 8 s (`RESTART_TIMEOUT_MS`: a vanished
+   device can leave `resume()` pending forever). Its command-stall watch is
+   attached at once (`prepare`), before any replayed command.
+4. `replayInto` (`app/src/project/load.ts`), within the same timeout: every
+   `p.sampleFiles` entry (the in-memory original bytes) is decoded with the
+   **new** context and uploaded at the id it already has — the samples the
+   project uses first, then the unused ones (undo snapshots name samples by
+   id) — then the commands of `projectCommands(serialize(p))` (the one
+   replay-order builder) are sent. No `RESET_ALL`: the engine is new. `p`
+   itself is not touched, so track ids, selection, name, folder handle, the
+   "● unsaved" mark, `version` and the undo history all carry over.
+5. Success: `unwireEngine` (the old engine's transport watch and stall watch),
+   then `wireEngine(new engine)` in the same task as the last replayed
+   command: `engine` (a prop: TopBar, Browser, song area, editors and the
+   mixer's meter loop read it each time), a new `AudioClock` (telemetry
+   history is per engine), `onCommand` / `onRackAddRefused`, deferred sample
+   loads moved over and settled from the upload results (`rebindSampleLoads`),
+   and the transport watch. TopBar re-attaches `onError` and the Browser drops
+   its preview player. Then the old engine closes (`AudioEngine.close()`:
+   pending uploads and reset waits settle with `ENGINE_STOPPED`, later
+   `send()`s go nowhere and mark no edit) and `p.audioRestarts` is bumped.
+6. Failure (the hint refused, a start or replay timeout, a replay error): the
+   new engine is closed (a start that answers after the timeout is closed when
+   it does), the old one was never unwired, and an inline banner says
+   "Couldn't apply Playback: <reason>; kept previous settings". The hint is
+   not saved.
+
+A failed or closed engine refuses `PLAY` (`send` returns false), and `play`
+then leaves the transport stopped.
 
 What needs no re-wiring: everything created once per session — the note input,
 Web MIDI, the QWERTY shortcuts, the recorder (still armed if it was), the

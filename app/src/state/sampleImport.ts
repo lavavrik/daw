@@ -10,6 +10,11 @@
 // decodeAudioData detaches its input). The caller attaches the id: at once,
 // or for `deferred` (dropped while playing, Err.DEFERRED) through
 // sampleLoads.ts once playback stops.
+//
+// An audio restart (audio/restart.ts) that overlaps the decode or the
+// upload (the old context may close under the decode; the old engine may
+// close before it answers) ends the import with "Audio restarted — drop it
+// again": the bytes never reached the new engine.
 import { Err } from '../audio/protocol';
 import { baseName, decodeBytes, isProbablyAudio, loadErrorText } from '../audio/samples';
 import type { SampleDecoder } from '../audio/samples';
@@ -34,21 +39,26 @@ export async function importSample(
 ): Promise<ImportResult> {
   const unreadable = { ok: false, error: `Couldn't load "${file.name}" — not a readable audio file` } as const;
   if (!isProbablyAudio(file)) return unreadable;
+  const restarts = p.audioRestarts;
+  const again = { ok: false, error: `Audio restarted — drop "${file.name}" again` } as const;
+  const restarted = () => p.restarting || p.audioRestarts !== restarts;
   let bytes: ArrayBuffer;
   let channels: Float32Array[];
   try {
     bytes = await file.arrayBuffer();
     channels = await decodeBytes(bytes.slice(0), file.name, engine.context);
   } catch {
-    return unreadable;
+    return restarted() ? again : unreadable;
   }
   const kept = await sampleFile(file.name, file.type, bytes); // hashed async, before the id is taken
+  if (restarted()) return again;
   // A project load started meanwhile: this drop belonged to the old session.
   if (p.loading || !stillThere()) return { ok: false, error: null };
   if (p.nextSampleId >= MAX_SAMPLES) return { ok: false, error: `Sample limit reached (${MAX_SAMPLES} loads per session)` };
   const gen = p.generation;
   const id = p.nextSampleId++;
   const code = await engine.loadSample(id, channels);
+  if (restarted()) return again; // uploaded to the old engine (or refused by it, closed)
   // A New / Open / Restore started (or finished) during the upload: the id
   // belonged to the old session (RESET_ALL dropped the sample); the new
   // session's id `id` is someone else's. Drop it silently.

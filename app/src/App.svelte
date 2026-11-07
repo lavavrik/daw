@@ -332,15 +332,30 @@
    * one first). `codes`: on a restart, the re-uploaded samples' results
    * (deferred sample loads settle from them).
    */
-  let stallMsg: string | null = null;
+  /**
+   * A ring backlog that does not drain means UI and engine disagree until it
+   * does: say so. Per engine; returns the detach (which clears its banner).
+   */
+  function watchStalls(e: AudioEngine): () => void {
+    let msg: string | null = null;
+    e.onCommandStall = (m) => {
+      if (m !== null) banners.error = msg = m;
+      else if (banners.error === msg) banners.error = null;
+    };
+    return () => {
+      e.onCommandStall = undefined;
+      if (msg !== null && banners.error === msg) banners.error = null;
+    };
+  }
+  /** The running engine's stall watch; and one set up on a restart's new engine before its replay. */
+  let unwatchStalls: (() => void) | null = null;
+  let preparedStalls: (() => void) | null = null;
+
   function wireEngine(e: AudioEngine, codes?: Map<number, number>) {
     engine = e;
     window.__daw.engine = e;
-    // A ring backlog that does not drain means UI and engine disagree until it does.
-    e.onCommandStall = (m) => {
-      if (m !== null) banners.error = stallMsg = m;
-      else if (banners.error === stallMsg) banners.error = null;
-    };
+    unwatchStalls = preparedStalls ?? watchStalls(e);
+    preparedStalls = null;
     // Telemetry history (heard time) is per engine: a new clock, which the
     // components get as a prop and the recorder through liveClock.
     clock = createAudioClock(e, () => project.tempo);
@@ -363,8 +378,8 @@
   function unwireEngine() {
     stopWatch?.();
     stopWatch = null;
-    if (stallMsg !== null && banners.error === stallMsg) banners.error = null;
-    stallMsg = null;
+    unwatchStalls?.();
+    unwatchStalls = null;
   }
 
   function onstarted(e: AudioEngine) {
@@ -453,10 +468,12 @@
 
   /**
    * Settings ▸ Apply: a new AudioContext + engine with `hint`, the project
-   * restored onto it from memory (audio/restart.ts). Runs as one project
-   * operation (session.exclusive: never during an Open / Save / restore), and
-   * never during an export (it decodes with the live context). Resolves with
-   * why it did not run, or null.
+   * restored onto it from memory (audio/restart.ts). The old engine keeps
+   * running until the new one is up; any failure (refused, 8 s timeout)
+   * keeps it and says "Couldn't apply …; kept previous settings". Runs as
+   * one project operation (session.exclusive: never during an Open / Save /
+   * restore), and never during an export (it decodes with the live context).
+   * Resolves with a message for the panel, or null.
    */
   async function applyAudioSettings(hint: LatencyHint): Promise<string | null> {
     const old = engine;
@@ -470,6 +487,7 @@
           old,
           oldHint: latencyHint,
           start: (h) => AudioEngine.start({ latencyHint: h }),
+          flush: () => autosave.flush(),
           // Applying stops the transport (plan 7): through the Stop path, so
           // the recorder closes held notes at the heard tick.
           stop: () => {
@@ -480,24 +498,33 @@
             releaseHeldKeys();
             refreshRec();
           },
+          prepare: (e) => (preparedStalls = watchStalls(e)),
           unwire: unwireEngine,
           wire: (e, codes) => wireEngine(e, codes),
         }),
       );
       if (res === undefined || res === null) return 'Busy with a project load or save — Apply again when it is done';
+      if (res.error) {
+        // The new engine was closed; its stall watch goes with it.
+        preparedStalls?.();
+        preparedStalls = null;
+        banners.error = res.error;
+        return res.error;
+      }
       latencyHint = res.hint;
       saveLatencyHint(res.hint);
       r.onInputChanged(liveClock.heardTicks());
       refreshRec();
-      if (res.error) banners.error = res.error;
       banners.load = res.warnings.length ? warningsText('Audio restarted — skipped or changed', res.warnings) : null;
-      if (!res.error && !res.warnings.length) flashHint(`Audio restarted (${hintLabel(res.hint)})`);
+      if (!res.warnings.length) flashHint(`Audio restarted (${hintLabel(res.hint)})`);
       return null;
     } catch (e) {
-      // No engine could start at all: keep what the user has.
-      void autosave.flush();
-      banners.error = `Audio could not restart — ${e instanceof Error ? e.message : String(e)}. Save, then reload the page.`;
-      return null;
+      // Not an audio failure (restartAudio reports those): a bug. Say so; the
+      // old engine is still the wired one unless wiring itself threw.
+      const msg = `Couldn't apply ${hintLabel(hint)}: ${e instanceof Error ? e.message : String(e)}`;
+      console.error(msg, e);
+      banners.error = msg;
+      return msg;
     } finally {
       restarting = false;
     }

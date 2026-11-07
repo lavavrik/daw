@@ -77,4 +77,36 @@ describe('importSample (Finder drop and library drag share it)', () => {
       expect(p.nextSampleId).toBe(finished ? 1 : 0);
     }
   });
+
+  it('an audio restart during the decode or the upload: "drop it again", never a misleading error or a silent drop', async () => {
+    // Restart running while the decode finishes.
+    const p = new Project();
+    const { e } = engine(Err.OK);
+    const dec = e.context.decodeAudioData;
+    e.context.decodeAudioData = async (b: ArrayBuffer) => {
+      p.restarting = true;
+      p.loading = true;
+      return dec(b);
+    };
+    const again = { ok: false, error: 'Audio restarted — drop "kick.wav" again' };
+    expect(await importSample(p, e, wav(), () => true)).toEqual(again);
+    // The old context closed under the decode (it rejects): same message, not "not readable".
+    const p2 = new Project();
+    const e2 = engine(Err.OK).e;
+    e2.context.decodeAudioData = async () => {
+      p2.audioRestarts++;
+      throw new Error('context closed');
+    };
+    expect(await importSample(p2, e2, wav(), () => true)).toEqual(again);
+    // A restart finished during the upload to the old engine (ENGINE_STOPPED).
+    const p3 = new Project();
+    const e3 = engine(HostErr.ENGINE_STOPPED).e;
+    const load = e3.loadSample;
+    e3.loadSample = async (id: number) => {
+      p3.audioRestarts++;
+      return load(id);
+    };
+    expect(await importSample(p3, e3, wav(), () => true)).toEqual(again);
+    expect(p3.sampleFiles.size).toBe(0);
+  });
 });

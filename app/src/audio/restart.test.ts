@@ -10,7 +10,7 @@ import { buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine } from '../p
 import { setRowSample, setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import {
-  LATENCY_HINT_KEY, hintLabel, loadLatencyHint, parseLatencyHint, restartAudio, saveLatencyHint,
+  LATENCY_HINT_KEY, customHint, hintLabel, loadLatencyHint, parseLatencyHint, restartAudio, saveLatencyHint,
 } from './restart';
 import type { LatencyHint, RestartDeps } from './restart';
 
@@ -62,6 +62,8 @@ function deps(l: Awaited<ReturnType<typeof live>>, o: Partial<RestartDeps<Fake>>
   const d: RestartDeps<Fake> = {
     old: l.old,
     oldHint: 'interactive',
+    timeoutMs: 200,
+    flush: async () => void l.steps.push('flush'),
     async start(hint) {
       l.steps.push(`start ${String(hint)}`);
       if (o.failHints?.includes(hint)) throw new Error('device refused');
@@ -71,6 +73,8 @@ function deps(l: Awaited<ReturnType<typeof live>>, o: Partial<RestartDeps<Fake>>
       return e;
     },
     stop: () => l.steps.push('stop'),
+    // Before any replayed command reaches the new engine (stall reports).
+    prepare: (e) => l.steps.push(`prepare ${String(e.hint)} (${e.log.length} sent)`),
     unwire: () => l.steps.push('unwire'),
     wire: (e) => {
       l.steps.push(`wire ${String(e.hint)}`);
@@ -105,22 +109,39 @@ describe('latency hint setting', () => {
     expect(hintLabel('playback')).toBe('Playback');
     expect(hintLabel(0.025)).toBe('Custom 25 ms');
   });
+
+  it('customHint: an empty or non-positive ms field applies nothing (no silent Interactive)', () => {
+    expect(customHint(20)).toBe(0.02);
+    expect(customHint(5000)).toBe(1); // clamped; the panel shows what applies
+    expect(customHint(0)).toBeNull();
+    expect(customHint(-3)).toBeNull();
+    expect(customHint(Number.NaN)).toBeNull(); // an emptied <input type=number>
+    expect(customHint(null)).toBeNull();
+  });
 });
 
 describe('restartAudio', () => {
-  it('restart order: stop, unwire, close the old engine, start with the hint, replay, wire', async () => {
+  it('restart order: flush, stop, start the new engine (old still running), replay, then swap and close the old one', async () => {
     const l = await live();
     const { d, started } = deps(l);
+    let during: [boolean, number] | null = null;
+    d.stop = () => {
+      l.steps.push('stop');
+      during = [l.p.restarting, l.p.audioRestarts];
+    };
     const r = await restartAudio(l.p, 'playback', d);
     expect(r).toEqual({ hint: 'playback', warnings: [], error: null });
-    expect(l.steps).toEqual(['stop', 'unwire', 'close old', 'start playback', 'wire playback']);
+    expect(l.steps).toEqual(['flush', 'stop', 'start playback', 'prepare playback (0 sent)', 'unwire', 'wire playback', 'close old']);
     expect(l.old.closed).toBe(true);
-    // Replayed on the fresh engine: samples first (each at its own id, used
-    // or not -- undo may bring an unused one back), then the commands. No
-    // RESET_ALL: a new engine is blank.
+    expect(during).toEqual([true, 0]);
+    expect(l.p.restarting).toBe(false);
+    expect(l.p.audioRestarts).toBe(1); // in-flight imports on the old engine see it
+    // Replayed on the fresh engine: samples first, each at its own id, the
+    // ones the project uses before the unused ones (undo may bring those
+    // back), then the commands. No RESET_ALL: a new engine is blank.
     const e = started[0];
     const firstOp = e.log.findIndex((x) => 'op' in x);
-    expect(e.log.slice(0, firstOp)).toEqual([{ sample: 0 }, { sample: 1 }, { sample: 2 }, { sample: 3 }, { sample: 7 }]);
+    expect(e.log.slice(0, firstOp)).toEqual([{ sample: 0 }, { sample: 1 }, { sample: 2 }, { sample: 7 }, { sample: 3 }]);
     expect(e.log.some((x) => 'op' in x && x.op === Op.RESET_ALL)).toBe(false);
     expect(checkLog(e.log).errors).toEqual([]);
     expect(l.p.loading).toBe(false);
@@ -160,15 +181,79 @@ describe('restartAudio', () => {
     expect(checkLog(e.log).errors).toEqual([]);
   });
 
-  it('a hint the device refuses falls back to the previous one (and says so)', async () => {
+  it('a hint the device refuses keeps the running engine (and says so)', async () => {
     const l = await live();
     const { d, started } = deps(l, { failHints: [0.005] });
     const r = await restartAudio(l.p, 0.005, d);
     expect(r?.hint).toBe('interactive');
-    expect(r?.error).toMatch(/Custom 5 ms.*device refused/);
-    expect(l.steps).toEqual(['stop', 'unwire', 'close old', 'start 0.005', 'start interactive', 'wire interactive']);
-    expect(started).toHaveLength(1);
+    expect(r?.error).toBe("Couldn't apply Custom 5 ms: device refused; kept previous settings");
+    expect(l.steps).toEqual(['flush', 'stop', 'start 0.005']);
+    expect(started).toHaveLength(0);
+    expect(l.old.closed).toBe(false); // still wired, still playing what it had
+    expect(l.p.loading).toBe(false);
+    expect(l.p.audioRestarts).toBe(0);
     expect(serialize(l.p).tempo).toBe(140);
+  });
+
+  it('a start that hangs times out; the old engine stays wired and running, the late one is closed', async () => {
+    const l = await live();
+    let late!: (e: Fake) => void;
+    const { d } = deps(l, { timeoutMs: 30, start: () => new Promise<Fake>((r) => (late = r)) });
+    const r = await restartAudio(l.p, 'playback', d);
+    expect(r?.error).toMatch(/^Couldn't apply Playback: audio did not start within 0\.03 s; kept previous settings$/);
+    expect(r?.hint).toBe('interactive');
+    expect(l.steps).toEqual(['flush', 'stop']);
+    expect(l.old.closed).toBe(false);
+    expect(l.p.loading).toBe(false);
+    expect(l.p.restarting).toBe(false);
+    // The device answers after all: that engine is closed, never wired.
+    const straggler = engineFor(l.steps, 'late');
+    late(straggler);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(straggler.closed).toBe(true);
+    expect(l.steps).not.toContain('unwire');
+  });
+
+  it('a replay that throws (or hangs) closes the new engine and keeps the old one', async () => {
+    const l = await live();
+    let made: Fake | null = null;
+    const { d } = deps(l, {
+      start: async (h) => {
+        made = engineFor(l.steps, 'new');
+        made.hint = h;
+        made.loadSample = () => Promise.reject(new Error('port gone'));
+        return made;
+      },
+    });
+    const r = await restartAudio(l.p, 'balanced', d);
+    expect(r?.error).toBe("Couldn't apply Balanced: port gone; kept previous settings");
+    expect(made!.closed).toBe(true);
+    expect(l.old.closed).toBe(false);
+    expect(l.steps).toEqual(['flush', 'stop', 'prepare balanced (0 sent)', 'close new']);
+
+    const l2 = await live();
+    const { d: d2, started } = deps(l2, { timeoutMs: 30 });
+    d2.start = async (h) => {
+      const e = engineFor(l2.steps, 'new');
+      e.hint = h;
+      e.loadSample = () => new Promise(() => {}); // never answers
+      started.push(e);
+      return e;
+    };
+    const r2 = await restartAudio(l2.p, 'balanced', d2);
+    expect(r2?.error).toMatch(/did not finish within 0\.03 s; kept previous settings$/);
+    expect(started[0].closed).toBe(true);
+    expect(l2.old.closed).toBe(false);
+    expect(l2.p.loading).toBe(false);
+  });
+
+  it('a failing autosave flush does not stop the restart', async () => {
+    const l = await live();
+    const { d } = deps(l, { flush: () => Promise.reject(new Error('disk full')) });
+    const r = await restartAudio(l.p, 'playback', d);
+    expect(r?.error).toBeNull();
+    expect(l.old.closed).toBe(true);
   });
 
   it('refused while a project load or another restart runs (nothing touched)', async () => {
@@ -176,7 +261,7 @@ describe('restartAudio', () => {
     const { d } = deps(l);
     l.p.loading = true;
     expect(await restartAudio(l.p, 'playback', d)).toBeNull();
-    expect(l.steps).toEqual([]);
+    expect(l.steps).toEqual([]); // not even the flush
     expect(l.old.closed).toBe(false);
   });
 
@@ -194,13 +279,5 @@ describe('restartAudio', () => {
     expect(codes!.get(0)).toBe(Err.OK);
     // The UI keeps the row's sample (a Save still writes it); only the engine lacks it.
     expect(l.p.tracks[0].kind === 'drum' && l.p.tracks[0].rows[2].sampleId).toBe(7);
-  });
-
-  it('when no engine can start, the error propagates with nothing wired and loading cleared', async () => {
-    const l = await live();
-    const { d } = deps(l, { failHints: ['playback', 'interactive'] });
-    await expect(restartAudio(l.p, 'playback', d)).rejects.toThrow(/device refused/);
-    expect(l.steps).not.toContain('wire interactive');
-    expect(l.p.loading).toBe(false);
   });
 });

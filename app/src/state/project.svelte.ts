@@ -199,6 +199,17 @@ export class Project {
    * before touching the project. Not reactive.
    */
   generation = 0;
+  /**
+   * An audio restart (audio/restart.ts) is running; `loading` is set too.
+   * Lets a sample import tell it apart from a project load ("drop it again"
+   * rather than a silent drop). Not reactive.
+   */
+  restarting = false;
+  /**
+   * Bumped by each successful audio restart: an import that decoded or
+   * uploaded on the old engine checks it. Not reactive.
+   */
+  audioRestarts = 0;
   /** Where Save writes (null: Save does a Save As). Not reactive. */
   folder: FileSystemDirectoryHandle | null = null;
   /**

@@ -12,19 +12,28 @@
 // never belonged to the AudioContext and keep working.
 //
 // restartAudio only sequences the steps; the App owns what is wired to an
-// engine (deps.stop / unwire / wire):
+// engine (deps.*). The old engine keeps running until the new one is fully
+// up, so any failure leaves the user exactly where they were:
 //   1. refuse while a load (or another restart) runs: p.loading;
-//   2. p.loading = true for the whole restart (the "Loading…" overlay blocks
-//      edits; shortcuts, undo and sample imports already respect it);
-//   3. deps.stop(): the transport stops through the App's own path (the
+//   2. deps.flush(): write the autosave first (a failure is ignored: the
+//      autosave reports its own errors);
+//   3. p.loading + p.restarting for the whole restart (the "Restarting
+//      audio…" overlay blocks edits; shortcuts, undo and sample imports
+//      respect it);
+//   4. deps.stop(): the transport stops through the App's own path (the
 //      recorder closes held notes at the heard tick), held keys released;
-//   4. deps.unwire(): per-engine loops detached; then the old engine closes
-//      (its context too: pending uploads settle, later sends do nothing);
-//   5. start a new engine with the hint; if the device refuses it, start
-//      again with the old hint and report the error (if that fails too, the
-//      error propagates: there is no engine any more);
-//   6. replayInto the new engine, then deps.wire(new engine, upload codes)
-//      in the same task as the last replayed command.
+//   5. start a new engine with the hint (two contexts exist for a moment),
+//      within RESTART_TIMEOUT_MS (a vanished device can leave
+//      AudioContext.resume() pending forever);
+//   6. deps.prepare(new): stall reporting, before any command reaches it;
+//   7. replayInto the new engine, within the same timeout;
+//   8. success: deps.unwire() (old), deps.wire(new, upload codes) -- in the
+//      same task as the last replayed command -- then the old engine closes
+//      and p.audioRestarts is bumped;
+//      failure (start refused / timed out, replay threw / timed out): the
+//      new engine (if any; a start that answers late too) is closed, the old
+//      one was never unwired, and the result says "Couldn't apply …; kept
+//      previous settings".
 import { replayInto } from '../project/load';
 import type { LoadEngine, SampleDecoder } from '../project/load';
 import type { Project } from '../state/project.svelte';
@@ -49,6 +58,16 @@ export function parseLatencyHint(v: unknown): LatencyHint {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_LATENCY_HINT;
   return Math.min(CUSTOM_HINT_MAX_S, Math.max(CUSTOM_HINT_MIN_S, n));
+}
+
+/**
+ * The hint for the Settings panel's custom field (milliseconds; clamped to
+ * the bounds above), or null when it applies nothing: empty (NaN from an
+ * emptied number input), zero or negative.
+ */
+export function customHint(ms: number | null | undefined): number | null {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(CUSTOM_HINT_MAX_S, Math.max(CUSTOM_HINT_MIN_S, ms / 1000));
 }
 
 /** "Interactive", "Balanced", "Playback", or "Custom 20 ms". */
@@ -90,15 +109,22 @@ export interface RestartEngine extends LoadEngine {
   close(): Promise<void>;
 }
 
+/** How long starting the new engine, and then restoring the project onto it, may each take. */
+export const RESTART_TIMEOUT_MS = 8000;
+
 export interface RestartDeps<E extends RestartEngine> {
-  /** The engine running now (closed by the restart). */
+  /** The engine running now (closed once the new one is up; kept on any failure). */
   old: E;
-  /** The hint `old` was started with: the fallback if the new one fails. */
+  /** The hint `old` was started with (the result's hint if the new one fails). */
   oldHint: LatencyHint;
   /** AudioEngine.start with that hint. */
   start(hint: LatencyHint): Promise<E>;
+  /** Autosave now, before anything changes. */
+  flush?(): Promise<unknown>;
   /** Stop the transport the App's way (recorder stop tick) and release held keys. */
   stop(): void;
+  /** Hook up what must see the replay already (command-stall reports). */
+  prepare?(e: E): void;
   /** Detach what runs against the old engine (its rAF loops, callbacks). */
   unwire(): void;
   /**
@@ -106,10 +132,12 @@ export interface RestartDeps<E extends RestartEngine> {
    * `codes`: each re-uploaded sample's result (deferred loads settle from it).
    */
   wire(e: E, codes: Map<number, number>): void;
+  /** Tests: RESTART_TIMEOUT_MS otherwise. */
+  timeoutMs?: number;
 }
 
 export interface RestartResult {
-  /** The hint the running engine has (the old one if the new was refused). */
+  /** The hint the running engine has (the old one if the restart failed). */
   hint: LatencyHint;
   /** Samples that could not be re-uploaded, and the like. */
   warnings: string[];
@@ -119,35 +147,55 @@ export interface RestartResult {
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+class Timeout extends Error {}
+
+/** `pr`, or a Timeout rejection after `ms` (pr keeps running). */
+function within<T>(pr: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const t = new Promise<never>((_, rej) => (timer = setTimeout(() => rej(new Timeout(`${what} within ${ms / 1000} s`)), ms)));
+  return Promise.race([pr, t]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Re-create the AudioContext and engine with `hint` and restore the project
  * in memory onto it (sequence above). Null if refused (a load or another
- * restart is running; nothing was touched). Rejects only if no engine could
- * be started at all.
+ * restart is running; nothing was touched). Never rejects for an audio
+ * failure: `error` says why the old engine was kept.
  */
 export async function restartAudio<E extends RestartEngine>(
   p: Project, hint: LatencyHint, deps: RestartDeps<E>,
 ): Promise<RestartResult | null> {
   if (p.loading) return null;
+  const ms = deps.timeoutMs ?? RESTART_TIMEOUT_MS;
+  try {
+    await deps.flush?.();
+  } catch {
+    // The autosave shows its own error; the restart keeps the project in memory anyway.
+  }
+  if (p.loading) return null; // a load started during the flush
   p.loading = true;
+  p.restarting = true;
+  let e: E | null = null;
+  let abandoned = false;
   try {
     deps.stop();
+    const starting = deps.start(hint);
+    // A start that answers after we gave up is closed at once, never wired.
+    starting.then((late) => abandoned && void late.close(), () => {});
+    e = await within(starting, ms, 'audio did not start');
+    deps.prepare?.(e);
+    const { warnings, codes } = await within(replayInto(p, e, e.context), ms, 'restoring the project did not finish');
     deps.unwire();
-    await deps.old.close();
-    let used = hint;
-    let error: string | null = null;
-    let e: E;
-    try {
-      e = await deps.start(hint);
-    } catch (err) {
-      error = `Couldn't start audio with ${hintLabel(hint)} — ${message(err)}. Kept ${hintLabel(deps.oldHint)}.`;
-      used = deps.oldHint;
-      e = await deps.start(deps.oldHint);
-    }
-    const { warnings, codes } = await replayInto(p, e, e.context);
     deps.wire(e, codes);
-    return { hint: used, warnings, error };
+    p.audioRestarts++;
+    void deps.old.close();
+    return { hint, warnings, error: null };
+  } catch (err) {
+    abandoned = true;
+    if (e) void e.close();
+    return { hint: deps.oldHint, warnings: [], error: `Couldn't apply ${hintLabel(hint)}: ${message(err)}; kept previous settings` };
   } finally {
     p.loading = false;
+    p.restarting = false;
   }
 }

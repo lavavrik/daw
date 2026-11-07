@@ -20,7 +20,7 @@ architecture notes per area in [docs/architecture/](docs/architecture/).
 
 You need:
 
-- Rust with the WASM target: `rustup target add wasm32-unknown-unknown`;
+- rustup (the toolchain is pinned in `rust-toolchain.toml` and installs on first build);
 - Node 26 and npm;
 - desktop Chrome (the app uses Web MIDI, the File System Access API and
   `SharedArrayBuffer`; other browsers are not supported).

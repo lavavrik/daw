@@ -175,8 +175,19 @@ Audio output has latency (about 250 ms on Bluetooth), so "now" in the engine is
 not what you hear. The recorder therefore timestamps each key event, maps the
 timestamp through `AudioContext.getOutputTimestamp()` to the *context time that
 is audible*, subtracts the user "Rec offset" (-200..+200 ms, positive = notes
-land earlier), and converts to a tick with the latest telemetry:
+land earlier), and converts to a tick with telemetry:
 `tick = tele.ticks + (c*sr - tele.frame) / framesPerTick`.
+
+The heard frame `c*sr` lies one output latency *behind* the newest telemetry,
+and the playhead can jump in between (loop wrap, seek, mode switch). So the
+clock (`audioClock.ts`, `createTelemetryHistory`) keeps a ring of the last 256
+telemetry snapshots `{frame, ticks, playing, bpm}`, sampled on every query
+(each playhead queries every rAF), and extrapolates from the newest snapshot
+at or before the heard frame: right after a wrap the heard tick stays at the
+loop end until the wrap is actually audible. It falls back to the next
+snapshot (back-extrapolating, the old behaviour) when none is that old, the
+chosen one was stopped, or it is more than 0.1 s older than the next one
+(nobody polled, e.g. a hidden tab).
 
 `TELEMETRY_FRAME` (slot 8) is the context frame at which the published
 `TELEMETRY_TICKS` (slot 2) applies (the start of the next block), so the main
@@ -198,8 +209,9 @@ the overdub duplicate set, which is cleared only at pass start and on undo.
 "Undo take" for a pattern that is not current first selects that pattern
 (a visible switch that is never undone), then deletes. A take whose track or
 pattern was removed is dropped, and Undo is disabled. Recording is
-disabled in Song mode: arming is a no-op, and entering Song mode closes held
-notes.
+disabled in Song mode: arming is a no-op (R flashes "Recording works in
+Pattern mode (Shift+L)" in the bottom panel's header status line), and
+entering Song mode closes held notes.
 A UI Play starts the recording pass at once;
 the 60 Hz telemetry watcher (`transportSync`) only catches transport changes
 the UI did not make.

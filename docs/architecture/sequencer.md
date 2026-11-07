@@ -72,6 +72,11 @@ split), `engine.rs` (commands, pieces), `synth.rs` / `drums.rs` (playback).
 Every track slot has `MAX_CLIPS = 256` clip slots (preallocated, ~4 KB per
 track) and the UI keeps the authoritative clip list, writing slots by index
 like notes. `MAX_SONG_TICKS = 999 * 3840` (999 bars). Both are mirrored in TS.
+A drum track triggers at most `MAX_EVENTS = 32` hits per rendered piece
+(block, or block part at a loop wrap) across all its overlapping clips; extra
+hits in that piece are dropped (drums have nothing to release). A synth
+track's events share one 256-event buffer per piece (see Event order above;
+Offs are never lost).
 
 | Op | # | Fields |
 |---|---|---|
@@ -107,19 +112,29 @@ clips share the rack, whose MIDI In is per pitch: an `Off` from one clip can
 cut the same pitch from another (accepted, FL-like) but never strands one.
 Drums have nothing to release: hits stop retriggering and ring out.
 
+**No note chase.** Notes are only started by their On. After a jump of song
+time (loop wrap, seek, Play from the middle, mode switch) a note that began
+before the new position does not sound: e.g. a note that started before
+`loop_start` and is still sounding at the wrap is released there and stays
+silent until its next On. A note that starts exactly at `loop_start` gets the
+wrap's Off and its own On on the wrap frame (a retrigger).
+
 **Transport.** In Song mode the playhead is the song position (telemetry
 `TICKS`, the timeline playhead).
 - Play remembers the position as the song start. The count-in is
   Pattern-mode only: Song mode ignores it (and recording is Pattern-mode only).
 - Stop: Song mode returns to the loop start with the loop on, else to the song
-  start (where playback last started, or the last seek). Pattern mode: tick 0.
+  start (where playback last started, or the last seek). Stop with the loop on
+  also overwrites the song start with the loop start (the song start is "where
+  Song mode is parked"). Pattern mode: tick 0.
 - Seek sets the playhead and the song start; while playing it releases the
   clip notes.
 - Loop: with `start < end`, playback wraps from end to start. The block is
   split at the wrap and each piece rendered with its own window (see
   `audio-path.md`); the wrap frame plays exactly the loop start, so every pass
-  has the same whole number of frames. A playhead at or after the loop end
-  (seeked there) plays on. Synced LFOs follow song time, so after a wrap they
+  has the same whole number of frames. A playhead exactly at the loop end
+  wraps at once; one already *after* the loop end when the loop is set (or
+  seeked there) plays on. Synced LFOs follow song time, so after a wrap they
   are back at their loop-start phase.
 - Mode switch releases every sequenced note. Pattern -> Song jumps to the song
   start; Song -> Pattern goes to 0 when stopped and keeps the playhead while

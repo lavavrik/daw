@@ -129,8 +129,10 @@ overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
   pattern that is playing latches, and copying into it keeps its latched
   swing until the next pair boundary. In Song mode each clip has its own
   latch (two overlapping clips of one pattern cannot move each other's
-  steps); a clip latches at once at its start, when edited, and on any jump
-  of song time (Play, seek, loop wrap, mode switch).
+  steps); a clip latches at once at its start, when edited into a new
+  mapping (start / offset / pattern) or where it has not played yet, and on
+  any jump of song time (Play, seek, loop wrap, mode switch). Only lengthening
+  or shortening a clip under the playhead keeps its latch (R12).
 - **Patterns:** a drum track has 16 patterns (steps of every row, step count,
   swing); rows (sample, gain, pan, mute) and voices are per track. Switching
   the current pattern needs no release: hits ring out, and the new pattern's

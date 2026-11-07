@@ -41,8 +41,11 @@
 //!   latched at pair boundaries of the clip's own pattern time, so two
 //!   overlapping clips of one pattern at different phases cannot move each
 //!   other's steps. A clip also latches at once where nothing of it has
-//!   played yet: at its start, when it is edited, and on every jump of song
-//!   time (Play, seek, loop wrap, mode switch: `Drums::latch_clips`).
+//!   played yet: at its start, when it is edited into a new mapping or before
+//!   it reached the playhead (see `ClipSet` in engine.rs; a clip only
+//!   lengthened or shortened under the playhead keeps its latch), and on every
+//!   jump of song time (Play, seek, loop wrap, mode switch:
+//!   `Drums::latch_clips`).
 //!
 //! # Song mode
 //! A clip plays its pattern's steps mapped through `Clip::pattern_window`;
@@ -536,8 +539,9 @@ impl Drums {
         }
     }
 
-    /// Clip `idx` of track `slot` was set to `clip`: it latches its
-    /// pattern's pending swing at once (nothing of the edited clip has played).
+    /// Clip `idx` of track `slot` was set to `clip` and nothing of its new
+    /// mapping has played at the playhead (the caller decides; see `ClipSet`
+    /// in engine.rs): it latches its pattern's pending swing at once.
     pub fn latch_clip(&mut self, slot: usize, idx: usize, clip: Clip) {
         if let Some(t) = self.tracks.get_mut(slot) {
             if let (Some(s), Some(p)) = (t.clip_swing.get_mut(idx), t.patterns.get(clip.pattern as usize)) {

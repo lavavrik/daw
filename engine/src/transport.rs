@@ -20,7 +20,9 @@
 //! sub-sample remainder is dropped), so every pass lasts exactly
 //! `ceil(loopLength * samplesPerTick)` frames and an event at `loop_start`
 //! fires on the wrap frame itself: nothing double-fires or skips. A playhead
-//! at or after `loop_end` (seeked or started there) plays on without looping.
+//! exactly at `loop_end` wraps at once; one already *after* `loop_end` when it
+//! starts (seeked there, or the loop was set behind it) plays on without
+//! looping.
 
 use crate::PPQ;
 
@@ -125,7 +127,7 @@ impl Transport {
         // Frames whose tick is still below loop_end.
         let x = (self.loop_end - t) * spt;
         if !(x > -SNAP_FRAMES) {
-            return whole; // at/after loop_end (or garbage): plays on
+            return whole; // after loop_end (or garbage): plays on
         }
         let before = if (x - x.round()).abs() < SNAP_FRAMES { x.round() } else { x.ceil() };
         if before <= frames as f64 {

@@ -515,16 +515,31 @@ impl Engine {
                 SlotKind::Empty => return Err(protocol::ERR_BAD_INDEX),
             },
             // Clips: drum or synth slots. A real edit (or removal) releases
-            // the notes the clip owns; a drum clip latches its swing afresh.
+            // the notes the clip owns. A drum clip latches its swing afresh
+            // only if nothing of the new mapping has played at the playhead:
+            // stopped, the clip (old or new) not yet started or not playing
+            // there, or a new start / offset / pattern. A clip that keeps its
+            // mapping under the playhead (e.g. only lengthened / shortened)
+            // keeps its latch until the next pair boundary (R12: otherwise a
+            // pending swing could move an odd step that already fired in this
+            // pair ahead of the playhead and fire it again).
             Command::ClipSet { slot, idx, clip } => {
                 let kind = self.kind(slot);
                 if kind == SlotKind::Empty {
                     return Err(protocol::ERR_BAD_INDEX);
                 }
                 let Some(a) = self.arrangements.get_mut(slot) else { return Err(protocol::ERR_BAD_INDEX) };
+                let old = a.clip(idx).unwrap_or(Clip::OFF);
                 if a.set(idx, clip) {
                     self.synths.release_clip(slot, idx);
-                    self.drums.latch_clip(slot, idx, clip);
+                    let t = self.transport.ticks;
+                    let playing_here = |c: &Clip| c.active && c.start as f64 <= t && t < c.end() as f64;
+                    let same_mapping =
+                        old.start == clip.start && old.offset == clip.offset && old.pattern == clip.pattern;
+                    let fired = self.transport.playing && playing_here(&old) && playing_here(&clip);
+                    if !(fired && same_mapping) {
+                        self.drums.latch_clip(slot, idx, clip);
+                    }
                 }
             }
             Command::ClipRemove { slot, idx } => {
@@ -2471,6 +2486,32 @@ mod tests {
     }
 
     #[test]
+    fn note_at_loop_start_retriggers_on_the_wrap_frame() {
+        // Loop 3840..11520 (120 bpm: a pass is 192000 frames). One clip spans
+        // the whole loop; its note starts at the loop start and is still
+        // sounding at the loop end, so the wrap frame gets the wrap's Off and
+        // the pass's On together: a retrigger, not a held note. With one MIDI
+        // In voice the retrigger shows as the voice's 32-frame gate gap
+        // (midi_in.rs) right on the wrap frame (sub-block aligned here).
+        let mut e = Engine::new(SR);
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        gate_patch(&mut e, 0.0, 0.25);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0.0, 0.0, 0.0, 1.0), OK); // 1 voice
+        render(&mut e, 4800); // let the patch edits settle
+        set_note(&mut e, 0, 0, 60, 3840, 8000);
+        set_clip(&mut e, 0, 0, 0, 0, 15360, 0);
+        set_loop(&mut e, 3840.0, 11520.0);
+        mode(&mut e, true);
+        seek(&mut e, 3840.0);
+        play(&mut e, 0.0);
+        let s = render(&mut e, 192000 + 12800);
+        assert!(all_near(&s[32..192000], 0.2), "held through pass 1");
+        assert!(silent(&s[192000..192032]), "Off + On on the wrap frame: retrigger gap");
+        assert!(all_near(&s[192032..], 0.2), "sounding again from the loop start");
+        assert_eq!(rising(&s[32..]), vec![0, 192032 - 32], "exactly one retrigger");
+    }
+
+    #[test]
     fn seek_releases_and_jumps() {
         let mut e = drum_engine();
         drum_setup(&mut e, 1.0, 0.0, &[0.0]);
@@ -2653,6 +2694,39 @@ mod tests {
         assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK);
         s.extend(render(&mut e, 96000 - 6400));
         assert_eq!(rising(&s), vec![6000, 21000]);
+    }
+
+    #[test]
+    fn editing_a_playing_drum_clip_keeps_its_swing_latch() {
+        // Odd steps 1 and 3. Swing 1.0 is set at tick ~128 (pending), step 1
+        // fires at 240, then at tick ~256 the clip is lengthened (same start,
+        // offset, pattern: the mapping at the playhead is unchanged). The
+        // edit must not latch the swing mid-pair, or step 1 would move to
+        // 360 and fire again (a flam). Step 3 takes the swing at the pair
+        // boundary (840). A moved clip is a new mapping and latches at once.
+        let mut e = drum_engine();
+        drum_setup(&mut e, 1.0, 0.0, &[1.0, 3.0]);
+        set_clip(&mut e, 1, 0, 0, 0, 3840, 0);
+        mode(&mut e, true);
+        play(&mut e, 0.0);
+        let mut s = render(&mut e, 3200); // tick 128
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK);
+        s.extend(render(&mut e, 3200)); // tick 256
+        set_clip(&mut e, 1, 0, 0, 0, 7680, 0);
+        s.extend(render(&mut e, 96000 - 6400));
+        assert_eq!(rising(&s), vec![6000, 21000]);
+        // Moving it re-maps the playhead (a new mapping): it latches at once.
+        e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 0.0, 0.0, 0.0), OK); // stopped: latches
+        play(&mut e, 0.0);
+        let mut s = render(&mut e, 3200); // tick 128, latch 0
+        assert_eq!(e.command(OP_SET_SWING, 1.0, 1.0, 0.0, 0.0), OK); // pending
+        s.extend(render(&mut e, 3200)); // tick 256: step 1 fired at 240
+        set_clip(&mut e, 1, 0, 0, 160, 7680, 0); // pattern time 256 -> 96: pair 0 again
+        s.extend(render(&mut e, 25600)); // to tick 1280
+        // Step 1 of the moved clip at pattern 360 = song 520 (swing 1.0
+        // latched at the edit), step 3 at pattern 840 = song 1000.
+        assert_eq!(rising(&s), vec![6000, 13000, 25000]);
     }
 
     #[test]

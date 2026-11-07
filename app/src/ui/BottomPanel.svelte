@@ -97,6 +97,19 @@
         <span>{banners.error}</span><button aria-label="Dismiss" onclick={() => (banners.error = null)}>×</button>
       </div>
     {/if}
+    {#if banners.ask}
+      {@const ask = banners.ask}
+      <div class="banner note" data-testid="ask" role="alertdialog" aria-label={ask.text}>
+        <span>{ask.text}</span>
+        <button class="ok" data-testid="ask-ok" onclick={() => void ask.run()}>{ask.ok}</button>
+        <button data-testid="ask-cancel" onclick={() => (banners.ask = null)}>Cancel</button>
+      </div>
+    {/if}
+    {#if banners.load}
+      <div class="banner note" data-testid="load-notice">
+        <span>{banners.load}</span><button aria-label="Dismiss" onclick={() => (banners.load = null)}>×</button>
+      </div>
+    {/if}
     {#if banners.notice}
       <div class="banner note" data-testid="notice">
         <span>{banners.notice}</span><button aria-label="Dismiss" onclick={() => (banners.notice = null)}>×</button>
@@ -132,6 +145,9 @@
   .body { padding: 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
+  .banner[data-testid='ask'] span { flex: 1; }
+  .banner[data-testid='ask'] button { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; }
+  .banner .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
   .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
   .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
 </style>

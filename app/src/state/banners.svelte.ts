@@ -7,10 +7,26 @@
 // status line (fixed height, so it never moves the editor), e.g. "Recording
 // works in Pattern mode" when R is pressed in Song mode. Raise it with
 // flashHint(); it clears itself.
-export const banners = $state<{ error: string | null; notice: string | null; hint: string | null }>({
+//
+// `load`: what a project load skipped or changed (its own banner, so the
+// deferred-sample notice clearing `notice` never hides it).
+// `ask`: an inline yes/no question (e.g. "Replace the project in …?") with
+// its action; Cancel just clears it. Never confirm().
+export interface Ask {
+  text: string;
+  /** Label of the confirming button. */
+  ok: string;
+  run: () => Promise<void> | void;
+}
+
+export const banners = $state<{
+  error: string | null; notice: string | null; hint: string | null; load: string | null; ask: Ask | null;
+}>({
   error: null,
   notice: null,
   hint: null,
+  load: null,
+  ask: null,
 });
 
 let hintTimer: ReturnType<typeof setTimeout> | undefined;

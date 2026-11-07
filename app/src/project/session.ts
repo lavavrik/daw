@@ -1,6 +1,7 @@
 // Project ▸ New / Open… / Save / Save As… as the user sees them: one
 // operation at a time, results and problems as banners (never confirm() /
-// alert()), and the "unsaved" baseline reset after each success.
+// alert(); Save As over an existing project asks via banners.ask), and the
+// "unsaved" baseline reset after each success.
 //
 // saveTo / openFrom take any FileSystemDirectoryHandle (a picked folder, or
 // OPFS in the e2e tests via __daw.saveTo / __daw.openFrom) and throw on
@@ -8,7 +9,7 @@
 import { addDrumTrack } from '../state/actions';
 import { banners, flashHint } from '../state/banners.svelte';
 import { Project } from '../state/project.svelte';
-import { pickProjectFolder, readProject, writeProject } from './fsFolder';
+import { folderInUse, pickProjectFolder, readProject, writeProject } from './fsFolder';
 import { loadProject } from './load';
 import type { LoadEngine, SampleDecoder } from './load';
 import { projectFiles, projectFingerprint, serialize } from './serialize';
@@ -41,12 +42,21 @@ export function markSaved(p: Project) {
   p.dirty = false;
 }
 
-/**
- * `beforeLoad` runs right before the session is replaced (New / Open): the
- * App stops the transport through its own path there (recorder stop tick)
- * and releases held keys.
- */
-export function createProjectSession(p: Project, engine: SessionEngine, beforeLoad: () => void = () => {}): ProjectSession {
+export interface SessionOptions {
+  /**
+   * Runs once a New / Open is known to go ahead, right before the engine is
+   * stopped and reset (loadProject): the App stops the transport through its
+   * own path (recorder stop tick) and releases held keys.
+   */
+  beforeLoad?: () => void;
+  /** Runs after every New / Open that got that far, success or not (recorder resync). */
+  afterLoad?: () => void;
+  /** The folder picker (tests pass a fake). */
+  pick?: () => Promise<FileSystemDirectoryHandle | null>;
+}
+
+export function createProjectSession(p: Project, engine: SessionEngine, opts: SessionOptions = {}): ProjectSession {
+  const pick = opts.pick ?? pickProjectFolder;
   let busy = false;
   const once = async (fn: () => Promise<void>) => {
     if (busy) return;
@@ -65,15 +75,30 @@ export function createProjectSession(p: Project, engine: SessionEngine, beforeLo
     markSaved(p);
   }
 
+  /** loadProject with the hooks; afterLoad runs whenever beforeLoad did. */
+  async function replace(json: unknown, files: Map<string, ArrayBuffer>): Promise<string[]> {
+    let started = false;
+    try {
+      return await loadProject(p, engine, json, files, engine.context, {
+        beforeLoad: () => {
+          started = true;
+          opts.beforeLoad?.();
+        },
+      });
+    } finally {
+      if (started) opts.afterLoad?.();
+    }
+  }
+
   async function openFrom(dir: FileSystemDirectoryHandle): Promise<string[]> {
     const { json, files } = await readProject(dir); // nothing changes if this fails
-    beforeLoad();
-    const warnings = await loadProject(p, engine, json, files, engine.context);
+    const warnings = await replace(json, files);
     p.folder = dir;
     markSaved(p);
+    banners.load = null;
     if (warnings.length) {
       console.warn(`Opened "${p.name}" with changes:\n${warnings.join('\n')}`);
-      banners.notice = warningsText(`Opened "${p.name}" — skipped or changed`, warnings);
+      banners.load = warningsText(`Opened "${p.name}" — skipped or changed`, warnings);
     }
     return warnings;
   }
@@ -91,15 +116,33 @@ export function createProjectSession(p: Project, engine: SessionEngine, beforeLo
     }
   }
 
+  /**
+   * Pick a folder; one that already holds a project or samples (and is not
+   * this project's own folder) is only written after an inline "Replace?".
+   */
   async function saveAs() {
     let dir: FileSystemDirectoryHandle | null;
     try {
-      dir = await pickProjectFolder();
+      dir = await pick();
+      if (!dir) return;
+      const ours = p.folder !== null && (await dir.isSameEntry(p.folder));
+      if (!ours && (await folderInUse(dir))) {
+        const target = dir;
+        banners.ask = {
+          text: `Replace the project in "${target.name}"? Its project.json is overwritten (other files are kept).`,
+          ok: 'Replace',
+          run: async () => {
+            banners.ask = null;
+            await once(() => saveInto(target, target.name));
+          },
+        };
+        return;
+      }
     } catch (e) {
       banners.error = `Couldn't save — ${message(e)}`;
       return;
     }
-    if (dir) await saveInto(dir, dir.name);
+    await saveInto(dir, dir.name);
   }
 
   return {
@@ -111,7 +154,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, beforeLo
       once(async () => {
         let dir: FileSystemDirectoryHandle | null = null;
         try {
-          dir = await pickProjectFolder();
+          dir = await pick();
           if (!dir) return;
           await openFrom(dir);
           banners.error = null;
@@ -123,13 +166,12 @@ export function createProjectSession(p: Project, engine: SessionEngine, beforeLo
     newProject: () =>
       once(async () => {
         try {
-          beforeLoad();
-          await loadProject(p, engine, serialize(new Project()), new Map(), engine.context);
+          await replace(serialize(new Project()), new Map());
           addDrumTrack(p, engine); // like a fresh start
           p.folder = null;
           markSaved(p);
           banners.error = null;
-          banners.notice = null;
+          banners.load = null;
         } catch (e) {
           banners.error = `Couldn't start a new project — ${message(e)}`;
         }

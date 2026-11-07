@@ -370,6 +370,134 @@ fn resize_right_or_gain_change_keeps_voice() {
     for k in F..1280 {
         assert_eq!(rec.l[k], data[24000 + at + k] * 0.5, "chased to the new offset, frame {k}");
     }
+
+    // Fade handles and the end dragged across the playhead keep the voice
+    // and blend the envelope over 5 ms: no step (a constant 0.8 file).
+    const V: f32 = 0.8;
+    let setup = || {
+        let mut e = song_engine();
+        load_const(&mut e, 0, 480000, V);
+        add_audio(&mut e, 0);
+        ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let rec = run(&mut e, 0, 1280); // the playhead is at tick 51.2
+        assert!(rec.l.iter().all(|&x| x == V));
+        e
+    };
+    // The end moved to tick 200 with a fade-out from tick 10: the playhead is
+    // now 78 % into the fade-out. It blends there, then fades to the end.
+    let mut e = setup();
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 190), 0, 200));
+    let rec = run(&mut e, 0, 5120);
+    assert!(max_step(V, &rec.l) <= 0.01, "fade-out and end moved: {}", max_step(V, &rec.l));
+    let end = 200 * 25 - 1280; // frame of the clip end in this run
+    assert!(rec.l[RAMP] < V * 0.8, "the new fade-out applies after the blend");
+    assert!(rec.l[end..].iter().all(|&x| x == 0.0));
+    // A fade-in handle dragged past the playhead, then again mid-blend.
+    let mut e = setup();
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (100, 0), 0, 38400));
+    let mut got = run(&mut e, 0, 128).l;
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (400, 0), 0, 38400));
+    got.extend(run(&mut e, 0, 1280).l);
+    assert!(max_step(V, &got) <= 0.01, "fade-in moved twice: {}", max_step(V, &got));
+    let k = 128 + RAMP + 10; // after both blends: on the new fade-in line
+    let t = 51.2 + k as f64 / SPT;
+    assert!((got[k] - V * (t / 400.0) as f32).abs() < 1e-4, "{} vs {}", got[k], V * (t / 400.0) as f32);
+    // Back to no fades: blends up again.
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+    let rec = run(&mut e, 0, 1280);
+    assert!(max_step(*got.last().unwrap(), &rec.l) <= 0.01);
+    assert!(rec.l[RAMP..].iter().all(|&x| x == V));
+}
+
+#[test]
+fn clip_end_moved_inside_the_declick_fade_cuts_smoothly() {
+    const V: f32 = 0.8;
+    // A resize that puts the end 1 tick (25 frames < 2 ms) ahead.
+    let mut e = song_engine();
+    load_const(&mut e, 0, 480000, V);
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    run(&mut e, 0, 1280); // tick 51.2
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 52));
+    let rec = run(&mut e, 0, 1280);
+    assert!(max_step(V, &rec.l) <= 0.01, "resize: {}", max_step(V, &rec.l));
+    assert!(rec.l[F..].iter().all(|&x| x == 0.0));
+    // A faster tempo that brings the end inside 2 ms: 3 ticks ahead is 75
+    // frames at 120 bpm, 30 at 300 bpm. (At tick 51.2 the end at 55 is 95
+    // frames ahead: the fade's first frame, not yet begun, at 120 bpm.)
+    let mut e = song_engine();
+    load_const(&mut e, 0, 480000, V);
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 55));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let mut got = run(&mut e, 0, 1280).l;
+    ok(e.command(OP_SET_TEMPO, 300.0, 0.0, 0.0, 0.0));
+    got.extend(run(&mut e, 0, 1280).l);
+    assert_eq!(got[0], V, "a start at file position 0 is unfaded");
+    assert!(max_step(V, &got[1..]) <= 0.01, "tempo: {}", max_step(V, &got[1..]));
+    assert!(got[1280 + F..].iter().all(|&x| x == 0.0));
+    // The end extended while its fade runs (frame 1408 is 17 frames before
+    // the end at tick 57): a cut and a re-chase, not a jump back to full.
+    let mut e = song_engine();
+    load_const(&mut e, 0, 480000, V);
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 57));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let before = run(&mut e, 0, 1408).l;
+    let last = *before.last().unwrap();
+    assert!(last > 0.0 && last < V * 0.25, "inside the end fade ({last})");
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+    let rec = run(&mut e, 0, 1280);
+    assert!(max_step(last, &rec.l) <= 0.01, "extended: {}", max_step(last, &rec.l));
+    assert!(rec.l[F..].iter().all(|&x| x == V), "chased back in");
+}
+
+#[test]
+fn finished_one_shot_chases_a_replaced_sample() {
+    let mut e = song_engine();
+    load_const(&mut e, 0, 1000, 0.8);
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let rec = run(&mut e, 0, 2560);
+    assert!(rec.l[1000..].iter().all(|&x| x == 0.0), "the file ended");
+    // The same id now holds a longer file: the clip chases into it.
+    let data = load_ramp(&mut e, 0, 96000, 1);
+    let rec = run(&mut e, 0, 1280);
+    assert_eq!(rec.l[0], 0.0);
+    for k in F..1280 {
+        assert_eq!(rec.l[k], data[2560 + k], "frame {k}");
+    }
+    // Ended again, then replaced by a sample not ready yet: chases once ready.
+    let mut e = song_engine();
+    load_const(&mut e, 0, 1000, 0.8);
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 0, 0.0, 0.0, false, 1.0, (0, 0), 0, 38400));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    run(&mut e, 0, 2560);
+    let p = e.sample_alloc(0, 96000, 1).unwrap();
+    assert!(run(&mut e, 0, 1280).l.iter().all(|&x| x == 0.0));
+    unsafe { std::slice::from_raw_parts_mut(p, 96000) }.fill(0.3);
+    ok(e.sample_ready(0));
+    let rec = run(&mut e, 0, 1280);
+    assert!(rec.l[F..].iter().all(|&x| x == 0.3));
+}
+
+#[test]
+fn clip_remove_resets_the_staged_edit() {
+    let mut e = song_engine();
+    add_audio(&mut e, 0);
+    ok(clip(&mut e, 0, 4, 1.0, 0.5, true, 0.25, (10, 20), 0, 3840));
+    ok(e.command(OP_CLIP_REMOVE, addr(0, 4), 0.0, 0.0, 0.0));
+    // A SET alone now commits the defaults, not the removed clip's edit.
+    ok(e.command(OP_AUDIO_CLIP_SET, addr(0, 4), 0.0, 3840.0, 0.0));
+    let c = e.audio.clip(0, 4).unwrap();
+    assert_eq!(
+        (c.active, c.sample, c.offset_frames, c.looped, c.gain, c.fade_in, c.fade_out),
+        (true, None, 0, false, 1.0, 0, 0)
+    );
 }
 
 #[test]

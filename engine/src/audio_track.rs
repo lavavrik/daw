@@ -33,8 +33,9 @@
 //! makes it jump; its position is recomputed only on a *chase*. Each clip
 //! slot has one [`AudioVoice`]: `Idle` (chases on the next piece the
 //! playhead is inside the clip and its sample is playable), `Playing`, or
-//! `Done` (a one-shot file ran out; it waits for a jump or an edit, so a
-//! slower tempo cannot replay the file's end).
+//! `Done` (a one-shot file ran out; it waits for a jump, an edit of its
+//! mapping or a new generation of its sample, so a faster tempo cannot
+//! replay the file's end).
 //!
 //! A chase happens on Play, a seek, a loop wrap, a loop set behind the
 //! playhead, a mode switch, Stop (the engine calls [`AudioTracks::jump`],
@@ -42,12 +43,19 @@
 //! the clip's sample, offset, loop or start (`commit`), and a sample that
 //! becomes ready (or is replaced) while the playhead is inside the clip.
 //! Changing only the length, the gain or the fades keeps the voice; the
-//! gain ramps linearly to its new value over 5 ms.
+//! gain ramps linearly to its new value over 5 ms, and so does the user-fade
+//! factor (`env_d`: the old factor blends into the new one), so a fade
+//! handle or the clip end dragged across the playhead never steps.
 //!
 //! # Fades (declicking, `CLIP_FADE_SECONDS` = 2 ms)
 //! * A start at file position 0 is unfaded (it keeps the transient); any
 //!   other start (a chase, a trimmed clip, a late sample) fades in.
-//! * Every clip end fades out so the fade ends exactly at the clip end.
+//! * Every clip end fades out so the fade ends exactly at the clip end. That
+//!   fade always runs in full: an end that a resize or a tempo change puts
+//!   less than 2 ms ahead before its fade began, or an end moved while its
+//!   fade runs, cuts the voice instead (the hold-and-fade may then run up to
+//!   2 ms past the clip end), and a chased start inside the last 2 ms of a
+//!   clip does not play.
 //! * A one-shot (non-loop) file's last 2 ms fade out too, so a file cut
 //!   mid-signal (a trimmed export, a clip that outlives its file after a
 //!   tempo change) never ends in a step. The repeat seam of a loop clip is
@@ -176,6 +184,16 @@ struct AudioVoice {
     gain_left: u32,
     /// Frames of the 2 ms declick fade-in done (`>= fade`: full level).
     rise: u32,
+    /// The clip-end declick fade has begun (see `render_voice`).
+    ending: bool,
+    /// An edit that kept the voice changed the clip's length or fades: the
+    /// old `(len, fade_in, fade_out)`, turned into `env_d` on the next piece.
+    env_prev: Option<(u32, u32, u32)>,
+    /// The user-fade blend: `env_d × env_left / ramp` is added to the new
+    /// user-fade factor, so it moves from the old value to the new one
+    /// linearly over the 5 ms ramp instead of stepping.
+    env_d: f32,
+    env_left: u32,
     /// The last frame this voice played (its playback, not its tail).
     last_l: f32,
     last_r: f32,
@@ -196,6 +214,10 @@ impl AudioVoice {
         gain_step: 0.0,
         gain_left: 0,
         rise: 0,
+        ending: false,
+        env_prev: None,
+        env_d: 0.0,
+        env_left: 0,
         last_l: 0.0,
         last_r: 0.0,
         tail_l: 0.0,
@@ -339,18 +361,30 @@ impl AudioTracks {
         };
         if !clip.same_mapping(c) {
             v.cut(fade);
+        } else if v.state == State::Playing {
+            if v.ending && clip.end() != c.end() {
+                // The end moved while its declick fade ran: the fade would
+                // jump. Cut (hold-and-fade); the voice chases with a fade-in.
+                v.cut(fade);
+            } else if (clip.len, clip.fade_in, clip.fade_out) != (c.len, c.fade_in, c.fade_out) && v.env_prev.is_none() {
+                // Keep the oldest envelope since the last piece: that is
+                // what sounds now.
+                v.env_prev = Some((c.len, c.fade_in, c.fade_out));
+            }
         }
         *c = clip;
         t.used = t.used.max(idx + 1);
         Ok(())
     }
 
-    /// `CLIP_REMOVE`: empty clip slot `idx`; its voice fades out.
+    /// `CLIP_REMOVE`: empty clip slot `idx` and reset its staged edit; its
+    /// voice fades out.
     pub fn remove_clip(&mut self, slot: usize, idx: usize) {
         let fade = self.fade;
         let Some(t) = self.tracks.get_mut(slot) else { return };
-        if let (Some(c), Some(v)) = (t.clips.get_mut(idx), t.voices.get_mut(idx)) {
+        if let (Some(c), Some(v), Some(s)) = (t.clips.get_mut(idx), t.voices.get_mut(idx), t.staged.get_mut(idx)) {
             *c = AudioClip::OFF;
+            *s = Staged::DEFAULT;
             v.cut(fade);
         }
     }
@@ -448,6 +482,14 @@ fn render_voice(
     r: &mut [f32],
 ) -> bool {
     let n = l.len().min(r.len());
+    // A finished one-shot whose sample was replaced (or un-readied) since:
+    // idle again, so it chases into the new upload once that is playable.
+    if v.state == State::Done && c.active {
+        let g = c.sample.and_then(|id| samples.playable(id as usize)).map(|p| p.3);
+        if g != Some(v.generation) {
+            v.state = State::Idle;
+        }
+    }
     if v.state != State::Playing && v.tail_left == 0 && (v.state == State::Done || !(c.active && win.is_some())) {
         return false; // the common case: nothing sounds and nothing can start
     }
@@ -457,7 +499,12 @@ fn render_voice(
     if v.state == State::Playing {
         let keep = match (win, data) {
             (Some((t0, _, spt)), Some((.., g))) => {
-                c.sample == Some(v.sample) && g == v.generation && (c.end() as f64 - t0) * spt > SNAP
+                // The end fade must start in full: an end that a resize or a
+                // tempo change put less than the fade ahead, with the fade
+                // not yet running, is a cut (the hold-and-fade may run up to
+                // 2 ms past the clip end) rather than a part-way fade.
+                let ie = ((c.end() as f64 - t0) * spt - SNAP).ceil();
+                c.sample == Some(v.sample) && g == v.generation && ie > 0.0 && (v.ending || ie + 1.0 >= fade as f64)
             }
             _ => false,
         };
@@ -479,7 +526,12 @@ fn render_voice(
                 pos %= frames as f64;
             }
             if !c.looped && pos >= frames as f64 {
+                v.generation = g; // a replacement chases (see above)
                 v.finish(State::Done); // entered after the file's end
+            } else if pos != 0.0 && ie + 1.0 < fade as f64 {
+                // A faded start whose clip ends inside the declick fade
+                // (also the voice just cut for that reason): too short to
+                // play; stays idle.
             } else {
                 *v = AudioVoice {
                     state: State::Playing,
@@ -491,6 +543,10 @@ fn render_voice(
                     gain_step: 0.0,
                     gain_left: 0,
                     rise: if pos == 0.0 { fade } else { 0 },
+                    ending: false,
+                    env_prev: None,
+                    env_d: 0.0,
+                    env_left: 0,
                     ..*v
                 };
                 first = i0 as usize;
@@ -532,6 +588,16 @@ fn render_voice(
     let stop = if ie < n as f64 { ie.max(0.0) as usize } else { n };
     let fade_f = fade.max(1) as f32;
     let (fi, fo) = (c.fade_in as f64 * spt, c.fade_out as f64 * spt);
+    let ramp_f = ramp.max(1) as f32;
+    // A length or fade edit that kept the voice: blend from the old user-fade
+    // factor at this frame (including a blend still running) to the new one.
+    if let Some((len, fi_old, fo_old)) = v.env_prev.take() {
+        let xe_old = (c.start as f64 + len as f64 - t0) * spt;
+        let at = first as f64;
+        let old = user_fades(at, xs, xe_old, fi_old as f64 * spt, fo_old as f64 * spt) + v.env_d * v.env_left as f32 / ramp_f;
+        v.env_d = old - user_fades(at, xs, xe, fi, fo);
+        v.env_left = ramp.max(1);
+    }
     let (dl, dr) = d.split_at(frames.min(d.len()));
     let stereo = ch == 2;
     for i in first..stop {
@@ -557,6 +623,7 @@ fn render_voice(
         let to_end = (ie - i as f64) as f32 / fade_f;
         if to_end < 1.0 {
             env *= to_end;
+            v.ending = true;
         }
         if !c.looped {
             let left = (frames - p) as f32 / fade_f;
@@ -564,18 +631,12 @@ fn render_voice(
                 env *= left;
             }
         }
-        if fi > 0.0 {
-            let x = ((i as f64 - xs) / fi) as f32;
-            if x < 1.0 {
-                env *= x.max(0.0);
-            }
+        let mut user = user_fades(i as f64, xs, xe, fi, fo);
+        if v.env_left > 0 {
+            user += v.env_d * v.env_left as f32 / ramp_f;
+            v.env_left -= 1;
         }
-        if fo > 0.0 {
-            let x = ((xe - i as f64) / fo) as f32;
-            if x < 1.0 {
-                env *= x.max(0.0);
-            }
-        }
+        env *= user;
         let (ol, or) = (a * env, b * env);
         l[i] += ol;
         r[i] += or;
@@ -591,4 +652,24 @@ fn render_voice(
         v.finish(State::Idle);
     }
     true
+}
+
+/// The user's linear fade-in × fade-out factor at frame `i` of a piece whose
+/// clip starts at frame `xs` and ends at frame `xe` (both fractional), with
+/// fades of `fi` / `fo` frames (0: none).
+fn user_fades(i: f64, xs: f64, xe: f64, fi: f64, fo: f64) -> f32 {
+    let mut u = 1.0f32;
+    if fi > 0.0 {
+        let x = ((i - xs) / fi) as f32;
+        if x < 1.0 {
+            u *= x.max(0.0);
+        }
+    }
+    if fo > 0.0 {
+        let x = ((xe - i) / fo) as f32;
+        if x < 1.0 {
+            u *= x.max(0.0);
+        }
+    }
+    u
 }

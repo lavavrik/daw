@@ -11,8 +11,11 @@
 //! that would, whether or not it may grow, and a grown chunk is cut so it
 //! never extends past the budget either. The engine maps that refusal to
 //! `ERR_OUT_OF_MEMORY` (playing or stopped), checking
-//! [`over_budget`](SampleArena::over_budget) first. Space wasted at the end
-//! of a chunk that a request skipped is not handed out, so it does not count.
+//! [`over_budget`](SampleArena::over_budget) first. Requests go first fit
+//! (the first chunk whose free tail holds them), so a tail a large request
+//! skipped serves a later, smaller one; a tail nothing fits is not handed
+//! out, so it does not count (physical memory can exceed `allocated` by up to
+//! one tail per chunk).
 
 /// Handle to a region inside the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,9 +61,11 @@ impl SampleArena {
         self.allocated.checked_add(len).is_none_or(|total| total > self.budget)
     }
 
-    /// Bump-allocate `len` floats. A request never straddles chunks: if the
-    /// current (last) chunk lacks room, a new chunk of `max(64 MB, len)` is
-    /// added when `may_grow` (cut at the budget). Returns `None` (changing
+    /// Bump-allocate `len` floats. A request never straddles chunks: it goes
+    /// into the first chunk whose free tail holds it (first fit), so a tail
+    /// skipped by a large request is used by a later, smaller one; if none
+    /// does, a new chunk of `max(64 MB, len)` is added when `may_grow` (cut
+    /// at the budget). Returns `None` (changing
     /// nothing) when the request would pass the budget, when there is no
     /// room and `!may_grow`, or when growing fails (out of memory: on WASM
     /// `memory.grow` hit the max). Growth is fallible on purpose: `vec![]`
@@ -69,8 +74,12 @@ impl SampleArena {
         if self.over_budget(len) {
             return None;
         }
-        let last = self.chunks.len() - 1;
-        if self.chunks[last].len() - self.used[last] < len {
+        // First fit: the first chunk whose tail holds `len`, so the tail a
+        // larger request skipped is used by a later, smaller one.
+        let fit = (0..self.chunks.len()).find(|&i| self.chunks[i].len() - self.used[i] >= len);
+        let chunk = if let Some(i) = fit {
+            i
+        } else {
             if !may_grow {
                 return None;
             }
@@ -81,8 +90,8 @@ impl SampleArena {
             let chunk = try_zeroed(size)?; // heap grows here
             self.chunks.push(chunk); // capacity reserved above: cannot fail
             self.used.push(0);
-        }
-        let chunk = self.chunks.len() - 1;
+            self.chunks.len() - 1
+        };
         let start = self.used[chunk];
         if start > u32::MAX as usize || len > u32::MAX as usize {
             return None; // unrepresentable handle; unreachable with real sizes
@@ -222,6 +231,24 @@ mod tests {
         assert!(a.alloc(1000, false).is_some());
         // The engine's arena uses the real budget.
         assert_eq!(SampleArena::with_capacity(10).budget, crate::MAX_ARENA_FLOATS);
+    }
+
+    #[test]
+    fn first_fit_reuses_chunk_tails() {
+        // 40 MB, 40 MB, 20 MB (in floats): the 20 MB file goes into the
+        // first grown chunk's 24 MB tail, so the three fit in two chunks.
+        let mb = 1024 * 1024 / 4;
+        let mut a = SampleArena::with_budget(1000, usize::MAX);
+        let s1 = a.alloc(40 * mb, true).unwrap();
+        let s2 = a.alloc(40 * mb, true).unwrap();
+        let s3 = a.alloc(20 * mb, true).unwrap();
+        assert_eq!((s1.chunk, s2.chunk, s3.chunk), (1, 2, 1));
+        assert_eq!(a.chunks.len(), 3, "the reserve plus two grown chunks");
+        assert_eq!(s3.start as usize, 40 * mb);
+        // While playing (no growth) a tail that fits is used too.
+        let s4 = a.alloc(900, false).unwrap();
+        assert_eq!(s4.chunk, 0);
+        assert_eq!(a.allocated(), 100 * mb + 900);
     }
 
     #[test]

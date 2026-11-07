@@ -86,17 +86,27 @@ Plan 9 (spec addendum §3.1); engine side in `engine/src/audio_track.rs`.
 - **A voice advances by frames, never by ticks**, so a tempo change never
   makes it jump (a clip keeps its length in ticks: its audio ends early or
   is cut at the clip end). A one-shot file that ended stays silent until a
-  jump, even if a faster tempo maps the playhead back inside it.
+  jump, an edit that changes the clip's mapping (sample, offset, loop or
+  start) or a replacement of its sample, even if a faster tempo maps the
+  playhead back inside it.
 - **Chase.** On Play, a seek, a loop wrap, a loop set behind the playhead, a
   mode switch, an edit that changes the sample, offset, loop or start, and a
   sample that becomes ready (or is replaced) while the playhead is inside the
-  clip, the voice restarts at the file frame for the current tick. Changing
-  only the length, gain or fades keeps the voice; the gain ramps over 5 ms.
+  clip, the voice restarts at the file frame for the current tick; this
+  includes a one-shot that already finished. Changing only the length, gain
+  or fades keeps the voice; the gain and the user-fade factor ramp from the
+  old value to the new one over 5 ms (a fade handle or the end dragged across
+  the playhead never steps). `CLIP_REMOVE` also resets the slot's staged
+  edit.
 - **Fades** (2 ms, `CLIP_FADE_SECONDS`):
   - a start at file position 0 is unfaded (keeps the transient); any other
     start (chase, trimmed clip, late sample) fades in;
   - every clip end fades out, ending exactly at the clip end; a one-shot
-    file's last 2 ms fade out too;
+    file's last 2 ms fade out too. The end fade always runs in full: an end
+    that a resize or a tempo change puts less than 2 ms ahead (before its
+    fade began), or one moved while its fade runs, cuts the voice instead
+    (the hold-and-fade may run up to 2 ms past the clip end), and a chased
+    start inside a clip's last 2 ms stays silent;
   - a cut voice (jump, Stop, removal, a new sample generation, its clip moved
     off the playhead) holds its last sample and fades it out; a chase into
     the same clip fades in meanwhile (a linear cross-over);

@@ -97,7 +97,13 @@ one-off copy, maybe a `memory.grow`, not a steady-state overrun).
    allocator, so a replaced sample leaks until the next load or reset). A
    request that would pass it is `Err.OUT_OF_MEMORY` **whether playing or
    not** (waiting for Stop cannot help, so it is never `DEFERRED`), and a
-   grown chunk is cut so it never extends past the budget. One file stays
+   grown chunk is cut so it never extends past the budget. Requests are
+   placed **first fit** (the first chunk whose free tail holds them), so the
+   tail a large file skipped (a 40 MB file leaves 24 MB of a 64 MB chunk)
+   takes a later, smaller one: without it, physical memory could reach about
+   twice the budget with 33–64 MB files. Tails smaller than every later
+   request still go unused, so physical memory can exceed the handed-out
+   total by up to one tail per chunk. One file stays
    capped at `MAX_SAMPLE_FLOATS` (256 MB). `SampleArena::allocated()`
    reports the total; tests use `SampleArena::with_budget` so they never
    touch 1 GiB. The UI checks the same budget after decode and before

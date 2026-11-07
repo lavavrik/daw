@@ -269,7 +269,8 @@
       recorder.onTransport(false, clock.heardTicks());
       stop(project, engine);
     } else {
-      play(project, engine, recorder.countInTicks());
+      // A failed (or closed) engine refuses PLAY: stay stopped, no recording pass.
+      if (!play(project, engine, recorder.countInTicks())) return;
       recorder.onTransport(true, clock.heardTicks());
     }
     refreshRec();

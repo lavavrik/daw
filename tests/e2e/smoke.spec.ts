@@ -309,6 +309,9 @@ test('engine failure is shown prominently and loads settle', async ({ page }) =>
     engine!.send(Op.NOTE_ON, 69, 127);
   });
   expect(await maxPeak(page, 500)).toBe(0);
+  // Play on a dead engine does nothing (no "■ Stop" for a transport that is not running).
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('play')).toHaveText(/Play/);
 });
 
 test('a command burst larger than the ring is delivered, in order, nothing dropped', async ({ page }) => {

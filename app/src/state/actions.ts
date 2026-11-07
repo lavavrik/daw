@@ -174,9 +174,15 @@ export function setMetronome(p: Project, sink: CommandSink, on: boolean) {
 }
 
 /** `countIn`: ticks of count-in (BAR_TICKS = one bar; the engine accepts only 0 or BAR_TICKS). */
-export function play(p: Project, sink: CommandSink, countIn = 0) {
+/**
+ * False (and still stopped) if the engine refused the command: it failed,
+ * or it is closed (an audio restart replaced it) -- the Play button must not
+ * show a transport that is not running.
+ */
+export function play(p: Project, sink: CommandSink, countIn = 0): boolean {
+  if (!sink.send(Op.PLAY, countIn === BAR_TICKS ? BAR_TICKS : 0)) return false;
   p.playing = true;
-  sink.send(Op.PLAY, countIn === BAR_TICKS ? BAR_TICKS : 0);
+  return true;
 }
 
 /** Song mode with the loop on: the engine parks at the loop start (and makes it the song start). */

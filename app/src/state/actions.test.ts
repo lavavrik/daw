@@ -136,4 +136,15 @@ describe('actions', () => {
       [Op.PLAY, 3840], [Op.STOP, 0], [Op.PLAY, 0], [Op.STOP, 0], [Op.PLAY, 3840], [Op.STOP, 0], [Op.PLAY, 0],
     ]);
   });
+
+  it('play on a failed or closed engine (send refused) leaves the transport stopped', () => {
+    const p = new Project();
+    const dead = { send: () => false };
+    expect(play(p, dead)).toBe(false);
+    expect(p.playing).toBe(false);
+    togglePlay(p, dead);
+    expect(p.playing).toBe(false);
+    expect(play(p, fake().sink)).toBe(true);
+    expect(p.playing).toBe(true);
+  });
 });

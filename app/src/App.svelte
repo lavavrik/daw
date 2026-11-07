@@ -40,6 +40,7 @@
   import { createHistory } from './history/history';
   import type { History } from './history/history';
   import { diffApply } from './history/diffApply';
+  import { createGestures, installGestures } from './history/gestures';
   import { serialize } from './project/serialize';
 
   const project = new Project();
@@ -385,44 +386,26 @@
       onSave: () => void s.save(),
       onSaveAs: () => void s.saveAs(),
       onOpen: () => topBar?.request('open'),
-      onUndo: () => h.undo(),
-      onRedo: () => h.redo(),
+      onUndo: undo,
+      onRedo: redo,
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     void connectMidi(e, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
   }
 
-  // Every pointer gesture (press .. release) is one undo entry: a knob,
-  // fader, note or clip drag, a step-paint stroke. The commit waits one task
-  // after the release so the editors' own pointerup handlers (final drag
-  // value) and the click that follows land inside the gesture.
-  onMount(() => {
-    const down = new Set<number>();
-    const press = (e: PointerEvent) => {
-      if (down.size === 0 && !project.loading) history?.begin();
-      down.add(e.pointerId);
-    };
-    const release = (e: PointerEvent) => {
-      down.delete(e.pointerId);
-      setTimeout(() => {
-        if (down.size === 0) history?.commit();
-      }, 0);
-    };
-    const lost = () => {
-      down.clear();
-      history?.commit();
-    };
-    window.addEventListener('pointerdown', press, true);
-    window.addEventListener('pointerup', release, true);
-    window.addEventListener('pointercancel', release, true);
-    window.addEventListener('blur', lost);
-    return () => {
-      window.removeEventListener('pointerdown', press, true);
-      window.removeEventListener('pointerup', release, true);
-      window.removeEventListener('pointercancel', release, true);
-      window.removeEventListener('blur', lost);
-    };
-  });
+  // Every pointer gesture is one undo entry (history/gestures.ts: lost
+  // pointerups after a <select> popup or a context menu end it too).
+  const gestures = createGestures({ history: () => history, loading: () => project.loading });
+  onMount(() => installGestures(gestures));
+  /** ⌘Z / ↶ and ⇧⌘Z / ↷: a drag still held after it continues as a new entry. */
+  const undo = () => {
+    history?.undo();
+    gestures.afterApply();
+  };
+  const redo = () => {
+    history?.redo();
+    gestures.afterApply();
+  };
 
   // The browser may suspend the AudioContext (device change, long idle);
   // resume() needs a user gesture, so every click / key press wakes it. This
@@ -479,7 +462,7 @@
         bind:this={topBar}
         p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
         onTogglePlay={transportToggle} onToggleArm={toggleArm}
-        onUndo={() => history?.undo()} onRedo={() => history?.redo()}
+        onUndo={undo} onRedo={redo}
       />
     {/if}
     {#if restoreOffer}

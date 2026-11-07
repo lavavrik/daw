@@ -36,7 +36,8 @@
   // focused jack picks it up exactly like a press would (a connected input
   // lifts its cable); Tab to another jack moves the dashed cable's free end
   // there; Enter/Space on it drops (the same drop()); Delete/Backspace
-  // unplugs a carried cable; Esc (anywhere) or a pointer press cancels. A
+  // unplugs a carried cable; Esc or a pointer press, anywhere, cancels; a
+  // re-measure (scroll, resize) keeps the free end on the focused jack. A
   // visually hidden live region says what is picked up.
   import { tick, untrack } from 'svelte';
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
@@ -125,8 +126,10 @@
     // client* = the panels' box only. Not scroll*: that would include the
     // cable SVG itself (sized from this) and grow on every measure.
     size = { w: content.clientWidth, h: content.clientHeight };
-    // Mid-drag scroll/resize: the carried end stays under the pointer.
-    if (drag) drag.at = { x: drag.client.x - r0.left, y: drag.client.y - r0.top };
+    // Mid-drag scroll/resize: the carried end stays under the pointer, or on
+    // the focused jack for a keyboard pick (it has no pointer position).
+    if (drag?.kbd) drag.at = (drag.kbdAt && next[drag.kbdAt]) || drag.at;
+    else if (drag) drag.at = { x: drag.client.x - r0.left, y: drag.client.y - r0.top };
   }
   /** Coalesced to one measure per frame (scroll and resize fire often). */
   function remeasure() {
@@ -171,6 +174,8 @@
     client: Pt;
     /** Keyboard pick: the jack it was picked up from (`at` follows focus, not the pointer). */
     kbd?: End & { dir: 'in' | 'out' };
+    /** Keyboard pick: key() of the focused jack, where the free end sits (re-read on every measure). */
+    kbdAt?: string;
   };
   let drag = $state<Drag | null>(null);
 
@@ -269,18 +274,23 @@
       return;
     }
     if (drag || !content) return; // a pointer drag is in progress
-    const at = pos[key(m, dir, port)] ?? { x: 0, y: 0 };
+    const kbdAt = key(m, dir, port);
+    const at = pos[kbdAt] ?? { x: 0, y: 0 };
     const existing = dir === 'in' ? track.cables.find((c) => c.to.m === m && c.to.port === port) : undefined;
     const kbd = { m, port, dir };
     drag = existing
-      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at, client: { x: 0, y: 0 }, kbd }
-      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at, client: { x: 0, y: 0 }, kbd };
+      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at, client: { x: 0, y: 0 }, kbd, kbdAt }
+      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at, client: { x: 0, y: 0 }, kbd, kbdAt };
   }
   /** The free end of a keyboard-picked cable follows focus from jack to jack. */
   function jackFocus(m: number, dir: 'in' | 'out', port: number) {
-    if (drag?.kbd) drag.at = pos[key(m, dir, port)] ?? drag.at;
+    if (!drag?.kbd) return;
+    drag.kbdAt = key(m, dir, port);
+    drag.at = pos[drag.kbdAt] ?? drag.at;
   }
-  // Esc anywhere cancels a keyboard pick (a carried cable snaps back).
+  // Esc anywhere, or a pointer press anywhere, cancels a keyboard pick (a
+  // carried cable snaps back). A press on a jack also starts a pointer drag
+  // (jackDown runs after this capture-phase listener cleared the pick).
   $effect(() => {
     if (!drag?.kbd) return;
     const esc = (ev: KeyboardEvent) => {
@@ -289,8 +299,15 @@
       ev.stopPropagation();
       drag = null;
     };
+    const press = () => {
+      if (drag?.kbd) drag = null;
+    };
     window.addEventListener('keydown', esc, true);
-    return () => window.removeEventListener('keydown', esc, true);
+    window.addEventListener('pointerdown', press, true);
+    return () => {
+      window.removeEventListener('keydown', esc, true);
+      window.removeEventListener('pointerdown', press, true);
+    };
   });
   // Another track's rack: a pick from this one is dropped.
   $effect(() => {

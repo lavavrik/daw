@@ -620,6 +620,36 @@ test('keyboard patching: Enter picks a jack up, Enter on another drops it, Esc c
   expect(await holdPeak(page, ['KeyA'])).toBeGreaterThan(0.05);
 });
 
+test('keyboard pick-up: the free end stays on the focused jack across a re-measure; a press elsewhere cancels', async ({ page }) => {
+  await addSynth(page); // Deep Bass: VCA 6 -> Out 7
+  const freeEnd = () => page.evaluate(() => {
+    const plug = document.querySelector('[data-testid="cables"] path.drag + circle.plug');
+    return plug ? { x: Number(plug.getAttribute('cx')), y: Number(plug.getAttribute('cy')) } : null;
+  });
+  const holeIn = (testid: string) => page.evaluate((id) => {
+    const content = document.querySelector('[data-testid="rail"] .content')!.getBoundingClientRect();
+    const r = document.querySelector(`[data-testid="${id}"] .hole`)!.getBoundingClientRect();
+    return { x: r.left - content.left + r.width / 2, y: r.top - content.top + r.height / 2 };
+  }, testid);
+  await page.getByTestId('jack-6-out-out').focus();
+  await page.keyboard.press('Enter');
+  await page.getByTestId('jack-7-in-r').focus();
+  const want = await holeIn('jack-7-in-r');
+  await expect.poll(freeEnd).toEqual(want);
+  // A rail scroll and a window resize re-measure every jack: the end stays put.
+  await page.evaluate(() => document.querySelector('[data-testid="rail"]')!.dispatchEvent(new Event('scroll')));
+  await page.setViewportSize({ width: 1200, height: 720 });
+  await page.waitForTimeout(100);
+  const after = await holeIn('jack-7-in-r');
+  const end = (await freeEnd())!;
+  expect(Math.abs(end.x - after.x)).toBeLessThan(0.5);
+  expect(Math.abs(end.y - after.y)).toBeLessThan(0.5);
+  // A press anywhere (not only on a jack) cancels the pick.
+  await page.getByTestId('rail').click({ position: { x: 5, y: 5 } });
+  await expect(page.locator('[data-testid="cables"] path.drag')).toHaveCount(0);
+  await expect(page.getByTestId('jack-6-out-out')).toHaveAttribute('aria-pressed', 'false');
+});
+
 test('add module menu adds Noise', async ({ page }) => {
   await addSynth(page);
   await page.getByRole('button', { name: '+ Add module' }).click();

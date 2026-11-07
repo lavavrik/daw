@@ -145,7 +145,7 @@
     recorder.countIn = countIn = !countIn;
     persist();
   }
-  /** Commit on change/Enter (clamped), then release focus so Space / R / the piano work again. */
+  /** Commit on change (clamped; Enter blurs, which fires it), then release focus so Space / R / the piano work again. */
   function commitOffset(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     recorder.offsetMs = input.valueAsNumber;
@@ -204,7 +204,6 @@
     };
   });
 
-  /** Commit on change/Enter, then release focus so Space and the piano work again. */
   /**
    * Enter in a number field only blurs it: the blur commits through
    * `change` (once -- calling the commit here as well sent SET_TEMPO twice).
@@ -212,6 +211,7 @@
   function blurOnEnter(e: KeyboardEvent) {
     if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
   }
+  /** Commit on change (Enter blurs, see above), then release focus so Space and the piano work again. */
   function commitTempo(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     setTempo(p, engine, input.valueAsNumber);

@@ -13,7 +13,10 @@ export const APPENDED_PARAMS: Record<string, Record<string, number>> = {
 
 type FixtureModule = { id: string; params?: Record<string, number> };
 
-/** A fixture track as a save writes it today: synth patches gain the appended params. */
+/**
+ * A fixture track as a save writes it today: synth patches gain the appended
+ * params (defaults only; a value the fixture already has wins).
+ */
 export function withAppendedParams<T extends object>(track: T): T {
   const t = track as T & { patch?: { modules: FixtureModule[] } };
   if (!t.patch) return track;
@@ -21,7 +24,7 @@ export function withAppendedParams<T extends object>(track: T): T {
     ...t,
     patch: {
       ...t.patch,
-      modules: t.patch.modules.map((m) => (APPENDED_PARAMS[m.id] ? { ...m, params: { ...m.params, ...APPENDED_PARAMS[m.id] } } : m)),
+      modules: t.patch.modules.map((m) => (APPENDED_PARAMS[m.id] ? { ...m, params: { ...APPENDED_PARAMS[m.id], ...m.params } } : m)),
     },
   };
 }

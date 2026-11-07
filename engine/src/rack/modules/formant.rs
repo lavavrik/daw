@@ -16,6 +16,9 @@
 //!   copied), band-pass output `k·v1` with damping `k = 1/q`, so every peak has
 //!   **unity gain at its centre** and the sum peaks near 0 dB (`g2`, `g3`
 //!   scale the upper two). No input saturation (unlike the Filter's SVF).
+//!   Coinciding peaks (overlapping `f` ranges, or centres pushed into the
+//!   20 Hz / 0.45·sr clamp) add up to `1 + g2 + g3` (≈ +7 dB at the default
+//!   gains); the limiter catches that, it is not normalised.
 //! * **Smoothing.** Every param is smoothed (5 ms one-pole); `f1..f3` and `q`
 //!   in the log2 domain (like the Filter's cutoff) so sweeps move evenly.
 //!   The `pitch` and `cv` inputs are not smoothed (as the Filter's `cv`):
@@ -76,6 +79,18 @@ pub struct Formant {
     state: [[[f32; 2]; PEAKS]; MAX_POLY],
     /// Channel count of the previous sub-block.
     channels: usize,
+    /// Test-only probes: the largest |pre-limiter output| and |state| seen,
+    /// and how many times a non-finite state was reset.
+    #[cfg(test)]
+    probe: Probe,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+struct Probe {
+    pre_limit: f32,
+    state: f32,
+    resets: u32,
 }
 
 impl Formant {
@@ -96,6 +111,8 @@ impl Formant {
             mix: lin(MIX),
             state: [[[0.0; 2]; PEAKS]; MAX_POLY],
             channels: 0,
+            #[cfg(test)]
+            probe: Probe::default(),
         }
     }
 
@@ -175,13 +192,25 @@ impl Formant {
                 let bp2 = k * svf_step(&mut s[1], x, c[1]).0;
                 let bp3 = k * svf_step(&mut s[2], x, c[2]).0;
                 let wet = bp1 + g2 * bp2 + g3 * bp3;
-                out.data[ch][i] = limit(x + mix * (wet - x));
+                let y = x + mix * (wet - x);
+                #[cfg(test)]
+                {
+                    self.probe.pre_limit = self.probe.pre_limit.max(y.abs());
+                }
+                out.data[ch][i] = limit(y);
             }
         }
 
         // Denormal guard and defensive reset, once per sub-block.
         for st in self.state[..channels].iter_mut() {
             for s in st.iter_mut() {
+                #[cfg(test)]
+                {
+                    if s.iter().any(|x| !x.is_finite()) {
+                        self.probe.resets += 1;
+                    }
+                    self.probe.state = s.iter().fold(self.probe.state, |m, x| m.max(x.abs()));
+                }
                 flush(s);
             }
         }
@@ -196,6 +225,8 @@ mod tests {
     use crate::{MAX_PARAMS, RACK_BLOCK};
 
     const SR: f32 = 48000.0;
+    /// The peaks and bounds are checked at the common rates.
+    const SRS: [f32; 3] = [44100.0, 48000.0, 96000.0];
 
     fn defaults() -> [f32; MAX_PARAMS] {
         let mut p = [0.0f32; MAX_PARAMS];
@@ -208,7 +239,11 @@ mod tests {
     /// Steady-state gain (dB) at `hz` through a fresh Formant with params
     /// `p` and constant mono `pitch` / `cv` (None = unconnected).
     fn gain_at(p: &[f32], hz: f64, pitch: Option<f32>, cv: Option<f32>) -> f64 {
-        let mut f = Formant::new(SR);
+        gain_at_sr(SR, p, hz, pitch, cv)
+    }
+
+    fn gain_at_sr(sr: f32, p: &[f32], hz: f64, pitch: Option<f32>, cv: Option<f32>) -> f64 {
+        let mut f = Formant::new(sr);
         f.snap();
         let mut ins = [PortBuf::new(), PortBuf::new(), PortBuf::new()];
         ins[0].channels = 1;
@@ -219,7 +254,7 @@ mod tests {
             }
         }
         let mut outs = [PortBuf::new()];
-        tone_gain_db(SR, hz, |l, _r| {
+        tone_gain_db(sr, hz, |l, _r| {
             for chunk in l.chunks_mut(RACK_BLOCK) {
                 ins[0].data[0].copy_from_slice(chunk);
                 f.process(p, &ins, &mut outs);
@@ -243,16 +278,18 @@ mod tests {
         p[G2] = 1.0;
         p[G3] = 1.0;
         assert_eq!(p[Q], 6.0);
-        for want in [500.0f64, 1500.0, 2600.0] {
-            // Sweep ±12 % in 1.5 % steps; the maximum must be inside, not at
-            // an edge (a local maximum), and within ±3 % at about 0 dB.
-            let steps: Vec<f64> = (-8..=8).map(|k| want * (1.0 + 0.015 * k as f64)).collect();
-            let gains: Vec<f64> = steps.iter().map(|&hz| gain_at(&p, hz, None, None)).collect();
-            let (best, &g) = gains.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
-            assert!(best > 0 && best < steps.len() - 1, "{want} Hz: maximum at the sweep edge ({:?})", gains);
-            let at = steps[best];
-            assert!((at / want - 1.0).abs() <= 0.03, "{want} Hz peak found at {at:.0} Hz");
-            assert!(g.abs() <= 1.5, "{want} Hz peak gain {g:.2} dB");
+        for sr in SRS {
+            for want in [500.0f64, 1500.0, 2600.0] {
+                // Sweep ±12 % in 1.5 % steps; the maximum must be inside, not
+                // at an edge (a local maximum), and within ±3 % at about 0 dB.
+                let steps: Vec<f64> = (-8..=8).map(|k| want * (1.0 + 0.015 * k as f64)).collect();
+                let gains: Vec<f64> = steps.iter().map(|&hz| gain_at_sr(sr, &p, hz, None, None)).collect();
+                let (best, &g) = gains.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap();
+                assert!(best > 0 && best < steps.len() - 1, "{sr}: {want} Hz: maximum at the sweep edge ({:?})", gains);
+                let at = steps[best];
+                assert!((at / want - 1.0).abs() <= 0.03, "{sr}: {want} Hz peak found at {at:.0} Hz");
+                assert!(g.abs() <= 1.5, "{sr}: {want} Hz peak gain {g:.2} dB");
+            }
         }
     }
 
@@ -316,84 +353,130 @@ mod tests {
 
     #[test]
     fn formant_is_bounded() {
-        let mut p = defaults();
-        p[Q] = 20.0;
-        p[G2] = 1.0;
-        p[G3] = 1.0;
-        p[CV_AMT] = 4.0;
+        for sr in SRS {
+            let mut p = defaults();
+            p[Q] = 20.0;
+            p[G2] = 1.0;
+            p[G3] = 1.0;
+            p[CV_AMT] = 4.0;
+            let mut f = Formant::new(sr);
+            f.snap();
+            let mut noise = Noise::new(11);
+            let mut ins = [PortBuf::new(), PortBuf::new(), PortBuf::new()];
+            ins[0].channels = 2;
+            ins[2].channels = 1;
+            let mut outs = [PortBuf::new()];
+            let mut peak = 0.0f32;
+            let saw_period = (sr / 110.0) as usize;
+            for b in 0..(2.0 * sr) as usize / RACK_BLOCK {
+                for i in 0..RACK_BLOCK {
+                    let n = b * RACK_BLOCK + i;
+                    ins[0].data[0][i] = noise.next();
+                    // Full-scale saw at 110 Hz.
+                    ins[0].data[1][i] = (n % saw_period) as f32 / (saw_period as f32 / 2.0) - 1.0;
+                    // cv ±1 at 20 Hz, × cv_amt 4 = ±4 oct.
+                    ins[2].data[0][i] = (std::f32::consts::TAU * 20.0 * n as f32 / sr).sin();
+                }
+                f.process(&p, &ins, &mut outs);
+                for ch in 0..2 {
+                    for &y in &outs[0].data[ch] {
+                        assert!(y.is_finite(), "{sr}: non-finite output");
+                        peak = peak.max(y.abs());
+                    }
+                }
+            }
+            assert!(peak <= 3.5, "{sr}: peak {peak}");
+            assert!(peak > 0.5, "{sr}: it rings: {peak}");
+            // The limiter only bounds the output: the filters themselves must
+            // stay bounded and finite (no defensive reset ever fired).
+            let pr = f.probe;
+            assert_eq!(pr.resets, 0, "{sr}: a non-finite state was reset");
+            assert!(pr.pre_limit < 3.5, "{sr}: pre-limiter peak {}", pr.pre_limit);
+            assert!(pr.state < 100.0, "{sr}: state peak {}", pr.state);
+            // Silence: the states decay and are flushed to exactly 0.
+            ins[0].data = [[0.0; RACK_BLOCK]; crate::MAX_POLY];
+            for _ in 0..(2.0 * sr) as usize / RACK_BLOCK {
+                f.process(&p, &ins, &mut outs);
+            }
+            assert!(f.state[..2].iter().flatten().flatten().all(|&s| s == 0.0), "{sr}: denormals flushed");
+            assert!(outs[0].data[..2].iter().flatten().all(|&y| y == 0.0));
+        }
+    }
+
+    /// Largest second difference `|y[n] − 2y[n−1] + y[n−2]|`: a sine of
+    /// amplitude A at f has A·(2πf/sr)², so a click (a step or a kink)
+    /// stands out against the steady signal's own curvature.
+    fn max_d2(y: &[f32]) -> f32 {
+        y.windows(3).map(|w| (w[2] - 2.0 * w[1] + w[0]).abs()).fold(0.0, f32::max)
+    }
+
+    /// Outputs (per channel, after a 0.1 s start-up) for a 0.5-amplitude
+    /// 1 kHz sine with a `cv` of `cv_ch` channels given by `cv(ch, n)`.
+    fn render_cv(p: &[f32], cv_ch: usize, seconds: f32, cv: impl Fn(usize, usize) -> f32) -> Vec<Vec<f32>> {
         let mut f = Formant::new(SR);
         f.snap();
-        let mut noise = Noise::new(11);
         let mut ins = [PortBuf::new(), PortBuf::new(), PortBuf::new()];
-        ins[0].channels = 2;
-        ins[2].channels = 1;
+        ins[0].channels = 1;
+        ins[2].channels = cv_ch;
         let mut outs = [PortBuf::new()];
-        let mut peak = 0.0f32;
-        for b in 0..(2.0 * SR) as usize / RACK_BLOCK {
+        let mut out = vec![Vec::new(); cv_ch];
+        let skip = (0.1 * SR) as usize;
+        for b in 0..(seconds * SR) as usize / RACK_BLOCK {
             for i in 0..RACK_BLOCK {
                 let n = b * RACK_BLOCK + i;
-                ins[0].data[0][i] = noise.next();
-                // Full-scale saw at 110 Hz.
-                ins[0].data[1][i] = (n % 436) as f32 / 218.0 - 1.0;
-                // cv ±1 at 20 Hz, × cv_amt 4 = ±4 oct.
-                ins[2].data[0][i] = (std::f32::consts::TAU * 20.0 * n as f32 / SR).sin();
+                ins[0].data[0][i] = 0.5 * (std::f32::consts::TAU * 1000.0 * n as f32 / SR).sin();
+                for ch in 0..cv_ch {
+                    ins[2].data[ch][i] = cv(ch, n);
+                }
             }
-            f.process(&p, &ins, &mut outs);
-            for ch in 0..2 {
-                for &y in &outs[0].data[ch] {
-                    assert!(y.is_finite(), "non-finite output");
-                    peak = peak.max(y.abs());
+            f.process(p, &ins, &mut outs);
+            for (ch, o) in out.iter_mut().enumerate() {
+                if b * RACK_BLOCK >= skip {
+                    o.extend_from_slice(&outs[0].data[ch]);
                 }
             }
         }
-        assert!(peak <= 3.5, "peak {peak}");
-        assert!(peak > 0.5, "it rings: {peak}");
-        // Silence: the states decay and are flushed to exactly 0.
-        ins[0].data = [[0.0; RACK_BLOCK]; crate::MAX_POLY];
-        for _ in 0..(2.0 * SR) as usize / RACK_BLOCK {
-            f.process(&p, &ins, &mut outs);
-        }
-        assert!(f.state[..2].iter().flatten().flatten().all(|&s| s == 0.0), "denormals flushed");
-        assert!(outs[0].data[..2].iter().flatten().all(|&y| y == 0.0));
+        out
     }
 
     #[test]
     fn formant_cv_sweep_is_smooth() {
-        let mut p = defaults();
-        p[CV_AMT] = 1.0;
-        // cv before / after 0.25 s.
-        let max_step = |cv0: f32, cv1: f32| -> f32 {
-            let mut f = Formant::new(SR);
-            f.snap();
-            let mut ins = [PortBuf::new(), PortBuf::new(), PortBuf::new()];
-            ins[0].channels = 1;
-            ins[2].channels = 1;
-            let mut outs = [PortBuf::new()];
-            let mut prev = 0.0f32;
-            let mut worst = 0.0f32;
-            for b in 0..(0.5 * SR) as usize / RACK_BLOCK {
-                for i in 0..RACK_BLOCK {
-                    let n = b * RACK_BLOCK + i;
-                    ins[0].data[0][i] = 0.5 * (std::f32::consts::TAU * 1000.0 * n as f32 / SR).sin();
-                }
-                ins[2].data[0] = [if b >= 375 { cv1 } else { cv0 }; RACK_BLOCK];
-                f.process(&p, &ins, &mut outs);
-                for &y in &outs[0].data[0] {
-                    // Skip the start-up transient.
-                    if b >= 100 {
-                        worst = worst.max((y - prev).abs());
-                    }
-                    prev = y;
-                }
+        for q in [6.0, 20.0] {
+            let mut p = defaults();
+            p[Q] = q;
+            p[CV_AMT] = 1.0;
+            let at = (0.25 * SR) as usize;
+            let steady_at = |p: &[f32], c: f32| max_d2(&render_cv(p, 1, 0.5, |_, _| c)[0]);
+            // A 1-oct cv step, both ways, against the settled states.
+            let steady = steady_at(&p, 0.0).max(steady_at(&p, 1.0));
+            let bound = 3.0 * steady;
+            for (c0, c1) in [(0.0, 1.0), (1.0, 0.0)] {
+                let y = &render_cv(&p, 1, 0.5, |_, n| if n >= at { c1 } else { c0 })[0];
+                let got = max_d2(y);
+                assert!(got <= bound, "q {q}: cv step {c0}->{c1}: max d2 {got} > 3 × steady {steady}");
+                // The detector catches a click: a 0.05 step (the old
+                // test's threshold) added at the cv step breaks the bound.
+                let mut clicked = y.clone();
+                let k = at - (0.1 * SR) as usize;
+                clicked[k..].iter_mut().for_each(|v| *v += 0.05);
+                assert!(max_d2(&clicked) > bound, "q {q}: the metric must see a 0.05 step");
             }
-            worst
-        };
-        // The steady signal's own maximum step: the larger of the two
-        // settled states (the 1 kHz sine sits between the peaks at cv 0 and
-        // on f1 at cv 1, so it is much louder after the step).
-        let steady = max_step(0.0, 0.0).max(max_step(1.0, 1.0));
-        let stepped = max_step(0.0, 1.0).max(max_step(1.0, 0.0));
-        assert!(stepped <= steady + 0.05, "cv step clicks: max step {stepped} vs steady {steady}");
+            // A 20 Hz ±4-oct sweep against every settled state in range.
+            p[CV_AMT] = 4.0;
+            let steady = (-8..=8).map(|k| steady_at(&p, k as f32 / 8.0)).fold(0.0f32, f32::max);
+            let sweep = |_: usize, n: usize| (std::f32::consts::TAU * 20.0 * n as f32 / SR).sin();
+            let got = max_d2(&render_cv(&p, 1, 0.5, sweep)[0]);
+            assert!(got <= 3.0 * steady, "q {q}: 20 Hz sweep: max d2 {got} > 3 × steady {steady}");
+            // Poly cv (per-channel coefficients): channel 0 steps, channel 1
+            // holds; each matches its own mono behaviour.
+            p[CV_AMT] = 1.0;
+            let poly = render_cv(&p, 2, 0.5, |ch, n| if ch == 0 && n >= at { 1.0 } else if ch == 0 { 0.0 } else { 0.5 });
+            let got = max_d2(&poly[0]);
+            assert!(got <= bound, "q {q}: poly cv step: max d2 {got} > {bound}");
+            let held = &render_cv(&p, 1, 0.5, |_, _| 0.5)[0];
+            let diff = held.iter().zip(&poly[1]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(diff < 1e-6, "q {q}: the held channel is independent ({diff})");
+        }
     }
 
     #[test]

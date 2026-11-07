@@ -21,7 +21,8 @@
 //! * `sustain` is smoothed (5 ms), so moving it never clicks. While held at
 //!   sustain the level simply tracks it.
 //! * **Velocity** (plan 11): `env = level × (1 − vel_amt + vel_amt × v)`,
-//!   where `v` is the `vel` input (0..1; unconnected = 1; mono is broadcast)
+//!   where `v` is the `vel` input (0..1; unconnected = 1; mono is broadcast;
+//!   a gate channel beyond a poly `vel`'s channels also reads 1)
 //!   **latched at the rising gate edge**, so a note's dynamic holds through
 //!   it (mono legato keeps the first note's velocity: no new edge). The
 //!   latched value glides over 5 ms (one-pole), so a voice stolen at a
@@ -147,7 +148,12 @@ impl Adsr {
                     // Rising edge: latch the velocity, then (re)start the
                     // delay or the attack from the current level.
                     (true, Stage::Idle | Stage::Release) => {
-                        self.vel[ch] = vel_in.map_or(1.0, |p| p.get(ch, i).max(0.0).min(1.0));
+                        // Unconnected, or a poly vel with fewer channels
+                        // than the gate: that voice reads full velocity.
+                        self.vel[ch] = match vel_in {
+                            Some(p) if p.channels == 1 || ch < p.channels => p.get(ch, i).max(0.0).min(1.0),
+                            _ => 1.0,
+                        };
                         if st == Stage::Idle {
                             // Level 0: nothing to glide from.
                             self.vel_glide[ch].snap();
@@ -603,5 +609,31 @@ mod tests {
         env.snap(); // a fresh module takes its smooth params at once
         let up = run(&mut env, &p, 1.0, 40);
         assert_eq!(*up.last().unwrap(), 1.0);
+    }
+
+    #[test]
+    fn vel_missing_channels_read_full() {
+        // A 2-channel vel into a 3-channel gate: channel 2 has no velocity
+        // and reads as 1 (unconnected), not 0.
+        let mut p = defaults();
+        p[VEL_AMT] = 1.0;
+        p[SUSTAIN] = 1.0;
+        let mut env = Adsr::new(SR);
+        env.snap();
+        let mut ins = [PortBuf::new(), PortBuf::new()];
+        ins[0].channels = 3;
+        ins[1].channels = 2;
+        for ch in 0..3 {
+            ins[0].data[ch] = [1.0; RACK_BLOCK];
+        }
+        ins[1].data[0] = [0.5; RACK_BLOCK];
+        ins[1].data[1] = [0.25; RACK_BLOCK];
+        let mut outs = [PortBuf::new()];
+        for _ in 0..40 {
+            env.process(&p, &ins, &mut outs);
+        }
+        let last = |ch: usize| outs[0].data[ch][RACK_BLOCK - 1];
+        assert!((last(0) - 0.5).abs() < 1e-4 && (last(1) - 0.25).abs() < 1e-4, "{} {}", last(0), last(1));
+        assert_eq!(last(2), 1.0, "a missing vel channel reads full");
     }
 }

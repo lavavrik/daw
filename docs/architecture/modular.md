@@ -61,7 +61,9 @@ Sustain → Release per channel. Plan 11 appended (indices unchanged):
   with `v` latched at the rising gate (unconnected = 1), so a note's dynamic
   holds through it; the latched value glides over 5 ms so a voice steal at a
   sounding level never steps. Patch MIDI In `vel` into it for velocity
-  brightness or loudness.
+  brightness or loudness. Mono MIDI In `vel` jumps to a note started from
+  silence (so the ADSR latches that note's velocity) and glides 5 ms only
+  on legato notes, which the ADSR ignores anyway (no new edge).
 - With `delay` 0, `vel_amt` 0 the output is bit-identical to the
   pre-plan-11 envelope (pinned by `adsr_defaults_are_bit_identical`), so old
   patches and export hashes are unchanged.
@@ -214,12 +216,21 @@ the "bloom"/"wah" of Brass Stab and Garage Organ. Inline (no FX pool).
   shared with `filter.rs`, not copied), so every peak has unity gain at its
   centre and, with `g2 = g3 = 1`, the response peaks within 1.5 dB of 0 dB at
   each `f_i` (tested). No input saturation.
+- **Stacked peaks.** Peaks that coincide add up: overlapping `f` ranges
+  (`f1` up to 1500 Hz, `f2` from 500 Hz) or a large `shift`/`cv` that pushes
+  several centres into the 20 Hz or 0.45·sr clamp put them on one frequency,
+  for a gain of up to `1 + g2 + g3` there: about +7 dB at the default gains
+  (2.2×), +9.5 dB at `g2 = g3 = 1`. Not normalised (that would make the
+  usual, separated case quieter); the output limiter catches it.
 - **Smoothing and channels.** Every param is smoothed over 5 ms (`f1..f3`
   and `q` in log2). Coefficients are computed per sample, shared across
   channels when `pitch` and `cv` are mono or unconnected (as in the Filter),
   per channel otherwise. Channels are the maximum over the connected inputs
-  (a mono `in` is broadcast to a poly `pitch`). Even a 1-octave cv step does
-  not click: the TPT states stay continuous.
+  (a mono `in` is broadcast to a poly `pitch`). `pitch` and `cv` are not
+  smoothed, and need not be: the TPT states stay continuous, so a 1-octave
+  cv step and a 20 Hz ±4-oct sweep keep the output's curvature (max second
+  difference) within 3× (measured ≤ 1.9×) that of the settled signal
+  (`formant_cv_sweep_is_smooth`, q 6 and 20, mono and poly cv).
 - **Defaults** are an alto-sax body: 500 / 1500 / 2600 Hz, q 6, gains 1 /
   0.7 / 0.5, so a fresh Formant is useful at once.
 - **No vowel table.** Three explicit peaks plus a CV shift cover sax, brass

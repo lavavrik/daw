@@ -11,7 +11,7 @@
   } from '../state/actions';
   import { mod } from '../audio/audioClock';
   import type { AudioClock } from '../audio/audioClock';
-  import { MAX_ROWS, MAX_SAMPLES } from '../state/project.svelte';
+  import { MAX_ROWS, MAX_SAMPLES, currentPattern } from '../state/project.svelte';
   import { deferSampleLoad } from '../state/sampleLoads';
   import type { DrumTrack, Project } from '../state/project.svelte';
 
@@ -22,6 +22,9 @@
     track: DrumTrack;
     onerror: (msg: string | null) => void;
   } = $props();
+
+  /** The pattern being edited (steps, step count, swing); rows stay per track. */
+  const pat = $derived(currentPattern(track));
 
   const GHOST = 60;
   const FULL = 100;
@@ -50,7 +53,7 @@
       // Heard position (latency-compensated). Negative = count-in: no column.
       const ticks = clock !== null ? clock.heardTicks() : t[TELEMETRY.ticks];
       const next = t[TELEMETRY.playing] === 1 && ticks >= 0
-        ? Math.floor(mod(ticks, track.stepCount * 240) / 240)
+        ? Math.floor(mod(ticks, pat.stepCount * 240) / 240)
         : -1;
       if (next !== playStep) playStep = next;
       raf = requestAnimationFrame(loop);
@@ -165,13 +168,13 @@
         <span class="val">{panText(row.pan)}</span>
       </label>
       <div class="cells">
-        {#each { length: track.stepCount } as _, s (s)}
-          {@const v = row.steps[s]}
+        {#each { length: pat.stepCount } as _, s (s)}
+          {@const v = pat.steps[r][s]}
           <button
             class="cell"
             class:on={v > 0}
             class:beat={s % 4 === 0}
-            class:group={s % 4 === 3 && s !== track.stepCount - 1}
+            class:group={s % 4 === 3 && s !== pat.stepCount - 1}
             class:playhead={s === playStep}
             style:--o={v > 0 ? 0.35 + (0.65 * v) / 127 : 1}
             data-testid="step-{r}-{s}"
@@ -197,7 +200,7 @@
     >+ Add row</button>
     <label>Steps
       <select
-        data-testid="step-count" value={track.stepCount}
+        data-testid="step-count" value={pat.stepCount}
         onchange={(e) => setStepCount(p, engine, track.id, Number(e.currentTarget.value) as 16 | 32 | 64)}
       >
         <option value={16}>16</option><option value={32}>32</option><option value={64}>64</option>
@@ -205,10 +208,10 @@
     </label>
     <label>Swing
       <input
-        type="range" min="0" max="100" step="1" value={Math.round(track.swing * 100)}
+        type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
         data-testid="swing" style:accent-color={track.color} oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
       />
-      <span class="pct">{Math.round(track.swing * 100)}%</span>
+      <span class="pct">{Math.round(pat.swing * 100)}%</span>
     </label>
   </div>
 </div>

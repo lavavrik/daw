@@ -55,6 +55,24 @@ against the current pattern length: notes starting at or after it are kept
 (stored and shown) but silent, and play again if the pattern grows. The UI
 keeps the authoritative note list and writes slots by index.
 
+### UI state (app/src/state)
+The UI keeps the authoritative pattern and clip lists (`project.svelte.ts`)
+and every edit sends its engine command (`pattern-actions.ts`,
+`song-actions.ts`).
+- Each pattern has a stable `engineIdx`: the lowest free 0..15 when it is
+  created. It is never renumbered, so clips never need re-sending.
+  `deletePattern` is refused while a clip uses the pattern or when it is the
+  track's last one; it sends `CLEAR_PATTERN_DATA` and frees the index.
+- `selectPattern` is the only sender of `SET_CURRENT_PATTERN` and the only
+  writer of `currentPatternId`. Step, swing, step-count, note and bars edits
+  act on `currentPattern(track)`, which is then always the engine's current
+  pattern. No action switches it implicitly.
+- `newPattern` selects the new pattern, then sends the copied lengths.
+  `duplicatePattern` and `makeUnique` use `COPY_PATTERN`.
+- Clip moves to another lane are allowed only between tracks of the same
+  kind. Patterns belong to tracks, so the clip then uses the destination's
+  pattern of the same name, or else its current pattern.
+
 ## Event generation and wrapping
 Each block, the engine finds the pattern events whose tick falls in the block's
 tick range and fires them at their sample offset. A note's off lands at
@@ -167,7 +185,15 @@ Switching the live-input track mid-pass (selecting, adding or removing a
 synth track) ends every held recorded note at that heard tick on the old track
 -- where the engine cuts the live pitches -- and later notes record on the new
 input track as a new take (`Recorder.onInputChanged`, called from an App
-`$effect` on `liveInputTrack()`). A UI Play starts the recording pass at once;
+`$effect` on `liveInputTrack()`). Recording targets the input track's *current pattern*. A pattern switch on
+that track mid-pass works the same way: `selectPattern` calls
+`Project.beforePatternSwitch` *before* the engine switches, so held notes are
+written into the old pattern. The take is keyed by (track, pattern), and so is
+the overdub duplicate set, which is cleared only at pass start and on undo.
+"Undo take" is refused while the take's pattern is not current. Recording is
+disabled in Song mode: arming is a no-op, and entering Song mode closes held
+notes.
+A UI Play starts the recording pass at once;
 the 60 Hz telemetry watcher (`transportSync`) only catches transport changes
 the UI did not make.
 The e2e test `record from the keyboard, notes land on the heard beat`

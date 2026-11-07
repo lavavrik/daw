@@ -47,6 +47,7 @@
     GRID_TICKS, MAX_NOTE_LEN, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
+  import { currentPattern } from '../../state/project.svelte';
   import {
     BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
     snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
@@ -89,15 +90,17 @@
   let hint = $state<string | null>(null);
   let cursor = $state('default');
 
-  const notes = $derived(track.pattern.notes);
-  const total = $derived(track.pattern.bars * BAR);
+  /** The pattern being edited (the track's current pattern). */
+  const pat = $derived(currentPattern(track));
+  const notes = $derived(pat.notes);
+  const total = $derived(pat.bars * BAR);
   const grid = $derived(GRID_TICKS[gridKey]);
   const selNotes = $derived(notes.filter((n) => selected.has(n.id)));
   /** Unselected first: the selection is drawn on top, and hit-tested first (hitTest takes the last match). */
   const drawOrder = $derived([...notes.filter((n) => !selected.has(n.id)), ...selNotes]);
   const noteH = $derived(Math.max(0, size.h - RULER_H - VEL_H - SEP));
   const velTop = $derived(size.h - VEL_H);
-  const lengths = $derived(LENGTHS.includes(track.pattern.bars) ? LENGTHS : [...LENGTHS, track.pattern.bars].sort((a, b) => a - b));
+  const lengths = $derived(LENGTHS.includes(pat.bars) ? LENGTHS : [...LENGTHS, pat.bars].sort((a, b) => a - b));
 
   const readoutText = $derived.by(() => {
     if (hint) return hint;
@@ -422,7 +425,7 @@
     let raf = 0;
     const loop = () => {
       const t = c.heardTicks();
-      playTick = Number.isFinite(t) && t >= 0 ? mod(t, track.pattern.bars * BAR) : null;
+      playTick = Number.isFinite(t) && t >= 0 ? mod(t, pat.bars * BAR) : null;
       draw();
       raf = requestAnimationFrame(loop);
     };
@@ -766,7 +769,7 @@
       </select>
     </label>
     <label title="Pattern length in bars (notes past the end are kept, silent)">Length
-      <select data-testid="pr-length" value={track.pattern.bars} onchange={(e) => setLength(Number(e.currentTarget.value))}>
+      <select data-testid="pr-length" value={pat.bars} onchange={(e) => setLength(Number(e.currentTarget.value))}>
         {#each lengths as b (b)}<option value={b}>{b} {b === 1 ? 'bar' : 'bars'}</option>{/each}
       </select>
     </label>

@@ -1,4 +1,5 @@
-// Live recording of played notes into the live-input synth track's pattern.
+// Live recording of played notes into the live-input synth track's current
+// pattern (Pattern mode only).
 //
 // Pure: the clock and the pattern actions are injected (recorderFor() wires
 // the real ones), so every timing rule below is unit-tested with fakes.
@@ -23,21 +24,30 @@
 //   tick. Re-striking a pedal-held pitch ends the old note there.
 // - The note is written (addNote) on release. Notes still held when recording
 //   becomes inactive (stop, disarm) close at that moment's heard tick.
-// - The target track is captured at the first recorded note-on and kept
-//   until the live input changes: onInputChanged(ticksNow) (App calls it when
-//   liveInputTrack() changes) closes every open note on the old track at that
-//   tick -- the engine cuts live-held pitches there too -- and ends the take;
-//   the next note-on retargets and starts a fresh take on the new track.
+// - The target (track, current pattern) is captured at the first recorded
+//   note-on and kept until the live input, the mode or the target's current
+//   pattern changes: onInputChanged(ticksNow) (App calls it when
+//   liveInputTrack() or the mode changes) and onPatternChanging(trackId,
+//   ticksNow) (selectPattern calls it via p.beforePatternSwitch, BEFORE the
+//   engine switches, so the notes still land in the old pattern) close every
+//   open note at that tick -- the engine cuts live-held pitches there too --
+//   and end the take; the next note-on retargets and starts a fresh take.
+// - Song mode: recording is disabled. toggleArm() is a no-op (disarming
+//   still works), and nothing records while deps.songMode() is true.
 // - Overdub: notes merge into the pattern; the same pitch at the same start
-//   twice in one pass is written once.
-// - A *take* is the notes one pass added; undoLastTake() removes exactly those.
-//   An empty pass does not replace the previous take.
+//   twice in one pass on one (track, pattern) is written once. That set is
+//   cleared only at pass start and by undo.
+// - A *take* is the notes added to one (track, pattern) since the last
+//   retarget; undoLastTake() removes exactly those. An empty pass does not
+//   replace the previous take. Undo is refused (the take is kept) while its
+//   pattern is not the track's current one -- the engine edits only that.
 import { BAR_TICKS, MAX_NOTES } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
 import { liveInputTrack } from './actions';
 import type { CommandSink } from './actions';
-import { addNote, deleteNotes, patternTicks } from './pattern-actions';
-import type { Project, SynthTrack } from './project.svelte';
+import { addNote, deleteNotes } from './pattern-actions';
+import { currentPattern } from './project.svelte';
+import type { NotePatternState, Project, SynthTrack } from './project.svelte';
 import type { NoteListener } from '../input/noteInput';
 
 export const REC_OFFSET_MIN = -200;
@@ -53,10 +63,16 @@ export interface RecorderClock {
 
 export interface RecorderDeps {
   clock: RecorderClock;
-  /** Track that would receive a recording now (the live-input synth). */
+  /** Track that would receive a recording now (the live-input synth); its current pattern is the target. */
   target(): SynthTrack | null;
-  addNote(trackId: string, o: { pitch: number; start: number; len: number; vel: number }): { id: string } | null;
-  deleteNotes(trackId: string, ids: string[]): void;
+  /** Null when it could not be added (full, track gone, pattern no longer current). */
+  addNote(
+    trackId: string, patternId: string, o: { pitch: number; start: number; len: number; vel: number },
+  ): { id: string } | null;
+  /** False when refused (pattern no longer current); the take is then kept. */
+  deleteNotes(trackId: string, patternId: string, ids: string[]): boolean | void;
+  /** True in Song mode: recording is disabled. */
+  songMode?(): boolean;
   /** The pattern is full (MAX_NOTES); called once per pass. */
   onFull?(): void;
 }
@@ -87,16 +103,18 @@ export class Recorder implements NoteListener {
   armed = false;
   /** Count-in on Play while armed (one bar). The UI persists it. */
   countIn = false;
-  /** Ids of the notes the last take added (on lastTakeTrackId). */
+  /** Ids of the notes the last take added (on lastTakeTrackId / lastTakePatternId). */
   lastTakeIds: string[] = [];
   lastTakeTrackId: string | null = null;
+  lastTakePatternId: string | null = null;
 
   #offsetMs = 0;
   #playing = false;
   /** Pass state. */
   #track: SynthTrack | null = null;
+  #pattern: NotePatternState | null = null;
   #takeStarted = false;
-  #written = new Set<string>(); // `${pitch}:${start}` written this pass
+  #written = new Set<string>(); // `${trackId}:${patternId}:${pitch}:${start}` written this pass
   #fullReported = false;
   /** Open (held, recording) notes by `${source}:${pitch}`. */
   #open = new Map<string, Open>();
@@ -123,10 +141,16 @@ export class Recorder implements NoteListener {
 
   /** Count-in ticks to pass to play(): one bar when armed with Count-in on, else 0. */
   countInTicks(): number {
-    return this.armed && this.countIn ? BAR_TICKS : 0;
+    return this.armed && this.countIn && !this.#song() ? BAR_TICKS : 0;
   }
 
+  #song(): boolean {
+    return this.deps.songMode?.() ?? false;
+  }
+
+  /** No-op in Song mode unless disarming. */
   toggleArm() {
+    if (!this.armed && this.#song()) return;
     this.armed = !this.armed;
     if (this.armed) {
       if (this.#playing) this.#beginPass();
@@ -157,12 +181,26 @@ export class Recorder implements NoteListener {
     this.#newTarget();
   }
 
+  /**
+   * Track `trackId`'s current pattern is about to change (called before the
+   * engine switches). If it is the recording target, held notes end at
+   * `ticksNow` in the old pattern and the next note-on starts a new take.
+   */
+  onPatternChanging(trackId: string, ticksNow: number) {
+    if (this.#track?.id !== trackId) return;
+    this.#closeAll(ticksNow);
+    this.#newTarget();
+  }
+
   noteOn(pitch: number, vel: number, perfMs: number, source = '') {
-    if (!this.armed || !this.#playing) return;
+    if (!this.armed || !this.#playing || this.#song()) return;
     let tick = this.deps.clock.ticksForEvent(perfMs, this.#offsetMs);
     if (!(tick >= -GRACE_TICKS)) return; // count-in (or a NaN clock): not recorded
     if (tick < 0) tick = 0; // grace window
-    if (!this.#track) this.#track = this.deps.target();
+    if (!this.#track) {
+      this.#track = this.deps.target();
+      this.#pattern = this.#track && currentPattern(this.#track);
+    }
     if (!this.#track) return; // no synth track to record into
     const key = `${source}:${pitch}`;
     // Same key re-struck while still open (pedal-held, or two QWERTY keys on
@@ -203,8 +241,8 @@ export class Recorder implements NoteListener {
   }
 
   undoLastTake() {
-    if (this.lastTakeTrackId && this.lastTakeIds.length) {
-      this.deps.deleteNotes(this.lastTakeTrackId, this.lastTakeIds);
+    if (this.lastTakeTrackId && this.lastTakePatternId && this.lastTakeIds.length) {
+      if (this.deps.deleteNotes(this.lastTakeTrackId, this.lastTakePatternId, this.lastTakeIds) === false) return;
     }
     this.lastTakeIds = [];
     this.#takeStarted = false; // later notes in this pass form a new take
@@ -213,12 +251,12 @@ export class Recorder implements NoteListener {
 
   /** True while notes played now would be recorded. */
   recording(): boolean {
-    return this.armed && this.#playing && this.deps.clock.heardTicks() >= 0;
+    return this.armed && this.#playing && !this.#song() && this.deps.clock.heardTicks() >= 0;
   }
 
   status(): RecStatus {
     let state: RecState = this.armed ? 'armed' : 'off';
-    if (this.armed && this.#playing) {
+    if (this.armed && this.#playing && !this.#song()) {
       // Negative heard ticks without a count-in are just output latency after Play.
       state = this.deps.clock.heardTicks() >= 0 ? 'recording' : this.countIn ? 'count-in' : 'armed';
     }
@@ -227,14 +265,15 @@ export class Recorder implements NoteListener {
 
   #beginPass() {
     this.#open.clear();
+    this.#written.clear();
     this.#newTarget();
   }
 
   /** Forget the target; the next recorded note-on picks one and starts a new take. */
   #newTarget() {
     this.#track = null;
+    this.#pattern = null;
     this.#takeStarted = false;
-    this.#written.clear();
     this.#fullReported = false;
   }
 
@@ -246,18 +285,19 @@ export class Recorder implements NoteListener {
     const o = this.#open.get(key)!;
     this.#open.delete(key);
     const t = this.#track;
-    if (!t || !Number.isFinite(endTick)) return;
-    const period = patternTicks(t);
+    const pat = this.#pattern;
+    if (!t || !pat || !Number.isFinite(endTick)) return;
+    const period = pat.bars * BAR_TICKS;
     const startAbs = Math.round(o.tick);
     const start = mod(startAbs, period);
     // Negative (jitter between the two timestamp mappings) -> 1.
     const len = Math.min(period, Math.max(1, Math.round(endTick) - startAbs));
-    const dup = `${o.pitch}:${start}`;
+    const dup = `${t.id}:${pat.id}:${o.pitch}:${start}`;
     if (this.#written.has(dup)) return;
-    const n = this.deps.addNote(t.id, { pitch: o.pitch, start, len, vel: o.vel });
+    const n = this.deps.addNote(t.id, pat.id, { pitch: o.pitch, start, len, vel: o.vel });
     if (!n) {
       // Null is also "track was removed mid-pass": only a full pattern is reported.
-      if (!this.#fullReported && t.pattern.notes.length >= MAX_NOTES) {
+      if (!this.#fullReported && pat.notes.length >= MAX_NOTES) {
         this.#fullReported = true;
         this.deps.onFull?.();
       }
@@ -268,6 +308,7 @@ export class Recorder implements NoteListener {
       this.#takeStarted = true;
       this.lastTakeIds = [];
       this.lastTakeTrackId = t.id;
+      this.lastTakePatternId = pat.id;
     }
     this.lastTakeIds.push(n.id);
   }
@@ -302,8 +343,9 @@ export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock,
   return new Recorder({
     clock,
     target: () => liveInputTrack(p),
-    addNote: (trackId, o) => addNote(p, sink, trackId, o),
-    deleteNotes: (trackId, ids) => deleteNotes(p, sink, trackId, ids),
+    addNote: (trackId, patternId, o) => addNote(p, sink, trackId, o, patternId),
+    deleteNotes: (trackId, patternId, ids) => deleteNotes(p, sink, trackId, ids, patternId),
+    songMode: () => p.mode === 'song',
     onFull,
   });
 }

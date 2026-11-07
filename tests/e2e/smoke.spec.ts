@@ -15,7 +15,7 @@ type DawWindow = {
     recorder?: { lastTakeIds: string[]; armed: boolean } | null;
     clock?: { heardTicks(): number } | null;
     project: {
-      tempo: number; tracks: { pattern?: { notes: { pitch: number; start: number; len: number }[] } }[] };
+      tempo: number; tracks: { patterns: { notes?: { pitch: number; start: number; len: number }[] }[] }[] };
   };
 };
 
@@ -778,7 +778,7 @@ test('record: switching the input track mid-pass ends held notes there and recor
   await page.keyboard.up('KeyD');
   await page.keyboard.press('Space');
   const pitches = (i: number) =>
-    page.evaluate((i) => (window as unknown as DawWindow).__daw!.project.tracks[i].pattern!.notes.map((n) => n.pitch % 12), i);
+    page.evaluate((i) => (window as unknown as DawWindow).__daw!.project.tracks[i].patterns[0].notes!.map((n) => n.pitch % 12), i);
   await expect.poll(() => pitches(2)).toEqual([0]);
   await expect.poll(() => pitches(1)).toEqual([4]);
 });
@@ -840,7 +840,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
 
   await expect(page.getByTestId('pr-readout')).toContainText('1 note ');
   const notes = await page.evaluate(() =>
-    (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.pattern?.notes ?? []).map((n) => ({ pitch: n.pitch, start: n.start, len: n.len })),
+    (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.patterns[0]?.notes ?? []).map((n) => ({ pitch: n.pitch, start: n.start, len: n.len })),
   );
   expect(notes).toHaveLength(1);
   const n = notes[0];

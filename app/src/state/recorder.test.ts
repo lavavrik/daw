@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BAR_TICKS, MAX_NOTES, Op } from '../audio/protocol';
-import { Project } from './project.svelte';
-import type { SynthTrack } from './project.svelte';
+import { Project, currentPattern } from './project.svelte';
+import type { NotePatternState, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
 import { selectTrack } from './actions';
+import { newPattern, selectPattern } from './pattern-actions';
+import { setMode } from './song-actions';
 import { Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync } from './recorder';
 
 /**
@@ -20,32 +22,42 @@ function fakeClock() {
   return c;
 }
 
+/** A plain (non-reactive) synth track with one pattern `${id}0`. */
+function mkTrack(id: string, bars: number): SynthTrack {
+  return {
+    kind: 'synth', id, slot: 0, name: id, color: '', patchName: '', modules: [], cables: [],
+    patterns: [{ id: `${id}0`, engineIdx: 0, name: 'Pattern 1', bars, notes: [] }],
+    currentPatternId: `${id}0`,
+    clips: [],
+  };
+}
+
 /** Fake actions over plain (non-reactive) tracks; ids are n1, n2, … */
 function setup(bars = 1) {
   const clock = fakeClock();
-  const mk = (id: string): SynthTrack => ({
-    kind: 'synth', id, slot: 0, name: id, color: '', patchName: '', modules: [], cables: [],
-    pattern: { bars, notes: [] },
-  });
-  const tracks = { a: mk('a'), b: mk('b') };
+  const tracks = { a: mkTrack('a', bars), b: mkTrack('b', bars) };
   let target: SynthTrack | null = tracks.a;
+  let song = false;
   let k = 0;
+  const pat = (trackId: string, patternId: string) =>
+    (trackId === 'a' ? tracks.a : tracks.b).patterns.find((x) => x.id === patternId)!;
   const rec = new Recorder({
     clock,
     target: () => target,
-    addNote(trackId, o) {
-      const t = trackId === 'a' ? tracks.a : tracks.b;
+    songMode: () => song,
+    addNote(trackId, patternId, o) {
       const n = { id: `n${++k}`, idx: k, ...o };
-      t.pattern.notes.push(n);
+      pat(trackId, patternId).notes.push(n);
       return n;
     },
-    deleteNotes(trackId, ids) {
-      const t = trackId === 'a' ? tracks.a : tracks.b;
-      t.pattern.notes = t.pattern.notes.filter((n) => !ids.includes(n.id));
+    deleteNotes(trackId, patternId, ids) {
+      const ps = pat(trackId, patternId);
+      ps.notes = ps.notes.filter((n) => !ids.includes(n.id));
     },
   });
-  const notes = (t: SynthTrack = tracks.a) => t.pattern.notes.map(({ pitch, start, len, vel }) => ({ pitch, start, len, vel }));
-  return { clock, rec, tracks, notes, setTarget: (t: SynthTrack | null) => (target = t) };
+  const notes = (t: SynthTrack = tracks.a, i = 0) =>
+    t.patterns[i].notes.map(({ pitch, start, len, vel }) => ({ pitch, start, len, vel }));
+  return { clock, rec, tracks, notes, setTarget: (t: SynthTrack | null) => (target = t), setSong: (v: boolean) => (song = v) };
 }
 
 /** Arm and start the transport (a pass begins). */
@@ -224,10 +236,7 @@ describe('Recorder', () => {
   it('a full pattern is reported once per pass; a vanished track is not "full"', () => {
     let full = 0;
     let room = true;
-    const tr: SynthTrack = {
-      kind: 'synth', id: 'a', slot: 0, name: 'a', color: '', patchName: '', modules: [], cables: [],
-      pattern: { bars: 1, notes: [] },
-    };
+    const tr = mkTrack('a', 1);
     const clock = fakeClock();
     const rec = new Recorder({
       clock,
@@ -242,7 +251,7 @@ describe('Recorder', () => {
     rec.noteOn(60, 100, 10);
     rec.noteOff(60, 20); // addNote failed, pattern not full: track gone
     expect(full).toBe(0);
-    tr.pattern.notes = Array.from({ length: MAX_NOTES }, (_, i) => ({ id: `${i}`, idx: i, pitch: 0, vel: 1, start: 0, len: 1 }));
+    tr.patterns[0].notes = Array.from({ length: MAX_NOTES }, (_, i) => ({ id: `${i}`, idx: i, pitch: 0, vel: 1, start: 0, len: 1 }));
     for (const pitch of [61, 62]) {
       rec.noteOn(pitch, 100, 10);
       rec.noteOff(pitch, 20);
@@ -366,6 +375,58 @@ describe('Recorder', () => {
   });
 });
 
+describe('Recorder: patterns and Song mode', () => {
+  it('recorder disabled in song mode', () => {
+    const s = setup(4);
+    s.setSong(true);
+    s.rec.toggleArm(); // no-op in Song mode
+    expect(s.rec.armed).toBe(false);
+    s.setSong(false);
+    rolling(s); // armed and playing in Pattern mode
+    s.rec.noteOn(60, 100, 100); // held when the mode switches
+    s.setSong(true);
+    s.rec.onInputChanged(500); // App calls this when the mode changes
+    s.rec.noteOff(60, 900);
+    expect(s.notes().map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 100, 400]]);
+    s.rec.noteOn(62, 100, 1000); // Song mode: nothing records
+    s.rec.noteOff(62, 1100);
+    expect(s.notes()).toHaveLength(1);
+    expect(s.rec.recording()).toBe(false);
+    expect(s.rec.status().state).toBe('armed'); // never 'recording' in Song mode
+    expect(s.rec.countInTicks()).toBe(0);
+    s.rec.toggleArm(); // disarming still works
+    expect(s.rec.armed).toBe(false);
+  });
+
+  it('a pattern change on the target track closes held notes into the old pattern and starts a new take', () => {
+    const s = setup(4);
+    const a = s.tracks.a;
+    a.patterns.push({ id: 'a1', engineIdx: 1, name: 'Pattern 2', bars: 4, notes: [] });
+    rolling(s);
+    s.rec.noteOn(60, 100, 100);
+    s.rec.noteOff(60, 200);
+    s.rec.noteOn(62, 100, 300); // held across the switch
+    s.rec.onPatternChanging('b', 900); // another track: ignored
+    s.rec.onPatternChanging('a', 1000); // before a's current pattern changes
+    a.currentPatternId = 'a1';
+    s.rec.noteOff(62, 1500);
+    expect(s.notes(a, 0).map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 100, 100], [62, 300, 700]]);
+    // Later notes go to the new current pattern as a new take; the same
+    // pitch+start as in pattern 0 is not a duplicate there.
+    s.rec.noteOn(60, 100, 100 + 4 * BAR_TICKS);
+    s.rec.noteOff(60, 200 + 4 * BAR_TICKS);
+    expect(s.notes(a, 1).map((n) => [n.pitch, n.start])).toEqual([[60, 100]]);
+    expect([s.rec.lastTakeTrackId, s.rec.lastTakePatternId, s.rec.lastTakeIds.length]).toEqual(['a', 'a1', 1]);
+    // ...but it is one within the same (track, pattern) for the rest of the pass.
+    s.rec.noteOn(60, 100, 100 + 8 * BAR_TICKS);
+    s.rec.noteOff(60, 200 + 8 * BAR_TICKS);
+    expect(s.notes(a, 1)).toHaveLength(1);
+    s.rec.undoLastTake();
+    expect(s.notes(a, 1)).toEqual([]);
+    expect(s.notes(a, 0)).toHaveLength(2);
+  });
+});
+
 describe('transportSync (App\'s per-frame telemetry watcher)', () => {
   it('UI Play starts the pass at once; frames before the engine confirms do not end it', () => {
     const s = setup(4);
@@ -428,10 +489,47 @@ describe('recorderFor (real project + actions)', () => {
     sent.length = 0;
     rec.noteOn(60, 100, 480);
     rec.noteOff(60, 720);
-    expect(t.pattern.notes.map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 480, 240]]);
+    expect(currentPattern(t).notes.map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 480, 240]]);
     expect(sent.map((x) => x[0])).toEqual([Op.NOTE_SET]);
     rec.undoLastTake();
-    expect(t.pattern.notes).toEqual([]);
+    expect(currentPattern(t).notes).toEqual([]);
     expect(sent.map((x) => x[0])).toEqual([Op.NOTE_SET, Op.NOTE_REMOVE]);
+  });
+
+  it('records into the current pattern; selectPattern mid-note closes it into the old one', () => {
+    const sent: number[][] = [];
+    const sink = { send(op: number, a = 0, b = 0, c = 0, d = 0) { sent.push([op, a, b, c, d]); return true; } };
+    const p = new Project();
+    const t = addSynthTrack(p, sink)!;
+    const [p0] = t.patterns;
+    const p1 = newPattern(p, sink, t.id) as NotePatternState;
+    const clock = fakeClock();
+    const rec = recorderFor(p, sink, clock);
+    p.beforePatternSwitch = (id) => rec.onPatternChanging(id, clock.heardTicks()); // as App wires it
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    sent.length = 0;
+    rec.noteOn(60, 100, 480);
+    clock.now = 960;
+    selectPattern(p, sink, t.id, p0.id);
+    rec.noteOff(60, 1200);
+    expect(p1.notes.map((n) => [n.pitch, n.start, n.len])).toEqual([[60, 480, 480]]);
+    expect(p0.notes).toEqual([]);
+    // NOTE_SET reached the engine while p1 was still its current pattern.
+    expect(sent.map((x) => x.slice(0, 2))).toEqual([[Op.NOTE_SET, t.slot * MAX_NOTES], [Op.SET_CURRENT_PATTERN, t.slot]]);
+    // Undo of a take whose pattern is no longer current is refused (the take is kept).
+    sent.length = 0;
+    rec.undoLastTake();
+    expect(p1.notes).toHaveLength(1);
+    expect(rec.lastTakeIds).toHaveLength(1);
+    expect(sent).toEqual([]);
+    selectPattern(p, sink, t.id, p1.id);
+    rec.undoLastTake();
+    expect(p1.notes).toEqual([]);
+    // Song mode: arming is a no-op.
+    rec.toggleArm();
+    setMode(p, sink, 'song');
+    rec.toggleArm();
+    expect(rec.armed).toBe(false);
   });
 });

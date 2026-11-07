@@ -1,7 +1,8 @@
 // Every user edit: mutate Project AND send the matching engine command.
 import { BAR_TICKS, Op } from '../audio/protocol';
-import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from './project.svelte';
+import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
+import { makeDrumPattern } from './pattern-actions';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -18,7 +19,6 @@ function makeRow(n: number): DrumRow {
     gain: 1,
     pan: 0,
     mute: false,
-    steps: new Array<number>(MAX_STEPS).fill(0),
   };
 }
 
@@ -43,15 +43,18 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackNa
   let slot = 0;
   while (slot < MAX_TRACKS && used.has(slot)) slot++;
   if (slot >= MAX_TRACKS) return null;
+  // ADD_DRUM_TRACK resets all engine patterns (16 steps, no swing) and selects 0.
+  const pattern = makeDrumPattern(0, 'Pattern 1', 16, 0);
   p.tracks.push({
     kind: 'drum',
     id: crypto.randomUUID(),
     slot,
     name,
     color: TRACK_COLORS[slot % TRACK_COLORS.length],
-    stepCount: 16,
-    swing: 0,
     rows: [1, 2, 3, 4].map(makeRow),
+    patterns: [pattern],
+    currentPatternId: pattern.id,
+    clips: [],
   });
   const track = p.tracks[p.tracks.length - 1] as DrumTrack; // reactive proxy
   sink.send(Op.ADD_DRUM_TRACK, slot);
@@ -59,7 +62,7 @@ export function addDrumTrack(p: Project, sink: CommandSink, name = uniqueTrackNa
   return track;
 }
 
-/** No engine command: all engine rows already exist (empty). */
+/** No engine command: all engine rows already exist (empty), and every pattern holds MAX_ROWS step rows. */
 export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow | null {
   const track = p.tracks.find((t) => t.id === trackId);
   if (!track || track.kind !== 'drum' || track.rows.length >= MAX_ROWS) return null;
@@ -67,18 +70,21 @@ export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow
   return track.rows[track.rows.length - 1];
 }
 
+// Step, step-count and swing edits act on the track's current pattern, which
+// is also the engine's current pattern (only selectPattern changes either).
+
 export function setStep(p: Project, sink: CommandSink, trackId: string, rowId: string, step: number, velocity: number) {
   const f = find(p, trackId, rowId);
   if (!f || Number.isNaN(velocity) || !Number.isInteger(step) || step < 0 || step >= MAX_STEPS) return;
   const v = Math.round(clamp(velocity, 0, 127));
-  f.r.steps[step] = v;
+  currentPattern(f.track).steps[f.row][step] = v;
   sink.send(Op.SET_STEP, f.track.slot, f.row, step, v);
 }
 
 export function toggleStep(p: Project, sink: CommandSink, trackId: string, rowId: string, step: number) {
   const f = find(p, trackId, rowId);
   if (!f) return;
-  setStep(p, sink, trackId, rowId, step, f.r.steps[step] > 0 ? 0 : 100);
+  setStep(p, sink, trackId, rowId, step, currentPattern(f.track).steps[f.row][step] > 0 ? 0 : 100);
 }
 
 export function setRowSample(p: Project, sink: CommandSink, trackId: string, rowId: string, sampleId: number | null, name: string) {
@@ -113,15 +119,16 @@ export function setRowMute(p: Project, sink: CommandSink, trackId: string, rowId
 export function setStepCount(p: Project, sink: CommandSink, trackId: string, n: 16 | 32 | 64) {
   const track = p.tracks.find((t) => t.id === trackId);
   if (!track || track.kind !== 'drum' || (n !== 16 && n !== 32 && n !== 64)) return;
-  track.stepCount = n;
+  currentPattern(track).stepCount = n;
   sink.send(Op.SET_STEP_COUNT, track.slot, n);
 }
 
 export function setSwing(p: Project, sink: CommandSink, trackId: string, s: number) {
   const track = p.tracks.find((t) => t.id === trackId);
   if (!track || track.kind !== 'drum' || Number.isNaN(s)) return;
-  track.swing = clamp(s, 0, 1);
-  sink.send(Op.SET_SWING, track.slot, track.swing);
+  const pat = currentPattern(track);
+  pat.swing = clamp(s, 0, 1);
+  sink.send(Op.SET_SWING, track.slot, pat.swing);
 }
 
 export function setTempo(p: Project, sink: CommandSink, bpm: number) {
@@ -141,9 +148,11 @@ export function play(p: Project, sink: CommandSink, countIn = 0) {
   sink.send(Op.PLAY, countIn === BAR_TICKS ? BAR_TICKS : 0);
 }
 
+/** Song mode with the loop on: the engine parks at the loop start (and makes it the song start). */
 export function stop(p: Project, sink: CommandSink) {
   p.playing = false;
   sink.send(Op.STOP);
+  if (p.mode === 'song' && p.loop.on) p.songPosition = p.loop.start;
 }
 
 export function togglePlay(p: Project, sink: CommandSink, countIn = 0) {

@@ -64,9 +64,10 @@
    * heard tick now on the old track, later ones record on the new input.
    * The effect runs in the same task as the change (before the next key event).
    */
+  // Entering Song mode (recording disabled there) closes held notes the same way.
   let inputId: string | null = null;
   $effect(() => {
-    const id = liveInputTrack(project)?.id ?? null;
+    const id = `${liveInputTrack(project)?.id ?? null}|${project.mode}`;
     if (id === inputId) return;
     inputId = id;
     if (recorder && clock) recorder.onInputChanged(clock.heardTicks());
@@ -120,6 +121,10 @@
     r.offsetMs = saved.offsetMs;
     recorder = r;
     window.__daw.recorder = r;
+    // Before a track's current pattern changes (selectPattern): held recorded
+    // notes are written into the old pattern while the engine still edits it.
+    const c = clock;
+    project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, c.heardTicks());
     const input = createNoteInput(e, r);
     noteInput = input;
     stopWatch = watchTransport(e, clock, r);

@@ -9,6 +9,8 @@ export const MAX_TRACKS = 32;
 export const DEFAULT_PATTERN_BARS = 4;
 /** Engine sample slots; sample ids are never reused within a session. */
 export const MAX_SAMPLES = 256;
+/** Default loop range: bars 1-4. */
+export const DEFAULT_LOOP_END = 4 * 3840;
 
 /** 8 colours that read well on the dark UI; track colour = TRACK_COLORS[slot % 8]. */
 export const TRACK_COLORS: string[] = [
@@ -23,8 +25,46 @@ export interface DrumRow {
   gain: number;
   pan: number;
   mute: boolean;
-  /** MAX_STEPS velocities, 0 = off. */
-  steps: number[];
+}
+
+/**
+ * One drum pattern. `engineIdx` is the engine pattern slot (0..MAX_PATTERNS-1,
+ * lowest free when created, stable for the pattern's life; never renumbered).
+ */
+export interface DrumPattern {
+  id: string;
+  engineIdx: number;
+  name: string;
+  stepCount: 16 | 32 | 64;
+  swing: number;
+  /** MAX_ROWS x MAX_STEPS velocities (0 = off); steps[r] belongs to rows[r]. */
+  steps: number[][];
+}
+
+/** One synth note pattern (plan-3 NotePattern); `engineIdx` as in DrumPattern. */
+export interface NotePatternState {
+  id: string;
+  engineIdx: number;
+  name: string;
+  /** Loop length in bars; notes at/after bars*BAR_TICKS are kept but do not play. */
+  bars: number;
+  notes: Note[];
+}
+
+/**
+ * A pattern placed on the song timeline. `idx` is the engine clip slot
+ * (0..MAX_CLIPS-1) within the track. The clip plays its pattern at song tick t
+ * for start <= t < start+len, at pattern position (offset + t - start) mod length.
+ */
+export interface Clip {
+  id: string;
+  idx: number;
+  /** A pattern of the same track. */
+  patternId: string;
+  start: number;
+  len: number;
+  /** Ticks into the pattern, 0..61439. */
+  offset: number;
 }
 
 export interface DrumTrack {
@@ -34,10 +74,13 @@ export interface DrumTrack {
   slot: number;
   name: string;
   color: string;
-  stepCount: 16 | 32 | 64;
-  swing: number;
   /** Index in this array is the engine row number (append-only for now). */
   rows: DrumRow[];
+  /** Never empty. Order is creation order, not engineIdx. */
+  patterns: DrumPattern[];
+  /** The pattern Pattern mode loops and the step grid edits (engine current pattern). */
+  currentPatternId: string;
+  clips: Clip[];
 }
 
 /** One module in a synth track's rack; `idx` is the engine module slot (0..31). */
@@ -79,8 +122,11 @@ export interface SynthTrack {
   patchName: string;
   modules: RackModule[];
   cables: RackCable[];
-  /** Looping note pattern; notes at/after bars*BAR_TICKS are kept but do not play. */
-  pattern: { bars: number; notes: Note[] };
+  /** Never empty. Order is creation order, not engineIdx. */
+  patterns: NotePatternState[];
+  /** The pattern Pattern mode loops, the piano roll edits and recording targets. */
+  currentPatternId: string;
+  clips: Clip[];
 }
 
 export type Track = DrumTrack | SynthTrack;
@@ -94,10 +140,36 @@ export class Project {
   /** Most recently selected synth track; keeps receiving keys while a drum track is selected. */
   lastSynthTrackId = $state<string | null>(null);
   nextSampleId = $state(0);
+  /** 'pattern': each track loops its current pattern; 'song': clips play on the timeline. */
+  mode = $state<'pattern' | 'song'>('pattern');
+  /** Song-mode loop range in ticks (sent to the engine only while `on`). */
+  loop = $state({ on: false, start: 0, end: DEFAULT_LOOP_END });
+  /** Where Song mode is parked (last seek, or the loop start after a looped Stop). */
+  songPosition = $state(0);
+  /**
+   * Called by selectPattern just BEFORE a track's current pattern changes
+   * (the engine still edits the old one). App wires it to the recorder so
+   * notes held across the switch are written into the old pattern. Not reactive.
+   */
+  beforePatternSwitch: ((trackId: string) => void) | null = null;
 }
 
 /** The synth track with this id, or null (unknown id or a drum track). */
 export function synthTrack(p: Project, trackId: string): SynthTrack | null {
   const t = p.tracks.find((x) => x.id === trackId);
   return t && t.kind === 'synth' ? t : null;
+}
+
+/** The track's current pattern (falls back to the first; patterns is never empty). */
+export function currentPattern(t: DrumTrack): DrumPattern;
+export function currentPattern(t: SynthTrack): NotePatternState;
+export function currentPattern(t: Track): DrumPattern | NotePatternState;
+export function currentPattern(t: Track): DrumPattern | NotePatternState {
+  const ps: (DrumPattern | NotePatternState)[] = t.patterns;
+  return ps.find((x) => x.id === t.currentPatternId) ?? ps[0];
+}
+
+/** Pattern length in ticks (drum: stepCount sixteenths; synth: bars). */
+export function patternLength(pat: DrumPattern | NotePatternState): number {
+  return 'stepCount' in pat ? pat.stepCount * 240 : pat.bars * 3840;
 }

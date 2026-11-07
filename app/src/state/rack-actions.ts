@@ -7,6 +7,7 @@ import type { Project, RackCable, RackModule, SynthTrack } from './project.svelt
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { STARTER_PATCHES } from './patches';
+import { makeNotePattern } from './pattern-actions';
 import type { Patch } from './patches';
 
 /**
@@ -21,6 +22,8 @@ export function addSynthTrack(
   let slot = 0;
   while (slot < MAX_TRACKS && used.has(slot)) slot++;
   if (slot >= MAX_TRACKS) return null;
+  // ADD_SYNTH_TRACK resets all engine patterns and selects 0; bars sent below.
+  const pattern = makeNotePattern(0, 'Pattern 1', DEFAULT_PATTERN_BARS);
   p.tracks.push({
     kind: 'synth',
     id: crypto.randomUUID(),
@@ -30,7 +33,9 @@ export function addSynthTrack(
     patchName: '',
     modules: [],
     cables: [],
-    pattern: { bars: DEFAULT_PATTERN_BARS, notes: [] },
+    patterns: [pattern],
+    currentPatternId: pattern.id,
+    clips: [],
   });
   const track = p.tracks[p.tracks.length - 1] as SynthTrack; // reactive proxy
   sink.send(Op.ADD_SYNTH_TRACK, slot);

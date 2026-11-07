@@ -132,7 +132,10 @@
     data-testid="rec-button"
     data-state={rec.state}
     onclick={onToggleArm}
-    title="Record arm (R). Records into the Keys → track while playing."
+    disabled={p.mode === 'song' && !rec.armed}
+    title={p.mode === 'song'
+      ? 'Recording is Pattern-mode only (switch to PAT).'
+      : 'Record arm (R). Records into the Keys → track\'s current pattern while playing.'}
   >{recLabel}</button>
   <button
     class="small"

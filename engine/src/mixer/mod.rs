@@ -21,7 +21,8 @@
 //! * **Master:** bus × the legacy master gain (`SET_MASTER_GAIN`, default
 //!   0.8) → EQ → fader → [`Limiter`] (lookahead 1.5 ms, release 50 ms,
 //!   ceiling −0.3 dBFS by default) → output. The engine adds the metronome
-//!   after this and keeps a NaN-safe ±1 clamp only as a backstop.
+//!   after this, then [`soft_clip`] (bit-transparent below 0.9 × ceiling,
+//!   never above the ceiling), and keeps a NaN-safe ±1 clamp as a backstop.
 //!
 //! # Smoothing (no clicks)
 //! * Fader, pan, sends and the legacy master gain move linearly over 5 ms
@@ -69,7 +70,7 @@ mod tests;
 
 use crate::dsp::{db_to_lin, Compressor, Delay, Eq3, Limiter, Reverb};
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE};
-use crate::{MAX_BLOCK, MAX_KEYS, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY, MIX_MASTER, MIX_METER_STRIDE, MIX_REVERB};
+use crate::{MAX_BLOCK, MAX_KEYS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY, MIX_MASTER, MIX_METER_STRIDE, MIX_REVERB};
 use catalog::*;
 
 /// A strip keeps running this long after its slot last held a track or
@@ -458,6 +459,11 @@ impl Mixer {
         }
     }
 
+    /// The master limiter's ceiling target (linear).
+    pub fn ceiling(&self) -> f32 {
+        self.strips.get(MIX_MASTER).map_or(1.0, |s| db_to_lin(s.v(P_LIMITER_CEILING)))
+    }
+
     /// The legacy master gain's current (ramped) value.
     pub fn master_gain(&self) -> f32 {
         self.master_gain.value
@@ -560,8 +566,10 @@ impl Mixer {
         // The old track fades out over 2 ms through the strip it was mixed
         // with (a muted track stays muted, a quiet one quiet), then the
         // strip glides to its defaults.
+        // The fade is 2 ms of voice ramps, rendered in rack sub-blocks: hold
+        // one sub-block longer so its tail is covered too.
         if let Some(s) = self.strips.get_mut(slot).filter(|_| slot < MAX_TRACKS) {
-            s.hold = fade;
+            s.hold = fade + RACK_BLOCK;
         }
         self.reset_channel(slot);
     }
@@ -707,6 +715,27 @@ impl Mixer {
     }
 }
 
+/// Where [`soft_clip`] leaves linear (as a fraction of the ceiling).
+pub const SOFT_KNEE: f32 = 0.9;
+
+/// The post-limiter safety stage (the click is added after the limiter):
+/// bit-transparent while `|x| ≤ SOFT_KNEE·ceiling`, above that a tanh knee
+/// with slope 1 at the knee (continuous value and slope, so no corner) that
+/// approaches but never exceeds `ceiling`. Monotonic, odd, NaN in -> NaN out
+/// (the engine's backstop zeroes it).
+#[inline]
+pub fn soft_clip(x: f32, ceiling: f32) -> f32 {
+    let k = SOFT_KNEE * ceiling;
+    let a = x.abs();
+    if a <= k {
+        return x;
+    }
+    let room = ceiling - k;
+    let y = k + room * ((a - k) / room).tanh();
+    // tanh rounds to 1.0 for large inputs: keep strictly within the ceiling.
+    y.min(ceiling).copysign(x)
+}
+
 fn write_meter(meters: &mut [f32], ch: usize, pl: f32, pr: f32, gr: f32) {
     if let Some(m) = meters.get_mut(ch * MIX_METER_STRIDE..(ch + 1) * MIX_METER_STRIDE) {
         m[0] = pl;
@@ -774,15 +803,17 @@ impl Buses {
             pr = pr.max(r.abs());
             ml[i] += l;
             mr[i] += r;
+            // Post-fader taps `l`/`r`, which already carry the gate; a
+            // pre-fader tap applies the gate itself (once either way).
             if use_a {
-                let s = st.send_a.next() * g;
-                let (u, v) = if pre_a { (x, y) } else { (l, r) };
+                let s = st.send_a.next();
+                let (u, v) = if pre_a { (x * g, y * g) } else { (l, r) };
                 al[i] += u * s;
                 ar[i] += v * s;
             }
             if use_b {
-                let s = st.send_b.next() * g;
-                let (u, v) = if pre_b { (x, y) } else { (l, r) };
+                let s = st.send_b.next();
+                let (u, v) = if pre_b { (x * g, y * g) } else { (l, r) };
                 bl[i] += u * s;
                 br[i] += v * s;
             }

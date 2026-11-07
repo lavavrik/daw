@@ -46,6 +46,8 @@ interface EngineExports {
   engine_sample_alloc(e: number, id: number, frames: number, channels: number): number;
   engine_sample_ready(e: number, id: number): number;
   engine_telemetry(e: number): number;
+  /** Output latency in frames (the master limiter's lookahead). */
+  engine_latency(e: number): number;
 }
 
 /** Fixed capacity of the deferred-sample queue (oldest dropped when full). */
@@ -72,6 +74,8 @@ const isU32 = (v: unknown): v is number =>
 class DawEngineProcessor extends AudioWorkletProcessor {
   private ex: EngineExports | null = null;
   private h = 0; // engine handle (*mut Host)
+  /** Engine output latency (frames), read once at construction. */
+  private latency = 0;
   private ring: CommandRing;
   private readonly cmd = new Float64Array(RECORD_WORDS); // reused pop() scratch
   private readonly tele: Float64Array; // shared with the main thread
@@ -112,6 +116,7 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       const inst = new WebAssembly.Instance(new WebAssembly.Module(o.wasmBytes), {});
       this.ex = inst.exports as unknown as EngineExports;
       this.h = this.ex.engine_new(sr);
+      this.latency = this.ex.engine_latency(this.h) >>> 0;
       this.refreshViews();
       this.port.postMessage({ type: 'ready' });
     } catch (e) {
@@ -184,8 +189,10 @@ class DawEngineProcessor extends AudioWorkletProcessor {
       const et = this.engTele;
       const tele = this.tele;
       for (let k = 0; k < ENGINE_SLOTS.length; k++) tele[ENGINE_SLOTS[k]] = et[ENGINE_SLOTS[k]];
-      // The context frame at which the published ticks apply (start of next block).
-      tele[TELEMETRY.frame] = currentFrame + n;
+      // The context frame at which the published ticks are *output*: the
+      // start of the next block plus the engine's own latency (the limiter
+      // lookahead delays everything by `latency` frames).
+      tele[TELEMETRY.frame] = currentFrame + n + this.latency;
 
       // Deferred samples retry on the first block once stopped (playing 1 -> 0).
       if (this.pLen > 0 && et[TELEMETRY.playing] === 0) {

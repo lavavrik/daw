@@ -162,9 +162,15 @@ beat; never compressed), then a NaN-safe ±1 clamp as a backstop only.
 Consequences worth knowing:
 
 - **Output latency +1.5 ms.** Everything leaves the engine 72 samples (48 kHz)
-  after it was rendered. Sequencing is unchanged; the heard-time mapping
-  absorbs it (well under its tolerance). Engine unit tests that pin exact
-  sample positions build the engine with `Engine::with_lookahead(sr, 0.0)`.
+  after it was rendered. Sequencing is unchanged. The worklet reads
+  `engine_latency(e)` once and publishes `TELEMETRY_FRAME = currentFrame +
+  n + latency`, so heard time (playheads, recording) maps to what is actually
+  output. Engine unit tests that pin exact sample positions build the engine
+  with `Engine::with_lookahead(sr, 0.0)`.
+- **Click headroom.** The click is added after the limiter, then a soft-clip
+  stage keeps the sum under the ceiling: bit-transparent up to 0.9 × ceiling,
+  a tanh knee above it that never reaches the ceiling. The ±1 clamp is only a
+  NaN-safe backstop.
 - **Jumps never reset effects.** Stop, seek and loop wraps release notes only;
   reverb/delay tails, compressor and limiter state carry on.
 - **Meters:** `engine_meters(e)` points at `[MIX_CHANNELS × (peakL, peakR,

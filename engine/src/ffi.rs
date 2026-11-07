@@ -107,6 +107,18 @@ pub extern "C" fn engine_meters(e: *mut Host) -> *const f32 {
     }
 }
 
+/// Output latency in frames (the master limiter's lookahead: 72 at 48 kHz);
+/// constant for the instance. The worklet adds it to `TELEMETRY_FRAME` so
+/// heard time matches what leaves the engine. 0 for a null handle.
+#[no_mangle]
+pub extern "C" fn engine_latency(e: *mut Host) -> u32 {
+    // SAFETY: see module contract.
+    match unsafe { e.as_ref() } {
+        Some(h) => h.engine.latency() as u32,
+        None => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +145,7 @@ mod tests {
         assert_eq!(t[0], 1.0);
         engine_process(e, 100_000); // clamped, must not panic
         assert_eq!(engine_meters(e), meters, "stable pointer");
+        assert_eq!(engine_latency(e), 72, "1.5 ms lookahead at 48 kHz");
         assert!(engine_sample_alloc(e, 9999, 1, 1).is_null());
         let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
         assert_eq!(t[7], ERR_BAD_INDEX as f64);
@@ -149,5 +162,6 @@ mod tests {
         assert_eq!(engine_sample_ready(n, 0), ERR_BAD_INDEX);
         assert!(engine_telemetry(n).is_null());
         assert!(engine_meters(n).is_null());
+        assert_eq!(engine_latency(n), 0);
     }
 }

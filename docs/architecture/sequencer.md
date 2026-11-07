@@ -190,7 +190,8 @@ chosen one was stopped, or it is more than 0.1 s older than the next one
 (nobody polled, e.g. a hidden tab).
 
 `TELEMETRY_FRAME` (slot 8) is the context frame at which the published
-`TELEMETRY_TICKS` (slot 2) applies (the start of the next block), so the main
+`TELEMETRY_TICKS` (slot 2) is output (the start of the next block plus the
+engine's latency, `engine_latency`: the 1.5 ms limiter lookahead), so the main
 thread can extrapolate at constant tempo. If `getOutputTimestamp()` is
 unusable (`contextTime <= 0`, early or headless), the clock falls back to
 `currentTime - (baseLatency + outputLatency)`. Playheads draw the same heard

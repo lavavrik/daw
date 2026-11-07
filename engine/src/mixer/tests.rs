@@ -267,7 +267,7 @@ fn pump(level: f64, key: f64) -> Engine {
     e
 }
 
-/// Per-block meters of `ch` over `blocks` blocks.
+/// Per-block meters of `ch` over `blocks` blocks: (peak L, gr).
 fn meter_run(e: &mut Engine, ch: usize, blocks: usize) -> Vec<(f32, f32)> {
     (0..blocks)
         .map(|_| {
@@ -284,7 +284,13 @@ fn sidechain_kick_ducks_pad() {
         let mut e = pump(0.5, key);
         assert_eq!(e.mixer().key(1), if key == 1.0 { Key::Row(0, 0) } else { Key::Track(0) });
         // 2 s: kicks at 0, 0.5, 1.0, 1.5 s = blocks 0, 187.5, 375, 562.5.
-        let m = meter_run(&mut e, 1, 750);
+        // Per block: (pad peak, pad gr, kick-strip peak).
+        let m: Vec<(f32, f32, f32)> = (0..750)
+            .map(|_| {
+                render(&mut e, BLOCK);
+                (meter(&e, 1).0, meter(&e, 1).2, meter(&e, 0).0)
+            })
+            .collect();
         for kick in 1..4usize {
             let at = kick * 24000 / BLOCK;
             let before = m[at - 4].0; // ~11 ms before the kick: recovered
@@ -292,9 +298,10 @@ fn sidechain_kick_ducks_pad() {
             let dip = db(before) - db(during);
             assert!(dip >= 6.0, "{what}: kick {kick} dips {dip} dB ({before} -> {during})");
             assert!(m[at + 8].1 >= 6.0, "{what}: gr meter {}", m[at + 8].1);
+            // The kick strip itself is not ducked: inside the kick it reads
+            // the row's full level (0.9 x equal-power centre).
+            assert!((m[at + 8].2 - 0.9 * 0.5f32.sqrt()).abs() < 1e-5, "{what}: kick strip {}", m[at + 8].2);
         }
-        // The kick track itself is not ducked.
-        assert!((meter(&e, 0).0 - 0.9 * 0.5f32.sqrt()).abs() < 1e-5 || meter(&e, 0).0 == 0.0);
     }
 }
 
@@ -540,4 +547,107 @@ fn removed_track_fades_out_through_its_old_strip() {
     assert!(l.iter().all(|&x| x <= level + 1e-6), "never above the old level");
     assert!(l[72 + 96 + 32..].iter().all(|&x| x == 0.0), "faded out (2 ms + a rack sub-block)");
     assert!(max_step(&l) < level / 40.0, "a ramp, not a cut: {}", max_step(&l));
+}
+
+#[test]
+fn soft_clip_is_transparent_below_the_knee_and_never_exceeds_the_ceiling() {
+    use super::{soft_clip, SOFT_KNEE};
+    let c = 10f32.powf(-0.3 / 20.0);
+    let k = SOFT_KNEE * c;
+    for i in 0..=1000 {
+        let x = k * i as f32 / 1000.0;
+        assert_eq!(soft_clip(x, c).to_bits(), x.to_bits(), "bit-exact at {x}");
+        assert_eq!(soft_clip(-x, c).to_bits(), (-x).to_bits());
+    }
+    let (mut px, mut prev) = (k, soft_clip(k, c));
+    for i in 1..=100_000 {
+        let x = k + i as f32 * 1e-4; // up to ~10.9
+        let y = soft_clip(x, c);
+        assert!(y <= c && y >= prev, "monotonic, under the ceiling at {x}: {y}");
+        assert!(y - prev <= (x - px) * 1.0001 + 1e-7, "slope <= 1 (no corner) at {x}");
+        assert_eq!(soft_clip(-x, c), -y);
+        (px, prev) = (x, y);
+    }
+    assert!(soft_clip(f32::MAX, c) <= c && soft_clip(f32::INFINITY, c) <= c);
+}
+
+#[test]
+fn click_on_a_limited_mix_stays_under_the_ceiling() {
+    // A DC mix far over the ceiling (limited to it) plus the metronome on
+    // top (added after the limiter): the soft clip keeps every sample under
+    // the ceiling, smoothly (the click's own slope is ~0.05 per sample).
+    let mut e = Engine::new(SR);
+    gate_patch(&mut e, 0, 1.0);
+    hold(&mut e, 0, 60.0);
+    mix(&mut e, 0, P_FADER, 6.0);
+    ok(e.command(OP_SET_METRONOME, 1.0, 0.0, 0.0, 0.0));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let ceiling = 10f32.powf(-0.3 / 20.0);
+    let (l, r) = render(&mut e, 2 * 48000);
+    for s in [&l, &r] {
+        assert!(peak(&s[4800..]) <= ceiling, "peak {} > ceiling {ceiling}", peak(&s[4800..]));
+        assert!(max_step(&s[4800..]) < 0.06, "step {}", max_step(&s[4800..]));
+    }
+    // The click is audible on top of the limited mix (not flattened away).
+    let lo = l[4800..].iter().fold(f32::MAX, |m, &x| m.min(x));
+    assert!(peak(&l[4800..]) - lo > 0.1, "click swing {}", peak(&l[4800..]) - lo);
+}
+
+#[test]
+fn post_fader_send_applies_the_gate_once() {
+    // DC through a post-fader send into the Delay (feedback 0): muting ramps
+    // the dry track linearly over 2 ms, and the echo of that ramp must be
+    // the same linear ramp (a gate applied twice would make it quadratic).
+    let mut e = Engine::new(SR);
+    gate_patch(&mut e, 0, 0.5);
+    hold(&mut e, 0, 60.0);
+    mix(&mut e, 0, P_SEND_B, 0.0);
+    mix(&mut e, MIX_DELAY, P_DELAY_FEEDBACK, 0.0);
+    mix(&mut e, MIX_DELAY, P_DELAY_PING_PONG, 0.0);
+    ok(e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0));
+    render(&mut e, 48000); // echoes settle to a steady DC
+    let (l, _) = render(&mut e, BLOCK);
+    let full = *l.last().unwrap(); // dry + echo
+    mix(&mut e, 0, P_MUTE, 1.0);
+    // 3/16 at 120 bpm = 18000 samples: the echo of the ramp starts 18000
+    // after the dry ramp (both behind the same latency).
+    let (l, _) = render(&mut e, 18000 + 1280);
+    let echo = full - l[72 + 200]; // dry gone: only the echo plays
+    assert!(echo > 0.1, "echo level {echo}");
+    let start = 72 + 18000;
+    let mid = l[start + 48]; // halfway through the 96-sample ramp
+    assert!((mid / echo - 0.5).abs() < 0.03, "linear ramp: mid {} of {echo}", mid / echo);
+}
+
+#[test]
+fn removing_a_muted_track_never_leaks_its_fade() {
+    // The strip holds its old (muted) gate until the removal fade is over,
+    // including the rack's last sub-block, so nothing of it is heard.
+    for (drum, sr) in [(false, SR), (true, SR), (false, 44100.0), (true, 44100.0)] {
+        let mut e = Engine::new(sr);
+        if drum {
+            load(&mut e, 0, 48000, |_| 0.9);
+            drums(&mut e, 0, 0, 0, &[0]);
+            ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        } else {
+            sine_patch(&mut e, 0, 0.8);
+            hold(&mut e, 0, 48.0);
+        }
+        render(&mut e, 4800);
+        mix(&mut e, 0, P_MUTE, 1.0);
+        let (l, _) = render(&mut e, 1280);
+        assert!(l[400..].iter().all(|&x| x == 0.0), "muted");
+        // Off the rack's 32-frame sub-block grid: the rack first plays out
+        // the rest of an already rendered sub-block, so its fade can end up
+        // to a sub-block after 2 ms.
+        e.process(&mut [0.0; 16], &mut [0.0; 16]);
+        ok(e.command(OP_REMOVE_TRACK, 0.0, 0.0, 0.0, 0.0));
+        // Small (16-frame) blocks: the hold is counted in processed frames,
+        // so it must cover the whole fade, not just "the next block".
+        let (mut l, mut r) = ([0.0f32; 16], [0.0f32; 16]);
+        for b in 0..300 {
+            e.process(&mut l, &mut r);
+            assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0), "drum {drum} @ {sr}: the muted fade leaked in block {b}: {l:?}");
+        }
+    }
 }

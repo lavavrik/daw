@@ -82,7 +82,7 @@ use crate::drums::Drums;
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool};
 use crate::metronome::Metronome;
-use crate::mixer::{Key, Mixer, StereoBufs};
+use crate::mixer::{soft_clip, Key, Mixer, StereoBufs};
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Mode, Transport};
@@ -679,8 +679,9 @@ impl Engine {
     /// into their own buffers; then the mixer runs once over the whole block
     /// (strips, sends, returns, master, limiter); then the metronome, delayed
     /// by the limiter latency so it stays on the beat, is added after the
-    /// limiter (the click is never compressed); a NaN-safe ±1 clamp is the
-    /// last backstop.
+    /// limiter (the click is never compressed); a soft clip (`mixer::soft_clip`,
+    /// transparent below 0.9 × ceiling) keeps click + mix under the ceiling,
+    /// and a NaN-safe ±1 clamp is the last backstop.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         left.fill(0.0);
         right.fill(0.0);
@@ -733,8 +734,9 @@ impl Engine {
         self.mixer.process(n, &self.tracks, &self.keys, active, self.transport.bpm, out_l, out_r);
         // Click: delayed by the limiter latency (stereo rings of latency + 1:
         // the slot after the write position holds the oldest sample), at the
-        // legacy master gain, after the limiter.
+        // legacy master gain, after the limiter, then the soft clip.
         let g = self.mixer.master_gain();
+        let ceiling = self.mixer.ceiling();
         let cap = (self.click_ring.len() / 2).max(1);
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         if let Some((cl, cr)) = self.click.pair(0, n) {
@@ -750,9 +752,11 @@ impl Engine {
                     (c_l, c_r) = (a, b);
                 }
                 self.click_pos = next;
-                // NaN-safe backstop only: the limiter holds the ceiling.
-                let l = left[i] + c_l * g;
-                let r = right[i] + c_r * g;
+                // The click rides on the limited mix: the soft clip keeps the
+                // sum under the ceiling (bit-transparent below 0.9 of it);
+                // the ±1 clamp is only a NaN-safe backstop.
+                let l = soft_clip(left[i] + c_l * g, ceiling);
+                let r = soft_clip(right[i] + c_r * g, ceiling);
                 let l = if l.is_finite() { l.clamp(-1.0, 1.0) } else { 0.0 };
                 let r = if r.is_finite() { r.clamp(-1.0, 1.0) } else { 0.0 };
                 left[i] = l;

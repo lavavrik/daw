@@ -96,6 +96,8 @@ fn reset_all_rejected_while_playing() {
     ok(e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0));
     ok(e.command(OP_RESET_ALL, 0.0, 0.0, 0.0, 0.0));
     assert_eq!(e.kind(0), SlotKind::Empty);
+    // A blank session carries no error over from the previous one.
+    assert_eq!(e.telemetry()[crate::TELEMETRY_LAST_ERROR], 0.0, "last error cleared");
 }
 
 #[test]

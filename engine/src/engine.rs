@@ -93,7 +93,8 @@
 //! * the transport (tempo, mode, loop, playhead) and the metronome are at
 //!   their defaults, and the click delay line is empty;
 //! * the sample pool is emptied (its generation moves on, `samples.rs`) and
-//!   the arena rewinds to its first chunk (grown chunks are freed).
+//!   the arena rewinds to its first chunk (grown chunks are freed);
+//! * `TELEMETRY_LAST_ERROR` is cleared (0).
 //!
 //! It allocates nothing (the arena only frees). What was audible is not cut:
 //! the last output sample (L/R) is held and faded linearly to 0 over 5 ms,
@@ -291,6 +292,8 @@ impl Engine {
         self.samples.clear();
         self.arena.reset();
         self.sync_transport_telemetry();
+        // A failure from the previous session must not show in the new one.
+        self.telemetry[TELEMETRY_LAST_ERROR] = 0.0;
         Ok(())
     }
 

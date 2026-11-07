@@ -115,7 +115,9 @@ mixer, transport and metronome, empties the sample pool and rewinds the
 arena to its first chunk (`SampleArena::reset`: grown chunks are freed, the
 first is **not** re-zeroed, which would be a 128 MB memset on the audio
 thread; every allocation is fully written before its sample is marked
-ready). Commands after it in the same batch land on the blank engine. The
+ready), and clears `TELEMETRY_LAST_ERROR` (an error from the previous
+session never shows in the new one). Commands after it in the same batch
+land on the blank engine. The
 audible result is a 5 ms linear fade of the last output sample (L/R), added
 to the blank engine's silent output, so a ringing reverb tail ends without a
 step. It allocates nothing (`no_alloc.rs` `reset_all_does_not_allocate`).

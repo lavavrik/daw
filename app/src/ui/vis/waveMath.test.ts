@@ -3,7 +3,7 @@ import { computePeaks } from '../../audio/peaks';
 import { Project } from '../../state/project.svelte';
 import { addAudioClip, addAudioTrack, clipGainLinear, setAudioClip, ticksPerSecond } from '../../state/audio-actions';
 import {
-  FINE_FPP, MIN_FPP, clipEnvelope, keyView, clipFrameAt, clipMap, clipSeams, columns, fileMap, fitView, pickSource, spanText, zoomAt,
+  FINE_FPP, MIN_FPP, clipEnvelope, dragDeltaTicks, handleKeyDelta, handleX, keyView, clipFrameAt, clipMap, clipSeams, columns, fileMap, fitView, pickSource, spanText, zoomAt,
 } from './waveMath';
 import type { WaveSource } from './waveMath';
 
@@ -225,5 +225,27 @@ describe('waveMath', () => {
     expect(keyView(v, 'ArrowLeft', true, lim)).toEqual({ frame0: 0, framesPerPx: 40 });
     expect(keyView(v, '0', false, lim)).toEqual({ frame0: 0, framesPerPx: 200 });
     expect(keyView(v, 'a', false, lim)).toBeNull();
+  });
+});
+
+describe('clip-tab handle maths', () => {
+  const view = { frame0: 1000, framesPerPx: 50 };
+  it('handleX puts a clip tick on the view and keeps it inside 0..width', () => {
+    // 2 view frames per tick: tick 600 = frame 1200 = (1200-1000)/50 = 4 px
+    expect(handleX(600, view, 2, 300)).toBeCloseTo(4);
+    expect(handleX(0, view, 2, 300)).toBe(0); // left of the view: pinned to the edge
+    expect(handleX(1e9, view, 2, 300)).toBe(300);
+  });
+  it('dragDeltaTicks converts pixels to ticks through the view at the grab', () => {
+    expect(dragDeltaTicks(10, 50, 2)).toBe(250);
+    expect(dragDeltaTicks(-10, 50, 2)).toBe(-250);
+    expect(dragDeltaTicks(10, 50, 0)).toBe(0); // degenerate: no movement, no NaN
+  });
+  it('handleKeyDelta: arrows step a quarter beat, Shift a beat', () => {
+    expect(handleKeyDelta('ArrowRight', false)).toBe(240);
+    expect(handleKeyDelta('ArrowUp', false)).toBe(240);
+    expect(handleKeyDelta('ArrowLeft', false)).toBe(-240);
+    expect(handleKeyDelta('ArrowDown', true)).toBe(-960);
+    expect(handleKeyDelta('a', false)).toBeNull();
   });
 });

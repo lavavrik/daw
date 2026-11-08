@@ -19,8 +19,20 @@
   //             the clip plays it (offset, loop) drawn pre-gain, the gain ×
   //             fades envelope as a line over it, loop seams dashed, and the
   //             playhead while the song playhead is inside the clip. Zooms
-  //             down to single samples. Display only: editing stays in the
-  //             fields (drag handles are a follow-up).
+  //             down to single samples.
+  //   handles   (plan 16) on the waveform, each a role="slider": a Fade in
+  //             flag at the top (right of its fade's end), a Fade out flag
+  //             at the top (left of its fade's start) and a Trim start bar
+  //             on the left edge. Drag = the field's own action
+  //             (setAudioClip for fades, so the same clamps: a fade never
+  //             leaves the clip nor overlaps the other; trimAudioClipStart
+  //             for the trim: the end stays, the offset follows). The pixel
+  //             -> tick scale is the view's at the grab, so a trim (which
+  //             rescales a fitted view as the clip shrinks) does not feed
+  //             back. Escape / pointercancel / lost capture mid-drag puts
+  //             the grabbed values back. Keys: ←/→ (↓/↑) move the handle a
+  //             quarter beat, Shift a beat (each press its own undo entry).
+  //             A pointer drag is one undo entry (history/gestures.ts).
   //
   // Every change goes through state/audio-actions.ts setAudioClip (one
   // undoable edit; SOURCE, GAIN, SET to the engine).
@@ -30,10 +42,10 @@
   import type { AudioClock } from '../audio/audioClock';
   import { fineRequestFor } from '../audio/fineSamples';
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
-  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, setAudioClip, ticksPerSecond } from '../state/audio-actions';
+  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, setAudioClip, ticksPerSecond, trimAudioClipStart } from '../state/audio-actions';
   import WaveformView from './vis/WaveformView.svelte';
-  import { clipEnvelope, clipMap, seamFrames, waveBase } from './vis/waveMath';
-  import type { WaveOverlay } from './vis/waveMath';
+  import { clipEnvelope, clipMap, dragDeltaTicks, handleKeyDelta, handleX, seamFrames, waveBase } from './vis/waveMath';
+  import type { View, WaveOverlay } from './vis/waveMath';
   import { clipFocus, sampleName } from './song/clipFocus.svelte';
   import { banners } from '../state/banners.svelte';
   import { pendingSampleIds, sampleFailed } from '../state/sampleLoads';
@@ -125,6 +137,77 @@
     }
   }
 
+  // ---- drag handles -----------------------------------------------------
+  type Handle = 'fadeIn' | 'fadeOut' | 'trim';
+  const HANDLE_LABEL: Record<Handle, string> = { fadeIn: 'Fade in', fadeOut: 'Fade out', trim: 'Trim start' };
+  const FLAG_W = 9;
+  /** The waveform's view as it last drew (CSS px), for placing the handles. */
+  let shown = $state<{ view: View; width: number } | null>(null);
+  function onView(v: View, width: number) {
+    const s = shown;
+    if (s && s.width === width && s.view.frame0 === v.frame0 && s.view.framesPerPx === v.framesPerPx) return;
+    shown = { view: { ...v }, width };
+  }
+  const fpt = $derived(wave ? wave.base.rate / ticksPerSecond(p.tempo) : 0); // view frames per tick
+  /** Clip tick each handle sits on. */
+  const handleTick = (c: AudioClip, h: Handle) => (h === 'fadeIn' ? c.fadeIn : h === 'fadeOut' ? c.len - c.fadeOut : 0);
+  const handleXpx = (c: AudioClip, h: Handle) => (shown ? handleX(handleTick(c, h), shown.view, fpt, shown.width) : 0);
+  /** What a cancel restores: the clip's fields at the grab (a trim moves start, len and offset together). */
+  type Grab = Pick<AudioClip, 'start' | 'len' | 'offset' | 'fadeIn' | 'fadeOut'>;
+  let drag: { h: Handle; x0: number; fpp: number; orig: Grab; moved: boolean; id: number } | null = null;
+
+  /** Move handle `h` to `dt` ticks from where the grab (or the clip as it is, for keys) put it. */
+  function moveHandle(c: AudioClip, h: Handle, from: Grab, dt: number) {
+    if (h === 'fadeIn') setAudioClip(p, engine, c.id, { fadeIn: Math.max(0, Math.round(from.fadeIn + dt)) });
+    else if (h === 'fadeOut') setAudioClip(p, engine, c.id, { fadeOut: Math.max(0, Math.round(from.fadeOut - dt)) });
+    else trimAudioClipStart(p, engine, c.id, from.start + dt);
+  }
+  function hDown(e: PointerEvent, c: AudioClip, h: Handle) {
+    if (e.button !== 0 || !shown) return;
+    e.preventDefault(); // no text selection / native drag
+    const el = e.currentTarget as HTMLElement;
+    el.focus();
+    el.setPointerCapture(e.pointerId);
+    drag = { h, x0: e.clientX, fpp: shown.view.framesPerPx, orig: { start: c.start, len: c.len, offset: c.offset, fadeIn: c.fadeIn, fadeOut: c.fadeOut }, moved: false, id: e.pointerId };
+  }
+  function hMove(e: PointerEvent, c: AudioClip) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0;
+    if (dx === 0 && !drag.moved) return;
+    drag.moved = true;
+    moveHandle(c, drag.h, drag.orig, dragDeltaTicks(dx, drag.fpp, fpt));
+  }
+  function hUp(e: PointerEvent) {
+    if (drag && e.pointerId === drag.id) drag = null;
+  }
+  /** Abort the drag: the grabbed values back (nothing when nothing moved). */
+  function hCancel(c: AudioClip) {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (!d.moved) return;
+    if (d.h === 'trim') setAudioClip(p, engine, c.id, { start: d.orig.start, len: d.orig.len, offset: d.orig.offset });
+    else setAudioClip(p, engine, c.id, { [d.h]: d.orig[d.h] });
+  }
+  function hKey(e: KeyboardEvent, c: AudioClip, h: Handle) {
+    if (drag) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation(); // App's Esc handlers must not also fire
+        hCancel(c);
+      }
+      return;
+    }
+    const dt = handleKeyDelta(e.key, e.shiftKey);
+    if (dt === null) return;
+    e.preventDefault();
+    e.stopPropagation(); // not the waveform's own scroll keys
+    moveHandle(c, h, c, dt);
+  }
+  const handleValue = (c: AudioClip, h: Handle) => (h === 'fadeIn' ? c.fadeIn / BEAT : h === 'fadeOut' ? c.fadeOut / BEAT : c.offset);
+  const handleText = (c: AudioClip, h: Handle) =>
+    h === 'trim' ? `starts ${c.offset.toFixed(3)} s into the file` : `${beats(h === 'fadeIn' ? c.fadeIn : c.fadeOut)} beats`;
+
   /** The heard song position as a view frame while it is inside the clip (Song mode, playing). */
   function playhead(): number | null {
     const c = clip;
@@ -199,8 +282,28 @@
         <WaveformView
           base={wave.base} map={wave.map} {fine} height={120} color={track.color}
           testid="cliptab-wave" label="Waveform of {name}"
-          overlay={drawOverlay} {overlayKey} {playhead} live={p.playing && p.mode === 'song'}
-        />
+          overlay={drawOverlay} {overlayKey} {playhead} live={p.playing && p.mode === 'song'} onview={onView}
+        >
+          <!-- only once the first draw told the view (placed by it) -->
+          {#each shown ? (['fadeIn', 'fadeOut', 'trim'] as const) : [] as h (h)}
+            {@const x = handleXpx(c, h)}
+            <div
+              class="handle {h}" role="slider" tabindex="0"
+              aria-label={HANDLE_LABEL[h]} aria-valuemin={0}
+              aria-valuemax={h === 'trim' ? Math.max(meta?.seconds ?? 0, c.offset) : c.len / BEAT}
+              aria-valuenow={Number(handleValue(c, h).toFixed(3))} aria-valuetext={handleText(c, h)}
+              title="{HANDLE_LABEL[h]}: {handleText(c, h)}: drag, or ←/→ (Shift: a beat)"
+              data-testid="cliptab-handle-{h === 'fadeIn' ? 'fade-in' : h === 'fadeOut' ? 'fade-out' : 'trim'}"
+              style:left="{h === 'fadeOut' ? Math.max(0, x - FLAG_W) : h === 'trim' ? 0 : Math.min((shown?.width ?? 0) - FLAG_W, x)}px"
+              onpointerdown={(e) => hDown(e, c, h)}
+              onpointermove={(e) => hMove(e, c)}
+              onpointerup={hUp}
+              onpointercancel={() => hCancel(c)}
+              onlostpointercapture={() => hCancel(c)}
+              onkeydown={(e) => hKey(e, c, h)}
+            ></div>
+          {/each}
+        </WaveformView>
       {/key}
     {/if}
     <div class="ctl">
@@ -261,4 +364,10 @@
   input[type='number']:focus-visible { outline: 2px solid #f0a23a; outline-offset: -1px; }
   .unit { color: #7d808c; font-size: 11px; }
   .loop input { accent-color: var(--c); }
+  .handle { position: absolute; touch-action: none; cursor: ew-resize; box-sizing: border-box; }
+  .handle:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
+  .handle.fadeIn, .handle.fadeOut { top: 0; width: 9px; height: 12px; background: #ffd98a; }
+  .handle.fadeIn { border-radius: 0 3px 3px 0; }
+  .handle.fadeOut { border-radius: 3px 0 0 3px; }
+  .handle.trim { top: 14px; bottom: 0; width: 7px; background: #8ab4ffcc; border-radius: 0 3px 3px 0; }
 </style>

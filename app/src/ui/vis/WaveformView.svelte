@@ -43,6 +43,7 @@
   // 'line' | 'dots') and data-fpp (frames per CSS px); the readout is
   // `wave-zoom-text`.
   import { onMount } from 'svelte';
+  import type { Snippet } from 'svelte';
   import { fineSamples } from '../../audio/fineSamples';
   import type { FineRequest } from '../../audio/fineSamples';
   import { frameLoop } from './frameLoop';
@@ -55,7 +56,7 @@
 
   let {
     base, map, fine, height, color, testid, label,
-    overlay = null, overlayKey = '', playhead = null, live = false,
+    overlay = null, overlayKey = '', playhead = null, live = false, onview = null, children,
   }: {
     /** The sample's axis and peaks (waveMath.waveBase), or null: nothing to draw. */
     base: WaveSource | null;
@@ -74,6 +75,10 @@
     playhead?: (() => number | null) | null;
     /** Playback is running: stay in the frame loop to move the playhead. */
     live?: boolean;
+    /** Told the view (and the CSS width) whenever it changes, for DOM handles drawn over the canvas. */
+    onview?: ((v: View, width: number) => void) | null;
+    /** DOM laid over the canvas (the Clip tab's handles). */
+    children?: Snippet;
   } = $props();
 
   let wrap: HTMLDivElement;
@@ -147,6 +152,7 @@
     if (!buf || cssW <= 0) return;
     const lim = limits();
     view = fitted ? fitView(lim.frames, lim.width, lim.minFpp) : clampView(view, lim);
+    onview?.(view, cssW);
     const W = Math.round(cssW * dpr);
     const H = Math.round(height * dpr);
     size(buf, W, H);
@@ -401,6 +407,7 @@
   <div class="ph" bind:this={headEl} style="display: none" aria-hidden="true"></div>
   <span class="readout" data-testid="wave-zoom-text" bind:this={readoutEl}></span>
   <span class="note" bind:this={noteEl} hidden>Sample-level zoom: files up to 256 MB</span>
+  {@render children?.()}
 </div>
 
 <style>

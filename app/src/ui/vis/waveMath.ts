@@ -380,3 +380,32 @@ export function keyView(v: View, key: string, shift: boolean, lim: Limits): View
       return null;
   }
 }
+
+// ---- the Clip tab's drag handles (plan 16 Task 3) ---------------------------------
+
+/**
+ * CSS x of clip tick `tick` in `view`, pinned inside 0..`width` (a handle
+ * whose tick is scrolled out of sight sits on the nearest edge, still
+ * focusable). `framesPerTick` converts ticks to view frames.
+ */
+export function handleX(tick: number, view: View, framesPerTick: number, width: number): number {
+  const x = (tick * framesPerTick - view.frame0) / view.framesPerPx;
+  return Math.min(width, Math.max(0, Number.isFinite(x) ? x : 0));
+}
+
+/** A horizontal drag of `dxPx` as clip ticks, through the view as it was at the grab (0 when degenerate). */
+export function dragDeltaTicks(dxPx: number, framesPerPx: number, framesPerTick: number): number {
+  const t = (dxPx * framesPerPx) / framesPerTick;
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * How far a key moves a focused handle along the clip: → / ↑ later, ← / ↓
+ * earlier, a quarter beat (Shift: a beat); null for any other key.
+ */
+export function handleKeyDelta(key: string, shift: boolean): number | null {
+  const step = shift ? 960 : 240;
+  if (key === 'ArrowRight' || key === 'ArrowUp') return step;
+  if (key === 'ArrowLeft' || key === 'ArrowDown') return -step;
+  return null;
+}

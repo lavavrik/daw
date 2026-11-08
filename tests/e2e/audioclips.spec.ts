@@ -420,6 +420,96 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await page.keyboard.press('Space');
 });
 
+test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) => {
+  test.setTimeout(30_000);
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2); // 2 bars = 8 beats = 7680 ticks
+  await page.getByTestId(`clip-${slot}-0`).click({ position: { x: 20, y: 8 } });
+  await page.getByTestId('mixer-tab').click();
+  await page.keyboard.press('Alt+5');
+  await expect(page.getByTestId('cliptab-panel')).toBeVisible();
+  const c0 = async () => (await audioTracks(page))[0].clips[0];
+  await expect(page.getByTestId('cliptab-handle-trim')).toBeVisible(); // placed after the first draw
+  const wave = (await page.getByTestId('cliptab-wave').boundingBox())!;
+  const tickPx = (await c0()).len / (wave.width - 2); // fitted: len across the width (1 px border each side)
+  // Handles follow the clip one frame late (the view reports after it draws): grab them once still.
+  const settled = async (id: string) => {
+    let prev = NaN;
+    await expect.poll(async () => {
+      const x = (await page.getByTestId(id).boundingBox())!.x;
+      const same = x === prev;
+      prev = x;
+      return same;
+    }).toBe(true);
+  };
+  const drag = async (id: string, dx: number) => {
+    await settled(id);
+    const b = (await page.getByTestId(id).boundingBox())!;
+    const x = b.x + b.width / 2;
+    const y = b.y + b.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y, { steps: 4 });
+    await page.mouse.move(x + dx, y, { steps: 4 });
+    return async () => page.mouse.up();
+  };
+
+  // Fade in: drag a quarter of the clip to the right -> ~2 beats; field and model follow.
+  const upIn = await drag('cliptab-handle-fade-in', wave.width / 4);
+  await expect.poll(async () => (await c0()).fadeIn).toBeGreaterThan(1800);
+  const fadeIn = (await c0()).fadeIn;
+  expect(Math.abs(fadeIn - (2 * BEAT))).toBeLessThan(tickPx * 6);
+  await expect(page.getByTestId('cliptab-fade-in')).toHaveValue(String(Math.round((fadeIn / BEAT) * 1000) / 1000));
+  await upIn();
+  await expect(page.getByTestId('cliptab-handle-fade-in')).toHaveAttribute('aria-valuenow', String(Math.round(fadeIn / BEAT * 1000) / 1000));
+  // One undo restores the whole drag.
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).fadeIn).toBe(0);
+
+  // Crossing: fade out 4 beats by field, then the fade-in handle dragged far past its start clamps.
+  await page.getByTestId('cliptab-fade-out').fill('4');
+  await page.getByTestId('cliptab-fade-out').press('Enter');
+  await expect.poll(async () => (await c0()).fadeOut).toBe(4 * BEAT);
+  await page.getByTestId('cliptab-fade-out').blur();
+  const upCross = await drag('cliptab-handle-fade-in', wave.width * 0.9);
+  await expect.poll(async () => (await c0()).fadeIn).toBe(4 * BEAT); // len - fadeOut
+  expect((await c0()).fadeOut).toBe(4 * BEAT);
+  await upCross();
+
+  // Keys move the focused handle along the clip. Left on Fade out = a longer fade; as in the
+  // fields, the fade-out wins and the fade-in gives way (they never overlap).
+  await page.getByTestId('cliptab-handle-fade-out').focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(async () => (await c0()).fadeOut).toBe(4 * BEAT + BEAT / 4);
+  const both = await c0();
+  expect(both.fadeIn + both.fadeOut).toBeLessThanOrEqual(both.len);
+  expect(both.fadeIn).toBe(both.len - both.fadeOut);
+  await page.keyboard.press('ArrowRight'); // shorter by a quarter beat
+  await expect.poll(async () => (await c0()).fadeOut).toBe(4 * BEAT);
+
+  // Trim: the left-edge handle dragged right moves the start and the offset, the end stays.
+  const before = await c0();
+  const upTrim = await drag('cliptab-handle-trim', wave.width / 4);
+  await expect.poll(async () => (await c0()).start).toBeGreaterThan(before.start + 1500);
+  const after = await c0();
+  expect(after.start + after.len).toBe(before.start + before.len);
+  expect(after.offset).toBeGreaterThan(0.2); // 2 beats = 0.5 s of the file skipped
+  await upTrim();
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).start).toBe(before.start);
+  expect((await c0()).offset).toBe(before.offset);
+  expect((await c0()).len).toBe(before.len);
+
+  // Escape mid-drag puts the grabbed values back.
+  const g = await c0();
+  await drag('cliptab-handle-fade-out', -wave.width / 8);
+  await expect.poll(async () => (await c0()).fadeOut).not.toBe(g.fadeOut);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await c0()).fadeOut).toBe(g.fadeOut);
+  await page.mouse.up();
+});
+
 test('drop on a drum lane shows the hint', async ({ page }) => {
   await start(page);
   const before = await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length);

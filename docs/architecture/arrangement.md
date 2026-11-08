@@ -168,7 +168,19 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
   clip's offset and loop drawn pre-gain, the gain × fades envelope as a line
   (`waveMath.clipEnvelope`, the engine's `user_fades`), dashed loop seams,
   and a DOM playhead while the song playhead is inside the clip. It zooms
-  from the whole clip to single samples and is display only (no handles).
+  from the whole clip to single samples. Drag handles sit on it (plan 16;
+  each a `role="slider"`, test ids `cliptab-handle-fade-in|fade-out|trim`): a
+  Fade in flag and a Fade out flag at the top, a Trim start bar on the left
+  edge. A drag runs the field's own action, so the clamps are the fields':
+  fades through `setAudioClip` (a fade never leaves the clip; the fade-out
+  wins over the fade-in), the trim through `trimAudioClipStart` (the end
+  stays, the offset follows). Pixels become ticks through the view at the
+  grab (`waveMath.dragDeltaTicks`); the handles are placed from the view
+  `WaveformView` reports (`onview`; hidden until the first draw). Escape,
+  pointercancel or a lost capture mid-drag restores the grabbed values; keys
+  on a focused handle move it a quarter beat (Shift: a beat,
+  `waveMath.handleKeyDelta`). A pointer drag is one undo entry
+  (history/gestures.ts), each key press its own.
   `shortcuts.ts tabFor` says which tab fits which track kind.
 
 ## Limits

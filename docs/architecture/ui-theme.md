@@ -86,7 +86,13 @@ out of a skin with `appearance: auto`.
   component sets both variables, e.g.
   `style:--fill="{(value - min) / (max - min) * 100}%" style:--c={trackColor}`.
   Unset, they default to `--accent` and 50%. A `--c` set on an ancestor also
-  applies (it inherits).
+  applies (it inherits). A fill that does not start at the left (bipolar,
+  from the centre) also sets `--fill-pos`, the fill layer's
+  `background-position` (default `0%`). CSS reads that percentage of the
+  groove left over beside the layer, so a fill whose left edge is at `at`%
+  with width `w`% needs `at / (100 − w) * 100`%; `ui/stepGrid.ts` `panFill`
+  computes it. Set `--fill`/`--fill-pos` on the input itself: they inherit,
+  so on an ancestor they would reach every slider inside.
 - **checkbox**: a 34×20 switch (`--well` off, `--play` on, the handle as the
   knob, drawn with `::before`).
 - **text, search, number, url, email, textarea**: `--well` fields, 8 px radius,

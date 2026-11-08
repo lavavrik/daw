@@ -76,6 +76,33 @@ and every edit sends its engine command (`pattern-actions.ts`,
   cross-track copy exists, lane moves can be allowed between tracks of the
   same kind.
 
+### Step grid look (ui/StepGrid.svelte)
+Plan 20, spec §4. The rules are pure functions in `ui/stepGrid.ts`
+(unit-tested in `stepGrid.test.ts`); the component turns them into classes
+and custom properties, and its CSS draws them with theme tokens.
+- **Row colour** = `TRACK_COLORS[(track.slot + row) % 8]` (`rowColor`). UI
+  only, never saved. The slot, not the track's list index: a slot is fixed
+  for the life of a track, so a row keeps its colour when other tracks come
+  and go, and row 0 matches a default-coloured track. Old projects whose
+  tracks carry old palette colours still get palette row colours. The row's
+  tag, gain/pan fills, cells and waveform strip use it; the footer's swing
+  uses the track colour.
+- **Cells** (`stepCellStyle(vel, step, playing)`): the fill is as tall as
+  the velocity read as a percent, capped at 100 (the grid writes 100 on
+  click and 60 on Alt-click, so those read full and 60 %); off cells are
+  recessed, every other group of four a shade lighter; velocity ≥
+  `ACCENT_MIN_VEL` (110, shared with the Acid tab, `state/acidSteps.ts`)
+  adds the `accent` class: a 2 px ring in the row colour and a glow. The
+  playing step (`playhead` class, from the grid's heard-position loop) gets
+  a white outline and a brighter fill. Groups of four sit 12 px apart.
+- **Gain and pan** stay native `<input type="range">` with the theme skin
+  (`--fill`, `--c` from the row). They are not rack params (no MIDI-learn or
+  automation for the Knob slider variant to keep), and a native drag is one
+  undo entry through the pointer gesture. Pan fills from the centre
+  (`panFill` → `--fill` and `--fill-pos`, see `ui-theme.md`).
+- The mute LED is lit (`--play`, with a glow) while the row plays and grey
+  when muted; `aria-pressed` = muted, as before.
+
 ## Acid tab (step view of a note pattern)
 Plan 17 (spec addendum §2). The **Acid** tab (`ui/acid/AcidSteps.svelte`,
 the third bottom-panel tab, Alt+3, no F-key) shows a synth track's current

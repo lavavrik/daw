@@ -88,8 +88,10 @@ const PLAIN_VEL = 80;
  * A velocity at or above this reads as an accent. Matches the Accent module's
  * default `threshold` (110/127, engine/src/rack/catalog.rs). Above 100, the
  * app's default velocity (QWERTY piano, drawn notes), which must read plain.
+ * The step grid (ui/stepGrid.ts) uses it too: a drum step this loud gets
+ * the accent ring.
  */
-const ACCENT_MIN_VEL = 110;
+export const ACCENT_MIN_VEL = 110;
 
 type NoteLike = NoteInit;
 

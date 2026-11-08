@@ -162,7 +162,10 @@
    A --well groove, the filled part in --c (the colour of the thing the
    slider belongs to) up to --fill (0..100%), and the white handle. The
    component sets both, e.g. style:--fill="{pct}%" style:--c={trackColour};
-   without them the fill is --accent at 50%. */
+   without them the fill is --accent at 50%. A fill that does not start at
+   the left (bipolar: from the centre) also sets --fill-pos, the layer's
+   background-position (a % of the groove left over beside the fill, CSS's
+   rule; ui/stepGrid.ts panFill computes it). */
 :where(input[type='range']) {
   appearance: none;
   height: 16px;
@@ -174,8 +177,8 @@
   height: 6px;
   border-radius: 3px;
   background:
-    var(--gloss) 0 0 / var(--fill, 50%) 100% no-repeat,
-    linear-gradient(var(--c, var(--accent)), var(--c, var(--accent))) 0 0 / var(--fill, 50%) 100% no-repeat,
+    var(--gloss) var(--fill-pos, 0%) 0 / var(--fill, 50%) 100% no-repeat,
+    linear-gradient(var(--c, var(--accent)), var(--c, var(--accent))) var(--fill-pos, 0%) 0 / var(--fill, 50%) 100% no-repeat,
     var(--well);
   box-shadow: var(--well-shadow);
 }

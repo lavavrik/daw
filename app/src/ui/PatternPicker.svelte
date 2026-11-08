@@ -76,20 +76,21 @@
       {/each}
     </select>
   {/if}
-  <button data-testid="pattern-new" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'New empty pattern'}
+  <button class="btn" data-testid="pattern-new" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'New empty pattern'}
     onclick={() => newPattern(p, engine, track.id)}>+ New</button>
-  <button data-testid="pattern-dup" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
+  <button class="btn" data-testid="pattern-dup" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
     onclick={() => duplicatePattern(p, engine, track.id)}>Duplicate</button>
-  <button data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}>Rename</button>
-  <button data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
+  <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}>Rename</button>
+  <button class="btn" data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
     onclick={() => deletePattern(p, engine, track.id, cur.id)}>Delete</button>
 </span>
 
 <style>
+  /* Tokens only (theme.css): the select and the rename field take the global
+     skins; the buttons are compact .btn (raised), sized like the old ones
+     (11 px) because the bottom panel header is a dense row. */
   .picker { display: inline-flex; align-items: center; gap: 4px; }
-  select, .name, button { font: inherit; font-size: 11px; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 3px; padding: 2px 6px; }
-  .name { width: 130px; border-color: #f0a23a; }
-  button { cursor: pointer; }
-  button:hover:not(:disabled) { background: #33353e; }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn { padding: 2px 6px; font-size: 11px; }
+  select { padding: 2px 4px 2px 6px; font-size: 11px; white-space: nowrap; }
+  .name { width: 130px; box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
 </style>

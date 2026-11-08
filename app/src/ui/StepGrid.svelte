@@ -10,6 +10,15 @@
   // time, not saved, display only. It draws no start/end/fade markers and no
   // playhead: drum rows have no such engine params yet and drum voices
   // report no position (follow-ups).
+  //
+  // Look (plan 20, spec §4): each row has its own colour, the palette walked
+  // from the track's slot (stepGrid.ts rowColor; UI only). A cell's fill is
+  // as tall as its velocity, velocity >= 110 adds the accent ring (the Acid
+  // rule), and the playing step gets a white outline and a brighter fill;
+  // stepGrid.ts stepCellStyle holds those rules. Gain and pan stay native
+  // range inputs (skinned by theme.css): they are not rack params, so they
+  // have no MIDI-learn or automation for the Knob slider variant to keep, and
+  // a native drag is already one undo entry (history/gestures.ts).
   import { onDestroy, onMount } from 'svelte';
   import { registerDragCancel } from '../history/gestures';
   import { TELEMETRY } from '../audio/protocol';
@@ -29,6 +38,7 @@
   import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
+  import { panFill, rowColor, stepCellStyle } from './stepGrid';
 
   let { p, engine, clock, track, onerror }: {
     p: Project;
@@ -211,15 +221,18 @@
   const vol = (e: Event) => (e.currentTarget as HTMLInputElement).valueAsNumber;
 </script>
 
-<div class="grid" style:--c={track.color}>
+<div class="grid">
   <div class="hdr" aria-hidden="true">
-    <span class="name">Sample</span><span class="wave-h"></span><span class="mute-h">Mute</span>
-    <span class="knob-h">Gain</span><span class="knob-h">Pan</span><span class="cells-h">Steps</span>
+    <span class="lbl tag-h"></span><span class="lbl name-h">Sample</span><span class="wave-h"></span>
+    <span class="lbl mute-h">Mute</span><span class="lbl gain-h">Gain</span><span class="lbl pan-h">Pan</span>
+    <span class="lbl">Steps</span>
   </div>
   {#each track.rows as row, r (row.id)}
+    {@const pan = panFill(row.pan)}
     <div
       class="row"
       class:over={dragOver === row.id}
+      style:--c={rowColor(track.slot, r)}
       data-testid="row-{r}"
       role="group"
       aria-label="Row {r + 1}"
@@ -228,6 +241,7 @@
       ondragleave={() => dragOver === row.id && (dragOver = null)}
       ondrop={(e) => void dropOnRow(e, row.id)}
     >
+      <span class="tag" aria-hidden="true"></span>
       {#if row.sampleId === null}
         <span class="name empty" data-testid="row-name" title={row.name}>drop sample</span>
         <span class="wave-h"></span>
@@ -246,43 +260,50 @@
           onclick={() => (waveRowId = waveRowId === row.id ? null : row.id)}
         >≈</button>
       {/if}
+      <!-- The LED shows the row playing (lit) or muted (grey); pressed = muted. -->
       <button
         class="mute" class:on={row.mute} aria-pressed={row.mute}
-        title="Mute {row.name}" aria-label="Mute {row.name}"
+        title="{row.mute ? 'Unmute' : 'Mute'} {row.name}" aria-label="Mute {row.name}"
         onclick={() => setRowMute(p, engine, track.id, row.id, !row.mute)}
-      >M</button>
-      <label class="kn" title="Gain {row.gain.toFixed(2)}">
+      ></button>
+      <label class="sl gain" title="Gain {row.gain.toFixed(2)}">
         <input
-          class="knob" type="range" min="0" max="2" step="0.01" value={row.gain}
+          type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill="{(row.gain / 2) * 100}%"
           aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
         />
-        <span class="val">{row.gain.toFixed(2)}</span>
+        <span class="val mono">{row.gain.toFixed(2)}</span>
       </label>
-      <label class="kn" title="Pan {panText(row.pan)}">
+      <label class="sl pan" title="Pan {panText(row.pan)}">
         <input
-          class="knob" type="range" min="-1" max="1" step="0.01" value={row.pan}
+          type="range" min="-1" max="1" step="0.01" value={row.pan}
+          style:--fill="{pan.width}%" style:--fill-pos="{pan.pos}%"
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
         />
-        <span class="val">{panText(row.pan)}</span>
+        <span class="val mono">{panText(row.pan)}</span>
       </label>
       <div class="cells">
-        {#each { length: pat.stepCount } as _, s (s)}
-          {@const v = pat.steps[r][s]}
-          <button
-            class="cell"
-            class:on={v > 0}
-            class:beat={s % 4 === 0}
-            class:group={s % 4 === 3 && s !== pat.stepCount - 1}
-            class:playhead={s === playStep}
-            style:--o={v > 0 ? 0.35 + (0.65 * v) / 127 : 1}
-            data-testid="step-{r}-{s}"
-            aria-label="Row {r + 1} step {s + 1}"
-            aria-pressed={v > 0}
-            onpointerdown={(e) => down(e, row.id, s, v)}
-            oncontextmenu={(e) => e.preventDefault()}
-            onpointerenter={() => enter(row.id, s)}
-            onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
-          ></button>
+        {#each { length: pat.stepCount / 4 } as _, g (g)}
+          <div class="grp">
+            {#each { length: 4 } as _, k (k)}
+              {@const s = g * 4 + k}
+              {@const v = pat.steps[r][s]}
+              {@const st = stepCellStyle(v, s, s === playStep)}
+              <button
+                class="cell"
+                class:on={st.on}
+                class:accent={st.accent}
+                class:alt={st.alt}
+                class:playhead={st.playing}
+                data-testid="step-{r}-{s}"
+                aria-label="Row {r + 1} step {s + 1}"
+                aria-pressed={st.on}
+                onpointerdown={(e) => down(e, row.id, s, v)}
+                oncontextmenu={(e) => e.preventDefault()}
+                onpointerenter={() => enter(row.id, s)}
+                onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
+              >{#if st.on}<span class="fill" style:height="{st.fill}%"></span>{/if}</button>
+            {/each}
+          </div>
         {/each}
       </div>
     </div>
@@ -294,16 +315,16 @@
       <span class="strip-name" title={w.row.name}>{w.row.name}</span>
       {#key `${w.row.id}:${w.sampleId}`}
         <WaveformView
-          base={w.base} map={w.map} fine={w.fine} height={72} color={track.color}
+          base={w.base} map={w.map} fine={w.fine} height={72} color={rowColor(track.slot, w.r)}
           testid="row-wave-{w.r}" label="Waveform of {w.row.name}"
         />
       {/key}
     </div>
   {/if}
 
-  <div class="foot">
+  <div class="foot" style:--c={track.color}>
     <button
-      class="add" class:over={dragOver === 'add'} data-testid="add-row"
+      class="btn add" class:over={dragOver === 'add'} data-testid="add-row"
       disabled={track.rows.length >= MAX_ROWS}
       onclick={() => addRow(p, engine, track.id)}
       ondragenter={(e) => { allow(e); dragOver = 'add'; }}
@@ -311,7 +332,7 @@
       ondragleave={() => dragOver === 'add' && (dragOver = null)}
       ondrop={dropOnAdd}
     >+ Add row</button>
-    <label>Steps
+    <label><span class="lbl">Steps</span>
       <select
         data-testid="step-count" value={pat.stepCount}
         onchange={(e) => setStepCount(p, engine, track.id, Number(e.currentTarget.value) as 16 | 32 | 64)}
@@ -319,57 +340,113 @@
         <option value={16}>16</option><option value={32}>32</option><option value={64}>64</option>
       </select>
     </label>
-    <label>Swing
+    <label><span class="lbl">Swing</span>
       <input
-        type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
-        data-testid="swing" style:accent-color={track.color} oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
+        class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
+        style:--fill="{pat.swing * 100}%"
+        data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
       />
-      <span class="pct">{Math.round(pat.swing * 100)}%</span>
+      <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>
   </div>
 </div>
 
 <style>
-  .grid { display: flex; flex-direction: column; gap: 3px; }
-  .row { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 3px; border: 1px dashed transparent; }
-  .row.over, .add.over { border-color: var(--c); background: #24262c; }
-  .name.prev { font: inherit; text-align: left; padding: 0; border: 0; background: transparent; cursor: pointer; }
-  .name.prev:hover, .name.prev.on { color: #9fe0b8; }
-  .name.prev:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
-  /* The ▶ / ■ glyph is CSS, so the name's text stays the sample name. */
-  .name.prev::before { content: '▶'; display: inline-block; width: 12px; font-size: 8px; color: #7d808c; }
-  .name.prev.on::before { content: '■'; color: #9fe0b8; }
-  .name { width: 90px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #e4e5ea; }
-  .name.empty { color: #6a6d79; font-style: italic; }
-  .mute { font: inherit; font-size: 10px; width: 22px; height: 22px; border: 0; border-radius: 3px; background: #2a2c33; color: #9a9ca8; cursor: pointer; }
-  .mute.on { background: #f0a23a; color: #111; }
-  .kn { display: flex; flex-direction: column; align-items: center; width: 64px; flex: none; }
-  .knob { width: 56px; margin: 0; accent-color: var(--c); }
-  .val { font-size: 9px; color: #7d808c; line-height: 1; }
-  .hdr { display: flex; gap: 6px; padding: 0 4px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #6a6d79; }
-  .hdr .name { color: #6a6d79; }
-  .mute-h { width: 22px; flex: none; text-align: center; }
-  .wave-h, .wave { width: 18px; flex: none; }
-  .wave { font: inherit; height: 22px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: #7d808c; cursor: pointer; }
-  .wave:hover, .wave.on { color: #e4e5ea; background: #2a2c33; }
-  .wave:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
-  .strip { display: flex; align-items: center; gap: 6px; padding: 2px 4px; }
-  .strip-name { width: 90px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9a9da8; font-size: 11px; }
-  .knob-h { width: 64px; flex: none; text-align: center; }
-  .cells { display: flex; gap: 2px; flex: 1; min-width: 0; user-select: none; }
-  .cell {
-    flex: 1 1 0; min-width: 8px; max-width: 34px; height: 26px; padding: 0; border: 0; border-radius: 3px;
-    background: #2a2c33; cursor: pointer; touch-action: none; position: relative;
+  /* Spec §4 "Step grid". Every colour is a theme.css token; a row's colour is
+     data (ui/stepGrid.ts rowColor), passed in as --c on the row. Widths: the
+     header's labels line up with the row's controls (tag 5, name 120,
+     wave 18, mute 22, gain 104, pan 80; 8 px gaps). */
+  .grid { display: flex; flex-direction: column; gap: 4px; }
+  .hdr, .row { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+  .hdr { height: 14px; }
+  .tag-h { width: 5px; flex: none; }
+  .name-h { width: 120px; flex: none; }
+  /* "MUTE" is wider than the 22 px LED: centred, it overhangs both gaps evenly. */
+  .mute-h { width: 22px; flex: none; display: flex; justify-content: center; }
+  .gain-h { width: 104px; flex: none; }
+  .pan-h { width: 80px; flex: none; }
+  .row { height: 34px; border-radius: var(--r-sm); outline: 1px dashed transparent; outline-offset: -1px; }
+  .row.over, .add.over { outline: 1px dashed var(--c); background-color: color-mix(in srgb, var(--c) 15%, transparent); }
+
+  /* The row-colour tag, with the gloss and a glow (theme glow recipe). */
+  .tag {
+    width: 5px; height: 30px; flex: none; border-radius: 3px;
+    background: var(--c) var(--gloss);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--c) 40%, transparent);
   }
-  .cell.beat:not(.on) { background: #34363f; }
-  .cell.group { margin-right: 6px; }
-  .cell.on { background: var(--c); opacity: var(--o); }
-  .cell.playhead { box-shadow: inset 0 0 0 2px #fff; }
-  .cell.playhead:not(.on) { background: #4a4d59; }
-  .foot { display: flex; align-items: center; gap: 14px; margin-top: 6px; color: #9a9ca8; }
-  .foot label { display: flex; align-items: center; gap: 6px; }
-  .foot select { font: inherit; background: #24262c; color: #c9cbd3; border: 1px solid #2a2c33; border-radius: 3px; }
-  .add { font: inherit; padding: 3px 10px; border: 1px dashed #3a3d47; border-radius: 3px; background: transparent; color: #c9cbd3; cursor: pointer; }
-  .add:disabled { opacity: 0.4; cursor: not-allowed; }
-  .pct { width: 32px; }
+
+  /* The name: a raised button (click previews); the ▶ / ■ glyph is CSS so the
+     text stays the sample name. */
+  .name {
+    display: block; width: 120px; height: 30px; flex: none; box-sizing: border-box; padding: 0 10px;
+    line-height: 30px; text-align: left; border-radius: var(--r-md);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    font: 600 var(--fs-ctl) var(--font-ui); color: var(--text);
+  }
+  .name.prev {
+    border: 0; cursor: pointer; position: relative; padding-right: 24px;
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow);
+  }
+  .name.prev:hover { filter: brightness(1.08); }
+  .name.prev::after { content: '▶'; position: absolute; right: 10px; font-size: 9px; color: var(--text-2); }
+  .name.prev.on { color: var(--on-color); background-color: var(--play); }
+  .name.prev.on::after { content: '■'; color: var(--on-color); }
+  .name.prev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .name.empty { line-height: 28px; border: 1px dashed var(--line); color: var(--text-2); font-weight: 400; font-style: italic; }
+
+  .wave-h, .wave { width: 18px; flex: none; }
+  .wave { font: inherit; height: 22px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer; }
+  .wave:hover, .wave.on { color: var(--text); background: var(--raised); }
+  .wave:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  /* Mute LED: lit (--play, glowing) while the row plays, grey when muted. */
+  .mute {
+    width: 22px; height: 22px; flex: none; padding: 0; border: 2px solid var(--well); border-radius: 50%;
+    background: var(--play) var(--gloss);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--play) 40%, transparent);
+    cursor: pointer;
+  }
+  .mute.on { background-color: var(--raised); box-shadow: none; }
+  .mute:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Gain and pan: skinned native ranges (theme.css), filled in the row colour
+     (--c inherits from the row); pan fills from the centre (--fill-pos). */
+  .sl { display: flex; flex-direction: column; justify-content: center; gap: 1px; flex: none; }
+  .sl.gain { width: 104px; }
+  .sl.pan { width: 80px; }
+  .sl input { width: 100%; }
+  .val { font-size: 9px; line-height: 1; color: var(--text-2); text-align: center; }
+
+  /* Steps: groups of 4, 12 px apart. */
+  .cells { display: flex; gap: 12px; flex: 1; min-width: 0; user-select: none; }
+  .grp { display: flex; gap: 3px; flex: 1 1 0; min-width: 0; max-width: 156px; }
+  .cell {
+    flex: 1 1 0; min-width: 7px; height: 30px; padding: 0; border: 0; position: relative; overflow: hidden;
+    border-radius: var(--r-sm); cursor: pointer; touch-action: none;
+    /* Off: recessed, in the area colour; odd groups a shade lighter (between --work and --grid). */
+    background: var(--work); box-shadow: var(--well-shadow);
+  }
+  .cell.alt { background: color-mix(in srgb, var(--work), var(--grid)); }
+  /* On: the row colour at 25 %, and a fill as tall as the velocity (inline height). */
+  .cell.on { background: color-mix(in srgb, var(--c) 25%, transparent); box-shadow: none; }
+  .fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: var(--c) var(--gloss); box-shadow: var(--raised-shadow);
+  }
+  /* Accent (velocity >= 110): a 2 px ring and a glow. */
+  .cell.accent { box-shadow: 0 0 0 2px var(--c), 0 0 10px color-mix(in srgb, var(--c) 40%, transparent); }
+  /* The playing step: a white outline, and its fill brightens. */
+  .cell.playhead { outline: 2px solid color-mix(in srgb, var(--text) 75%, transparent); outline-offset: -2px; }
+  .cell.playhead.on { outline-color: var(--text); }
+  .cell.playhead .fill { filter: brightness(1.25); }
+  .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
+  .strip-name { width: 133px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+
+  .foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 0 4px; color: var(--text-2); }
+  .foot label { display: flex; align-items: center; gap: 8px; }
+  .add { padding: 4px 12px; }
+  .swing { width: 160px; }
+  .pct { width: 32px; color: var(--text); }
 </style>

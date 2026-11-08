@@ -21,8 +21,8 @@ import { clampParam } from '../audio/catalog';
 import { fromPos, toPos } from '../ui/rack/knobMath';
 import type { CommandSink } from './actions';
 import {
-  DRAW_TOLERANCE, freeLane, isMasterChannel, laneCount, laneSetCommand, pointCommands, pointMap, projectLanes, sameTarget,
-  targetDef, thin,
+  DRAW_TOLERANCE, freeLane, isMasterChannel, laneCount, laneSetCommand, pointCommands, pointMap, pointTuple, projectLanes,
+  sameTarget, targetDef, thin,
 } from './automation';
 import type { AutoDef, AutoOwner, PointTuple } from './automation';
 import { edit } from './edits';
@@ -105,6 +105,7 @@ interface Want {
   tick: number;
   value: number;
   hold: boolean;
+  curve: number;
 }
 
 /**
@@ -121,15 +122,15 @@ function commitPoints(sink: CommandSink, lane: AutomationLane, want: Want[]) {
   const sorted = [...want].sort((a, b) => a.tick - b.tick);
   const idxOf = new Map<Want, number>();
   for (const w of sorted) idxOf.set(w, w.old && w.old.idx < n ? w.old.idx : free.pop()!);
-  const to = new Map<number, PointTuple>(sorted.map((w) => [idxOf.get(w)!, [w.tick, w.value, w.hold ? 1 : 0]]));
+  const to = new Map<number, PointTuple>(sorted.map((w) => [idxOf.get(w)!, pointTuple(w)]));
   for (const c of pointCommands(lane.lane, pointMap(lane), to)) sink.send(c[0], c[1], c[2], c[3], c[4]);
   lane.points = sorted.map((w) => {
-    const fields = { idx: idxOf.get(w)!, tick: w.tick, value: w.value, hold: w.hold };
+    const fields = { idx: idxOf.get(w)!, tick: w.tick, value: w.value, hold: w.hold, curve: w.curve };
     return w.old ? Object.assign(w.old, fields) : { id: crypto.randomUUID(), ...fields };
   });
 }
 
-const keep = (x: AutoPoint): Want => ({ old: x, tick: x.tick, value: x.value, hold: x.hold });
+const keep = (x: AutoPoint): Want => ({ old: x, tick: x.tick, value: x.value, hold: x.hold, curve: x.curve });
 /** A tick as stored: whole, 0..MAX_SONG_TICKS; null when not a number. */
 const tickOf = (t: number): number | null => (Number.isFinite(t) ? Math.min(MAX_SONG_TICKS, Math.max(0, Math.round(t))) : null);
 
@@ -147,7 +148,7 @@ export function addPoint(
   const { lane, def } = f;
   if (lane.points.length >= MAX_AUTO_POINTS || lane.points.some((x) => x.tick === tick)) return null;
   return edit(p, 'Add automation point', () => {
-    commitPoints(sink, lane, [...lane.points.map(keep), { old: null, tick, value: clampParam(def, pt.value), hold: pt.hold ?? false }]);
+    commitPoints(sink, lane, [...lane.points.map(keep), { old: null, tick, value: clampParam(def, pt.value), hold: pt.hold ?? false, curve: 0 }]);
     return lane.points.find((x) => x.tick === tick)!;
   });
 }
@@ -193,7 +194,7 @@ export function movePoints(
     const o = from(x);
     // dValue 0 keeps the value exactly (a position round trip could nudge it).
     const value = dValue === 0 ? o.value : fromPos(def, toPos(def, o.value) + dValue);
-    return { old: x, tick: o.tick + dt, value, hold: x.hold };
+    return { old: x, tick: o.tick + dt, value, hold: x.hold, curve: x.curve };
   });
   if (want.every((w) => w.tick === w.old!.tick && w.value === w.old!.value)) return false;
   return edit(p, 'Move automation points', () => {
@@ -229,6 +230,31 @@ export function setPointShape(p: Project, sink: CommandSink, laneId: string, ids
 }
 
 /**
+ * Bend the segment that starts at point `pointId` (plan 16): `curve` -1..1
+ * (clamped; 0 a straight line), f(x) = x^(2^(-3 curve)) of the way at
+ * fraction x (automation.ts bend). Sends AUTO_POINT_CURVE alone: the point
+ * keeps its tick, value, shape and idx. `owner` (a track id or a Master row
+ * channel) must own the lane. A hold point, or the last point, takes the
+ * curve and keeps it, but plays it only once it is linear and has a next
+ * point. False (nothing sent) when nothing changes, for NaN, or when there
+ * is no such lane / point on that owner.
+ */
+export function setPointCurve(
+  p: Project, sink: CommandSink, owner: MixChannelTarget, laneId: string, pointId: string, curve: number,
+): boolean {
+  const f = findLane(p, laneId);
+  const o = ownerOf(p, owner);
+  if (!f || !o || f.owner !== o || Number.isNaN(curve)) return false;
+  const pt = f.lane.points.find((x) => x.id === pointId);
+  const c = Math.min(1, Math.max(-1, curve)) || 0; // -0 is 0
+  if (!pt || pt.curve === c) return false;
+  return edit(p, 'Curve', () => {
+    commitPoints(sink, f.lane, f.lane.points.map((x) => (x === pt ? { ...keep(x), curve: c } : keep(x))));
+    return true;
+  });
+}
+
+/**
  * A freehand stroke: `samples` ({tick, value in param units}, in drawing
  * order, either direction) are rounded to whole ticks in the song (the last
  * sample on a tick wins), clamped to the range and thinned with
@@ -253,7 +279,7 @@ export function drawPoints(p: Project, sink: CommandSink, laneId: string, sample
   const last = stroke[stroke.length - 1].tick;
   const want: Want[] = [
     ...lane.points.filter((x) => x.tick < first || x.tick > last).map(keep),
-    ...kept.map((k): Want => ({ old: null, tick: k.tick, value: k.raw, hold: false })),
+    ...kept.map((k): Want => ({ old: null, tick: k.tick, value: k.raw, hold: false, curve: 0 })),
   ];
   if (want.length > MAX_AUTO_POINTS) return false;
   return edit(p, 'Draw automation', () => {

@@ -103,8 +103,11 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   position is the address and undo can match points by idx. The values are
   the base-independent breakpoints; what the knobs are set to (the mixer
   params, the rack params) is each target's **base value**, which plays
-  wherever a lane does not apply (Pattern mode, a disabled lane). Which
-  tracks show their lanes is UI state, not saved.
+  wherever a lane does not apply (Pattern mode, a disabled lane). A point
+  is `[tick, value, 0 linear | 1 hold]`, with a 4th element, its segment's
+  **curve** (−1..1), only when that is not 0 (plan 16; no version bump:
+  files without curves are byte-identical; automation.md, *Evaluation*).
+  Which tracks show their lanes is UI state, not saved.
 - **MIDI mappings** (plan 14, spec addendum §2; [midi.md](midi.md)):
   top-level `midiMap`, because a mapping names project tracks. Each maps a
   CC number (0..119, omni) to one control, named like an automation target:
@@ -261,6 +264,8 @@ notice banner after the load (all of them in the console):
   points: malformed ones dropped, ticks (0..`MAX_SONG_TICKS`, whole) and
   values (the target's range) clamped, a repeated tick dropped (the first
   kept), at most 512 kept; the kept points keep their order (= their idx).
+  A point is malformed unless it has 3 or 4 finite numbers; a curve is
+  clamped to −1..1, and a curve of 0 is written as none.
   `enabled` defaults to true.
 - a MIDI mapping (plan 14) is dropped when it is malformed, its `cc` is not
   an integer 0..119, its `track` slot has no track or its `channel` is
@@ -309,7 +314,8 @@ notice banner after the load (all of them in the console):
      `MIX_SET_KEY` (keys need their source tracks and rows);
    - **automation lanes** (plan 10), the tracks' in track order, then the
      Master row's: per lane `AUTO_LANE_SET`, its `AUTO_POINT_SET`s (idx =
-     position in `points`), `AUTO_LANE_ENABLE` (always sent). After every
+     position in `points`; a curved point's `AUTO_POINT_CURVE` right after
+     its SET, which resets the curve), `AUTO_LANE_ENABLE` (always sent). After every
      track and module they target; the bases were already set by the
      `RACK_SET_PARAM` / `MIX_SET` commands, and `AUTO_LANE_SET` captures
      them. A rack lane whose module the FX-pool check dropped is dropped

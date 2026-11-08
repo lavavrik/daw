@@ -98,9 +98,19 @@ export interface LaneJson {
   lane: number;
   enabled: boolean;
   target: { mix: string } | { rack: [moduleIdx: number, name: string] };
-  /** [tick, value, 0 linear | 1 hold], listed in engine idx order (point i is idx i); unique ticks. */
-  points: [number, number, 0 | 1][];
+  /**
+   * [tick, value, 0 linear | 1 hold, curve?], listed in engine idx order
+   * (point i is idx i); unique ticks. `curve` (plan 16): -1..1, the bend of
+   * the segment to the next point; written only when it is not 0, so a
+   * straight point keeps the 3-element form (no schema bump: an older file
+   * has no curves; a newer one opened by an older app would fail validate's
+   * length check for curved points and drop just those).
+   */
+  points: PointJson[];
 }
+
+/** One saved breakpoint (see LaneJson.points). */
+export type PointJson = [tick: number, value: number, hold: 0 | 1, curve?: number];
 
 /** A Master row lane: a lane of the Reverb, Delay or master channel. */
 export type MasterLaneJson = { channel: 'reverb' | 'delay' | 'master' } & LaneJson;
@@ -803,11 +813,11 @@ function readLanes(
     seen.add(key(target));
     lanes.count++;
     const w = `${at} automation of ${name}`;
-    const points: [number, number, 0 | 1][] = [];
+    const points: PointJson[] = [];
     const ticks = new Set<number>();
     const raw = arr(x.points);
     for (const pt of raw) {
-      if (!Array.isArray(pt) || pt.length !== 3 || !pt.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      if (!Array.isArray(pt) || (pt.length !== 3 && pt.length !== 4) || !pt.every((n) => typeof n === 'number' && Number.isFinite(n))) {
         r.warn(`${w}: dropped a malformed point (${JSON.stringify(pt)})`);
         continue;
       }
@@ -823,7 +833,9 @@ function readLanes(
       ticks.add(tick);
       const value = r.num(pt[1], d.def.default, d.def.min, d.def.max, `${w} point value`);
       if (pt[2] !== 0 && pt[2] !== 1) r.warn(`${w}: point shape ${pt[2]} is not 0/1 (linear)`);
-      points.push([tick, value, pt[2] === 1 ? 1 : 0]);
+      // The curve: clamped to -1..1; 0 is written as no curve.
+      const curve = pt.length === 4 ? r.num(pt[3], 0, -1, 1, `${w} point curve`) : 0;
+      points.push(curve ? [tick, value, pt[2] === 1 ? 1 : 0, curve] : [tick, value, pt[2] === 1 ? 1 : 0]);
     }
     out.push({ lane, enabled: r.bool(x.enabled, true, `${w} enabled`), target, points });
   }

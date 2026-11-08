@@ -94,6 +94,9 @@ export interface AutoPoint {
   value: number;
   /** Keeps its value up to the next point (else: linear in knob space to it). */
   hold: boolean;
+  /** The segment to the next point: -1..1, 0 a straight line (plan 16;
+   *  state/automation.ts bend). Kept, and ignored, on a hold point. */
+  curve: number;
 }
 
 /**

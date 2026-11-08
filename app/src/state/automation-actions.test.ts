@@ -12,7 +12,7 @@ import { fromPos } from '../ui/rack/knobMath';
 import { addDrumTrack, removeTrack } from './actions';
 import { addAudioTrack } from './audio-actions';
 import {
-  addLane, addPoint, deletePoints, drawPoints, movePoints, overrideLane, removeLane, setLaneEnabled, setPointShape,
+  addLane, addPoint, deletePoints, drawPoints, movePoints, overrideLane, removeLane, setLaneEnabled, setPointCurve, setPointShape,
 } from './automation-actions';
 import { commandEdits } from './edits';
 import { STARTER_PATCHES } from './patches';
@@ -258,6 +258,56 @@ describe('automation actions', () => {
     agrees();
     // Nothing to draw: refused.
     expect(drawPoints(p, sink, l.id, [])).toBe(false);
+  });
+
+  it('setPointCurve: one edit, SET-proof, undoable (plan 16)', () => {
+    const { p, sent, sink, agrees } = rig({ history: true });
+    const d = addDrumTrack(p, sink)!;
+    const l = addLane(p, sink, d.id, { kind: 'mix', param: 'fader' })!;
+    for (const [tick, value] of [[0, -60], [960, -12], [1920, 0]]) addPoint(p, sink, l.id, { tick, value });
+    const a = l.points[0];
+    p.history!.clear();
+    const v = p.version;
+    sent.length = 0;
+    expect(setPointCurve(p, sink, d.id, l.id, a.id, 0.5)).toBe(true);
+    expect(sent).toEqual([[Op.AUTO_POINT_CURVE, autoPoint(l.lane, a.idx), 0.5, 0, 0]]);
+    expect(a.curve).toBe(0.5);
+    expect(p.version).toBeGreaterThan(v);
+    expect(p.history!.labels.undo).toBe('Curve');
+    agrees();
+    // Saved as the point's 4th element; a straight point stays [tick, value, hold].
+    const saved = () => serialize(p).tracks.find((t) => t.slot === d.slot)!.automation[0].points;
+    expect(saved()).toEqual([[0, -60, 0, 0.5], [960, -12, 0], [1920, 0, 0]]);
+    // Clamped to -1..1; refused when nothing changes, for NaN, or no such point / lane / owner.
+    expect(setPointCurve(p, sink, d.id, l.id, a.id, 3)).toBe(true);
+    expect(a.curve).toBe(1);
+    sent.length = 0;
+    expect(setPointCurve(p, sink, d.id, l.id, a.id, 1)).toBe(false);
+    expect(setPointCurve(p, sink, d.id, l.id, a.id, NaN)).toBe(false);
+    expect(setPointCurve(p, sink, d.id, l.id, 'nope', 0.2)).toBe(false);
+    expect(setPointCurve(p, sink, d.id, 'nope', a.id, 0.2)).toBe(false);
+    expect(setPointCurve(p, sink, 'master', l.id, a.id, 0.2)).toBe(false);
+    expect(sent).toEqual([]);
+    // A move sends SET (which resets the engine's curve), then the CURVE again.
+    movePoints(p, sink, l.id, [a.id], 0, 0.1);
+    expect(sent.map((c) => c[0])).toEqual([Op.AUTO_POINT_SET, Op.AUTO_POINT_CURVE]);
+    expect(a.curve).toBe(1);
+    agrees();
+    // Hold, and back: the curve is kept (a hold point ignores it).
+    setPointShape(p, sink, l.id, [a.id], true);
+    setPointShape(p, sink, l.id, [a.id], false);
+    expect(a.curve).toBe(1);
+    agrees();
+    // Undo, step by step, back to the straight point; redo brings the curve back.
+    for (let k = 0; k < 4; k++) p.history!.undo();
+    expect(l.points[0].curve).toBe(0.5);
+    p.history!.undo();
+    expect(p.tracks[0].automation[0].points[0].curve).toBe(0);
+    expect(saved()).toEqual([[0, -60, 0], [960, -12, 0], [1920, 0, 0]]);
+    agrees();
+    p.history!.redo();
+    expect(p.tracks[0].automation[0].points[0].curve).toBe(0.5);
+    agrees();
   });
 
   it('overrideLane is not an edit', () => {

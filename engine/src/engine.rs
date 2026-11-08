@@ -25,7 +25,8 @@
 //!
 //! # Automation
 //! `AUTO_LANE_SET` / `AUTO_POINT_SET` / `AUTO_POINT_REMOVE` /
-//! `AUTO_LANE_CLEAR` / `AUTO_LANE_ENABLE` / `AUTO_OVERRIDE` edit the 64
+//! `AUTO_POINT_CURVE` / `AUTO_LANE_CLEAR` / `AUTO_LANE_ENABLE` /
+//! `AUTO_OVERRIDE` edit the 64
 //! preallocated lanes (`automation.rs`). A lane's target must exist and be
 //! automatable: a non-integer mixer param its channel accepts (a track
 //! channel needs a track in its slot), or a non-integer param of a module
@@ -1036,6 +1037,7 @@ impl Engine {
                 self.automation.set_point(lane, idx, tick, value, hold)?
             }
             Command::AutoPointRemove { lane, idx } => self.automation.remove_point(lane, idx),
+            Command::AutoPointCurve { lane, idx, curve } => self.automation.set_curve(lane, idx, curve)?,
             Command::AutoLaneClear { lane } => {
                 if let Some((old, b)) = self.automation.release(lane) {
                     self.reapply_base(old, b);

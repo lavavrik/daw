@@ -174,7 +174,11 @@ export function laneCommands(lj: LaneJson, channel: number, patch: { modules: { 
       patch!.modules.find((m) => m.idx === (lj.target as { rack: [number, string] }).rack[0])!.id);
   return [
     set,
-    ...lj.points.map(([tick, value, hold], i): EngineCommand => [Op.AUTO_POINT_SET, autoPoint(lj.lane, i), tick, value, hold]),
+    // SET resets a point's curve (plan 16): a curved one is SET, then CURVEd.
+    ...lj.points.flatMap(([tick, value, hold, curve], i): EngineCommand[] => [
+      [Op.AUTO_POINT_SET, autoPoint(lj.lane, i), tick, value, hold],
+      ...(curve ? [[Op.AUTO_POINT_CURVE, autoPoint(lj.lane, i), curve, 0, 0] as EngineCommand] : []),
+    ]),
     [Op.AUTO_LANE_ENABLE, lj.lane, lj.enabled ? 1 : 0],
   ];
 }
@@ -197,7 +201,7 @@ export function lanesState(lanes: LaneJson[]): AutomationLane[] {
     enabled: lj.enabled,
     target: 'mix' in lj.target ? { kind: 'mix', param: lj.target.mix } : { kind: 'rack', module: lj.target.rack[0], param: lj.target.rack[1] },
     points: lj.points
-      .map(([tick, value, hold], idx) => ({ id: crypto.randomUUID(), idx, tick, value, hold: hold === 1 }))
+      .map(([tick, value, hold, curve], idx) => ({ id: crypto.randomUUID(), idx, tick, value, hold: hold === 1, curve: curve ?? 0 }))
       .sort((a, b) => a.tick - b.tick),
   }));
 }

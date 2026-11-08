@@ -487,7 +487,7 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
  * was not matched by tick) takes the wanted point at its idx (a point moved
  * in place). Each old object is used at most once.
  */
-function reusePoints<P extends { idx: number; tick: number; value: number; hold: boolean }>(old: P[], fresh: P[]): P[] {
+function reusePoints<P extends { idx: number; tick: number; value: number; hold: boolean; curve: number }>(old: P[], fresh: P[]): P[] {
   const byTick = new Map(old.map((x) => [x.tick, x]));
   const byIdx = new Map(old.map((x) => [x.idx, x]));
   const used = new Set<P>();
@@ -505,6 +505,6 @@ function reusePoints<P extends { idx: number; tick: number; value: number; hold:
         o = c;
       }
     }
-    return o ? Object.assign(o, { idx: x.idx, tick: x.tick, value: x.value, hold: x.hold }) : x;
+    return o ? Object.assign(o, { idx: x.idx, tick: x.tick, value: x.value, hold: x.hold, curve: x.curve }) : x;
   });
 }

@@ -516,7 +516,7 @@ fn mixer_commands_do_not_allocate() {
     for ch in 0..MIX_CHANNELS {
         for p in PARAMS.iter().filter(|p| p.accepts(ch)) {
             for v in [p.min, p.max, p.default] {
-                if p.id == P_MUTE as u32 && ch < 3 && v == 1.0 {
+                if p.id == P_MUTE && ch < 3 && v == 1.0 {
                     continue; // keep the sounding tracks audible
                 }
                 assert_eq!(e.command(OP_MIX_SET, ch as f64, p.id as f64, v as f64, 0.), OK, "ch {ch} {} = {v}", p.name);
@@ -896,6 +896,9 @@ fn automation_does_not_allocate() {
                 ok(e.command(OP_AUTO_POINT_SET, (pts + 5) as f64, 80., 0.5, 0.)); // lane 1 (pan), point 5
                 ok(e.command(OP_AUTO_POINT_REMOVE, (2 * pts + 100) as f64, 0., 0., 0.));
                 ok(e.command(OP_AUTO_POINT_SET, (2 * pts + 100) as f64, 1601., -20., 1.));
+                for i in 0..pts {
+                    ok(e.command(OP_AUTO_POINT_CURVE, (3 * pts + i) as f64, (i % 9) as f64 / 4.0 - 1.0, 0., 0.)); // lane 3, every point
+                }
             }
             400 => {
                 for lane in 10..20 {

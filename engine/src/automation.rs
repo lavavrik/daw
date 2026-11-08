@@ -28,7 +28,13 @@
 //!   ([`Shape`]): plain linear interpolation of the values for a `lin`
 //!   param, linear in the knob position for an `exp` one (logarithmic in
 //!   the value; an exp param whose minimum is 0 uses the knob's zero zone,
-//!   `ZERO_ZONE` / `EXP_FLOOR_RATIO`, exactly as `app/src/ui/rack/knobMath.ts`).
+//!   `ZERO_ZONE` / `EXP_FLOOR_RATIO`, exactly as `app/src/ui/rack/knobMath.ts`);
+//! * its **curve** (plan 16, `AUTO_POINT_CURVE`, −1..1, 0 linear) bends that
+//!   segment: at fraction `x` of the way it is `f(x) = x^(2^(−3·curve))` of
+//!   the way in the same knob space (curve 1: `x^(1/8)`, fast then slow;
+//!   −1: `x^8`, slow then fast). A hold point, and the last point (no
+//!   segment after it), ignore their curve. `AUTO_POINT_SET` resets the
+//!   point's curve to 0, so a replay sends SET, then CURVE.
 //!
 //! Each lane keeps a segment cursor (the number of points at or before the
 //! last evaluated tick), so steady playback costs O(1) per lane per value;
@@ -114,10 +120,23 @@ pub struct Point {
     pub value: f32,
     /// Hold its value up to the next point (else: linear to it).
     pub hold: bool,
+    /// The segment to the next point: −1..1, 0 linear (see the module docs).
+    pub curve: f32,
 }
 
 impl Point {
-    const OFF: Point = Point { active: false, tick: 0, value: 0.0, hold: false };
+    const OFF: Point = Point { active: false, tick: 0, value: 0.0, hold: false, curve: 0.0 };
+}
+
+/// The fraction of the way a segment of curve `c` is at fraction `x`
+/// (0..1): `x^(2^(−3c))`; `x` itself for 0. The exponent is 1/8..8, always
+/// positive, so `0` maps to 0 and `1` to 1, never NaN.
+fn bend(x: f64, c: f32) -> f64 {
+    if c == 0.0 {
+        x
+    } else {
+        x.powf((-3.0 * c as f64).exp2())
+    }
 }
 
 /// A param's knob space: its range and curve (catalog `curve`).
@@ -374,8 +393,22 @@ impl Lane {
             self.order[pos] = idx as u16;
             self.count += 1;
         }
-        self.points[idx] = Point { active: true, tick, value, hold };
+        self.points[idx] = Point { active: true, tick, value, hold, curve: 0.0 };
         self.dirty = true;
+        Ok(())
+    }
+
+    /// Set the curve of the segment starting at point `idx` (−1..1). An
+    /// inactive point or a curve out of range is `ERR_BAD_VALUE`.
+    pub fn set_curve(&mut self, idx: usize, curve: f32) -> Result<(), i32> {
+        let Some(p) = self.points.get_mut(idx).filter(|p| p.active) else { return Err(ERR_BAD_VALUE) };
+        if !(-1.0..=1.0).contains(&curve) {
+            return Err(ERR_BAD_VALUE);
+        }
+        if p.curve != curve {
+            p.curve = curve;
+            self.dirty = true;
+        }
         Ok(())
     }
 
@@ -419,7 +452,7 @@ impl Lane {
             } else {
                 let span = b.tick as f64 - a.tick as f64;
                 let f = if span > 0.0 { ((t - a.tick as f64) / span).clamp(0.0, 1.0) } else { 1.0 };
-                self.shape.lerp(a.value, b.value, f)
+                self.shape.lerp(a.value, b.value, bend(f, a.curve))
             }
         };
         (v as f32).clamp(self.shape.min, self.shape.max)
@@ -610,6 +643,12 @@ impl Automation {
         if let Some(lane) = self.lanes.get_mut(i) {
             lane.remove_point(idx);
         }
+    }
+
+    /// `AUTO_POINT_CURVE` on point `idx` of lane `i` (`ERR_BAD_VALUE` for an
+    /// inactive point, which a lane without a target never has).
+    pub fn set_curve(&mut self, i: usize, idx: usize, curve: f32) -> Result<(), i32> {
+        self.lanes.get_mut(i).ok_or(ERR_BAD_VALUE)?.set_curve(idx, curve)
     }
 
     pub fn set_enabled(&mut self, i: usize, on: bool) {
@@ -928,54 +967,72 @@ mod tests {
 
     // ---- the fixture ------------------------------------------------------
 
-    /// `(name, (min, max, exp), points (tick, value, hold), query ticks)`.
-    type Case = (&'static str, (f32, f32, bool), &'static [(u32, f32, bool)], &'static [f64]);
+    /// `(name, (min, max, exp), points (tick, value, hold, curve), query ticks)`.
+    type Case = (&'static str, (f32, f32, bool), &'static [(u32, f32, bool, f32)], &'static [f64]);
 
     /// The cases `auto_eval.json` was generated from (UPDATE_FIXTURE=1).
     const CASES: &[Case] = &[
         (
             "linear fader ride (dB)",
             (-60.0, 6.0, false),
-            &[(0, -24.0, false), (3840, 0.0, false), (7680, -6.0, false)],
+            &[(0, -24.0, false, 0.0), (3840, 0.0, false, 0.0), (7680, -6.0, false, 0.0)],
             &[0.0, 480.0, 1920.0, 1920.5, 3839.999, 3840.0, 5000.25, 7680.0, 9000.0],
         ),
         (
             "hold steps, before the first point and after the last",
             (-60.0, 6.0, false),
-            &[(960, -10.0, true), (1920, -30.0, true), (2880, 0.0, false), (3840, 6.0, false)],
+            &[(960, -10.0, true, 0.0), (1920, -30.0, true, 0.0), (2880, 0.0, false, 0.0), (3840, 6.0, false, 0.0)],
             &[0.0, 959.9, 960.0, 1500.0, 1919.5, 1920.0, 2400.0, 2880.0, 3360.0, 3840.0, 4000.0],
         ),
         (
             "exponential mid frequency (halfway is the geometric mean)",
             (200.0, 8000.0, true),
-            &[(0, 200.0, false), (3840, 2000.0, false)],
+            &[(0, 200.0, false, 0.0), (3840, 2000.0, false, 0.0)],
             &[0.0, 960.0, 1920.0, 2880.0, 3840.0],
         ),
         (
             "exponential cutoff with a hold",
             (20.0, 20000.0, true),
-            &[(0, 20000.0, false), (1920, 100.0, true), (3840, 5000.0, false), (5760, 20.0, false)],
+            &[(0, 20000.0, false, 0.0), (1920, 100.0, true, 0.0), (3840, 5000.0, false, 0.0), (5760, 20.0, false, 0.0)],
             &[0.0, 960.0, 1919.0, 1920.0, 3000.0, 3840.0, 4800.0, 5760.0, 6000.0],
         ),
         (
             "exponential from zero (the knob's zero zone)",
             (0.0, 2.0, true),
-            &[(0, 0.0, false), (1000, 2.0, false), (2000, 0.001, false)],
+            &[(0, 0.0, false, 0.0), (1000, 2.0, false, 0.0), (2000, 0.001, false, 0.0)],
             &[0.0, 10.0, 15.0, 100.0, 500.0, 900.0, 1000.0, 1500.0, 1999.0, 2000.0],
         ),
-        ("a single point", (0.0, 1.0, false), &[(1000, 0.3, false)], &[0.0, 1000.0, 999999.0]),
+        ("a single point", (0.0, 1.0, false), &[(1000, 0.3, false, 0.0)], &[0.0, 1000.0, 999999.0]),
         (
             "points sent out of order",
             (-1.0, 1.0, false),
-            &[(3840, 1.0, false), (0, -1.0, true), (1920, 0.5, false), (960, 0.0, false)],
+            &[(3840, 1.0, false, 0.0), (0, -1.0, true, 0.0), (1920, 0.5, false, 0.0), (960, 0.0, false, 0.0)],
             &[0.0, 500.0, 960.0, 1440.0, 1920.0, 2880.0, 3840.0, 5000.0],
+        ),
+        (
+            "curved segments (plan 16): rising, falling, an S of two curves",
+            (-60.0, 6.0, false),
+            &[(0, -60.0, false, 1.0), (1000, 6.0, false, -1.0), (2000, -60.0, false, 0.5), (3000, 0.0, false, -0.5), (4000, -30.0, false, 0.25)],
+            &[0.0, 250.0, 500.0, 750.0, 1000.0, 1250.0, 1500.0, 1750.0, 2250.0, 2500.0, 2750.0, 3250.0, 3500.0, 3750.0, 4000.0, 5000.0],
+        ),
+        (
+            "a curved exponential cutoff (the curve shapes the knob position)",
+            (20.0, 20000.0, true),
+            &[(0, 20.0, false, 0.75), (3840, 20000.0, false, -0.375), (7680, 200.0, false, 0.0)],
+            &[0.0, 480.0, 960.0, 1920.0, 2880.0, 3840.0, 4800.0, 5760.0, 7680.0],
+        ),
+        (
+            "curves on a hold point and on the last point are ignored",
+            (0.0, 1.0, false),
+            &[(0, 0.2, true, 1.0), (1000, 0.8, false, 0.0), (2000, 0.4, false, -1.0)],
+            &[0.0, 500.0, 999.0, 1000.0, 1500.0, 2000.0, 3000.0],
         ),
     ];
 
     /// Reference evaluation, written independently of the cursor code: sort
     /// the points, find the segment by a linear scan, interpolate the knob
     /// positions.
-    fn reference(points: &[(u32, f32, bool)], t: f64, shape: Shape) -> f64 {
+    fn reference(points: &[(u32, f32, bool, f32)], t: f64, shape: Shape) -> f64 {
         let mut p = points.to_vec();
         p.sort_by_key(|x| x.0);
         let (first, last) = (p[0], p[p.len() - 1]);
@@ -990,7 +1047,9 @@ mod tests {
         if a.2 {
             return a.1 as f64;
         }
-        let f = (t - a.0 as f64) / (b.0 as f64 - a.0 as f64);
+        let x = (t - a.0 as f64) / (b.0 as f64 - a.0 as f64);
+        // The segment's curve: f(x) = x^(2^(-3 curve)), written out here.
+        let f = x.powf(2f64.powf(-3.0 * a.3 as f64));
         if shape.exp {
             let (pa, pb) = (shape.pos(a.1 as f64), shape.pos(b.1 as f64));
             shape.value(pa + (pb - pa) * f)
@@ -1001,11 +1060,21 @@ mod tests {
 
     fn fixture_json() -> String {
         let mut o = String::from(
-            "{\n  \"version\": 1,\n  \"about\": \"Automation lane evaluation (engine/src/automation.rs, Lane::value_at; app laneValueAt). Points are [tick, value, hold 0/1] in the order they are sent; queries are [tick, expected value]. Compare in knob space (the param's min/max/curve) to 1e-6.\",\n  \"cases\": [",
+            "{\n  \"version\": 1,\n  \"about\": \"Automation lane evaluation (engine/src/automation.rs, Lane::value_at; app laneValueAt). Points are [tick, value, hold 0/1, curve (optional, default 0: f(x) = x^(2^(-3 curve)))] in the order they are sent; queries are [tick, expected value]. Compare in knob space (the param's min/max/curve) to 1e-6.\",\n  \"cases\": [",
         );
         for (i, (name, (min, max, exp), points, queries)) in CASES.iter().enumerate() {
             let shape = Shape { min: *min, max: *max, exp: *exp };
-            let pts: Vec<String> = points.iter().map(|(t, v, h)| format!("[{t}, {}, {}]", *v as f64, *h as u8)).collect();
+            // `[tick, value, hold]`, and the curve as a 4th element when it is not 0 (as saved).
+            let pts: Vec<String> = points
+                .iter()
+                .map(|(t, v, h, c)| {
+                    if *c == 0.0 {
+                        format!("[{t}, {}, {}]", *v as f64, *h as u8)
+                    } else {
+                        format!("[{t}, {}, {}, {}]", *v as f64, *h as u8, *c as f64)
+                    }
+                })
+                .collect();
             let qs: Vec<String> = queries.iter().map(|&t| format!("[{t}, {}]", reference(points, t, shape))).collect();
             o.push_str(if i == 0 { "\n    {" } else { ",\n    {" });
             o.push_str(&format!(
@@ -1049,6 +1118,72 @@ mod tests {
         assert!((e - 632.456).abs() < 1e-2, "{e}");
     }
 
+    /// The curve's formula, worked by hand: f(x) = x^(2^(-3 curve)) on the
+    /// segment's fraction, in knob space (plan 16; the app's laneValueAt
+    /// test checks the same numbers).
+    #[test]
+    fn curves_match_the_formula() {
+        let f = |x: f64, c: f64| x.powf(2f64.powf(-3.0 * c));
+        // Hand values: curve 1 is x^(1/8), -1 is x^8, 0.5 is x^(1/2^1.5), -0.5 is x^(2^1.5).
+        assert!((f(0.5, 1.0) - 0.917004).abs() < 1e-6);
+        assert!((f(0.5, -1.0) - 0.00390625).abs() < 1e-9);
+        let lin = Shape { min: 0.0, max: 1.0, exp: false };
+        let exp = Shape { min: 20.0, max: 20000.0, exp: true };
+        for c in [-1.0f32, -0.5, 0.5, 1.0] {
+            for (shape, a, b) in [(lin, 0.0f32, 1.0f32), (lin, 1.0, 0.0), (exp, 20.0, 20000.0), (exp, 20000.0, 20.0)] {
+                let mut lane = Lane::new();
+                lane.set_shape(shape);
+                assert_eq!(lane.set_point(0, 0, a, false), Ok(()));
+                assert_eq!(lane.set_point(1, 1000, b, false), Ok(()));
+                assert_eq!(lane.set_curve(0, c), Ok(()));
+                for x in [0.25, 0.5, 0.75] {
+                    let got = shape.pos(lane.value_at(1000.0 * x).unwrap() as f64);
+                    let (pa, pb) = (shape.pos(a as f64), shape.pos(b as f64));
+                    let want = pa + (pb - pa) * f(x, c as f64);
+                    assert!((got - want).abs() < 1e-5, "curve {c} {a}->{b} at {x}: pos {got}, want {want}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn curve_edge_cases() {
+        let shape = Shape { min: 0.0, max: 1.0, exp: false };
+        let mut lane = Lane::new();
+        lane.set_shape(shape);
+        // A curve on an inactive point, or out of range: refused.
+        assert_eq!(lane.set_curve(0, 0.5), Err(ERR_BAD_VALUE));
+        assert_eq!(lane.set_point(0, 0, 0.2, true), Ok(()));
+        assert_eq!(lane.set_point(1, 1000, 0.8, false), Ok(()));
+        for bad in [1.01f32, -1.01, f32::NAN, f32::INFINITY] {
+            assert_eq!(lane.set_curve(0, bad), Err(ERR_BAD_VALUE), "{bad}");
+        }
+        assert_eq!(lane.set_curve(MAX_AUTO_POINTS, 0.5), Err(ERR_BAD_VALUE));
+        // On a hold point the hold wins.
+        assert_eq!(lane.set_curve(0, 1.0), Ok(()));
+        assert_eq!(lane.value_at(500.0), Some(0.2));
+        // On the last point (no segment after it): ignored, no NaN.
+        assert_eq!(lane.set_curve(1, -1.0), Ok(()));
+        for t in [999.0, 1000.0, 1500.0, 1e9] {
+            let v = lane.value_at(t).unwrap();
+            assert!(v.is_finite(), "{t}");
+            if t >= 1000.0 {
+                assert_eq!(v, 0.8, "{t}");
+            }
+        }
+        // Made linear again by AUTO_POINT_SET, which resets the point's curve
+        // to 0 (so replays send SET, then CURVE): a straight line.
+        assert_eq!(lane.set_point(0, 0, 0.2, false), Ok(()));
+        assert!((lane.value_at(500.0).unwrap() - 0.5).abs() < 1e-6);
+        assert_eq!(lane.set_curve(0, 1.0), Ok(()));
+        let want = 0.2 + 0.6 * 0.5f64.powf(0.125);
+        assert!((lane.value_at(500.0).unwrap() as f64 - want).abs() < 1e-6);
+        // A removed point forgets its curve too.
+        lane.remove_point(0);
+        assert_eq!(lane.set_point(0, 0, 0.2, false), Ok(()));
+        assert!((lane.value_at(500.0).unwrap() - 0.5).abs() < 1e-6);
+    }
+
     #[test]
     fn lane_eval_matches_fixture() {
         if std::env::var("UPDATE_FIXTURE").as_deref() == Ok("1") {
@@ -1073,6 +1208,9 @@ mod tests {
                 let p = p.arr();
                 let (t, v, h) = (p[0].num() as u32, p[1].num() as f32, p[2].num() == 1.0);
                 assert_eq!(lane.set_point(idx, t, v, h), Ok(()), "{name}: point {idx}");
+                if let Some(c) = p.get(3) {
+                    assert_eq!(lane.set_curve(idx, c.num() as f32), Ok(()), "{name}: curve {idx}");
+                }
             }
             let queries = case.get("queries").arr();
             // Forwards (the cursor walks) and backwards (it re-seeks).

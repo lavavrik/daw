@@ -48,11 +48,12 @@ frame), `engine/src/engine.rs` (commands, base values, lifecycle),
 | `AUTO_LANE_CLEAR` | 52 | `a` lane: no points, no target; the param goes back to its base |
 | `AUTO_LANE_ENABLE` | 53 | `a` lane, `b` 0/1 |
 | `AUTO_OVERRIDE` | 54 | `a` lane: suspend until the next breakpoint (not an edit) |
+| `AUTO_POINT_CURVE` | 56 | `a` `lane * 512 + idx`, `b` curve −1..1 of the segment from that point to the next (0 straight). An inactive point is `ERR_BAD_VALUE`. `AUTO_POINT_SET` resets a point's curve to 0, so a curved point is sent SET, then CURVE (plan 16; 55 was `VIS_TAP` already) |
 
 Validation:
 - A bad lane, point address, channel or slot is `ERR_BAD_INDEX`.
 - A bad kind, a non-automatable or missing target, or a duplicate target is
-  `ERR_BAD_VALUE`.
+  `ERR_BAD_VALUE`, and so is a curve outside −1..1 or on an inactive point.
 - So is a point that has a value out of range, a tick another point of the
   lane uses, or a lane without a target.
 
@@ -65,7 +66,12 @@ no-op: the base it captured stays.
 
 `Lane::value_at(t)` in the engine and `laneValueAt` in the app follow the
 same rules. They are pinned by `auto_eval.json`, compared in knob space to
-1e-6.
+1e-6. Its points are `[tick, value, hold, curve?]` (the curve only when
+not 0), and three cases are curved: a rising / falling S, an exp cutoff,
+and curves on a hold point and on the last point. `curves_match_the_formula`
+(engine) and `laneValueAt bends a segment by its left point's curve` (app)
+check `f` itself at x = 0.25 / 0.5 / 0.75 for curves −1, −0.5, 0.5, 1
+(1e-5).
 
 - **Before and after the points.** Before the first point the lane holds the
   first point's value. After the last point it holds the last point's value.
@@ -81,6 +87,18 @@ same rules. They are pinned by `auto_eval.json`, compared in knob space to
     bottom 2 % of travel is exactly 0; the rest is logarithmic from
     `max / 1000`. This is `ZERO_ZONE` / `EXP_FLOOR_RATIO`, the same mapping
     as `app/src/ui/rack/knobMath.ts`.
+- **Curve** (plan 16). A linear point's `curve` (−1..1, 0 by default) bends
+  its segment in that same knob space: at fraction `x` of the segment's
+  time the value is `f(x) = x^(2^(−3·curve))` of the way (`bend` in both
+  `automation.rs` and `automation.ts`). Curve 1 is `x^(1/8)` (fast, then
+  slow), −1 is `x^8` (slow, then fast), ±0.5 is `x^(2^∓1.5)`. The exponent
+  is always positive, so the ends stay put and nothing is NaN.
+  - A hold point keeps its curve but ignores it (the hold wins).
+  - The last point keeps its curve but has no segment to bend: after it the
+    lane holds its value.
+  - The per-block frame is unchanged: values at sub-block starts, mixer
+    gains ramped linearly between them, so a steep curve (±1 near its fast
+    end) is followed in 32-frame chords.
 - **Cursor.** Each lane keeps a segment cursor (points at or before the last
   evaluated tick). Steady playback costs O(1) per lane per value: the cursor
   or its successor still fits. A jump re-seeks with a binary search.
@@ -216,7 +234,8 @@ export tests named in projects.md, history.md and export.md.
   own strip, and on synth tracks also on its own rack (Audio and drum tracks
   have no rack). The Master row's lanes (Reverb, Delay, master) are in
   `MixerState.automation` as `{channel, lane}`.
-- `AutoPoint = {id, idx, tick, value, hold}`. `idx` is the engine point
+- `AutoPoint = {id, idx, tick, value, hold, curve}` (`curve` −1..1, 0 a
+  straight segment; plan 16). `idx` is the engine point
   slot, and a lane's idx are always **dense** (0..n−1): the saved points are
   listed in idx order without an idx field (projects.md), and undo matches
   them by idx.
@@ -227,8 +246,9 @@ export tests named in projects.md, history.md and export.md.
 
 - `laneValueAt(points, tick, param)`: the engine's `Lane::value_at`, in
   float64. Lin params interpolate the values; exp params the knob position
-  through `knobMath` `toPos` / `fromPos` (zero zone included); clamped to
-  the range; null without points. Pinned by `auto_eval.json` (`laneValueAt
+  through `knobMath` `toPos` / `fromPos` (zero zone included); the fraction
+  bent by the left point's `curve` (`bend`); clamped to the range; null
+  without points. Pinned by `auto_eval.json` (`laneValueAt
   matches the engine fixture`, knob space, 1e-6). The knob rings (Task 4)
   draw it at the heard playhead.
 - `nextBreakpoint(points, tick)`: the first point after `tick`, where an
@@ -245,9 +265,11 @@ export tests named in projects.md, history.md and export.md.
   builder (`packAutoParam` for rack targets). `laneSetCommand` (live lanes)
   and `commands.ts laneCommands` (saved lanes) both use it.
 - `pointCommands(lane, from, to)`: the commands from one point set (idx →
-  `[tick, value, hold]`) to another. **All `AUTO_POINT_REMOVE`s first** (an
-  idx that goes, or whose tick changes), **then the `AUTO_POINT_SET`s** (new
-  or changed idx). The engine refuses a SET on a tick another point of the
+  `PointTuple` `[tick, value, hold, curve?]`, the curve only when not 0) to
+  another. **All `AUTO_POINT_REMOVE`s first** (an idx that goes, or whose
+  tick changes), **then the `AUTO_POINT_SET`s** (new or changed idx), each
+  followed by its `AUTO_POINT_CURVE` when its curve is not 0 (the SET reset
+  it). A point whose curve alone changes gets the CURVE only (to 0 too). The engine refuses a SET on a tick another point of the
   lane still holds, and after the removals the only held ticks are those of
   points that keep their idx and tick. A point whose value or shape alone
   changes is SET in place, since it holds its own tick. Every point edit and
@@ -267,6 +289,7 @@ changes nothing and sends nothing.
 | `addPoint(p, sink, laneId, {tick, value, hold?})` | one `AUTO_POINT_SET` | 512 points, a tick already used, NaN; the tick is rounded and kept in the song, the value clamped |
 | `movePoints(p, sink, laneId, ids, dTick, dValue)` | the difference | nothing moves. `dTick` is clamped so no moved point reaches an unmoved neighbour or leaves the song: the order never changes. **`dValue` is in knob position** (a fraction of the travel, as the lane is drawn), and each value is clamped to the range. **`origin`** (optional, a drag): the moved points' positions at the gesture start, by id; the deltas are then cumulative and apply to it, so clamping on the way loses nothing (a group dragged past the top and back keeps its shape; a glide point at 0 leaves the zero zone in small steps) |
 | `deletePoints`, `setPointShape(…, ids, hold)` | the difference | nothing changes |
+| `setPointCurve(p, sink, owner, laneId, pointId, curve)` (plan 16) | `AUTO_POINT_CURVE` | no such lane on that owner or no such point, NaN, or no change. The curve is clamped to −1..1. A hold or last point takes it (and ignores it until it is linear with a next point). Moves, shape changes and undo keep a point's curve: their SET is followed by the CURVE again |
 | `drawPoints(p, sink, laneId, samples)` | the difference | nothing usable drawn, or more than 512 points would result. The samples are rounded to whole ticks (the last on a tick wins), clamped, and thinned in knob position to `DRAW_TOLERANCE` (0.5 % of the travel); the result replaces every point between the first and last sample's tick. The stroke's ends are always kept |
 | `overrideLane(p, sink, laneId)` | `AUTO_OVERRIDE` only | no such lane. **Not an edit**: no undo entry, no unsaved mark. The manual move's own `setMix` / `setParam` that follows is the edit, and it sets the base |
 
@@ -284,10 +307,14 @@ changes nothing and sends nothing.
 ### Persistence, replay, undo
 
 - **Schema v3** (projects.md): lanes inside their owner's JSON, points as
-  `[tick, value, 0|1]` in idx order. `validate` drops what the engine would
-  refuse.
+  `[tick, value, 0|1]` in idx order, plus an optional 4th element, the
+  curve, when it is not 0 (plan 16; no schema bump: a file without curves
+  is unchanged). `validate` drops what the engine would refuse and clamps
+  a curve to −1..1 (a point of another length, or a non-number curve, is
+  malformed and dropped).
 - **Replay** (`projectCommands`): after `MIX_SET_KEY`, before the
-  transport: per lane `AUTO_LANE_SET`, its points, `AUTO_LANE_ENABLE`. So
+  transport: per lane `AUTO_LANE_SET`, its points (each curved one SET,
+  then CURVE), `AUTO_LANE_ENABLE`. So
   load, export, the audio restart and undo's whole-track rebuilds have no
   automation path of their own. `load.ts units()` keeps a lane's commands
   in one unit.
@@ -325,7 +352,20 @@ changes nothing and sends nothing.
   - When it comes within the margin it draws at the current view.
   - Measured in the serial perf e2e (docs/architecture/mixer.md,
     *Performance*).
-- **Gestures.** Click adds a point (1/16, Alt free) and keeps dragging it;
+- **Curves** (plan 16). `lanePolyline` samples a curved segment every 2 px
+  across and every px up (`curveSamples`: curve 1 rises most of the way in
+  its first pixels), only within the view, so the drawn bend is within half
+  a pixel of `laneValueAt` and a segment wider than the view costs no more
+  than the view.
+- **Gestures.** Alt-drag on a segment (within `SEGMENT_R` 5 px of its drawn
+  line, strictly between its two points; not a hold point's flat run)
+  bends it: `tlMath.curveDrag`, vertical only, `CURVE_PX` 100 px = the full
+  −1..1, rounded to 0.01, and dragging **up bends the line up** (a positive
+  curve on a rising segment, negative on a falling one; a flat segment
+  counts as rising). `setPointCurve` on the left point at most once per
+  frame; the tooltip shows "Curve +0.60"; one gesture, one undo entry;
+  Escape puts the old curve back. Alt-click off the line still adds a free
+  point. Click adds a point (1/16, Alt free) and keeps dragging it;
   a point drag calls `movePoints` with the gesture's `origin` and the
   cumulative deltas, at most once per animation frame; Cmd/Ctrl-drag
   previews a stroke and calls `drawPoints` once on release; right-click:

@@ -210,6 +210,29 @@ describe('project schema', () => {
     for (const re of [/gain/, /offset/, /loop/, /fade/i, /sample 77/, /slot/, /malformed/]) expect(w).toMatch(re);
   });
 
+  it('saves a point\'s curve as its optional 4th element (plan 16, no schema bump)', async () => {
+    const { p, synth } = await buildFixture();
+    const lanes = addAutomationFixture(p);
+    lanes.fader.points[0].curve = -0.75;
+    const json = serialize(p);
+    const sj = json.tracks.find((t) => t.slot === synth.slot)!;
+    expect(sj.automation[0].points).toEqual([[0, -24, 0, -0.75], [3840, 0, 1], [5760, -60, 0]]);
+    expect(json.schemaVersion).toBe(SCHEMA_VERSION); // still 4
+    // Round trip: unchanged, no warnings.
+    expect(ok(validate(roundJson(json)))).toEqual({ project: roundJson(json), warnings: [] });
+    // Bad curves: clamped to -1..1 (0 written as no curve); a non-number makes the point malformed.
+    const bad = roundJson(json) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const at = bad.tracks.findIndex((t: { slot: number }) => t.slot === synth.slot);
+    const pts = bad.tracks[at].automation[0].points;
+    pts[0][3] = 7;
+    pts[1][3] = 0;
+    pts.push([6000, -6, 0, 'x'], [6100, -6, 0, 0.5, 1]);
+    const r = ok(validate(bad));
+    expect(r.project.tracks[at].automation[0].points).toEqual([[0, -24, 0, 1], [3840, 0, 1], [5760, -60, 0]]);
+    expect(r.warnings.join('\n')).toMatch(/curve 7 clamped to 1/);
+    expect(r.warnings.filter((w) => /malformed/.test(w))).toHaveLength(2);
+  });
+
   it('validates lanes', async () => {
     const { p, synth } = await buildFixture();
     const lanes = addAutomationFixture(p);

@@ -12,6 +12,7 @@
 import { MAX_SONG_TICKS } from '../../audio/protocol';
 import { toPos } from '../rack/knobMath';
 import type { CurveDef } from '../rack/knobMath';
+import { bend } from '../../state/automation';
 
 /** Ticks per beat / bar (4/4 at 960 PPQ). */
 export const BEAT = 960;
@@ -405,25 +406,105 @@ export function pointBox(lane: LanePoints, x0: number, y0: number, x1: number, y
 }
 
 /**
+ * The fractions (0..1, exclusive, ascending) at which a curved segment from
+ * x0 to x1 rising `dy` px is sampled for drawing (plan 16): every 2 px of x
+ * AND every px of y, so each chord spans at most 2 px across and 1 px up
+ * (curve 1 rises most of the way in its first pixels; -1 in its last). Only
+ * the part in -1..W+1 is sampled, so a segment far wider than the view (deep
+ * zoom) costs no more than the view.
+ */
+function curveSamples(x0: number, x1: number, dy: number, curve: number, W: number): number[] {
+  const span = x1 - x0;
+  if (!(span > 0)) return [];
+  const lo = Math.max(0, (-1 - x0) / span);
+  const hi = Math.min(1, (W + 1 - x0) / span);
+  if (!(hi > lo)) return [];
+  const out: number[] = [];
+  if (lo > 0) out.push(lo);
+  if (hi < 1) out.push(hi);
+  const nx = Math.ceil(((hi - lo) * span) / 2);
+  for (let k = 1; k < nx; k++) out.push(lo + ((hi - lo) * k) / nx);
+  // Even steps of y: the inverse of bend, x = y^(2^(3 curve)).
+  const ny = Math.min(4096, Math.ceil(Math.abs(dy)));
+  const inv = 2 ** (3 * curve);
+  for (let k = 1; k < ny; k++) {
+    const u = (k / ny) ** inv;
+    if (u > lo && u < hi) out.push(u);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/**
  * The vertices of a lane's drawn curve (lane-local px), from x = -1 to
  * W + 1: flat at the first point's value before it and at the last's after
  * it; a linear segment is a straight line between its points' KNOB
  * positions, which is exactly what laneValueAt (and the engine) interpolate,
  * exp params included (only inside an exp param's zero zone, where the value
  * is exactly 0, the line is up to ZERO_ZONE of the travel off: < 1 px); a
- * hold point runs flat to the next point's x, then steps.
+ * curved one (plan 16) bends the same knob-space line by `bend`, sampled
+ * by curveSamples (within half a pixel); a hold point runs flat to the next
+ * point's x, then steps.
  */
 export function lanePolyline(
-  points: readonly { tick: number; value: number; hold: boolean }[], def: CurveDef, v: TlView, W: number, h = AUTO_H,
+  points: readonly { tick: number; value: number; hold: boolean; curve?: number }[], def: CurveDef, v: TlView, W: number, h = AUTO_H,
 ): [number, number][] {
   if (!points.length) return [];
-  const pts = points.map((x) => ({ x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), h), hold: x.hold }));
+  const pts = points.map((x) => ({ x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), h), hold: x.hold, curve: x.curve ?? 0 }));
   const out: [number, number][] = [[-1, pts[0].y]];
   pts.forEach((a, i) => {
     out.push([a.x, a.y]);
     const b = pts[i + 1];
     if (b && a.hold) out.push([b.x, a.y]);
+    else if (b && a.curve !== 0 && b.y !== a.y) {
+      for (const u of curveSamples(a.x, b.x, b.y - a.y, a.curve, W)) out.push([a.x + u * (b.x - a.x), a.y + (b.y - a.y) * bend(u, a.curve)]);
+    }
   });
   out.push([W + 1, pts[pts.length - 1].y]);
   return out;
+}
+
+/** A segment is grabbed (Alt-drag: its curve) within this many px of the drawn line. */
+export const SEGMENT_R = 5;
+/** Alt-drag on a segment: this many px of vertical travel is the curve's full range, -1..1 (plan 16). */
+export const CURVE_PX = 100;
+
+/**
+ * The point whose segment (to the next point) is under lane-local (x, y):
+ * x strictly between the two points and y within SEGMENT_R px of the drawn
+ * line there (curve included), or null. A hold point's flat run and the
+ * flat ends before the first and after the last point are no segment.
+ * Points sorted by tick, as the model keeps them. Check pointHit first: a
+ * point wins over its segments.
+ */
+export function segmentHit(
+  lane: { points: readonly { id: string; tick: number; value: number; hold: boolean; curve?: number }[]; def: CurveDef },
+  x: number, y: number, v: TlView, h = AUTO_H,
+): string | null {
+  const pts = lane.points;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const xa = tickToX(a.tick, v);
+    const xb = tickToX(b.tick, v);
+    if (!(x > xa && x < xb)) continue;
+    if (a.hold) return null;
+    const ya = posToY(toPos(lane.def, a.value), h);
+    const yb = posToY(toPos(lane.def, b.value), h);
+    const yc = ya + (yb - ya) * bend((x - xa) / (xb - xa), a.curve ?? 0);
+    return Math.abs(y - yc) <= SEGMENT_R ? a.id : null;
+  }
+  return null;
+}
+
+/**
+ * The curve an Alt-drag sets (plan 16): from `c0` at the press, `dy` px
+ * down since (negative: up), on a segment that `rises` (its end is higher
+ * on screen; a flat one counts as rising). Dragging up bends the line up:
+ * a rising segment gets a positive curve (fast, then slow), a falling one a
+ * negative curve (holds high, then drops). CURVE_PX px is the full range;
+ * clamped to -1..1 and rounded to 0.01.
+ */
+export function curveDrag(c0: number, dy: number, rises: boolean): number {
+  const c = c0 + ((rises ? -dy : dy) * 2) / CURVE_PX;
+  return Math.round(Math.min(1, Math.max(-1, c)) * 100) / 100 || 0;
 }

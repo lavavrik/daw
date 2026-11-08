@@ -146,6 +146,13 @@ export const Op = {
    *  BAD_VALUE (the worklet taps the output itself). Not an edit
    *  (NON_EDIT_OPS), never in projectCommands; re-sent after a restart. */
   VIS_TAP: 55,
+  /** a=lane*MAX_AUTO_POINTS+idx b=curve -1..1 (0 linear) of the segment from
+   *  that point to the next: f(x) = x^(2^(-3 curve)) of the way at fraction x,
+   *  in knob space (plan 16; state/automation.ts bend). An inactive point or
+   *  a curve out of range is BAD_VALUE. AUTO_POINT_SET resets the point's
+   *  curve to 0, so a curved point is sent SET, then CURVE (pointCommands).
+   *  56: 55 was VIS_TAP's already. */
+  AUTO_POINT_CURVE: 56,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 

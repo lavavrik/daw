@@ -22,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(61);
+    expect(Object.keys(rust).length).toBe(62); // + AUTO_POINT_CURVE (plan 16)
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -37,6 +37,9 @@ describe('protocol parity with engine/src/protocol.rs', () => {
     expect(autoPoint(3, 511)).toBe(3 * 512 + 511);
     expect(AUTO_KIND).toEqual({ NONE: 0, MIX: 1, RACK: 2 });
     expect(src).toMatch(/OP_AUTO_LANE_SET: u32 = 49; \/\/ a=lane b=kind 0 none\/1 mix\/2 rack/);
+    // Plan 16: a segment's curve (55 is VIS_TAP's).
+    expect(Op.AUTO_POINT_CURVE).toBe(56);
+    expect(src).toMatch(/OP_AUTO_POINT_CURVE: u32 = 56; \/\/ a=lane\*512\+idx b=curve -1\.\.1/);
   });
 });
 

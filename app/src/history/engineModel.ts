@@ -139,6 +139,18 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
         l.points[idx] = [b, cc, d];
         break;
       }
+      // Plan 16: the curve of an active point, -1..1; stored as the point's
+      // 4th element only when it is not 0 (the PointTuple form). SET (above)
+      // stores [tick, value, hold]: it resets the curve, as the engine does.
+      case Op.AUTO_POINT_CURVE: {
+        const l = m.autos[Math.floor(a / MAX_AUTO_POINTS)];
+        const pt = l && Number.isInteger(a) && a >= 0 ? l.points[a % MAX_AUTO_POINTS] : undefined;
+        if (!pt) { bad('curve on an inactive point'); break; }
+        if (!(b >= -1 && b <= 1)) { bad('curve out of range'); break; }
+        pt.length = 3;
+        if (b !== 0) pt.push(b);
+        break;
+      }
       case Op.AUTO_POINT_REMOVE: { const l = m.autos[Math.floor(a / MAX_AUTO_POINTS)]; if (l) delete l.points[a % MAX_AUTO_POINTS]; break; }
       case Op.AUTO_LANE_CLEAR: m.autos[a] = null; break;
       // A cleared lane is enabled; ENABLE on it sticks until the next SET (an empty target here).

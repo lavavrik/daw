@@ -660,3 +660,46 @@ test('Automate menu from the keyboard; the 64-lane cap', async ({ page }) => {
   await expect(page.getByTestId('flash-hint')).toContainText('at most 64');
   expect(await savedLanes(page, 'master')).toEqual([]);
 });
+
+test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 4);
+  const lane = await addLane(page, slot, 'Fader');
+  // A ride from −60 dB to 0 dB over a bar, then flat.
+  await clickLane(page, lane, 0, 0);
+  await clickLane(page, lane, BAR, faderPos(0));
+  const straight = await savedLanes(page, slot);
+  expect(straight[0].points.map((x: number[]) => [x[0], Math.round(x[1]) || 0, x[2], x.length])).toEqual([[0, -60, 0, 3], [BAR, 0, 0, 3]]);
+  // Alt-drag the middle of the line 30 px up: the first point's curve, 100 px = the full -1..1, so +0.6 (fast, then slow).
+  const a = await lanePt(page, lane, BAR / 2, faderPos(0) / 2);
+  await page.keyboard.down('Alt');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x, a.y - 30, { steps: 10 });
+  await expect(page.getByTestId(`${lane}-tip`)).toContainText('Curve +0.6');
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  const bent = await savedLanes(page, slot);
+  expect(bent[0].points).toHaveLength(2);
+  expect(bent[0].points[0].slice(0, 3)).toEqual([0, -60, 0]);
+  expect(bent[0].points[0][3]).toBeCloseTo(0.6, 2);
+  expect(bent[0].points[1]).toEqual(straight[0].points[1]);
+  await page.screenshot({ path: 'test-results/automation-curve.png' });
+
+  // One undo takes the bend back (the points stay); redo brings it again.
+  // (Before playing: the switch to Song mode is an undo entry of its own.)
+  await page.keyboard.press(undoKey);
+  await expect.poll(() => savedLanes(page, slot)).toEqual(straight);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect.poll(() => savedLanes(page, slot)).toEqual(bent);
+
+  // Heard: a quarter of the way the bent ride is at f(0.25) = 0.25^(2^-1.8) ≈ 0.67 of
+  // the travel (≈ −20 dB) where the straight one was at −45 dB.
+  const rec = await playSong(page, 1200);
+  const q0 = peakIn(rec, 100, BAR / 4);
+  const q3 = peakIn(rec, (3 * BAR) / 4, BAR);
+  console.log('curved ride first/last quarter', q0.toFixed(4), q3.toFixed(4));
+  expect(q0).toBeGreaterThan(0.05 * q3);
+});

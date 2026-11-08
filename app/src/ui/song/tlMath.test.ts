@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_H, BAR, BEAT, LANE_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
-  followPage, lanePolyline, pointBox, pointHit, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
+  followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
   snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
@@ -325,6 +325,79 @@ describe('automation rows (plan 10)', () => {
     const hz = mixParam('eq_mid_freq'); // 200..8000 Hz
     const exp = { def: hz, points: [{ id: 'k', tick: 3840, value: Math.sqrt(200 * 8000) }] };
     expect(pointHit(exp, 0, yMid, view)).toBe('k');
+  });
+});
+
+describe('curved segments (plan 16)', () => {
+  const v = { ticksPerPx: 10, scrollTick: 0 };
+  /** The polyline's y at x (the last vertex at x wins: a hold step is vertical). */
+  const yAt = (line: [number, number][], x: number) => {
+    for (let i = line.length - 1; i > 0; i--) {
+      const [x0, y0] = line[i - 1];
+      const [x1, y1] = line[i];
+      if (x0 <= x && x <= x1) return x1 === x0 ? y1 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+    }
+    return NaN;
+  };
+
+  it('lanePolyline draws the bend laneValueAt plays (within half a pixel)', () => {
+    const W = 600;
+    for (const def of [mixParam('fader'), mixParam('eq_mid_freq')]) {
+      for (const c of [-1, -0.5, 0.25, 1]) {
+        const points = [
+          { tick: 300, value: def.min, hold: false, curve: c },
+          { tick: 3300, value: def.max, hold: false, curve: -c },
+          { tick: 5200, value: def.min, hold: false, curve: 0 },
+        ];
+        const line = lanePolyline(points, def, v, W);
+        let worst = 0;
+        for (let x = 0.25; x < W; x += 0.5) {
+          const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!));
+          worst = Math.max(worst, Math.abs(yAt(line, x) - want));
+        }
+        expect(worst, `${def.name} curve ${c}`).toBeLessThan(0.5);
+        // Off-screen parts are not sampled: a long segment costs about one vertex per pixel at most.
+        expect(line.length).toBeLessThan(2 * W);
+      }
+    }
+    // A segment far wider than the view (zoomed in) stays cheap.
+    const far = lanePolyline([{ tick: 0, value: -60, hold: false, curve: 1 }, { tick: 10_000_000, value: 6, hold: false }], mixParam('fader'), v, W);
+    expect(far.length).toBeLessThan(2 * W);
+  });
+
+  it('segmentHit finds the curve between two points (not a hold step, not past the ends)', () => {
+    const def = mixParam('fader');
+    const points = [
+      { id: 'a', tick: 1000, value: -60, hold: false, curve: 1 },
+      { id: 'b', tick: 3000, value: 6, hold: true, curve: 0 },
+      { id: 'c', tick: 5000, value: -30, hold: false, curve: 0 },
+    ];
+    const lane = { points, def };
+    const line = lanePolyline(points, def, v, 600);
+    // On the bent line between a and b (x 100..300): a.
+    expect(segmentHit(lane, 200, yAt(line, 200), v)).toBe('a');
+    expect(segmentHit(lane, 200, yAt(line, 200) + 4, v)).toBe('a');
+    expect(segmentHit(lane, 200, yAt(line, 200) + 12, v)).toBeNull();
+    // b holds: its flat run is no curve to bend.
+    expect(segmentHit(lane, 400, posToY(toPos(def, 6)), v)).toBeNull();
+    // Before the first point and after the last: no segment.
+    expect(segmentHit(lane, 50, posToY(toPos(def, -60)), v)).toBeNull();
+    expect(segmentHit(lane, 550, posToY(toPos(def, -30)), v)).toBeNull();
+  });
+
+  it('curveDrag: 100 px is the full range, up bends the line up', () => {
+    expect(CURVE_PX).toBe(100);
+    // Rising segment: up (dy < 0) is a positive curve (fast, then slow: above the line).
+    expect(curveDrag(0, -50, true)).toBe(1);
+    expect(curveDrag(-1, -100, true)).toBe(1);
+    expect(curveDrag(0, 25, true)).toBe(-0.5);
+    // Falling: up is a negative curve (stays high, then drops: above the line too).
+    expect(curveDrag(0, -25, false)).toBe(-0.5);
+    // Clamped to -1..1, rounded to 0.01.
+    expect(curveDrag(0.5, -400, true)).toBe(1);
+    expect(curveDrag(0, 1000, true)).toBe(-1);
+    expect(curveDrag(0, -0.333, true)).toBe(0.01);
+    expect(Object.is(curveDrag(0, 0, true), 0)).toBe(true);
   });
 });
 

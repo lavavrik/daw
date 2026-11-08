@@ -9,7 +9,8 @@
   // the master grey), filled below; before the first point and after the
   // last the lane holds that point's value. A linear segment is a straight
   // line: values are drawn at their KNOB position (an exp param, e.g. a
-  // cutoff, logarithmically), which is the space the engine interpolates in.
+  // cutoff, logarithmically), which is the space the engine interpolates in;
+  // a curved one bends in that space (tlMath.lanePolyline samples it).
   // A hold point keeps its value up to the next point, then steps (drawn as a
   // square dot). Selected points are white. A disabled lane is dimmed; a
   // suspended one (a manual move overrides it until its next point: Task 4's
@@ -26,6 +27,11 @@
   //   gesture's ORIGIN and the cumulative deltas (dValue in knob position),
   //   so nothing is lost to clamping on the way;
   // - Shift-click a point toggles it; Shift-drag box-selects (adds);
+  // - Alt-drag a segment (on its line, between two points; not a hold
+  //   point's flat run) bends it (plan 16): the curve of its left point,
+  //   -1..1, tlMath.curveDrag: dragging up bends the line up, CURVE_PX
+  //   (100 px) of travel is the full range, setPointCurve at most once per
+  //   frame, one undo entry. Alt-click off the line still adds a free point;
   // - Cmd/Ctrl-drag draws freehand: the stroke is previewed, and on release
   //   drawPoints thins it (Ramer–Douglas–Peucker, ½ % of the travel) and
   //   replaces the points in its tick range: one edit;
@@ -48,11 +54,13 @@
   import type { AutoDef, AutoOwner } from '../../state/automation';
   import { MAX_AUTO_POINTS } from '../../audio/protocol';
   import { laneView } from './laneView.svelte';
-  import { addPoint, deletePoints, drawPoints, movePoints, setPointShape } from '../../state/automation-actions';
+  import { addPoint, deletePoints, drawPoints, movePoints, setPointCurve, setPointShape } from '../../state/automation-actions';
   import type { AutomationLane, Project } from '../../state/project.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { formatValue, fromPos, toPos } from '../rack/knobMath';
-  import { AUTO_H, AUTO_PAD, BEAT, lanePolyline, pointBox, pointHit, posToY, snap, tickToX, xToTick, yToPos } from './tlMath';
+  import {
+    AUTO_H, AUTO_PAD, BEAT, curveDrag, lanePolyline, pointBox, pointHit, posToY, segmentHit, snap, tickToX, xToTick, yToPos,
+  } from './tlMath';
   import type { TlView } from './tlMath';
 
   let {
@@ -215,7 +223,7 @@
       return;
     }
     // Every point field the drawing shows (the proxies are read in draw too, but be explicit).
-    for (const x of lane.points) void (x.tick + x.value + (x.hold ? 1 : 0));
+    for (const x of lane.points) void (x.tick + x.value + (x.hold ? 1 : 0) + x.curve);
     void lane.enabled;
     draw();
   });
@@ -227,6 +235,8 @@
         x0: number; y0: number; moved: boolean; last: string; placed: boolean; wasMulti: boolean;
       }
     | { kind: 'box'; base: Set<string> }
+    /** Alt-drag on point `id`'s segment: its curve from `c0` (plan 16). */
+    | { kind: 'curve'; id: string; c0: number; y0: number; rises: boolean; last: number }
     | { kind: 'draw'; samples: { tick: number; value: number }[] };
   let drag: Drag | null = null;
   let pending: (() => void) | null = null;
@@ -249,6 +259,10 @@
   }
   const valueAt = (y: number) => fromPos(def, yToPos(y));
   const pointById = (id: string) => lane.points.find((x) => x.id === id);
+  /** The lane's owner as setPointCurve takes it: a track id or a Master row channel. */
+  const ownerId = () => (isMasterChannel(owner) ? owner : owner.id);
+  /** The point whose segment an Alt-press at (x, y) would bend, or null. */
+  const segmentAt = (x: number, y: number) => segmentHit(geom, x, y, view);
 
   function startMove(id: string, x: number, y: number, placed: boolean, wasMulti: boolean) {
     const ids = sel.includes(id) ? sel : [id];
@@ -286,6 +300,13 @@
       } else if (e.shiftKey) {
         drag = { kind: 'box', base: new Set(sel) };
         box = { x0: x, y0: y, x1: x, y1: y };
+      } else if (e.altKey && segmentAt(x, y) !== null) {
+        const id = segmentAt(x, y)!; // its left point
+        const k = lane.points.findIndex((q) => q.id === id);
+        const a = lane.points[k];
+        const b = lane.points[k + 1];
+        drag = { kind: 'curve', id, c0: a.curve, y0: y, rises: toPos(def, b.value) >= toPos(def, a.value), last: a.curve };
+        cursor = 'ns-resize';
       } else {
         const raw = xToTick(x, v);
         const tick = Math.max(0, e.altKey ? Math.round(raw) : snap(raw, STEP));
@@ -316,8 +337,17 @@
     if (!d) {
       const hit = pointHit(geom, x, y, v);
       const pt = hit ? pointById(hit) : null;
-      cursor = hit ? 'grab' : 'crosshair';
-      tip = { x, y, text: formatValue(def, pt ? pt.value : valueAt(y)) };
+      const seg = !hit && e.altKey ? segmentAt(x, y) : null;
+      cursor = hit ? 'grab' : seg ? 'ns-resize' : 'crosshair';
+      tip = { x, y, text: seg ? curveText(pointById(seg)!.curve) : formatValue(def, pt ? pt.value : valueAt(y)) };
+      return;
+    }
+    if (d.kind === 'curve') {
+      const c = curveDrag(d.c0, y - d.y0, d.rises);
+      tip = { x, y, text: curveText(c) };
+      if (c === d.last) return;
+      d.last = c;
+      schedule(() => setPointCurve(p, engine, ownerId(), lane.id, d.id, c));
       return;
     }
     if (d.kind === 'draw') {
@@ -356,6 +386,7 @@
     laneView.gesture = false;
     flush();
     if (d.kind === 'box') box = null;
+    else if (d.kind === 'curve') cursor = 'crosshair';
     else if (d.kind === 'draw') {
       stroke = null;
       // Refused: nothing usable drawn, or too many points. Only the second says so (it is
@@ -364,6 +395,11 @@
         onhint(`${label}: the drawing would pass ${MAX_AUTO_POINTS} points`);
       }
     } else if (!d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
+  }
+
+  /** The tooltip of a curve: "Curve +0.35" ("Straight" at 0). */
+  function curveText(c: number) {
+    return c === 0 ? 'Straight' : `Curve ${c > 0 ? '+' : '−'}${Math.abs(c).toFixed(2)}`;
   }
 
   /** Abort the drag and put the points back. */
@@ -379,6 +415,10 @@
       selected = d.base;
       box = null;
     } else if (d.kind === 'draw') stroke = null;
+    else if (d.kind === 'curve') {
+      cursor = 'crosshair';
+      setPointCurve(p, engine, ownerId(), lane.id, d.id, d.c0); // false (nothing sent) if never changed
+    }
     else if (d.placed) {
       deletePoints(p, engine, lane.id, d.ids);
       selected = new Set();
@@ -490,8 +530,8 @@
   style:cursor
   tabindex="0"
   role="application"
-  aria-label="Automation: {label}. {lane.points.length} points. Click to add a point, drag to move, {IS_MAC ? 'Cmd' : 'Ctrl'}-drag to draw, Delete removes, arrows nudge."
-  title="{label} — click: add a point (1/16, Alt: free) · drag: move · Shift-drag: select · {IS_MAC ? 'Cmd' : 'Ctrl'}-drag: draw · double-click: delete · right-click: Linear / Hold"
+  aria-label="Automation: {label}. {lane.points.length} points. Click to add a point, drag to move, Alt-drag a line to curve it, {IS_MAC ? 'Cmd' : 'Ctrl'}-drag to draw, Delete removes, arrows nudge."
+  title="{label} — click: add a point (1/16, Alt: free) · drag: move · Alt-drag a line: curve · Shift-drag: select · {IS_MAC ? 'Cmd' : 'Ctrl'}-drag: draw · double-click: delete · right-click: Linear / Hold"
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}

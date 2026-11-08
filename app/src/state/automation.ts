@@ -11,6 +11,7 @@
 //   automatableParams / targetDef   what a lane may drive, by catalog name.
 //   pointCommands    the engine commands that turn one lane's points into
 //                    another set: removals first (see there).
+//   bend             a curved segment's shape (plan 16): f(x) = x^(2^(-3c)).
 import { AUTO_KIND, MAX_AUTO_LANES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, packAutoParam } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
@@ -30,8 +31,23 @@ export type AutoDef = MixParamDef | ParamDef;
 /** Whose lane: a track (its strip, or its rack) or a Master row channel. */
 export type AutoOwner = Track | MasterChannel;
 
-/** A breakpoint as the engine sees it: [tick, value, hold 0/1]. */
-export type PointTuple = readonly [tick: number, value: number, hold: 0 | 1];
+/**
+ * A breakpoint as the engine sees it and the file saves it: [tick, value,
+ * hold 0/1, curve?]. The curve (-1..1, of the segment to the next point) is
+ * there only when it is not 0, so straight points keep their plan-10 form.
+ */
+export type PointTuple = readonly [tick: number, value: number, hold: 0 | 1, curve?: number];
+
+/** A tuple's curve (0 when absent). */
+export const tupleCurve = (t: PointTuple): number => t[3] ?? 0;
+
+/**
+ * The fraction of the way a segment of curve `c` (-1..1) is at fraction `x`
+ * (0..1) of its time: x^(2^(-3c)), x itself for 0 (plan 16; the engine's
+ * automation.rs `bend`). Curve 1 is x^(1/8) (fast, then slow), -1 is x^8
+ * (slow, then fast). The exponent is always positive: 0 stays 0, 1 stays 1.
+ */
+export const bend = (x: number, c: number): number => (c === 0 ? x : x ** (2 ** (-3 * c)));
 
 /** The engine mixer channel of a Master row channel. */
 export const MASTER_CHANNEL_INDEX: Record<MasterChannel, number> = { reverb: MIX_REVERB, delay: MIX_DELAY, master: MIX_MASTER };
@@ -58,11 +74,12 @@ function upperBound(points: readonly { tick: number }[], t: number): number {
  * before the first point, the first value; after the last, the last; a hold
  * point keeps its value up to the next point; a linear one interpolates to
  * it in KNOB space -- the values themselves for a `lin` param, the knob
- * position (knobMath toPos/fromPos, zero zone included) for an `exp` one.
- * The result is clamped to the range.
+ * position (knobMath toPos/fromPos, zero zone included) for an `exp` one --
+ * bent by its `curve` (bend; absent = 0; a hold point and the last point
+ * ignore theirs). The result is clamped to the range.
  */
 export function laneValueAt(
-  points: readonly { tick: number; value: number; hold: boolean }[], tick: number, param: CurveDef,
+  points: readonly { tick: number; value: number; hold: boolean; curve?: number }[], tick: number, param: CurveDef,
 ): number | null {
   const n = points.length;
   if (n === 0) return null;
@@ -76,7 +93,7 @@ export function laneValueAt(
     if (a.hold) v = a.value;
     else {
       const span = b.tick - a.tick;
-      const f = span > 0 ? Math.min(1, Math.max(0, (tick - a.tick) / span)) : 1;
+      const f = bend(span > 0 ? Math.min(1, Math.max(0, (tick - a.tick) / span)) : 1, a.curve ?? 0);
       if (param.curve === 'exp') {
         const pa = toPos(param, a.value);
         const pb = toPos(param, b.value);
@@ -225,11 +242,14 @@ export function laneSetCommand(lane: number, owner: AutoOwner, target: AutoTarge
 
 /**
  * The commands that turn engine lane `lane`'s points `from` into `to` (each
- * a map engine idx -> [tick, value, hold]). Ticks are unique within a lane
- * and the engine refuses an AUTO_POINT_SET on a tick another point still
- * holds (Lane::set_point), so the ORDER matters:
+ * a map engine idx -> [tick, value, hold, curve?]). Ticks are unique within a
+ * lane and the engine refuses an AUTO_POINT_SET on a tick another point
+ * still holds (Lane::set_point), so the ORDER matters:
  *   1. AUTO_POINT_REMOVE for every idx that goes, or whose tick changes;
- *   2. then AUTO_POINT_SET for every idx that is new or changed.
+ *   2. then AUTO_POINT_SET for every idx that is new or changed, each
+ *      followed by its AUTO_POINT_CURVE when its curve is not 0 (a SET
+ *      resets the engine's curve to 0); a point whose curve alone changes
+ *      gets the CURVE only.
  * After step 1 the only ticks still held are those of points that keep
  * their idx and tick, and `to` holds each of those at that same idx, so no
  * SET can land on a held tick (a point whose value or shape alone changes
@@ -247,11 +267,19 @@ export function pointCommands(
   }
   for (const [idx, q] of to) {
     const p = from.get(idx);
-    if (!p || p[0] !== q[0] || p[1] !== q[1] || p[2] !== q[2]) out.push([Op.AUTO_POINT_SET, autoPoint(lane, idx), q[0], q[1], q[2]]);
+    const c = tupleCurve(q);
+    if (!p || p[0] !== q[0] || p[1] !== q[1] || p[2] !== q[2]) {
+      out.push([Op.AUTO_POINT_SET, autoPoint(lane, idx), q[0], q[1], q[2]]);
+      if (c !== 0) out.push([Op.AUTO_POINT_CURVE, autoPoint(lane, idx), c, 0, 0]);
+    } else if (tupleCurve(p) !== c) out.push([Op.AUTO_POINT_CURVE, autoPoint(lane, idx), c, 0, 0]);
   }
   return out;
 }
 
+/** A point as its tuple: the curve only when it is not 0. */
+export const pointTuple = (x: { tick: number; value: number; hold: boolean; curve?: number }): PointTuple =>
+  x.curve ? [x.tick, x.value, x.hold ? 1 : 0, x.curve] : [x.tick, x.value, x.hold ? 1 : 0];
+
 /** A lane's points as pointCommands takes them. */
-export const pointMap = (lane: { points: readonly { idx: number; tick: number; value: number; hold: boolean }[] }): Map<number, PointTuple> =>
-  new Map(lane.points.map((x) => [x.idx, [x.tick, x.value, x.hold ? 1 : 0] as const]));
+export const pointMap = (lane: { points: readonly { idx: number; tick: number; value: number; hold: boolean; curve?: number }[] }): Map<number, PointTuple> =>
+  new Map(lane.points.map((x) => [x.idx, pointTuple(x)]));

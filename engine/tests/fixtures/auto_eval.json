@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "about": "Automation lane evaluation (engine/src/automation.rs, Lane::value_at; app laneValueAt). Points are [tick, value, hold 0/1] in the order they are sent; queries are [tick, expected value]. Compare in knob space (the param's min/max/curve) to 1e-6.",
+  "about": "Automation lane evaluation (engine/src/automation.rs, Lane::value_at; app laneValueAt). Points are [tick, value, hold 0/1, curve (optional, default 0: f(x) = x^(2^(-3 curve)))] in the order they are sent; queries are [tick, expected value]. Compare in knob space (the param's min/max/curve) to 1e-6.",
   "cases": [
     {
       "name": "linear fader ride (dB)",
@@ -43,6 +43,24 @@
       "param": {"min": -1, "max": 1, "curve": "lin"},
       "points": [[3840, 1, 0], [0, -1, 1], [1920, 0.5, 0], [960, 0, 0]],
       "queries": [[0, -1], [500, -1], [960, 0], [1440, 0.25], [1920, 0.5], [2880, 0.75], [3840, 1], [5000, 1]]
+    },
+    {
+      "name": "curved segments (plan 16): rising, falling, an S of two curves",
+      "param": {"min": -60, "max": 6, "curve": "lin"},
+      "points": [[0, -60, 0, 1], [1000, 6, 0, -1], [2000, -60, 0, 0.5], [3000, 0, 0, -0.5], [4000, -30, 0, 0.25]],
+      "queries": [[0, -60], [250, -4.500836593254846], [500, 0.5222668515082987], [750, 3.668789577380423], [1000, 6], [1250, 5.998992919921875], [1500, 5.7421875], [1750, -0.607452392578125], [2250, -23.24716040783605], [2500, -13.040758358659183], [2750, -5.802564593986936], [3250, -0.5946185376611162], [3500, -4.2235714898452335], [3750, -13.296616503585547], [4000, -30], [5000, -30]]
+    },
+    {
+      "name": "a curved exponential cutoff (the curve shapes the knob position)",
+      "param": {"min": 20, "max": 20000, "curve": "exp"},
+      "points": [[0, 20, 0, 0.75], [3840, 20000, 0, -0.375], [7680, 200, 0]],
+      "queries": [[0, 20], [480, 1732.4315193437385], [960, 3488.2480566507566], [1920, 7838.606029018198], [2880, 13334.423968370294], [3840, 20000], [4800, 15987.164136790045], [5760, 7244.176797661347], [7680, 200]]
+    },
+    {
+      "name": "curves on a hold point and on the last point are ignored",
+      "param": {"min": 0, "max": 1, "curve": "lin"},
+      "points": [[0, 0.20000000298023224, 1, 1], [1000, 0.800000011920929, 0], [2000, 0.4000000059604645, 0, -1]],
+      "queries": [[0, 0.20000000298023224], [500, 0.20000000298023224], [999, 0.20000000298023224], [1000, 0.800000011920929], [1500, 0.6000000089406967], [2000, 0.4000000059604645], [3000, 0.4000000059604645]]
     }
   ]
 }

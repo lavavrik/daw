@@ -93,6 +93,8 @@ pub const OP_AUTO_POINT_REMOVE: u32 = 51; // a=lane*512+idx
 pub const OP_AUTO_LANE_CLEAR: u32 = 52; // a=lane: no points, no target; the param goes back to its base
 pub const OP_AUTO_LANE_ENABLE: u32 = 53; // a=lane b=0/1
 pub const OP_AUTO_OVERRIDE: u32 = 54; // a=lane: suspend until the next breakpoint (not an edit)
+// Plan 16: 55 was taken by OP_VIS_TAP (plan 12), so the curve is 56.
+pub const OP_AUTO_POINT_CURVE: u32 = 56; // a=lane*512+idx b=curve -1..1 of the segment it starts (0 linear); AUTO_POINT_SET resets it to 0
 // Visual data path (plan 12, docs/architecture/visuals.md). Not an edit.
 pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=33 (tracks, returns) or -1 = off; the master is BAD_VALUE
 
@@ -190,6 +192,8 @@ pub enum Command {
     /// target's range and the tick against the lane's other points).
     AutoPointSet { lane: usize, idx: usize, tick: u32, value: f32, hold: bool },
     AutoPointRemove { lane: usize, idx: usize },
+    /// The curve of the segment that starts at point `idx` (-1..1, 0 linear).
+    AutoPointCurve { lane: usize, idx: usize, curve: f32 },
     AutoLaneClear { lane: usize },
     AutoLaneEnable { lane: usize, on: bool },
     /// Suspend `lane` until its next breakpoint (a manual move).
@@ -577,6 +581,10 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
             let (lane, idx) = auto_addr(a)?;
             Command::AutoPointRemove { lane, idx }
         }
+        OP_AUTO_POINT_CURVE => {
+            let (lane, idx) = auto_addr(a)?;
+            Command::AutoPointCurve { lane, idx, curve: ranged(b, -1.0, 1.0)? }
+        }
         OP_AUTO_LANE_CLEAR => Command::AutoLaneClear { lane: index(a, MAX_AUTO_LANES)? },
         OP_AUTO_LANE_ENABLE => Command::AutoLaneEnable { lane: index(a, MAX_AUTO_LANES)?, on: flag(b)? },
         OP_AUTO_OVERRIDE => Command::AutoOverride { lane: index(a, MAX_AUTO_LANES)? },
@@ -937,6 +945,16 @@ mod tests {
             assert_eq!(decode(OP_AUTO_POINT_SET, 0., b, c, d), Err(ERR_BAD_VALUE), "{b} {c} {d}");
         }
         assert_eq!(decode(OP_AUTO_POINT_REMOVE, pts + 1., 0., 0., 0.), Ok(Command::AutoPointRemove { lane: 1, idx: 1 }));
+        // A segment's curve (plan 16): -1..1 on the point it starts at.
+        assert_eq!(decode(OP_AUTO_POINT_CURVE, a, -0.5, 0., 0.), Ok(Command::AutoPointCurve { lane: 3, idx: 511, curve: -0.5 }));
+        assert_eq!(decode(OP_AUTO_POINT_CURVE, 0., 1., 0., 0.), Ok(Command::AutoPointCurve { lane: 0, idx: 0, curve: 1.0 }));
+        assert_eq!(decode(OP_AUTO_POINT_CURVE, 0., -1., 0., 0.), Ok(Command::AutoPointCurve { lane: 0, idx: 0, curve: -1.0 }));
+        for bad in [-1., lanes * pts, 0.5, f64::NAN] {
+            assert_eq!(decode(OP_AUTO_POINT_CURVE, bad, 0., 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+        }
+        for b in [-1.001, 1.001, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_AUTO_POINT_CURVE, 0., b, 0., 0.), Err(ERR_BAD_VALUE), "{b}");
+        }
         assert_eq!(decode(OP_AUTO_LANE_CLEAR, 63., 0., 0., 0.), Ok(Command::AutoLaneClear { lane: 63 }));
         assert_eq!(decode(OP_AUTO_LANE_CLEAR, lanes, 0., 0., 0.), Err(ERR_BAD_INDEX));
         assert_eq!(decode(OP_AUTO_LANE_ENABLE, 2., 0., 0., 0.), Ok(Command::AutoLaneEnable { lane: 2, on: false }));

@@ -201,6 +201,40 @@ fn linear_lane_follows_the_line() {
     assert!(max_step(out[0], &out) < 1e-4, "step {}", max_step(out[0], &out));
 }
 
+fn curve(e: &mut Engine, lane: usize, idx: usize, c: f64) -> i32 {
+    e.command(OP_AUTO_POINT_CURVE, (lane * MAX_AUTO_POINTS + idx) as f64, c, 0.0, 0.0)
+}
+
+/// Plan 16: a curved segment (AUTO_POINT_CURVE) is followed through the
+/// engine like a line, f(x) = x^(2^(-3 curve)) of the way at fraction x;
+/// AUTO_POINT_SET resets it to linear.
+#[test]
+fn curved_lane_follows_the_curve() {
+    let mut e = eng();
+    constant_track(&mut e, 0, 0.5);
+    ok(lane_mix(&mut e, 0, 0, P_FADER));
+    ok(point(&mut e, 0, 0, 0.0, -36.0, false));
+    ok(point(&mut e, 0, 1, 3840.0, 0.0, false));
+    assert_eq!(curve(&mut e, 0, 2, 0.5), ERR_BAD_VALUE, "an inactive point");
+    assert_eq!(curve(&mut e, 0, 0, 1.5), ERR_BAD_VALUE, "past +1");
+    assert_eq!(curve(&mut e, 5, 0, 0.5), ERR_BAD_VALUE, "a lane without a target");
+    ok(curve(&mut e, 0, 0, -0.5)); // slow start: x^2.83
+    song(&mut e, true);
+    render(&mut e, 9600);
+    cmd(&mut e, OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+    let ideal = |t: f64| -36.0 + 36.0 * (t / 3840.0).clamp(0.0, 1.0).powf(2f64.powf(1.5));
+    follow(&mut e, 96000 / BLOCK, 0.5, 0, ideal);
+    // A quarter of the way: far below the straight line's -27 dB.
+    cmd(&mut e, OP_SEEK, 960.0, 0.0, 0.0, 0.0);
+    follow(&mut e, 8, 0.5, 0, ideal);
+    let q = db(render(&mut e, BLOCK)[0], 0.5);
+    assert!(q < -35.0, "{q}");
+    // SET on the point again: linear.
+    ok(point(&mut e, 0, 0, 0.0, -36.0, false));
+    cmd(&mut e, OP_SEEK, 960.0, 0.0, 0.0, 0.0);
+    follow(&mut e, 8, 0.5, 0, |t| -36.0 + 36.0 * t / 3840.0);
+}
+
 #[test]
 fn exp_param_interpolates_in_knob_space() {
     let mut e = eng();

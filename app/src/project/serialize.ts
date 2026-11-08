@@ -9,8 +9,8 @@ import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
 import type { AudioTrack, AutomationLane, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
 import { SCHEMA_VERSION } from './schema';
-import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MidiMapJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
-import { isMasterChannel } from '../state/automation';
+import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MidiMapJson, MixParamsJson, PointJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
+import { isMasterChannel, pointTuple } from '../state/automation';
 
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -47,7 +47,7 @@ export function laneJson(l: AutomationLane): LaneJson {
     lane: l.lane,
     enabled: l.enabled,
     target: l.target.kind === 'mix' ? { mix: l.target.param } : { rack: [l.target.module, l.target.param] },
-    points: [...l.points].sort((a, b) => a.idx - b.idx).map((x) => [x.tick, x.value, x.hold ? 1 : 0]),
+    points: [...l.points].sort((a, b) => a.idx - b.idx).map((x) => [...pointTuple(x)] as PointJson),
   };
 }
 

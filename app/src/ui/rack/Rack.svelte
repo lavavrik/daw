@@ -59,6 +59,10 @@
   import { warningsText } from '../../project/session';
   import { banners, flashHint } from '../../state/banners.svelte';
   import { edit, markEdited } from '../../state/edits';
+  import { addExamplePattern } from '../../state/example-actions';
+  import { exampleFor } from '../../state/houseExamples';
+  import { MAX_PATTERNS } from '../../audio/protocol';
+  import { PATTERNS_FULL_TEXT } from '../../state/pattern-actions';
   import { BUILTIN_GROUPS, BUILTIN_PATCHES, isBuiltinName, trackPatch } from '../../state/patches';
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
@@ -72,7 +76,24 @@
   import ModulePanel from './ModulePanel.svelte';
   import VoiceLeds from './VoiceLeds.svelte';
 
-  let { p, engine, track }: { p: Project; engine: AudioEngine; track: SynthTrack } = $props();
+  let { p, engine, track, onpianoroll }: {
+    p: Project;
+    engine: AudioEngine;
+    track: SynthTrack;
+    /** Show the Piano roll tab (BottomPanel); after "Add example roll". */
+    onpianoroll?: () => void;
+  } = $props();
+
+  // ---- example roll (plan 13) ------------------------------------------------
+  /** The house example for this patch (state/houseExamples.ts); null for starter / library patches. */
+  const example = $derived(exampleFor(track.patchName));
+  const patternsFull = $derived(track.patterns.length >= MAX_PATTERNS);
+  /** Adds the example as a new pattern of this track (one undo step) and shows it in the Piano roll. */
+  function addExample() {
+    if (!example) return;
+    if (!addExamplePattern(p, engine, track.id, example)) return flashHint(PATTERNS_FULL_TEXT);
+    onpianoroll?.();
+  }
 
   type End = { m: number; port: number };
   const key = (m: number, dir: 'in' | 'out', port: number) => `${m}:${dir}:${port}`;
@@ -632,6 +653,11 @@
       <span class="edited" data-testid="patch-edited" title="Changed since the patch was loaded">(edited)</span>
       <button class="link" onclick={revert} title={`Reload ${track.patchName}, discarding your changes`}>revert</button>
     {/if}
+    {#if example}
+      <button class="link" data-testid="rack-example" disabled={patternsFull}
+        title={patternsFull ? PATTERNS_FULL_TEXT : `Add "${example.name}" as a new pattern and open it in the Piano roll`}
+        onclick={addExample}>Add example roll</button>
+    {/if}
     <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
     <VoiceLeds {track} />
     <button class="add" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
@@ -755,6 +781,7 @@
   select { font: inherit; background: #24262c; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 2px 4px; }
   .edited { color: #ffd98a; font-size: 11px; }
   .link { font: inherit; font-size: 11px; border: 0; background: transparent; color: #8fb8ff; cursor: pointer; padding: 0; text-decoration: underline; }
+  .link:disabled { color: #6f7280; cursor: not-allowed; text-decoration: none; }
   .addwrap { position: relative; }
   .add { font: inherit; padding: 3px 10px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; }
   .add:hover, .add[aria-expanded='true'] { background: #2e313a; color: #fff; }

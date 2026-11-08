@@ -40,18 +40,32 @@
   //   ↑ / ↓ (+Shift)      nudge the selection a semitone (an octave)
   // Every other key bubbles on: letters keep playing the QWERTY piano, Z/X
   // change octave, R arms recording, Space toggles the transport.
-  import { onDestroy, untrack } from 'svelte';
+  //
+  // Examples ▾ (plan 13): the house patches' example phrases
+  // (state/houseExamples.ts), grouped like the patch menu, the example for
+  // this track's patch first. A row's name adds it as a new pattern of this
+  // track; its "+ track" adds a new synth track with that patch and the
+  // example. Each is one undo step. At MAX_PATTERNS / MAX_TRACKS the buttons
+  // are disabled with the same reason the pattern picker / timeline give.
+  import { onDestroy, tick, untrack } from 'svelte';
   import type { CommandSink } from '../../state/actions';
   import type { AudioClock } from '../../audio/audioClock';
   import { mod } from '../../audio/audioClock';
   import type { NoteInput } from '../../input/noteInput';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
+  import { MAX_PATTERNS } from '../../audio/protocol';
+  import { TRACKS_FULL_TEXT } from '../../state/actions';
+  import { addExamplePattern, addExampleTrack } from '../../state/example-actions';
+  import { exampleFor } from '../../state/houseExamples';
+  import type { ExampleRoll } from '../../state/houseExamples';
+  import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars, updateNotes,
+    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars,
+    updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
-  import { currentPattern } from '../../state/project.svelte';
+  import { MAX_TRACKS, currentPattern } from '../../state/project.svelte';
   import { clearPatternText } from '../../state/confirmText';
   import {
     BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
@@ -790,6 +804,74 @@
     refocus(); // the popover had focus
   }
 
+  // ---- Examples ▾ -----------------------------------------------------------------
+  let exOpen = $state(false);
+  let exMenu = $state<HTMLElement | null>(null);
+  let exBtn = $state<HTMLElement | null>(null);
+  const patternsFull = $derived(track.patterns.length >= MAX_PATTERNS);
+  const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
+  /** Menu sections: this patch's example on its own first, then the house groups (without it). */
+  const exGroups = $derived.by(() => {
+    const mine = exampleFor(track.patchName);
+    const groups = HOUSE_GROUPS.map((g) => ({
+      label: g.label,
+      examples: g.patches
+        .map((x) => exampleFor(x.name))
+        .filter((e): e is ExampleRoll => !!e && e !== mine),
+    })).filter((g) => g.examples.length);
+    return mine ? [{ label: `This patch · ${mine.patch}`, examples: [mine] }, ...groups] : groups;
+  });
+  /** "Acid Line" -> "acid-line" (test ids). */
+  const slug = (ex: ExampleRoll) => ex.patch.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+  function pickExample(ex: ExampleRoll) {
+    exOpen = false;
+    if (!addExamplePattern(p, engine, track.id, ex)) return void flashHint(PATTERNS_FULL_TEXT);
+    selected = new Set();
+    // Frame the new pattern: its length across the width, its notes in view.
+    const h = noteH;
+    if (size.w > KEYS_W && h > 0) view = clampView(initialView(size.w, h, total, notes));
+    refocus();
+  }
+  function exampleTrack(ex: ExampleRoll) {
+    exOpen = false;
+    // The new track is selected: this roll unmounts and one opens for it.
+    if (!addExampleTrack(p, engine, ex)) flashHint(TRACKS_FULL_TEXT);
+  }
+  /** Up/Down move between the menu's buttons (wrapping), Home/End jump; Escape closes. */
+  function exKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      exOpen = false;
+      exBtn?.focus();
+      return;
+    }
+    const items = [...(exMenu?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+    if (!items.length) return;
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    const n = items.length;
+    const to =
+      e.key === 'ArrowDown' ? (i + 1) % n
+      : e.key === 'ArrowUp' ? (i <= 0 ? n - 1 : i - 1)
+      : e.key === 'Home' ? 0
+      : e.key === 'End' ? n - 1
+      : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    items[to].focus();
+  }
+  $effect(() => {
+    if (!exOpen) return;
+    const outside = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!exMenu?.contains(t) && !exBtn?.contains(t)) exOpen = false;
+    };
+    window.addEventListener('pointerdown', outside, true);
+    void tick().then(() => exMenu?.querySelector<HTMLElement>('button:not(:disabled)')?.focus());
+    return () => window.removeEventListener('pointerdown', outside, true);
+  });
+
   onDestroy(() => {
     flush();
     clearTimeout(hintTimer);
@@ -822,6 +904,30 @@
         onconfirm={clearConfirmed}
       />
     {/if}
+    <div class="exwrap">
+      <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="menu" aria-expanded={exOpen}
+        title="Example rolls for the house patches" onclick={() => (exOpen = !exOpen)}>Examples ▾</button>
+      {#if exOpen}
+        <!-- svelte-ignore a11y_interactive_supports_focus -->
+        <div class="exmenu" role="menu" tabindex="-1" data-testid="examples-list" bind:this={exMenu} onkeydown={exKey}>
+          {#if patternsFull}<p class="full">{PATTERNS_FULL_TEXT}</p>{/if}
+          {#if tracksFull}<p class="full">{TRACKS_FULL_TEXT}</p>{/if}
+          {#each exGroups as g (g.label)}
+            <div class="gh">{g.label}</div>
+            {#each g.examples as ex (ex.name)}
+              <div class="exrow">
+                <button role="menuitem" data-testid={`example-${slug(ex)}`} disabled={patternsFull}
+                  title={patternsFull ? PATTERNS_FULL_TEXT : `Add "${ex.name}" as a new pattern of ${track.name} (${ex.bars} ${ex.bars === 1 ? 'bar' : 'bars'})`}
+                  onclick={() => pickExample(ex)}>{ex.name}</button>
+                <button role="menuitem" class="plus" data-testid={`example-track-${slug(ex)}`} disabled={tracksFull}
+                  title={tracksFull ? TRACKS_FULL_TEXT : `New synth track with the ${ex.patch} patch and this example`}
+                  onclick={() => exampleTrack(ex)}>+ track</button>
+              </div>
+            {/each}
+          {/each}
+        </div>
+      {/if}
+    </div>
     <output class="readout" data-testid="pr-readout" class:hint={!!hint}>{readoutText}</output>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->
@@ -858,6 +964,15 @@
   .bar button { cursor: pointer; }
   .bar button:hover:not(:disabled) { border-color: #4a4d59; color: #fff; }
   .bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .exwrap { position: relative; }
+  .exmenu { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: flex; flex-direction: column; gap: 1px; min-width: 230px; max-height: 60vh; overflow-y: auto; padding: 6px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; }
+  .exmenu .gh { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #8d90a0; border-bottom: 1px solid #3a3d48; margin: 6px 0 3px; padding-bottom: 1px; }
+  .exmenu .gh:first-of-type { margin-top: 0; }
+  .exrow { display: flex; align-items: center; gap: 4px; }
+  .bar .exrow button { flex: 1; text-align: left; border: 0; background: transparent; color: #d7d9e0; white-space: nowrap; }
+  .bar .exrow button.plus { flex: none; font-size: 10px; color: #8fb8ff; border: 1px solid #3a3d48; }
+  .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: #2e313a; color: #fff; outline: none; }
+  .exmenu .full { margin: 0 0 4px; color: #ffd98a; font-size: 11px; white-space: nowrap; }
   .readout { margin-left: auto; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e4e5ea; background: #15161a; border: 1px solid #2a2c33; border-radius: 3px; padding: 2px 8px; white-space: nowrap; }
   .readout.hint { color: #ffd98a; }
   .stage { position: relative; flex: 1; min-height: 180px; border: 1px solid #2a2c33; border-radius: 3px; outline: none; overflow: hidden; }

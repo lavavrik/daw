@@ -220,6 +220,9 @@ export function patternOf(t: PatternTrack, patternId: string): AnyPattern | null
   return ps.find((x) => x.id === patternId) ?? null;
 }
 
+/** Why "new pattern" buttons are disabled at MAX_PATTERNS (the pattern picker, the examples menu). */
+export const PATTERNS_FULL_TEXT = `At most ${MAX_PATTERNS} patterns per track`;
+
 /** Lowest free engine pattern slot, or null when all MAX_PATTERNS are used. */
 function freeEngineIdx(t: PatternTrack): number | null {
   const used = new Set(t.patterns.map((x) => x.engineIdx));
@@ -231,7 +234,7 @@ function freeEngineIdx(t: PatternTrack): number | null {
  * First unused name. `numbered`: "base 1", "base 2", … (new patterns);
  * otherwise "base", "base 2", … (copies).
  */
-function freeName(t: PatternTrack, base: string, numbered: boolean): string {
+export function freeName(t: PatternTrack, base: string, numbered: boolean): string {
   const names = new Set(t.patterns.map((x) => x.name));
   let n = 1;
   const name = () => (n === 1 && !numbered ? base : `${base} ${n}`);

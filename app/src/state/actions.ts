@@ -34,6 +34,9 @@ function find(p: Project, trackId: string, rowId: string) {
 }
 
 /** First unused "Base", "Base 2", "Base 3"… so the list and the "Keys →" pill stay unambiguous. */
+/** Why "add track" buttons are disabled at MAX_TRACKS (the timeline, the examples menu). */
+export const TRACKS_FULL_TEXT = `${MAX_TRACKS} tracks is the maximum: remove one to add another`;
+
 export function uniqueTrackName(p: Project, base: string): string {
   const names = new Set(p.tracks.map((t) => t.name));
   let n = 1;

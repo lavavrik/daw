@@ -197,6 +197,15 @@ The **Piano roll** tab edits the synth track's current pattern.
 - **Toolbar:** **Grid** (snap and new-note length), **Length** (pattern bars;
   notes past the end are kept but silent, drawn hatched), **Quantize** and
   **Clear** (asks first).
+- **Examples ▾:** a short phrase for every house patch (the ones its demo
+  renders played): stabs and keys on a Cm9 → Fm9 → Abmaj7 → Gm7 loop, pad
+  chords, an arp, basslines, an acid line and a Sax hook. The example for
+  the track's patch is listed first. Click one to add it as a new pattern of
+  this track; **+ track** adds a new synth track with that patch and the
+  example instead. Either is one undo step. Notes only: the renders' mod-wheel
+  sweeps are not included (ride the wheel or draw automation). On the
+  Instrument tab, **Add example roll** next to **Patch** does the same for the
+  loaded house patch and opens the Piano roll.
 
 ## Patterns and song
 

@@ -15,7 +15,7 @@
   import { currentPattern } from '../state/project.svelte';
   import type { PatternTrack, Project } from '../state/project.svelte';
   import {
-    deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
+    PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
   } from '../state/pattern-actions';
 
   let { p, engine, track }: { p: Project; engine: AudioEngine; track: PatternTrack } = $props();
@@ -76,9 +76,9 @@
       {/each}
     </select>
   {/if}
-  <button data-testid="pattern-new" disabled={full} title={full ? `At most ${MAX_PATTERNS} patterns per track` : 'New empty pattern'}
+  <button data-testid="pattern-new" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'New empty pattern'}
     onclick={() => newPattern(p, engine, track.id)}>+ New</button>
-  <button data-testid="pattern-dup" disabled={full} title={full ? `At most ${MAX_PATTERNS} patterns per track` : 'Duplicate this pattern'}
+  <button data-testid="pattern-dup" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
     onclick={() => duplicatePattern(p, engine, track.id)}>Duplicate</button>
   <button data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}>Rename</button>
   <button data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}

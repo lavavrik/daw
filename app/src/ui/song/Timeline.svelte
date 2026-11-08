@@ -97,7 +97,7 @@
   // toggles the transport, Shift+L toggles PAT/SONG.
   import { onDestroy, untrack } from 'svelte';
   import type { CommandSink } from '../../state/actions';
-  import { addDrumTrack, selectTrack } from '../../state/actions';
+  import { TRACKS_FULL_TEXT, addDrumTrack, selectTrack } from '../../state/actions';
   import type { ImportEngine } from '../../state/sampleImport';
   import { dropAudioFiles } from '../../state/audioDrop';
   import { pendingSampleIds, sampleFailed } from '../../state/sampleLoads';
@@ -134,7 +134,7 @@
 
   const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
   const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
-  const FULL_TITLE = `${MAX_TRACKS} tracks is the maximum: remove one to add another`;
+  const FULL_TITLE = TRACKS_FULL_TEXT;
   /** What a drop on a drum or synth lane says (addendum §3.1). */
   const DROP_HINT = 'Drop audio on an audio track or below the tracks';
   /** Pixels a press must travel before it counts as a drag (a click never moves a clip). */

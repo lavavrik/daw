@@ -271,3 +271,48 @@ test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F
   await page.keyboard.press('F9');
   await expect(page.getByTestId('mixer-tab')).toHaveClass(/active/);
 });
+
+// ---- Example rolls (plan 13) ---------------------------------------------------
+
+test('examples menu: add an example pattern, undo it, add an example track', async ({ page }) => {
+  await openRoll(page);
+  const title = page.getByTestId('panel-title');
+  await expect(title).toContainText('Pattern 1');
+  // 1. An example as a new pattern of this track: selected, with its 16 notes.
+  await page.getByTestId('examples-menu').click();
+  await page.getByTestId('example-acid-line').click();
+  await expect(title).toContainText('Acid Line example');
+  await expect(readout(page)).toContainText('16 notes');
+  await expect(page.getByTestId('pr-length')).toHaveValue('1');
+  // 2. One undo takes the whole thing back: the previous pattern is current again.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(title).toContainText('Pattern 1');
+  await expect(readout(page)).toContainText('0 notes');
+  // 3. "+ track": a new "Sax" track with the Sax patch, the example as its pattern.
+  await page.getByTestId('examples-menu').click();
+  await page.getByTestId('example-track-sax').click();
+  await expect(title).toHaveText('Sax · Sax example');
+  await expect(readout(page)).toContainText('9 notes');
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await expect(page.getByTestId('patch-select')).toHaveValue('Sax');
+  // The track's own patch's example comes first in the menu.
+  await page.getByRole('button', { name: 'Piano roll' }).click();
+  await page.getByTestId('examples-menu').click();
+  await expect(page.getByTestId('examples-list').locator('button').first()).toHaveText('Sax example');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('examples-list')).toHaveCount(0);
+  // One undo removes track, patch and pattern.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(title).not.toContainText('Sax');
+});
+
+test('rack: "Add example roll" adds the patch\'s example and opens the Piano roll', async ({ page }) => {
+  await openRoll(page);
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await expect(page.getByTestId('rack-example')).toHaveCount(0); // Deep Bass (a starter patch) has none
+  await page.getByTestId('patch-select').selectOption('Brass Stab');
+  await page.getByTestId('rack-example').click();
+  await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
+  await expect(page.getByTestId('panel-title')).toContainText('Brass Stab example');
+  await expect(readout(page)).toContainText('64 notes');
+});

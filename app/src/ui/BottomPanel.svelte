@@ -173,7 +173,7 @@
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
       {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}
     {:else if track && track.kind === 'synth'}
-      {#key track.id}<Rack {p} {engine} {track} />{/key}
+      {#key track.id}<Rack {p} {engine} {track} onpianoroll={() => pickSynthTab('pianoroll')} />{/key}
     {:else if track && track.kind === 'audio'}
       <ClipPanel {p} {engine} {clock} {track} />
     {/if}

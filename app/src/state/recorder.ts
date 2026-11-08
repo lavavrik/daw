@@ -372,7 +372,12 @@ export function transportSync(r: Recorder) {
 export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock, onFull?: () => void): Recorder {
   return new Recorder({
     clock,
-    target: () => liveInputTrack(p),
+    // Only a synth input records notes for now (live drum hits are not
+    // recorded yet: plan 15 Task 3), so a drum input track is no target.
+    target: () => {
+      const t = liveInputTrack(p);
+      return t?.kind === 'synth' ? t : null;
+    },
     // One history entry per pass: every note of it merges into one "Record"
     // entry, and from the first written note on, the pass is held open, so
     // every other edit until the pass ends joins it too (holdOpen is

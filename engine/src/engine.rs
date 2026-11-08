@@ -63,6 +63,17 @@
 //! stops being a synth track (`REMOVE_TRACK`, or `ADD_DRUM_TRACK` over it) the
 //! input track is unset, so a track added there later does not inherit it.
 //!
+//! A drum track can be the input track too (plan 15): `NOTE_ON` note
+//! `36 + r` (r = 0..15) queues a hit of row `r` at that velocity, triggered
+//! at offset 0 of the next block like a step hit (see "Live hits" in
+//! `drums.rs`); other notes, `NOTE_OFF` and the controllers are ignored.
+//! Hits are one-shots, so switching the input away from a drum track
+//! releases nothing (its hits ring out) and replays nothing to it. When the
+//! drum input slot stops being a drum track (`REMOVE_TRACK`, or another kind
+//! added over it) the input is unset; `ADD_DRUM_TRACK` over it keeps it the
+//! input (as a synth track re-added over itself does) and drops its queued
+//! hits.
+//!
 //! # Patterns
 //! Every drum and synth track holds `MAX_PATTERNS` patterns (preallocated) and
 //! a *current* one, which plays (Pattern mode: it loops from tick 0) and which
@@ -152,7 +163,7 @@ use crate::arena::SampleArena;
 use crate::arrangement::{Arrangement, Clip, Timeline};
 use crate::audio_track::AudioTracks;
 use crate::automation::{Automation, Shape, Target};
-use crate::drums::Drums;
+use crate::drums::{Drums, DRUM_BASE_NOTE};
 use crate::protocol::{self, Command};
 use crate::samples::{Sample, SamplePool, SampleView};
 use crate::metronome::Metronome;
@@ -162,7 +173,7 @@ use crate::synth::Synths;
 use crate::transport::{events_in_window, tick_to_offset, Mode, Piece, Transport};
 use crate::vis::VisBlock;
 use crate::{
-    BAR_TICKS, MAX_BLOCK, MAX_KEYS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, MIX_MASTER, MIX_METER_STRIDE, PPQ,
+    BAR_TICKS, MAX_BLOCK, MAX_KEYS, MAX_ROWS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, MAX_TRACKS, MIX_MASTER, MIX_METER_STRIDE, PPQ,
     TELEMETRY_BLOCKS, TELEMETRY_LAST_ERROR, TELEMETRY_LEN, TELEMETRY_PEAK_L, TELEMETRY_PEAK_R, TELEMETRY_PLAYING,
     TELEMETRY_TICKS,
 };
@@ -501,19 +512,31 @@ impl Engine {
         self.synths.note(slot, NoteEvent::Bend(0.0));
     }
 
-    /// Send a live event to the input track (ignored without one).
+    /// Send a live event to the input track (ignored without one). A synth
+    /// track's rack gets every event; a drum track gets only NoteOn, note
+    /// `36 + r` queueing a hit of row `r` (`Drums::live_hit`; other notes,
+    /// NoteOff and controllers are ignored: hits are one-shots).
     fn live(&mut self, ev: NoteEvent) {
-        if let Some(slot) = self.input {
-            if self.kind(slot) == SlotKind::Synth {
-                self.synths.note(slot, ev);
+        let Some(slot) = self.input else { return };
+        match (self.kind(slot), ev) {
+            (SlotKind::Synth, ev) => self.synths.note(slot, ev),
+            (SlotKind::Drum, NoteEvent::On { note, vel }) if (DRUM_BASE_NOTE..DRUM_BASE_NOTE + MAX_ROWS as u8).contains(&note) => {
+                self.drums.live_hit(slot, (note - DRUM_BASE_NOTE) as usize, vel)
             }
+            _ => {}
         }
     }
 
     /// Remove whatever `slot` holds, each kind with its own 2 ms fade.
     fn clear_slot(&mut self, slot: usize) {
         match self.kind(slot) {
-            SlotKind::Drum => self.drums.remove_track(slot),
+            SlotKind::Drum => {
+                // Drops its queued live hits; unset the input as for a synth.
+                self.drums.remove_track(slot);
+                if self.input == Some(slot) {
+                    self.input = None;
+                }
+            }
             SlotKind::Synth => {
                 // The rack is cleared (with a fade), so its notes go anyway;
                 // unset the input so a later track there does not inherit it.
@@ -2063,6 +2086,130 @@ mod tests {
         assert_eq!(e.command(OP_SET_INPUT_TRACK, 9.0, 0.0, 0.0, 0.0), OK);
         e.command(OP_NOTE_ON, 70.0, 127.0, 0.0, 0.0);
         assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0));
+    }
+
+    // ---- live drum input (plan 15) ----------------------------------------
+
+    /// Drum track 1 is the input track: sample 0 (10 frames of 1.0) on row 1,
+    /// row 0 has no sample. Stopped: live hits need no transport.
+    fn live_drums() -> Engine {
+        let mut e = drum_engine();
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        e
+    }
+
+    #[test]
+    fn live_note_triggers_drum_row() {
+        let mut e = live_drums();
+        // Note 36 + r plays row r from offset 0 of the next block, at the
+        // step-hit level (gain * vel / 127, equal-power centre pan).
+        assert_eq!(e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 256);
+        assert!((s[0] - HIT).abs() < 1e-4, "row 1 at offset 0: {}", s[0]);
+        assert!(s[..10].iter().all(|&x| (x - HIT).abs() < 1e-4));
+        assert!(silent(&s[10..]), "one-shot: ends with the sample");
+        // Not a row (35, 52), a row without a sample (36): silence.
+        for note in [35.0, 36.0, 52.0, 127.0] {
+            assert_eq!(e.command(OP_NOTE_ON, note, 127.0, 0.0, 0.0), OK);
+        }
+        assert!(silent(&render(&mut e, 256)), "non-row notes sounded");
+        // Velocity 64: about half the level.
+        e.command(OP_NOTE_ON, 37.0, 64.0, 0.0, 0.0);
+        let s = render(&mut e, 128);
+        assert!((s[0] - HIT * 64.0 / 127.0).abs() < 1e-4, "vel 64: {}", s[0]);
+        // NoteOff (and NoteOn vel 0) is ignored: the hit still plays out.
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        e.command(OP_NOTE_OFF, 37.0, 0.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 0.0, 0.0, 0.0);
+        let s = render(&mut e, 128);
+        assert!(s[..10].iter().all(|&x| (x - HIT).abs() < 1e-4), "NoteOff cut the hit");
+        // Row gain applies like a step hit; a muted row ignores live hits.
+        e.command(OP_SET_ROW_GAIN, 1.0, 1.0, 0.5, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        let s = render(&mut e, 128);
+        assert!((s[0] - HIT * 0.5).abs() < 1e-4, "row gain: {}", s[0]);
+        e.command(OP_SET_ROW_MUTE, 1.0, 1.0, 1.0, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert!(silent(&render(&mut e, 256)), "muted row sounded");
+        // Two hits on one row in one block: one hit, not a double level.
+        e.command(OP_SET_ROW_MUTE, 1.0, 1.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        let s = render(&mut e, 128);
+        assert!((s[0] - HIT * 0.5).abs() < 1e-4, "doubled: {}", s[0]);
+    }
+
+    #[test]
+    fn live_note_on_another_input_does_not_hit_drums() {
+        // Another (empty) slot as input: the drum track gets nothing.
+        let mut e = live_drums();
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 3.0, 0.0, 0.0, 0.0), OK); // empty slot
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert!(silent(&render(&mut e, 256)));
+    }
+
+    #[test]
+    fn live_drums_survive_input_switch_and_removal() {
+        // A long hit keeps ringing across an input switch (one-shots:
+        // nothing to release) and is not retriggered by switching back.
+        let mut e = live_drums();
+        load_const(&mut e, 2, 4800, 0.5);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 2.0, 2.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 38.0, 127.0, 0.0, 0.0);
+        render(&mut e, 1280);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, -1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 4800 - 1280 + 128);
+        assert!(s[..4800 - 1280].iter().all(|&x| (x - HIT * 0.5).abs() < 1e-4), "switch cut the hit");
+        assert!(silent(&s[4800 - 1280..]), "switch retriggered");
+        // A hit queued just before the input switches still plays, once.
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, -1.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 256);
+        assert!((s[0] - HIT).abs() < 1e-4 && silent(&s[10..]));
+        // A hit queued just before its track is removed is dropped, and the
+        // removal unsets the input: a drum track added there later is not
+        // the input track.
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_REMOVE_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        assert!(silent(&render(&mut e, 256)), "queued hit outlived its track");
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert!(silent(&render(&mut e, 256)), "input inherited after remove");
+        // Re-adding a drum track over the input slot drops its queued hit
+        // (rows reset to no sample anyway) and keeps it the input.
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 0.0, 0.0), OK);
+        assert!(silent(&render(&mut e, 256)), "queued hit survived a re-add");
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert!((render(&mut e, 128)[0] - HIT).abs() < 1e-4);
+        // A synth track over the drum input slot unsets the input too.
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        render(&mut e, 1280);
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 1.0, 0.0, 0.0), OK);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        assert!(silent(&render(&mut e, 256)), "input inherited after kind swap");
+    }
+
+    #[test]
+    fn live_drum_hit_plays_alongside_steps() {
+        // While playing, a live hit lands at offset 0 of the next block on
+        // its own row, and the pattern's steps keep their exact offsets.
+        let mut e = live_drums();
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 1.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_STEP, 1.0, 0.0, 4.0, 127.0), OK); // 24000
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        render(&mut e, 128 * 10);
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        let s = render(&mut e, 24000);
+        assert_eq!(rising(&s), vec![0, 24000 - 1280]);
     }
 
     #[test]

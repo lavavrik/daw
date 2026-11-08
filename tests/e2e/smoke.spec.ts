@@ -414,12 +414,19 @@ test('add synth track, it plays from the keyboard', async ({ page }) => {
   await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeLessThan(0.001);
 });
 
-test('selecting drums keeps keys on the last synth', async ({ page }) => {
+test('selecting drums moves the keys to the drum track (plan 15), and back', async ({ page }) => {
   await startAudio(page);
   await page.getByTestId('add-synth-track').click();
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('track-0')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Step grid' })).toHaveClass(/active/);
+  await expect(page.getByTestId('keys-target')).toContainText('Keys → Drums');
+  // KeyA is C4 (60): not a drum row (36..51), and the synth no longer gets it.
+  await page.keyboard.down('KeyA');
+  await page.waitForTimeout(300);
+  expect(await slot(page, 5)()).toBeLessThan(0.001);
+  await page.keyboard.up('KeyA');
+  await page.getByTestId('track-1').click();
   await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
   await page.keyboard.down('KeyA');
   await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05);

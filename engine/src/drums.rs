@@ -47,6 +47,19 @@
 //!   jump of song time (Play, seek, loop wrap, mode switch:
 //!   `Drums::latch_clips`).
 //!
+//! # Live hits
+//! A MIDI note on a drum input track (`Drums::live_hit`, routed by the
+//! engine: note `36 + r` is row `r`) queues a hit in the track's fixed
+//! per-row buffer (`DrumTrack::live`, one velocity per row, so no allocation
+//! and at most one live hit per row per block: a repeat within a block keeps
+//! the latest velocity instead of stacking). The next block triggers it at
+//! offset 0 through the same `RowVoices::trigger` path as a step hit (gain
+//! `row.gain * vel / 127`, equal-power pan), playing or stopped, in either
+//! mode. A muted row or a row without a sample ignores it (checked when
+//! queued and again when triggered). Hits are one-shots: there is no
+//! NoteOff, and nothing to release when the input track switches. Adding,
+//! removing or resetting the track drops its queued hits.
+//!
 //! # Song mode
 //! A clip plays its pattern's steps mapped through `Clip::pattern_window`;
 //! a hit simply stops retriggering at the clip end (its voice rings out, as
@@ -60,6 +73,10 @@ use crate::samples::SamplePool;
 use crate::transport::{events_in_window, tick_to_offset};
 use crate::mixer::StereoBufs;
 use crate::{MAX_CLIPS, MAX_KEYS, MAX_PATTERNS, MAX_ROWS, MAX_STEPS, MAX_TRACKS, STEP_TICKS};
+
+/// MIDI note of row 0 for live hits (GM kick): note `DRUM_BASE_NOTE + r`
+/// plays row `r`.
+pub const DRUM_BASE_NOTE: u8 = 36;
 
 /// Max step events handled per track per block (a block spans at most a
 /// couple of steps at any sane tempo/block size, per playing clip; extras are
@@ -368,6 +385,9 @@ pub struct DrumTrack {
     pub voices: [RowVoices; MAX_ROWS],
     /// Song mode: the swing latched by clip `i` (see the module docs).
     pub clip_swing: [f32; MAX_CLIPS],
+    /// Queued live hits: velocity per row (0 = none), triggered at offset 0
+    /// of the next block and then cleared (see "Live hits").
+    pub live: [u8; MAX_ROWS],
 }
 
 impl DrumTrack {
@@ -379,17 +399,19 @@ impl DrumTrack {
             rows: [DrumRow::new(); MAX_ROWS],
             voices: [RowVoices::OFF; MAX_ROWS],
             clip_swing: [0.0; MAX_CLIPS],
+            live: [0; MAX_ROWS],
         }
     }
 
     /// Fresh active track: default rows, every pattern empty (16 steps, no
-    /// swing), pattern 0 current. Reset in place (no ~17 KB temporary on the
+    /// swing), pattern 0 current, no queued live hits. Reset in place (no ~17 KB temporary on the
     /// audio thread's stack). Voices are kept (the caller fades them) so a
     /// still-sounding tail is never hard-cut.
     pub fn reset_active(&mut self) {
         self.patterns.fill(DrumPattern::new());
         self.rows.fill(DrumRow::new());
         self.clip_swing.fill(0.0);
+        self.live.fill(0);
         self.current = 0;
         self.active = true;
     }
@@ -458,7 +480,23 @@ impl Drums {
         let fade = self.fade;
         if let Some(t) = self.tracks.get_mut(slot) {
             t.active = false;
+            t.live.fill(0);
             t.fade_all(fade);
+        }
+    }
+
+    /// Queue a live hit of `row` at velocity `vel` on track `slot` (a MIDI
+    /// note on the drum input track; see "Live hits"). Ignored on an
+    /// inactive track, an out-of-range row, a muted row, a row without a
+    /// sample, or at velocity 0. Allocation-free.
+    pub fn live_hit(&mut self, slot: usize, row: usize, vel: u8) {
+        let Some(t) = self.tracks.get_mut(slot) else { return };
+        if !t.active || vel == 0 {
+            return;
+        }
+        let (Some(r), Some(q)) = (t.rows.get(row), t.live.get_mut(row)) else { return };
+        if !r.mute && r.sample.is_some() {
+            *q = vel.min(127);
         }
     }
 
@@ -616,9 +654,16 @@ impl Drums {
                     pat.swing = pat.swing_next;
                 }
             }
-            let DrumTrack { patterns, rows, voices, .. } = track;
+            let DrumTrack { active, patterns, rows, voices, live: queue, .. } = track;
+            // Queued live hits fire in the first piece of the block (offset
+            // 0) and are consumed by it; an inactive track drops them.
+            let mut queued = [0u8; MAX_ROWS];
+            if *active {
+                queued = *queue;
+            }
+            queue.fill(0);
             let live = voices.iter().any(|v| v.active.live || v.fading.live);
-            if !live && hits.len == 0 {
+            if !live && hits.len == 0 && queued.iter().all(|&v| v == 0) {
                 continue; // nothing sounds and nothing starts: skip the slot
             }
             let Some((tl, tr)) = tracks.pair_mut(slot, from, to) else { continue };
@@ -626,15 +671,16 @@ impl Drums {
             let keyed = row_keys.get(slot);
             for (ri, (row, rv)) in rows.iter().zip(voices.iter_mut()).enumerate() {
                 let key = keyed.and_then(|rk| rk.get(ri)).copied().filter(|&k| (k as usize) < MAX_KEYS);
+                let lv = queued.get(ri).copied().unwrap_or(0);
                 match key.and_then(|k| keys.pair_mut(k as usize, from, to)) {
                     Some((kl, kr)) => {
-                        render_row(row, rv, ri, patterns, hits.as_slice(), pool, arena, fade, kl, kr);
+                        render_row(row, rv, ri, lv, patterns, hits.as_slice(), pool, arena, fade, kl, kr);
                         for i in 0..n.min(kl.len()).min(tl.len()) {
                             tl[i] += kl[i];
                             tr[i] += kr[i];
                         }
                     }
-                    None => render_row(row, rv, ri, patterns, hits.as_slice(), pool, arena, fade, tl, tr),
+                    None => render_row(row, rv, ri, lv, patterns, hits.as_slice(), pool, arena, fade, tl, tr),
                 }
             }
         }
@@ -642,13 +688,30 @@ impl Drums {
     }
 }
 
-/// Render one row's voices into `l`/`r`, triggering the row's hits (those
-/// with a non-zero velocity on row `ri`) at their offsets.
+/// Trigger a hit of `row` at velocity `vel` (1..=127) on its voices: gain
+/// `row.gain * vel / 127`, equal-power pan. The one path for step hits and
+/// live hits. A muted row, a row without a sample or a sample that is not
+/// playable ignores it.
+fn trigger_row(row: &DrumRow, rv: &mut RowVoices, vel: u8, pool: &SamplePool, arena: &SampleArena, fade: usize) {
+    if vel == 0 || row.mute {
+        return;
+    }
+    let Some(id) = row.sample else { return };
+    let Some((.., generation)) = pool.playable(arena, id as usize) else { return };
+    let g = row.gain * vel as f32 / 127.0;
+    let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
+    rv.trigger(id, generation, g * a.cos(), g * a.sin(), fade);
+}
+
+/// Render one row's voices into `l`/`r`: a queued live hit (`live_vel`, 0 =
+/// none) at offset 0, then the row's step hits (those with a non-zero
+/// velocity on row `ri`) at their offsets.
 #[allow(clippy::too_many_arguments)]
 fn render_row(
     row: &DrumRow,
     rv: &mut RowVoices,
     ri: usize,
+    live_vel: u8,
     patterns: &[DrumPattern],
     hits: &[Hit],
     pool: &SamplePool,
@@ -659,6 +722,7 @@ fn render_row(
 ) {
     let n = l.len().min(r.len());
     let mut pos = 0;
+    trigger_row(row, rv, live_vel, pool, arena, fade);
     for h in hits {
         let off = h.offset.min(n);
         let vel = patterns
@@ -671,13 +735,13 @@ fn render_row(
             continue;
         }
         let Some(id) = row.sample else { continue };
-        let Some((.., generation)) = pool.playable(arena, id as usize) else { continue };
+        if pool.playable(arena, id as usize).is_none() {
+            continue;
+        }
         let at = off.max(pos);
         rv.render_add(pool, arena, fade, &mut l[pos..at], &mut r[pos..at]);
         pos = at;
-        let g = row.gain * vel as f32 / 127.0;
-        let a = (row.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-        rv.trigger(id, generation, g * a.cos(), g * a.sin(), fade);
+        trigger_row(row, rv, vel, pool, arena, fade);
     }
     rv.render_add(pool, arena, fade, &mut l[pos..n], &mut r[pos..n]);
 }

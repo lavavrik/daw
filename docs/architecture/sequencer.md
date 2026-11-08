@@ -86,6 +86,34 @@ Sequenced and live notes share the track's MIDI In voices. Stop releases
 *sequenced* notes only; switching the input track releases only live-held
 pitches. Editing, moving or removing a sounding note releases it.
 
+## Live drum input
+Code: `engine/src/drums.rs` (`Drums::live_hit`, "Live hits"), `engine.rs`
+(`live`), `app/src/state/actions.ts` (`liveInputTrack`),
+`app/src/project/commands.ts` (`inputSlot`).
+
+The live-input track is the *selected* synth or drum track; with an Audio
+track (or nothing) selected it is the last-selected synth
+(`lastSynthTrackId`, which a drum track never becomes). Loading a project
+picks it the same way from the saved selection (`inputSlot`).
+
+On a drum input track a `NOTE_ON` of MIDI note `36 + r` (C2 = row 0, up to
+row 15) queues a hit of row `r`; other notes, `NOTE_OFF`, bend, mod wheel
+and sustain are ignored. Queued hits live in a fixed per-row buffer on the
+track (one velocity per row: a repeat inside one block keeps the latest
+instead of stacking) and fire at offset 0 of the next block (at most one
+block, ~2.7 ms, late) through the same trigger as a step hit: gain
+`row.gain * vel / 127`, equal-power pan, retrigger fades the old voice over
+2 ms. They play whether or not the transport runs, in either mode. A muted
+row or a row without a sample ignores them. Hits are one-shots: switching
+the input away releases nothing (a ringing hit rings out) and switching to
+a drum track replays nothing. Removing the track, or adding another kind
+over it, drops its queued hits and unsets the input (as for a synth);
+re-adding a drum track over it drops the queue and keeps it the input.
+
+Recording live drum hits is not wired yet: the recorder's target stays the
+synth input (`recorderFor` narrows `liveInputTrack`), so a drum input track
+records nothing (plan 15 Task 3).
+
 ## Song timeline (arrangement)
 Code: `engine/src/arrangement.rs` (clips), `transport.rs` (mode, loop,
 split), `engine.rs` (commands, pieces), `synth.rs` / `drums.rs` (playback).

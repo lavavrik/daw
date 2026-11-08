@@ -186,10 +186,12 @@ describe('diffApply', () => {
         selectTrack(p, sink, synth2.id);
         setTempo(p, sink, 100);
       },
-      // Back at A: the drums are selected, keys on the Bass synth (fixture).
+      // Back at A: the drums are selected and get the keys (plan 15); the
+      // Bass synth is still the last synth (fixture).
       ({ p, m, drums, synth }) => {
         expect(p.selectedTrackId).toBe(drums.id);
-        expect(m.input).toBe(synth.slot);
+        expect(m.input).toBe(drums.slot);
+        expect(p.lastSynthTrackId).toBe(synth.id);
       },
     );
   });

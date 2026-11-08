@@ -624,6 +624,58 @@ fn reset_all_does_not_allocate() {
     assert!(l.iter().chain(r.iter()).all(|&x| x == 0.0), "silent after the reset");
 }
 
+/// Live drum hits (plan 15): MIDI notes on a drum input track queue row hits
+/// into a fixed per-track buffer and trigger through the step-hit path, while
+/// stopped and while playing, across input switches, mutes and track
+/// removal, all with the counter ARMED.
+#[test]
+fn live_drum_no_alloc() {
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+    let p = e.sample_alloc(0, 4800, 1).unwrap();
+    unsafe { std::slice::from_raw_parts_mut(p, 4800) }.fill(0.5);
+    ok(e.sample_ready(0));
+
+    arm();
+
+    ok(e.command(OP_ADD_DRUM_TRACK, 2., 0., 0., 0.));
+    for row in 0..16u32 {
+        ok(e.command(OP_SET_ROW_SAMPLE, 2., row as f64, 0., 0.));
+    }
+    ok(e.command(OP_SET_STEP, 2., 0., 0., 100.));
+    ok(e.command(OP_SET_INPUT_TRACK, 2., 0., 0., 0.));
+    let mut peak = 0.0f64;
+    for b in 0..400u32 {
+        match b {
+            100 => ok(e.command(OP_PLAY, 0., 0., 0., 0.)),
+            150 => ok(e.command(OP_SET_ROW_MUTE, 2., 3., 1., 0.)),
+            200 => ok(e.command(OP_SET_INPUT_TRACK, -1., 0., 0., 0.)),
+            210 => ok(e.command(OP_SET_INPUT_TRACK, 2., 0., 0., 0.)),
+            300 => ok(e.command(OP_STOP, 0., 0., 0., 0.)),
+            380 => ok(e.command(OP_REMOVE_TRACK, 2., 0., 0., 0.)),
+            _ => {}
+        }
+        // Every block: a hit on one row, plus several on one block to fill
+        // the queue (every row, twice) every 25th block.
+        ok(e.command(OP_NOTE_ON, 36. + (b % 20) as f64, 100., 0., 0.));
+        ok(e.command(OP_NOTE_OFF, 36. + (b % 20) as f64, 0., 0., 0.));
+        if b % 25 == 0 {
+            for n in 0..40u32 {
+                ok(e.command(OP_NOTE_ON, 36. + (n % 16) as f64, 127., 0., 0.));
+            }
+        }
+        e.process(&mut l, &mut r);
+        if b < 100 {
+            peak = peak.max(e.telemetry()[5]);
+        }
+    }
+
+    assert_eq!(disarm(), 0, "live drum hits allocated");
+    assert!(peak > 0.05, "live hits sounded while stopped, peak {peak}");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+}
+
 /// Audio tracks (plan 9): every new op (`ADD_AUDIO_TRACK`, the staged
 /// `AUDIO_CLIP_SOURCE` / `AUDIO_CLIP_GAIN` and the committing
 /// `AUDIO_CLIP_SET`), playback of loop and one-shot clips (mono and stereo),

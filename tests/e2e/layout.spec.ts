@@ -14,8 +14,13 @@ for (const width of [1440, 1280, 1024]) {
     await page.goto('/');
     await page.getByRole('button', { name: 'Click to start audio' }).click();
     await expect(page.getByTestId('play')).toBeVisible();
-    // Worst case: the longest Keys text ("(no synth track)"), an unsaved
+    // Worst case: the longest Keys text ("(no synth track)": no tracks, as
+    // a selected drum track takes the keys since plan 15), an unsaved
     // project (SONG mode is an edit), and playing (Stop is wider than Play).
+    await page.getByTestId('track-0').hover();
+    await page.getByRole('button', { name: 'Remove track Drums' }).click();
+    await page.getByTestId('inline-confirm-ok').click();
+    await expect(page.getByTestId('track-0')).toHaveCount(0);
     await page.getByTestId('mode-song').click();
     await expect(page.getByTestId('keys-target')).toContainText('no synth track');
     await expect(page.getByTestId('project-name')).toContainText('unsaved');

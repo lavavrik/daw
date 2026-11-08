@@ -149,13 +149,17 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.SET_MODE: m.mode = a; break;
       case Op.SET_LOOP: m.loop = [a, b]; break;
       case Op.SET_INPUT_TRACK: m.input = a; break;
-      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK:
-        // A synth's live input goes when its slot becomes another kind.
-        if (op !== Op.ADD_SYNTH_TRACK && m.input === a) m.input = -1;
-        m.slots[a] = fresh(op === Op.ADD_DRUM_TRACK ? 'drum' : op === Op.ADD_SYNTH_TRACK ? 'synth' : 'audio');
+      case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK: {
+        // A synth's or drum track's live input goes when its slot becomes
+        // another kind (re-adding the same kind keeps it).
+        const kind = op === Op.ADD_DRUM_TRACK ? 'drum' : op === Op.ADD_SYNTH_TRACK ? 'synth' : 'audio';
+        const old = m.slots[a]?.kind;
+        if (m.input === a && (old === 'synth' || old === 'drum') && old !== kind) m.input = -1;
+        m.slots[a] = fresh(kind);
         unslot(a);
         clearAutos((t) => t[1] === a);
         break;
+      }
       case Op.AUDIO_CLIP_SOURCE: case Op.AUDIO_CLIP_GAIN: {
         const t = slotOf(Math.floor(a / MAX_CLIPS), 'audio');
         if (!t) break;

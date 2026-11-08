@@ -213,3 +213,43 @@ test('Project ▸ New deletes the old autosave and never autosaves the untouched
     localStorage.removeItem('daw.lastExplicitSave');
   });
 });
+
+test('a selected drum track plays its rows from the MIDI keyboard', async ({ page }) => {
+  // Plan 15: MIDI note 36 + r triggers row r of the drum input track, live
+  // (no transport), through the injected-MIDI hook (window.__daw.midi).
+  test.setTimeout(30_000);
+  type M = { midi?: { inject(bytes: number[]): void } };
+  await startAudio(page);
+  await expectKit(page);
+  await page.waitForFunction(() => !!(window as unknown as { __daw: M }).__daw?.midi);
+  // A synth takes the keys when added; selecting the drum track moves them.
+  await page.getByTestId('add-synth-track').click();
+  await expect(page.getByTestId('keys-target')).not.toContainText('Drums');
+  await page.getByTestId('track-0').click();
+  await expect(page.getByTestId('keys-target')).toContainText('Drums');
+  /** Inject `bytes`, then the max master peak over `ms`. */
+  const peakAfter = (bytes: number[], ms = 600) =>
+    page.evaluate(
+      ([bytes, ms]) =>
+        new Promise<number>((resolve) => {
+          const w = window as unknown as { __daw: Daw & M };
+          const eng = w.__daw.engine!;
+          w.__daw.midi!.inject(bytes as number[]);
+          let max = 0;
+          const t0 = performance.now();
+          const id = setInterval(() => {
+            max = Math.max(max, eng.telemetry()[5]);
+            if (performance.now() - t0 > (ms as number)) {
+              clearInterval(id);
+              resolve(max);
+            }
+          }, 4);
+        }),
+      [bytes, ms] as const,
+    );
+  expect(await maxPeak(page, 300)).toBeLessThan(0.01); // stopped, nothing held
+  expect(await peakAfter([0x90, 35, 127])).toBeLessThan(0.01); // below row 1: ignored
+  expect(await peakAfter([0x90, 36, 127])).toBeGreaterThan(0.05); // C2: the Kick row
+  await peakAfter([0x80, 36, 0], 400); // NoteOff: ignored, the hit rings out
+  expect(await maxPeak(page, 300)).toBeLessThan(0.01); // a one-shot: nothing stuck
+});

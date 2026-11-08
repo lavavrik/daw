@@ -587,3 +587,4 @@ restart; click it to grant access again.
   `--project=serial --no-deps --repeat-each=3`.
 - Follow-ups and decisions per plan: [docs/followups/](docs/followups/).
 - Sampler track: "+ Sampler track" on the timeline (drop a sample on it) makes a synth track on the Sampler patch; see [docs/architecture/modular.md](docs/architecture/modular.md#sampler-patch).
+- Drum pads from the MIDI keyboard: select a drum track and MIDI notes 36 (C2) and up play its rows 1–16 live, velocity-scaled; see [docs/architecture/sequencer.md](docs/architecture/sequencer.md#live-drum-input).

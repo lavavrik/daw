@@ -360,7 +360,8 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         else st.loop = b > a ? [a, b] : [0, 0];
         break;
       case Op.SEEK: if (!int(a, 0, MAX_SONG_TICKS)) bad('seek'); break;
-      case Op.SET_INPUT_TRACK: if (a !== -1) need(a, 'synth'); st.input = a; break;
+      // A synth or (plan 15) drum track, or -1.
+      case Op.SET_INPUT_TRACK: if (a !== -1) need(a, 'pattern'); st.input = a; break;
       case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK:
         afterKeys();
         if (!int(a, 0, MAX_TRACKS - 1)) bad('slot');

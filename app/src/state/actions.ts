@@ -208,16 +208,20 @@ export function togglePlay(p: Project, sink: CommandSink, countIn = 0) {
   else play(p, sink, countIn);
 }
 
-/** The synth that receives live keys: the selected synth, else the last-selected one. */
-export function liveInputTrack(p: Project): SynthTrack | null {
+/**
+ * The track that receives live keys: the selected synth or drum track (a
+ * drum track plays row r on MIDI note 36 + r, plan 15), else the
+ * last-selected synth (e.g. while an Audio track is selected).
+ */
+export function liveInputTrack(p: Project): SynthTrack | DrumTrack | null {
   const sel = p.tracks.find((t) => t.id === p.selectedTrackId);
-  if (sel?.kind === 'synth') return sel;
+  if (sel?.kind === 'synth' || sel?.kind === 'drum') return sel;
   const last = p.tracks.find((t) => t.id === p.lastSynthTrackId);
   return last?.kind === 'synth' ? last : null;
 }
 
 /** Sends SET_INPUT_TRACK only when `before` (a live input captured earlier) differs from the current one. */
-function syncInput(p: Project, sink: CommandSink, before: SynthTrack | null) {
+function syncInput(p: Project, sink: CommandSink, before: SynthTrack | DrumTrack | null) {
   const now = liveInputTrack(p);
   if (now?.id !== before?.id) sink.send(Op.SET_INPUT_TRACK, now ? now.slot : -1);
 }

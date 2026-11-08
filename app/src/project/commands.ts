@@ -202,13 +202,16 @@ export function lanesState(lanes: LaneJson[]): AutomationLane[] {
   }));
 }
 
-/** The slot that receives live keys (liveInputTrack of the loaded selection), or -1. */
+/**
+ * The slot that receives live keys (liveInputTrack of the loaded selection:
+ * the selected synth or drum track, else the last synth), or -1.
+ */
 export function inputSlot(project: ProjectJson): number {
   const bySlot = (s: number | null) => (s === null ? undefined : project.tracks.find((t) => t.slot === s));
   const sel = project.selection.track !== null ? bySlot(project.selection.track) : project.tracks[0];
+  if (sel?.kind === 'synth' || sel?.kind === 'drum') return sel.slot;
   const synth = project.selection.synth !== null ? bySlot(project.selection.synth) : project.tracks.find((t) => t.kind === 'synth');
-  const input = sel?.kind === 'synth' ? sel : synth;
-  return input?.kind === 'synth' ? input.slot : -1;
+  return synth?.kind === 'synth' ? synth.slot : -1;
 }
 
 /** Sample ids remapped; pooled effects / row keys beyond what the engine holds dropped (warned). */

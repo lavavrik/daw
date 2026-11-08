@@ -163,7 +163,7 @@ describe('rack actions', () => {
 });
 
 describe('input track selection', () => {
-  it('sends SET_INPUT_TRACK only on change; drum selection keeps last synth', () => {
+  it('sends SET_INPUT_TRACK only on change; a selected drum track is the input (plan 15)', () => {
     const p = new Project();
     const { sink, sent } = fake();
     const d = addDrumTrack(p, sink)!;
@@ -172,9 +172,10 @@ describe('input track selection', () => {
     selectTrack(p, sink, s.id); // unchanged
     expect(sent).toHaveLength(0);
     selectTrack(p, sink, d.id);
-    expect(sent).toHaveLength(0);
+    expect(sent).toEqual([[Op.SET_INPUT_TRACK, d.slot, 0, 0, 0]]);
     expect(p.selectedTrackId).toBe(d.id);
-    expect(liveInputTrack(p)?.id).toBe(s.id);
+    expect(liveInputTrack(p)?.id).toBe(d.id);
+    expect(p.lastSynthTrackId).toBe(s.id);
     const s2 = addSynthTrack(p, sink)!;
     expect(sent[sent.length - 1]).toEqual([Op.SET_INPUT_TRACK, s2.slot, 0, 0, 0]);
   });

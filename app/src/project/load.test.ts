@@ -132,8 +132,10 @@ describe('loadProject', () => {
     expect(state.song).toBe(p.mode === 'song');
     expect(state.loop).toEqual(p.loop.on ? [p.loop.start, p.loop.end] : [0, 0]);
     expect(state.input).toBe(liveInputTrack(p)?.slot ?? -1);
-    expect(liveInputTrack(p)?.name).toBe('Bass');
+    // The selected drum track is the input (plan 15); the last synth stays Bass.
+    expect(liveInputTrack(p)?.name).toBe('Drums');
     expect(p.tracks.find((t) => t.id === p.selectedTrackId)?.name).toBe('Drums');
+    expect(p.tracks.find((t) => t.id === p.lastSynthTrackId)?.name).toBe('Bass');
     // Defaults are sent too (RESET_ALL already set them, but say so explicitly).
     const blank = roundJson(serialize(new Project()));
     const e2 = fakeEngine();

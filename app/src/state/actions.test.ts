@@ -3,8 +3,10 @@ import { Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { DrumPattern } from './project.svelte';
 import {
-  addDrumTrack, addRow, play, setRowSample, setStep, setStepCount, setSwing, setTempo, stop, togglePlay, toggleStep,
+  addDrumTrack, addRow, liveInputTrack, play, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
+  setTempo, stop, togglePlay, toggleStep,
 } from './actions';
+import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 
 function fake() {
@@ -30,10 +32,14 @@ describe('actions', () => {
     p.tracks.splice(0, 1); // free slot 0
     const t2 = addDrumTrack(p, sink)!;
     expect(t2.slot).toBe(0);
+    // Each add also selects the new drum track, which becomes the live input.
     expect(sent.map((s) => s.slice(0, 2))).toEqual([
       [Op.ADD_DRUM_TRACK, 0],
+      [Op.SET_INPUT_TRACK, 0],
       [Op.ADD_DRUM_TRACK, 1],
+      [Op.SET_INPUT_TRACK, 1],
       [Op.ADD_DRUM_TRACK, 0],
+      [Op.SET_INPUT_TRACK, 0],
     ]);
     expect(t2.rows.map((r) => r.name)).toEqual(['Row 1', 'Row 2', 'Row 3', 'Row 4']);
     expect(t2.patterns).toHaveLength(1);
@@ -146,5 +152,36 @@ describe('actions', () => {
     expect(p.playing).toBe(false);
     expect(play(p, fake().sink)).toBe(true);
     expect(p.playing).toBe(true);
+  });
+});
+
+describe('live input track (plan 15: drum rows from the MIDI keyboard)', () => {
+  it('liveInputTrack picks a selected drum track; selecting it sends SET_INPUT_TRACK', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const s = addSynthTrack(p, sink)!;
+    const d = addDrumTrack(p, sink)!; // adding selects it: keys go to its rows
+    expect(liveInputTrack(p)?.id).toBe(d.id);
+    expect(sent[sent.length - 1]).toEqual([Op.SET_INPUT_TRACK, d.slot, 0, 0, 0]);
+    sent.length = 0;
+    selectTrack(p, sink, s.id);
+    expect(sent).toEqual([[Op.SET_INPUT_TRACK, s.slot, 0, 0, 0]]);
+    sent.length = 0;
+    selectTrack(p, sink, d.id);
+    expect(sent).toEqual([[Op.SET_INPUT_TRACK, d.slot, 0, 0, 0]]);
+    expect(p.lastSynthTrackId).toBe(s.id); // a drum never becomes the last synth
+    // Removing the drum input: selection falls back, keys follow it.
+    sent.length = 0;
+    removeTrack(p, sink, d.id);
+    expect(sent).toEqual([[Op.REMOVE_TRACK, d.slot, 0, 0, 0], [Op.SET_INPUT_TRACK, s.slot, 0, 0, 0]]);
+  });
+
+  it('an audio track selected keeps the last synth as the input', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s = addSynthTrack(p, sink)!;
+    p.tracks.push({ kind: 'audio', id: 'a', slot: 5, name: 'Vox', color: '#fff', clips: [], automation: [] } as never);
+    p.selectedTrackId = 'a';
+    expect(liveInputTrack(p)?.id).toBe(s.id);
   });
 });

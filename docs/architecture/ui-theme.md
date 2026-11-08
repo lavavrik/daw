@@ -324,3 +324,21 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
   element being removed or hidden (a menu closing, a re-rendered cell) hides
   the tip (one connected/visible check per animation frame while shown).
 - Touch pointers are ignored. `data-tip` alone (no `title`) also works.
+- **Limits.** A reactive `title` that becomes absent mid-hover is not
+  observable (removing an absent attribute fires no mutation), so the last
+  title is restored on hide until the next render. Any scroll event, including
+  programmatic ones (playhead follow), hides the tip. An authored `data-tip`
+  is never overwritten or removed and wins over `title`. A tip opened by
+  keyboard focus is not closed by the pointer leaving, only by focus leaving.
+- **Hint line.** While hovered the `title` lives in `data-tip`, so
+  `hintText` (bigTimer.ts) reads `title`, then `data-tip`, then `aria-label`.
+  Anything else reading `title` of a hovered element must do the same.
+- **Limits.** A reactive `title` that becomes absent mid-hover is not
+  observable (removing an absent attribute fires no mutation), so the last
+  title is restored on hide until the next render. Any scroll event, including
+  programmatic ones (playhead follow), hides the tip. An authored `data-tip`
+  is never overwritten or removed and wins over `title`. A tip opened by
+  keyboard focus is not closed by the pointer leaving, only by focus leaving.
+- **Hint line.** While hovered the `title` lives in `data-tip`, so
+  `hintText` (bigTimer.ts) reads `title`, then `data-tip`, then `aria-label`.
+  Anything else reading `title` of a hovered element must do the same.

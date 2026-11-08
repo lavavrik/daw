@@ -73,6 +73,7 @@ describe('hintText (the hovered control for the top bar hint line)', () => {
     const icon = el({}, btn);
     expect(hintText(icon)).toBe('Metronome');
     expect(hintText(el({ 'aria-label': 'Undo' }))).toBe('Undo');
+    expect(hintText(el({ 'data-tip': 'Parked', 'aria-label': 'A' }))).toBe('Parked');
     expect(hintText(el({ title: 'T', 'aria-label': 'A' }))).toBe('T');
   });
   it('blank attributes are skipped; nothing found is null', () => {

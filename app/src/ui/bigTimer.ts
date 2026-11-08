@@ -45,11 +45,12 @@ export function timerSeconds(ticks: number, bpm: number): string {
 
 /**
  * The hint line's text for a hovered element: the nearest `title`, else
+ * `data-tip` (the tooltip layer parks `title` there while hovered), else
  * `aria-label`, on it or an ancestor (blank ones skipped); null when none.
  */
 export function hintText(el: Element | null): string | null {
   for (let e = el; e; e = e.parentElement) {
-    const t = e.getAttribute('title')?.trim() || e.getAttribute('aria-label')?.trim();
+    const t = e.getAttribute('title')?.trim() || e.getAttribute('data-tip')?.trim() || e.getAttribute('aria-label')?.trim();
     if (t) return t;
   }
   return null;

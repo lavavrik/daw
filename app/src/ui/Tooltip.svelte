@@ -8,7 +8,13 @@
   // gets keyboard focus): its `title` moves to `data-tip`, which stops the
   // native tooltip, and `aria-describedby` points at this layer. After the
   // delay (tooltip.ts) the tip shows. *Release* undoes the claim and puts the
-  // `title` back, so code and tests reading `title` keep working.
+  // `title` back, so code and tests reading `title` keep working. An authored
+  // `data-tip` is never overwritten or removed (it wins over `title`).
+  //
+  // Known limits: (1) a reactive `title` that becomes absent mid-hover gives
+  // no attribute mutation (removing an absent attribute is not observable),
+  // so release restores the last title; the next render fixes it. (2) Any
+  // scroll event, including programmatic ones (playhead follow), hides the tip.
   import { onMount } from 'svelte';
   import { createTipTiming, placeTip } from './tooltip';
 
@@ -20,6 +26,9 @@
     const timing = createTipTiming();
     let target: HTMLElement | null = null;
     let movedTitle = false; // we took `title` off the target
+    let authoredTip = false; // the target had its own `data-tip` before the claim
+    let viaFocus = false;
+    let lastKey = '';
     let prevDescribed: string | null = null;
     let showing = false;
     let timer = 0;
@@ -30,12 +39,12 @@
 
     const tipOf = (n: EventTarget | null): HTMLElement | null =>
       n instanceof Element && !el.contains(n) ? n.closest<HTMLElement>(SEL) : null;
-    const textOf = (t: HTMLElement) => (t.getAttribute('title') || t.getAttribute('data-tip') || '').trim();
+    const textOf = (t: HTMLElement) => ((authoredTip ? t.getAttribute('data-tip') : null) || t.getAttribute('title') || t.getAttribute('data-tip') || '').trim();
 
     /** Move a (possibly changed) `title` into `data-tip`. Idempotent. */
     function absorb(t: HTMLElement) {
       const title = t.getAttribute('title');
-      if (title === null) return;
+      if (title === null || authoredTip) return;
       t.setAttribute('data-tip', title);
       t.removeAttribute('title');
       movedTitle = true;
@@ -45,9 +54,12 @@
       if (!target) return;
       const text = textOf(target);
       if (!text) { release(); return; }
+      const r = target.getBoundingClientRect();
+      const key = `${text}|${r.left}|${r.top}|${r.width}|${r.height}|${innerWidth}|${innerHeight}`;
+      if (key === lastKey && !el.hidden) return;
+      lastKey = key;
       if (el.textContent !== text) el.textContent = text;
       el.hidden = false;
-      const r = target.getBoundingClientRect();
       const p = placeTip(r, { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight });
       el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
     }
@@ -69,25 +81,33 @@
       if (showing) timing.hidden(performance.now());
       showing = false;
       el.hidden = true;
+      lastKey = '';
       if (target) {
-        if (movedTitle) {
+        if (!authoredTip) {
           const tip = target.getAttribute('data-tip');
-          if (tip !== null && target.getAttribute('title') === null) target.setAttribute('title', tip);
+          if (movedTitle && tip !== null && target.getAttribute('title') === null) target.setAttribute('title', tip);
           target.removeAttribute('data-tip');
         }
-        if (prevDescribed === null) target.removeAttribute('aria-describedby');
-        else target.setAttribute('aria-describedby', prevDescribed);
+        // Only undo our own aria-describedby.
+        if (target.getAttribute('aria-describedby') === ID) {
+          if (prevDescribed === null) target.removeAttribute('aria-describedby');
+          else target.setAttribute('aria-describedby', prevDescribed);
+        }
       }
       target = null;
       movedTitle = false;
+      authoredTip = false;
+      viaFocus = false;
       prevDescribed = null;
     }
 
-    function claim(t: HTMLElement) {
+    function claim(t: HTMLElement, byFocus: boolean) {
       if (t === target || t === dismissed) return;
       release();
-      if (!textOf(t)) return;
+      authoredTip = t.hasAttribute('data-tip');
+      if (!textOf(t)) { authoredTip = false; return; }
       target = t;
+      viaFocus = byFocus;
       absorb(t);
       prevDescribed = t.getAttribute('aria-describedby');
       t.setAttribute('aria-describedby', ID);
@@ -95,7 +115,7 @@
       watch = new MutationObserver(() => { if (target) { absorb(target); if (showing) paint(); } });
       watch.observe(t, { attributes: true, attributeFilter: ['title', 'data-tip'] });
       const reveal = () => {
-        if (!target) return;
+        if (!target || !target.isConnected) { release(); return; }
         showing = true;
         timing.shown();
         paint();
@@ -109,20 +129,23 @@
     const onOver = (e: PointerEvent) => {
       if (e.pointerType === 'touch') return;
       const t = tipOf(e.target);
-      if (t) claim(t);
+      if (t) claim(t, false);
     };
     const onOut = (e: PointerEvent) => {
       if (dismissed && tipOf(e.relatedTarget) !== dismissed) dismissed = null;
-      if (!target) return;
+      if (!target || viaFocus) return; // a keyboard-focus tip stays until focus leaves
       const to = tipOf(e.relatedTarget);
       if (to !== target) release();
     };
     const onFocusIn = (e: FocusEvent) => {
       const t = tipOf(e.target);
       // Keyboard focus only: a click-focus would show the tip under the cursor.
-      if (t && t === e.target && t.matches(':focus-visible')) claim(t);
+      if (t && t === e.target && t.matches(':focus-visible')) claim(t, true);
     };
-    const onFocusOut = (e: FocusEvent) => { if (target && tipOf(e.target) === target) release(); };
+    const onFocusOut = (e: FocusEvent) => {
+      dismissed = null;
+      if (target && tipOf(e.target) === target) release();
+    };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') hide(); }; // never swallowed
     const hide = () => { dismissed = target; release(); };
 

@@ -72,3 +72,20 @@ test('keyboard focus shows the tip', async ({ page }) => {
   await page.keyboard.press('Tab'); // back onto #b1 via the keyboard
   await expect(tip(page)).toBeVisible();
 });
+
+test('removing the element during the delay shows no tip', async ({ page }) => {
+  await fixture(page);
+  await page.locator('#b1').hover();
+  await page.evaluate(() => document.getElementById('tipbox')!.remove());
+  await page.waitForTimeout(450);
+  await expect(tip(page)).toBeHidden();
+});
+
+test('the top-bar hint line still reads a hovered (claimed) title', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  const hint = page.getByTestId('hint-line');
+  await page.getByTestId('loop-toggle').hover();
+  await expect(hint).toHaveText('Loop the loop range while playing the song');
+  await expect(tip(page)).toBeVisible();
+});

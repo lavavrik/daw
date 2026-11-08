@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { startApp } from './startApp';
 
 // Resizable automation lanes (plan 19 Task 2): the grab strip on a lane
 // header's bottom edge sets that lane's height (UI state: no undo entry,
@@ -15,7 +16,7 @@ type Any = any;
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await expect(page.getByTestId('tl-lane-0')).toBeVisible();
 }

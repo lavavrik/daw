@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Piano roll (plan 3, Task 5), driven through the UI with the real mouse.
 // The canvas publishes its view in data-view (prMath View + rulerH), so the
@@ -14,7 +15,7 @@ const BEAT = 960;
 
 async function openRoll(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await addTrack(page, 'synth');
   await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
   await expect(page.getByTestId('pr-canvas')).not.toHaveAttribute('data-view', '');
@@ -167,7 +168,7 @@ test('right-click deletes just the note under the pointer (one undo entry)', asy
 
 test('right-click clears a step in the step grid', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   const cell = page.getByTestId('step-0-0');
   await cell.click();
   await expect(cell).toHaveAttribute('aria-pressed', 'true');
@@ -258,7 +259,7 @@ test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo
 
 test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F9 Mixer', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await addTrack(page, 'synth');
   await page.keyboard.press('Alt+Digit4');
   await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);

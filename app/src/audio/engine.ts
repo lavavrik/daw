@@ -10,6 +10,12 @@
 // message. Every loadSample() promise always settles (pending ones resolve
 // with HostErr.ENGINE_STOPPED).
 //
+// Start-up (spec 2026-11-15 §10): start() needs no user gesture. The page
+// builds the engine at load; until the browser allows audio the context is
+// 'suspended' (the worklet and the WASM engine exist, commands queue in the
+// ring, nothing renders). App calls resume() on the first click / key press
+// and before anything plays; onStateChange drives the top bar's audio pill.
+//
 // Lifetime: one engine per AudioContext. The audio settings (audio/restart.ts)
 // close() this one and start() another with a new latency hint; close()
 // settles everything pending and turns send() into a no-op, so a late
@@ -76,6 +82,11 @@ export class AudioEngine {
    * huge (message), or it drained again (null). Nothing is dropped.
    */
   onCommandStall?: (message: string | null) => void;
+  /**
+   * The AudioContext's state changed ('suspended' -> 'running' once the
+   * browser lets audio start; 'suspended' again if it pauses it later).
+   */
+  onStateChange?: (state: AudioContextState) => void;
 
   private readonly ring: CommandRing;
   private readonly sender: CommandSender;
@@ -116,6 +127,7 @@ export class AudioEngine {
     this.tele = new Float64Array(telemetrySab, 0, TELEMETRY_LEN);
     this.meterView = new Float32Array(metersSab, 0, MIX_CHANNELS * MIX_METER_STRIDE);
     this.visView = visViews(visSab);
+    ctx.addEventListener('statechange', () => this.onStateChange?.(ctx.state));
     this.ready = new Promise((resolve, reject) => {
       // Before 'ready' a failure rejects start(); after it, it's reported via onError.
       const failed = (message: string) =>
@@ -166,16 +178,25 @@ export class AudioEngine {
   }
 
   /**
-   * Must be called from a user gesture (it creates/resumes the AudioContext).
+   * Build the AudioContext, the worklet and the engine. Needs no user
+   * gesture: without one the context is created 'suspended' (Chrome's
+   * autoplay policy) and the engine is complete but silent until resume()
+   * runs after a click or key press. It still asks to resume (allowed at
+   * once after an earlier gesture on the page), without waiting for it.
+   * `untilRunning`: resolve only once the context runs (an audio restart
+   * needs a running engine to replay into; the caller times it out, since
+   * a vanished device can keep resume() pending forever).
    * `latencyHint`: the context's buffer size request (Settings; default
    * 'interactive', the lowest). The browser may round it; latencyInfo()
    * reports what it chose.
    */
-  static async start(opts: { latencyHint?: LatencyHint } = {}): Promise<AudioEngine> {
+  static async start(opts: { latencyHint?: LatencyHint; untilRunning?: boolean } = {}): Promise<AudioEngine> {
     const latencyHint = opts.latencyHint ?? 'interactive';
     const ctx = new AudioContext({ latencyHint });
-    // Resume synchronously inside the gesture, before any await.
+    // Asked before any await, so a start inside a gesture resumes at once.
     const resumed = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
+    // Never waited on below unless untilRunning: a rejection is resume()'s to report.
+    resumed.catch(() => {});
     try {
       const [wasmBytes] = await Promise.all([
         fetch('/engine.wasm').then((r) => {
@@ -203,9 +224,10 @@ export class AudioEngine {
         processorOptions,
       });
       const engine = new AudioEngine(ctx, node, ringSab, telemetrySab, metersSab, visSab, latencyHint);
+      // The processor's constructor posts 'ready' (worklet.ts): it runs while suspended too.
       await engine.ready;
       node.connect(ctx.destination);
-      await resumed;
+      if (opts.untilRunning) await resumed;
       return engine;
     } catch (e) {
       void ctx.close();
@@ -296,11 +318,28 @@ export class AudioEngine {
     });
   }
 
+  /** The AudioContext's state: 'suspended' until the browser lets audio start. */
+  get state(): AudioContextState {
+    return this.ctx.state;
+  }
+
   /**
-   * Resume the AudioContext if the browser suspended it; resolves true once
-   * it runs. Chrome keeps resume() pending until a user gesture allows it,
-   * so this waits at most `timeoutMs`. Called on every click / key press
-   * (App) and by a project load before it blanks the session.
+   * Ask the context to run; cheap when it already does (or is closed).
+   * Called on every click / key press and before anything plays (App, the
+   * sample preview). Chrome keeps the request pending until the page has
+   * had a user gesture, so never await it where nothing may block; it
+   * rejects if the browser refuses (no output device).
+   */
+  resume(): Promise<void> {
+    const c = this.ctx;
+    if (c.state === 'running' || c.state === 'closed' || this.closed) return Promise.resolve();
+    return c.resume();
+  }
+
+  /**
+   * resume(), waiting at most `timeoutMs`; resolves true once the context
+   * runs. A project load checks it before it blanks the session (a
+   * suspended context never answers RESET_ALL).
    */
   async ensureRunning(timeoutMs = 1000): Promise<boolean> {
     const c = this.ctx;
@@ -308,7 +347,7 @@ export class AudioEngine {
     if (c.state === 'closed' || this.failMsg !== null) return false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      c.resume().catch(() => {}),
+      this.resume().catch(() => {}),
       new Promise<void>((r) => (timer = setTimeout(r, timeoutMs))),
     ]);
     clearTimeout(timer);

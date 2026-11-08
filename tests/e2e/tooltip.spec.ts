@@ -1,11 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
+import { startApp } from './startApp';
 
 // Custom tooltips (plan 21 Task 1, docs/architecture/ui-theme.md "Tooltips").
 // Fixture buttons are injected so the test needs no audio and no layout.
+// The app renders at load (no start splash), so the fixture hides it once it
+// is up: no titled app control under the pointer when a fixture goes away.
 
 async function fixture(page: Page) {
   await page.goto('/');
+  await startApp(page);
   await page.evaluate(() => {
+    document.querySelector<HTMLElement>('.app')!.style.visibility = 'hidden';
     const box = document.createElement('div');
     box.id = 'tipbox';
     box.style.cssText = 'position:fixed;left:300px;top:300px;z-index:900;display:flex;gap:20px';
@@ -83,7 +88,7 @@ test('removing the element during the delay shows no tip', async ({ page }) => {
 
 test('the top-bar hint line still reads a hovered (claimed) title', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   const hint = page.getByTestId('hint-line');
   await page.getByTestId('loop-toggle').hover();
   await expect(hint).toHaveText('Loop the loop range while playing the song');

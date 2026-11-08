@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import mixerCatalog from '../../engine/mixer_catalog.json' with { type: 'json' };
 import { addTrack, closeAddTrack, openAddTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Automation lanes on the timeline (plan 10 Task 3): the A toggle opens a
 // track's lanes under its clip row, "+ Lane" picks a target, clicks add
@@ -16,7 +17,7 @@ type Any = any;
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await expect(page.getByTestId('tl-lane-0')).toBeVisible();
 }

@@ -30,8 +30,10 @@ npm install
 npm run dev        # builds the engine, serves http://localhost:5174
 ```
 
-Open http://localhost:5174 and click **Click to start audio** (browsers only
-start audio from a click). The screen has four parts:
+Open http://localhost:5174. The app opens at once; browsers only start audio
+after a click or key press, so until then the top bar's pill reads "Audio
+paused — click anywhere to start" (your first click also does what it was
+aimed at). The screen has four parts:
 
 - the **top bar**: the Project menu (the project name, "Untitled" at first),
   undo/redo, transport, recording, tempo and status;

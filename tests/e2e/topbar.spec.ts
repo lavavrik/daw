@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { closeMenu, openMenu } from './topbar';
+import { startApp } from './startApp';
 
 // The FL-style top bar (plan 20 Task 5; spec §4 "Top bar"; TopBar.svelte,
 // BigTimer.svelte). layout.spec.ts measures it at more widths; this file
@@ -11,7 +12,7 @@ type Any = any;
 async function start(page: Page, height = 800) {
   await page.setViewportSize({ width: 1280, height });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('play')).toBeVisible();
 }
 

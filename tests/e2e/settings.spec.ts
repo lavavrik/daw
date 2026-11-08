@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { startApp } from './startApp';
 
 // Audio settings (plan 7 Task 3): Apply re-creates the AudioContext and the
 // engine and replays the project held in memory onto it -- no reload, no
@@ -25,8 +26,7 @@ type Daw = {
 type W = Window & { __daw: Daw; __oldEngine?: Daw['engine'] };
 
 async function startAudio(page: Page) {
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 async function dropFile(page: Page, testid: string, name: string, bytes: number[]) {

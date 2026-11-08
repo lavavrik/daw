@@ -73,7 +73,13 @@
   // (wheel steps it); then MIDI (opens MidiPopover), CPU + dropouts, and the
   // ⚙ latency pill, which opens Settings (ui/Settings.svelte: latency hint,
   // sample rate / base / output / total latency, the Bluetooth hint, Apply =
-  // engine restart via App). The latency turns orange above 40 ms. Telemetry
+  // engine restart via App). The latency turns orange above 40 ms. Until
+  // the browser lets audio start (no start splash: spec 2026-11-15 §10) that
+  // slot (`audio-status`, data-state = audio/audioStatus.ts kind) holds the
+  // "Audio paused — click anywhere to start" pill instead, or "Audio failed —
+  // retry" (AudioStatusPill.svelte). The CPU pill (0 % while nothing
+  // renders) steps aside for the longer text, and below 1400 px the MIDI
+  // pill too, so the bar keeps one row at 1280 px. Telemetry
   // refreshes at 4 Hz. If the engine dies after start, a red "Audio engine
   // stopped — reload" alert appears before the pills.
   //
@@ -97,6 +103,8 @@
   import { BT_LATENCY_MS } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
   import Settings from './Settings.svelte';
+  import AudioStatusPill from './AudioStatusPill.svelte';
+  import type { AudioStatus } from '../audio/audioStatus';
   import Spectrum from './vis/Spectrum.svelte';
   import NumberField from './NumberField.svelte';
   import BigTimer from './BigTimer.svelte';
@@ -154,6 +162,8 @@
     restarting = false,
     onApplyAudio = async () => null,
     onTab,
+    audio = { kind: 'running' },
+    onAudioResume = () => {},
   }: {
     p: Project;
     engine: AudioEngine;
@@ -187,6 +197,10 @@
     onApplyAudio?: (hint: LatencyHint) => Promise<string | null>;
     /** View ▸ an editor tab (App: BottomPanel.pickTab). */
     onTab?: (t: PanelTab) => void;
+    /** Is audio running yet (App: the engine's context state)? */
+    audio?: AudioStatus;
+    /** The audio pill's click: resume, or retry after a failure (App). */
+    onAudioResume?: () => void;
   } = $props();
 
   /** The Settings panel mounts while open (its readout polls only then). */
@@ -211,7 +225,8 @@
   /** Options ▸ Audio settings…: open the ⚙ panel and focus its first control. */
   let settingsEl = $state<HTMLDetailsElement | null>(null);
   async function openSettings() {
-    if (!settingsEl) return;
+    // Paused: the ⚙ pill is the audio pill until audio runs (that click already resumed it).
+    if (!settingsEl) return onAudioResume();
     settingsEl.open = true;
     await tick();
     settingsEl.querySelector<HTMLElement>('.panel select, .panel button, .panel input')?.focus();
@@ -386,7 +401,7 @@
           onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
       </span>
     </div>
-    <div class="row small">
+    <div class="row small" class:audio-off={audio.kind !== 'running'}>
       <span class="midiwrap">
         <button class="pill midi" data-testid="midi-status" class:ok={midi.state === 'connected'} class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
           aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => { midiReturn = null; midiOpen = !midiOpen; }}
@@ -395,24 +410,32 @@
           <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} returnFocus={midiReturn} onclose={() => (midiOpen = false)} />
         {/if}
       </span>
-      <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-        <span class="cpuw">CPU{' '}</span>{cpu}%<span class="long">{' '}· {dropouts}<span class="dropw">{' '}drop</span></span>
+      {#if audio.kind === 'running'}
+        <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
+          <span class="cpuw">CPU{' '}</span>{cpu}%<span class="long">{' '}· {dropouts}<span class="dropw">{' '}drop</span></span>
+        </span>
+      {/if}
+      <span class="audio" data-testid="audio-status" data-state={audio.kind}>
+        {#if audio.kind === 'running'}
+          <details class="pop settings" bind:this={settingsEl} ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
+            <summary
+              class="pill" data-testid="settings-button" aria-label="Audio settings" class:warn={latencyMs > BT_LATENCY_MS}
+              title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
+            >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
+            <div class="panel">
+              {#if settingsOpen}
+                <Settings
+                  {engine} hint={latencyHint} busy={restarting || p.loading}
+                  blocked={banners.exporting ? 'Wait for the export to finish' : null}
+                  onApply={onApplyAudio}
+                />
+              {/if}
+            </div>
+          </details>
+        {:else}
+          <AudioStatusPill status={audio} onresume={onAudioResume} />
+        {/if}
       </span>
-      <details class="pop settings" bind:this={settingsEl} ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
-        <summary
-          class="pill" data-testid="settings-button" aria-label="Audio settings" class:warn={latencyMs > BT_LATENCY_MS}
-          title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
-        >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
-        <div class="panel">
-          {#if settingsOpen}
-            <Settings
-              {engine} hint={latencyHint} busy={restarting || p.loading}
-              blocked={banners.exporting ? 'Wait for the export to finish' : null}
-              onApply={onApplyAudio}
-            />
-          {/if}
-        </div>
-      </details>
     </div>
   </div>
 </header>
@@ -516,6 +539,7 @@
   /* Bigger hit area without changing the layout width. */
   button.oct::before { content: ''; position: absolute; inset: -6px -2px; }
   .midiwrap { position: relative; display: inline-flex; }
+  .audio { display: inline-flex; --pill-h: 22px; }
   .pop { position: relative; }
   /* Block-level flex: no line box (and its strut) around the summary. */
   .pop summary.pill { display: flex; }
@@ -530,6 +554,8 @@
     .pill.midi { max-width: 88px; }
     /* With dropouts the red pill drops its "CPU " and "drop" words: "1% · 123" (tooltip unchanged). */
     .pill.bad .cpuw, .pill.bad .dropw { display: none; }
+    /* Room for the "Audio paused" pill; the first click brings MIDI back (it starts audio). */
+    .audio-off .midiwrap { display: none; }
   }
   /* Short windows (< 740 px tall): a 40 px bar, so the piano roll keeps
      C2..C5 at 9 px rows at 1280×720 (pianoroll.spec.ts): 36 px transport
@@ -554,6 +580,7 @@
     .io { gap: 2px; }
     .pill { height: 17px; font-size: 11px; }
     .small .pill { height: 17px; }
+    .audio { --pill-h: 17px; }
     .pill.keys { line-height: 17px; }
     /* Hit areas of at least 24 px around the short pills (their look stays 17 px). */
     button.pill, summary.pill { position: relative; }

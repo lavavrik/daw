@@ -1,13 +1,14 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Pattern picker, the song and pattern transports (plan 20; the PAT/SONG
 // toggle until then) and song-aware playheads (plan 4, Task 4).
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('pattern-picker')).toBeVisible(); // default drum track is selected
 }
 

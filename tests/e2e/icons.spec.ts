@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Plan 21 Task 8: the icon pass must leave no button without an accessible
 // name (icon-only buttons carry aria-label / title), and the mixer's spectrum
@@ -8,8 +9,7 @@ import { addTrack } from './addTrack';
 async function start(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** Visible buttons whose name (aria-label, text or title) is empty. */

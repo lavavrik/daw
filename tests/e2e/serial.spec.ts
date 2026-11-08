@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Timing-sensitive e2e tests. The "serial" Playwright project runs this file
 // alone, after all parallel tests are done (playwright.config.ts), so CPU
@@ -28,8 +29,7 @@ type DawWindow = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 function slot(page: Page, i: number) {

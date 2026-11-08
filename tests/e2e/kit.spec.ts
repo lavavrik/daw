@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { openMenu } from './topbar';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // The built-in starter kit (plan 8 Task 4): a fresh session — first start
 // and Project ▸ New — starts with the default drum track filled from the
@@ -25,8 +26,7 @@ const FILES = ['kick-punch.wav', 'clap.wav', 'hat-closed.wav', 'hat-open.wav', '
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** The default drum track holds the eight kit rows, each with its kit sample (original bytes kept). */

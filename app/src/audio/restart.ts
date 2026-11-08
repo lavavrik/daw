@@ -91,7 +91,7 @@ const defaultStore = (): StoreLike | null => {
   }
 };
 
-/** The hint the next start uses (StartOverlay). Never throws. */
+/** The hint the next start uses (App builds the engine with it at page load). Never throws. */
 export function loadLatencyHint(store: StoreLike | null = defaultStore()): LatencyHint {
   try {
     return parseLatencyHint(store?.getItem(LATENCY_HINT_KEY) ?? null);

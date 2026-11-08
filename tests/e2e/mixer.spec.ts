@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Mixer view (plan 5, Task 4), driven through the UI. Meter values are read
 // from the strip meters' data-peak-db (what the user sees, updated by the
@@ -14,8 +15,7 @@ type DawWindow = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** Dispatch a file drop onto the element with `testid` (see smoke.spec.ts). */

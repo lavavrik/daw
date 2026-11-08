@@ -1,6 +1,7 @@
 <script lang="ts">
   import { flushSync, onDestroy, onMount, untrack } from 'svelte';
-  import StartOverlay from './ui/StartOverlay.svelte';
+  import AudioStatusPill from './ui/AudioStatusPill.svelte';
+  import { audioStatus } from './audio/audioStatus';
   import { addClip, playPattern, playSong, seek, setMode, stopTransport, transportPlaying } from './state/song-actions';
   import type { TransportHooks } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
@@ -12,7 +13,7 @@
   import { PPQ, createAudioClock } from './audio/audioClock';
   import type { AudioClock } from './audio/audioClock';
   import { AudioEngine } from './audio/engine';
-  import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
+  import { hintLabel, loadLatencyHint, restartAudio, saveLatencyHint } from './audio/restart';
   import type { LatencyHint } from './audio/restart';
   import { Project } from './state/project.svelte';
   import { noPatternReason } from './ui/patternReadout';
@@ -171,12 +172,12 @@
   let restoring = false;
   /**
    * The autosave owner lock (only its holder autosaves, offers a restore or
-   * deletes the autosave). Claimed at mount, before the start overlay is
-   * clicked (Web Locks need no audio), so `ownerClaim.owns` is settled
+   * deletes the autosave). Claimed at mount, while the engine is still being
+   * built (Web Locks need no audio), so `ownerClaim.owns` is settled
    * before any New can run; a tab that is not the owner says so at once.
    */
   let ownerClaim: OwnerClaim | null = null;
-  /** Shown for as long as this tab is not the owner (on the start overlay too). */
+  /** Shown for as long as this tab is not the owner (a banner, from mount on). */
   const AUTOSAVE_OFF = 'Autosave is off — this project is open in another tab';
   let autosaveOff = $state(false);
   onMount(() => {
@@ -190,7 +191,7 @@
     });
   });
 
-  /** After audio started (a restore needs the engine): offer the autosave if it is newer than the last save. */
+  /** Once the engine exists (a restore needs it): offer the autosave if it is newer than the last save. */
   async function checkAutosave() {
     const gen = project.generation; // the session audio started with (before any await)
     if (!ownerClaim || !(await ownerClaim.settled)) return;
@@ -282,7 +283,7 @@
    * forwarding view, never an AudioEngine, so an audio restart (Settings ▸
    * Apply, audio/restart.ts), which replaces the engine, needs no re-wiring
    * for them. Components get `engine` as a (reactive) prop instead. Only
-   * used once audio has started.
+   * used once the engine exists.
    */
   const live: SessionEngine = {
     get sampleRate() {
@@ -353,7 +354,7 @@
 
   // Exposed unconditionally (personal local app): e2e tests and the console use it.
   window.__daw = { engine: null, Op, clock: null, recorder: null, project, vis: createVisHooks({ engine: () => engine, loop: frameLoop(), bus: analyserBus() }), actions: {
-    // Real song actions for e2e (no-ops before audio starts).
+    // Real song actions for e2e (no-ops before the engine exists).
     addClip: (trackId, o) => (engine ? addClip(project, engine, trackId, o) : null),
     // Song position (as a ruler click does), e.g. a mid-clip seek timed in the audio clips e2e.
     seek: (ticks: number) => engine && seek(project, engine, ticks),
@@ -409,6 +410,7 @@
   }
   function startTransport(mode: 'pattern' | 'song') {
     if (!engine || !recorder || !clock || project.loading) return;
+    wakeAudio(); // PLAY queues in the ring and sounds once the context runs
     const start = mode === 'song' ? playSong : playPattern;
     // A failed (or closed) engine refuses PLAY: stay stopped, no recording pass.
     if (start(project, engine, transportHooks(recorder, clock))) recorder.onTransport(true, clock.heardTicks());
@@ -553,6 +555,13 @@
   function wireEngine(e: AudioEngine, codes?: Map<number, number>) {
     engine = e;
     window.__daw.engine = e;
+    // The audio pill follows this engine's context ('suspended' until the
+    // first gesture lets it run).
+    ctxState = e.state;
+    e.onStateChange = (st) => {
+      ctxState = st;
+      if (st === 'running') audioError = null; // a retry (or the next gesture) worked
+    };
     // The one frame loop for every visual serves this engine's visSab.
     frameLoop().attach(e);
     // The analysers follow its sample rate (the loop re-sends their strip tap).
@@ -587,6 +596,7 @@
 
   /** Detach the per-engine loops from an engine about to close (audio restart). */
   function unwireEngine() {
+    if (engine) engine.onStateChange = undefined; // its context closes next: not the pill's business
     frameLoop().attach(null);
     analyserBus().attach(null);
     stopWatch?.();
@@ -616,6 +626,7 @@
     // (the Sample Player's "Root ← last note"; the Acid tab's step entry
     // watches the count).
     const input = createNoteInput(live, r, (note) => {
+      wakeAudio(); // a MIDI note is no gesture: it may still be paused
       lastLive.note = note;
       lastLive.seq++;
       visWake().wake();
@@ -707,6 +718,57 @@
     if (kitTrack) void loadDefaultKit(project, live, kitTrack.id, kitDeps);
   }
 
+  // ---- start-up (no splash) ----------------------------------------------
+  // The engine is built at page load, before any gesture: the AudioContext
+  // starts 'suspended' and the UI renders as soon as the engine object exists
+  // (a few hundred ms; until then nothing renders, so no control can act on
+  // a missing engine). The audio pill (TopBar, audio/audioStatus.ts) says
+  // "Audio paused — click anywhere to start" until the context runs.
+  /** The current engine's AudioContext state (its statechange events). */
+  let ctxState = $state<AudioContextState | null>(null);
+  /** Why building the engine, or resuming its context, failed (the pill's tooltip). */
+  let audioError = $state<string | null>(null);
+  const audio = $derived(audioStatus({ engine: !!engine, state: ctxState, error: audioError }));
+  let building = false;
+  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+  /** Build the engine and run the normal start-up on it (onstarted). Also the failed pill's retry. */
+  async function startEngine() {
+    if (building || engine) return;
+    building = true;
+    audioError = null;
+    try {
+      onstarted(await AudioEngine.start({ latencyHint: loadLatencyHint() }));
+    } catch (e) {
+      console.error('Audio could not start', e);
+      audioError = errText(e);
+    } finally {
+      building = false;
+    }
+  }
+  onMount(() => void startEngine());
+
+  /**
+   * Ask the context to run: every gesture (below) and every path that plays
+   * (Play, notes, the sample preview) call it. Not awaited: without a
+   * gesture yet Chrome keeps it pending. A refusal (no output device) turns
+   * the pill into "Audio failed — retry".
+   */
+  function wakeAudio() {
+    const e = engine;
+    if (!e || e.state === 'running') return;
+    e.resume().catch((err: unknown) => {
+      if (engine === e) audioError = errText(err);
+    });
+  }
+
+  /** The pill's click: retry a failed start, else resume. */
+  function resumeAudio() {
+    if (!engine) return void startEngine();
+    audioError = null;
+    wakeAudio();
+  }
+
   /**
    * Settings ▸ Apply: a new AudioContext + engine with `hint`, the project
    * restored onto it from memory (audio/restart.ts). The old engine keeps
@@ -727,7 +789,7 @@
         restartAudio(project, hint, {
           old,
           oldHint: latencyHint,
-          start: (h) => AudioEngine.start({ latencyHint: h }),
+          start: (h) => AudioEngine.start({ latencyHint: h, untilRunning: true }),
           flush: () => autosave.flush(),
           // Applying stops the transport (plan 7): through the Stop path, so
           // the recorder closes held notes at the heard tick.
@@ -816,13 +878,15 @@
     gestures.afterApply();
   };
 
-  // The browser may suspend the AudioContext (device change, long idle);
-  // resume() needs a user gesture, so every click / key press wakes it. This
-  // is the "click to start audio" a paused project load asks for (load.ts).
+  // Audio starts on the first gesture (no start splash: spec 2026-11-15
+  // §10, docs/architecture/audio-path.md "Start-up"): every pointerdown /
+  // keydown, in the capture phase (nothing can stop it first), asks the
+  // context to resume, and the event still goes on to its target: a first
+  // click on Play both starts audio and plays. Cheap once running; it also
+  // wakes a context the browser suspended later (device change, long idle),
+  // the "click to start audio" a paused project load asks for (load.ts).
   onMount(() => {
-    const wake = () => {
-      if (engine?.context.state === 'suspended') void engine.ensureRunning();
-    };
+    const wake = () => wakeAudio();
     window.addEventListener('pointerdown', wake, true);
     window.addEventListener('keydown', wake, true);
     // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
@@ -851,10 +915,11 @@
   });
 
   // Window-level drop guard. A file dropped where no row handles it (Browser
-  // pane, gaps, headers, a disabled button, the start overlay) would make the
-  // browser navigate to the file and lose the session. Rows/"+ Add row" call
-  // preventDefault themselves; anything still un-prevented when the event
-  // bubbles here is a miss: cancel it and say where to drop instead.
+  // pane, gaps, headers, a disabled button, the page before the engine
+  // exists) would make the browser navigate to the file and lose the
+  // session. Rows/"+ Add row" call preventDefault themselves; anything still
+  // un-prevented when the event bubbles here is a miss: cancel it and say
+  // where to drop instead.
   const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
   onMount(() => {
     const over = (e: DragEvent) => {
@@ -884,11 +949,19 @@
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
         onTab={(t) => bottomPanel?.pickTab(t)}
+        {audio} onAudioResume={resumeAudio}
       />
     {/if}
-    {#if autosaveOff}
-      <div class="autosave-off" data-testid="autosave-off" role="status">{AUTOSAVE_OFF}</div>
-    {/if}
+  {:else if audio.kind === 'failed'}
+    <!-- No engine, so no top bar: a bare bar keeps the pill's retry reachable. -->
+    <header class="bare">
+      <span data-testid="audio-status" data-state={audio.kind}><AudioStatusPill status={audio} onresume={resumeAudio} /></span>
+    </header>
+  {/if}
+  {#if autosaveOff}
+    <div class="autosave-off" data-testid="autosave-off" role="status">{AUTOSAVE_OFF}</div>
+  {/if}
+  {#if engine}
     {#if restoreOffer}
       {@const offer = restoreOffer}
       <div class="restore" data-testid="restore" role="region" aria-label="Restore last session">
@@ -912,9 +985,6 @@
     <AutoMenu p={project} {engine} bus={autoBus} />
   {/if}
 </div>
-{#if !engine}
-  <StartOverlay {onstarted} note={autosaveOff ? AUTOSAVE_OFF : null} />
-{/if}
 <Tooltip />
 {#if project.loading}
   <!-- A New / Open is replacing the session: no clicks, drags or drops reach
@@ -940,6 +1010,7 @@
   /* Banners (plan 20: tokens): the restore offer is an --accent-tinted --panel, the autosave note a quiet --panel line. */
   .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel)); }
   .restore span { flex: 1; }
+  .bare { display: flex; justify-content: flex-end; align-items: center; min-height: 40px; padding: 0 12px; background: var(--top); border-bottom: 1px solid var(--line); }
   .autosave-off { margin: 3px 3px 0; padding: 3px 8px; border-radius: var(--r-sm); background: var(--panel); color: var(--text-2); border: 1px solid var(--line); }
   .restore button { font: inherit; border: 1px solid currentColor; border-radius: var(--r-sm); padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
   .restore .ok { background: var(--accent) var(--gloss); color: var(--on-color); border-color: var(--accent); font-weight: 600; }

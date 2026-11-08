@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
 import { openMenu } from './topbar';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
 // engine.wasm. showSaveFilePicker is replaced (before the app loads) by a
@@ -52,8 +53,7 @@ async function fakeSavePicker(page: Page) {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** Kick on row 0 (four on the floor) and one 1-bar clip of it at 0; the metronome on (the export ignores it). */

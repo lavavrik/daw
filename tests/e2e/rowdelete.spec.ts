@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { startApp } from './startApp';
 
 // Deleting a drum row (plan 21 task 7): the trash button at the end of each
 // step-grid row, faded in on hover / focus but always focusable. One undo
@@ -16,8 +17,7 @@ const KIT = ['Kick', 'Clap', 'Closed hat', 'Open hat', 'Snare', 'Rim', 'Shaker',
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
   // The starter kit lands asynchronously: wait for its samples.
   for (const [i, name] of KIT.entries()) await expect(page.getByTestId(`row-${i}`).getByTestId('row-name')).toHaveText(name);
 }

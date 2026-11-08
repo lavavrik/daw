@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // The Acid tab (plan 17 Task 4): a step view of a synth track's current
 // pattern, stored as ordinary notes (docs/architecture/sequencer.md, "Acid
@@ -10,7 +11,7 @@ type N = { pitch: number; vel: number; start: number; len: number };
 
 async function openAcid(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await page.waitForFunction(() => !!(window as Any).__daw?.midi);
   await addTrack(page, 'synth');
   await page.getByTestId('tab-acid').click();
@@ -106,7 +107,7 @@ test('unshowable shows convert', async ({ page }) => {
 
 test('alt digits follow tab order', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await addTrack(page, 'synth');
   await page.keyboard.press('Alt+3');
   await expect(page.getByTestId('tab-acid')).toHaveClass(/active/);

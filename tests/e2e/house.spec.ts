@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // The menu's contract, in order (app/src/state/patches.ts BUILTIN_GROUPS and
 // housePatches.ts HOUSE_GROUPS; app code is not importable here because of
@@ -29,8 +30,7 @@ type DawWindow = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 async function addSynth(page: Page) {

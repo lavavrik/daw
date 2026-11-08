@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Plan 12 (docs/architecture/visuals.md): the visuals in the running app.
 // The Scope module, the mixer analyser (spectrum, strip toggle), the top-bar
@@ -26,8 +27,7 @@ type Daw = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** A new synth track (Deep Bass), selected, on the Instrument tab. Returns its slot. */

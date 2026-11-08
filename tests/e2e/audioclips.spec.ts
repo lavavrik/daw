@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Audio clips on the timeline (plan 9 Task 5): drops from Finder, the
 // library and the starter kit onto audio lanes, waveform overviews, clip
@@ -28,7 +29,7 @@ type Daw = {
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await expect(page.getByTestId('tl-lane-0')).toBeVisible();
 }

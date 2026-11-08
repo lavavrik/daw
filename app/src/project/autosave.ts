@@ -91,11 +91,11 @@ export interface OwnerClaim {
 }
 
 /**
- * Claim OWNER_LOCK now. App calls it at mount, before the start overlay is
- * clicked: Web Locks need no audio, so whether this tab may delete the
+ * Claim OWNER_LOCK now. App calls it at mount, while the engine is still
+ * being built: Web Locks need no audio, so whether this tab may delete the
  * autosave (Project ▸ New, Start fresh) is settled before any New can run.
- * The restore check (peek) still waits for audio, since a restore needs the
- * engine; it awaits `settled` first. `onNotOwner` runs once if another tab
+ * The restore check (peek) still waits for the engine, since a restore
+ * needs it; it awaits `settled` first. `onNotOwner` runs once if another tab
  * owns the autosave (App: disable this tab's autosave and show its hint).
  */
 export function createOwnerClaim(

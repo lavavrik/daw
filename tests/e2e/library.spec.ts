@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { startApp } from './startApp';
 
 // The Browser pane's library (plan 6 Task 5). An OPFS folder stands in for
 // the user's library folder: __daw.library.attach(handle) runs the same code
@@ -21,8 +22,7 @@ type Daw = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 type Entry = { path: string; bytes?: number[]; text?: string };

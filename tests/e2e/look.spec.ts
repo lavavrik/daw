@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { startApp } from './startApp';
 
 // The look check (plan 20 Task 11; spec §5). Captures the four main views at
 // 1440×900 into test-results/look-*.png for a human to compare with the
@@ -27,7 +28,7 @@ const BEAT = 960;
 /** Start audio and build a small song: a drum beat, a bass line, both placed on the playlist. */
 async function setup(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('step-0-0')).toBeVisible();
   await page.evaluate(
     ({ BAR, BEAT }) => {

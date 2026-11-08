@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { closeAddTrack, openAddTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // "+ Sampler track" (plan 15 Task 4): a sample dropped on the add button
 // makes a synth track on the Sampler patch named after the file, with the
@@ -24,7 +25,7 @@ const daw = (page: Page) => page.evaluate(() => {
 test('a sample dropped on + Add track makes a playable sampler track', async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await page.waitForFunction(() => !!(window as unknown as { __daw?: { midi?: unknown } }).__daw?.midi);
   await expect(page.getByTestId('add-track')).toHaveAttribute('title', /Drop a sample here for a Sampler track/);
@@ -77,7 +78,7 @@ test('a sample dropped on + Add track makes a playable sampler track', async ({ 
 test('the Sample Player strip shows the sample and its handles edit start / end / root', async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await page.waitForFunction(() => !!(window as unknown as { __daw?: { midi?: unknown } }).__daw?.midi);
 

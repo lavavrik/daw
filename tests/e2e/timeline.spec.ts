@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack, closeAddTrack, openAddTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Song timeline (plan 4, Task 5): placing / editing clips through the UI,
 // loop range and seek on the ruler, and what the engine plays in Song mode.
@@ -11,7 +12,7 @@ const BEAT = 960;
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await expect(page.getByTestId('tl-lane-0')).toBeVisible();
 }

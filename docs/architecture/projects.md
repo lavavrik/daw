@@ -287,7 +287,8 @@ notice banner after the load (all of them in the console):
    suspended AudioContext would never ack the reset, so if it cannot be
    resumed the load fails here — "Audio is paused — click to start audio,
    then open again" — with the session untouched (App resumes the context on
-   any click or key press).
+   any click or key press; there is no start splash, see audio-path.md
+   "Start-up", so the click on Open / Restore itself has usually resumed it).
 3. `beforeLoad` (App: stop via the recorder's path, release keys), `STOP`,
    blank the UI state, `RESET_ALL`; **await the worklet's `reset-done`**
    (audio-path.md): uploads must not overtake the reset. Any failure from
@@ -438,14 +439,13 @@ synchronously at the start of a write, so no edit can interleave with it.
   one tab's sweep can never remove a sample another tab's write is about to
   list;
 - only the tab holding `daw-autosave-owner` (requested with `ifAvailable`
-  at App mount — `createOwnerClaim`, before the start overlay is clicked:
+  at App mount — `createOwnerClaim`, while the engine is still being built:
   Web Locks need no audio — and kept for the tab's lifetime) autosaves,
   offers a restore or deletes the autosave. Its outcome is therefore
   settled before any New can run, so a New clicked right after start still
   deletes the discarded session's autosave. Any other tab shows the line
   "Autosave is off — this project is open in another tab" from mount on
-  (on the start overlay, then above the editors, for as long as it is not
-  the owner) and
+  (a banner under the top bar, for as long as it is not the owner) and
   never writes, so it cannot offer (or "Start fresh" away) the first tab's
   live session. Without Web Locks a tab assumes it is alone.
 

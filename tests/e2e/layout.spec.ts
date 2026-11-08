@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // The top bar degrades gracefully on narrow windows (plan 7 Task 5): nothing
 // is clipped off the right edge; less important readouts get shorter first,
@@ -15,7 +16,7 @@ for (const width of [1440, 1280, 1024]) {
   test(`top bar fits at ${width} px: no control is clipped`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await startApp(page);
     await expect(page.getByTestId('play')).toBeVisible();
     // No tracks: Keys shows "(no track)" (synth or drum: a selected drum
     // track takes the keys since plan 15); plus an unsaved project (the
@@ -61,7 +62,7 @@ for (const width of [1440, 1400, 1280]) {
   test(`top bar fits at ${width} px with 123 dropouts, unsaved and playing`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await startApp(page);
     await expect(page.getByTestId('play')).toBeVisible();
     await page.getByTestId('play').click();
     await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
@@ -103,7 +104,7 @@ for (const width of [1280, 1024]) {
   test(`bottom panel header fits at ${width} px: every tab reachable, no horizontal scroll`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
     await page.goto('/');
-    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await startApp(page);
     await addTrack(page, 'synth'); // the longer title ("Deep Bass · Pattern 1")
     await expect(page.getByTestId('pattern-play')).toBeEnabled();
     const out = await page.evaluate(() => {

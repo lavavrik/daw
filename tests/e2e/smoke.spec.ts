@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { openMenu } from './topbar';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Minimal shape of what App.svelte exposes on window for tests.
 type DawWindow = {
@@ -23,8 +24,7 @@ type DawWindow = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** Reads telemetry slot `i` from the live engine (NaN until started). */
@@ -908,7 +908,7 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   await expect(rec).toHaveAttribute('data-state', 'recording', { timeout: 5_000 });
   await page.keyboard.press('Space');
   await page.reload();
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('count-in')).toHaveAttribute('aria-pressed', 'true');
   // Not armed: Play has no count-in.
   await page.getByTestId('pattern-play').click();
@@ -1050,7 +1050,7 @@ test('octave buttons: step, remembered across reload, Z steps, Space still plays
   await page.getByTestId('octave-up').click();
   await expect(pill).toHaveText('Oct 5');
   await page.reload();
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(pill).toHaveText('Oct 5'); // remembered (localStorage daw.octave)
   await page.keyboard.press('KeyZ');
   await expect(pill).toHaveText('Oct 4'); // Z steps from the stored value

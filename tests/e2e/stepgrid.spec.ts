@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { startApp } from './startApp';
 
 // Step grid look (plan 20 Task 8, spec §4): velocity fill, accent ring, row
 // colours. The rules themselves are unit-tested in app/src/ui/stepGrid.test.ts;
@@ -6,7 +7,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('step-0-0')).toBeVisible(); // default drum track is selected
 }
 

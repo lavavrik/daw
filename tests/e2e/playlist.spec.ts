@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // The playlist look (plan 20 Task 7): the track header's volume slider is the
 // track's mixer fader (same value, same action, one undo entry per drag), and
@@ -10,8 +11,7 @@ const undoKey = 'ControlOrMeta+z';
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 /** The drum track's (slot 0) fader as its mixer strip shows it (dB). */

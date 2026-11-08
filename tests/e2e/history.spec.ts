@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Undo/redo (plan 7 Task 1): every edit is an undo step, restored by a
 // minimal diff while the transport keeps playing. Sound is read from the
@@ -20,8 +21,7 @@ type Daw = {
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 async function dropFile(page: Page, testid: string, name: string, bytes: number[]) {

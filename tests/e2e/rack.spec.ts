@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // Plan 13 Task 2: the Instrument rack wraps into rows (like VCV Rack) instead
 // of one long horizontal rail, and the cables follow the jacks after a wrap and
@@ -7,8 +8,7 @@ import { addTrack } from './addTrack';
 
 async function loadSax(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
   await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await page.getByTestId('patch-select').selectOption('Sax');
@@ -84,8 +84,7 @@ type RackDaw = {
 async function loadBrass(page: Page) {
   await page.setViewportSize({ width: 1000, height: 900 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
   await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await page.getByTestId('patch-select').selectOption('Brass Stab');
@@ -443,8 +442,7 @@ test('dragging near the rail edge scrolls it', async ({ page }) => {
 async function loadDeepBass(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
   await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('knob-4-reso')).toBeVisible();

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { startApp } from './startApp';
 
 // MIDI learn (plan 14 Task 3; docs/architecture/midi.md "UI"): right-click a
 // knob or fader ▸ "MIDI learn", the next CC binds to it, later CCs move it
@@ -24,7 +25,7 @@ const LEARN_HINT = 'Move a knob on your MIDI controller (Esc cancels)';
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   // The injection hook exists once audio runs.
   await page.waitForFunction(() => !!(window as Any).__daw?.midi);

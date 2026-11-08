@@ -29,13 +29,58 @@ it glitch-free. Code: `app/src/audio/{engine,sendQueue,worklet,ring,protocol}.ts
  AudioEngine.onError(msg) ◄── {type:'engine-error', message}       (once, fatal)
 ```
 
-`AudioEngine.start()` (from the "Click to start audio" gesture) creates the
-`AudioContext`, fetches `/engine.wasm`, loads the worklet module, and passes the
+`AudioEngine.start()` (at page load, no gesture needed: see "Start-up" below)
+creates the `AudioContext`, fetches `/engine.wasm`, loads the worklet module, and passes the
 wasm bytes plus the SABs (command ring, telemetry, meters, visuals) as
 `processorOptions`. The worklet compiles and
 instantiates the module synchronously in its constructor (0 imports) and posts
 `ready`. Cross-origin isolation (COOP/COEP headers in `vite.config.ts`) is what
 makes `SharedArrayBuffer` available at all.
+
+## Start-up: no splash (spec 2026-11-15 §10)
+
+Browsers let audio play only after the user interacts with the page. That
+rule can't be bypassed, but it needs no "Click to start audio" screen:
+
+- **The engine is built at page load** (`App.svelte` `startEngine`, on
+  mount). Creating an `AudioContext` and loading the worklet are allowed
+  before any gesture; the context starts `suspended`. The processor's
+  constructor (WASM compile, `engine_new`, `ready`) runs while suspended, so
+  `start()` resolves in a few hundred ms. It asks `ctx.resume()` without
+  waiting (allowed at once after an earlier gesture on the page, e.g. an
+  audio restart); `start({ untilRunning: true })` waits for it (the restart,
+  which replays into the new engine).
+- **The UI renders when the engine object exists**, and the normal start-up
+  runs on it (`onstarted`: the default kit, recorder, history, project
+  session, shortcuts, MIDI, the restore offer). Every component takes a
+  live `engine`, so nothing renders before it (no veil, no disabled
+  placeholders: a few hundred ms of empty page). Commands sent meanwhile
+  queue in the ring; sample uploads wait in the worklet's pending queue
+  until the first rendered block.
+- **The first gesture resumes.** One capture-phase `pointerdown` / `keydown`
+  listener on `window` calls `wakeAudio()` → `engine.resume()` on every
+  gesture (cheap once running; it also wakes a context the browser suspended
+  later). The event still reaches its target: a first click on Play both
+  starts audio and plays (PLAY waits in the ring until the context runs).
+  Every path that plays (song / pattern Play, QWERTY and MIDI notes, the
+  sample preview) also calls `resume()` first; a MIDI note is no gesture, so
+  it only helps after one.
+- **The audio pill** (`ui/AudioStatusPill.svelte`, state in
+  `audio/audioStatus.ts`; `data-testid="audio-status"` with `data-state`)
+  sits in the ⚙ latency slot: "Audio paused — click anywhere to start"
+  (`--accent`) while the context is suspended, the ⚙ latency once it runs
+  (`AudioEngine.onStateChange` follows `statechange`), and "Audio failed —
+  retry" (`--rec`, the error in its tooltip) if `start()` threw or
+  `resume()` was refused. Its click resumes, or retries the start. With no
+  engine at all (start failed) App shows it alone in a bare bar. The CPU
+  pill steps aside while it shows, so the bar keeps one row.
+- **Banners:** the start screen's other note, "Autosave is off — this
+  project is open in another tab" (`autosave-off`), is a banner from mount on.
+- **Tests:** Playwright launches Chrome with
+  `--autoplay-policy=no-user-gesture-required`, so the context runs at once;
+  `tests/e2e/startApp.ts` waits for the engine and the top bar instead of
+  clicking anything. `tests/e2e/audiostart.spec.ts` runs without the flag to
+  check the paused pill and the first-click start.
 
 ## Real-time rules (and why)
 
@@ -194,7 +239,7 @@ readout of the sample rate, `baseLatency`, `outputLatency` and their total, and
 the Bluetooth hint (no buffer setting removes the 100–300 ms a wireless output
 adds; it turns orange above 40 ms, as does the ⚙ readout). The hint is saved in
 `localStorage` (`daw.latencyHint`) and used by the next start
-(`StartOverlay` -> `AudioEngine.start({ latencyHint })`).
+(App's page-load `AudioEngine.start({ latencyHint })`).
 
 A context's latency hint is fixed when it is created, so **Apply** builds a new
 `AudioContext`, worklet and engine and puts the project back onto it from

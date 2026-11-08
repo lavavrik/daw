@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ADD_ID, addTrack, openAddTrack, type AddKind } from './addTrack';
+import { startApp } from './startApp';
 
 // Timeline readability (plan 21 Task 5, spec round 2 §6 and §8): the ruler's
 // BAR and TIME rows and their labels in the corner cell, the hover readout,
@@ -10,7 +11,7 @@ const BAR = 3840;
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('timeline')).toBeVisible();
   await expect(page.getByTestId('tl-lane-0')).toBeVisible();
 }

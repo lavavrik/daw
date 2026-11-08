@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { withAppendedParams } from '../../app/src/project/testdata/appendedParams';
 import { makeWav } from './wav';
 import { closeMenu, openMenu } from './topbar';
+import { startApp } from './startApp';
 
 // Project save/load through OPFS (an origin-private folder: no picker). The
 // app's debug hooks __daw.saveTo(handle) / __daw.openFrom(handle) run the
@@ -27,8 +28,7 @@ const daw = () => (window as unknown as { __daw: Daw }).__daw;
 
 async function startAudio(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(page);
 }
 
 async function dropFiles(page: Page, testid: string, files: { name: string; bytes: number[] }[]) {
@@ -374,24 +374,36 @@ test('New right after start deletes the autosave', async ({ page }) => {
       return a.lastSaved;
     }), { timeout: 15_000 })
     .not.toBeNull();
-  // Reload; click start and New at once: New runs in the very task that
-  // wired the engine (before any start-up check after audio could finish).
-  await page.goto('/');
-  await page.evaluate(() => {
-    const w = window as unknown as { __daw: Daw & { engine: unknown } };
-    const d = w.__daw;
-    let e: unknown = null;
-    Object.defineProperty(d, 'engine', {
+  // Reload; New the moment the engine is wired: New runs in the very task
+  // that wired the engine (before any start-up check after audio could
+  // finish). The engine is built at page load now (no start splash), so the
+  // hook goes in before the app runs: an init script catches the App's
+  // window.__daw assignment and its engine setter. One-shot (sessionStorage):
+  // the reload below must start normally.
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('e2e.newOnWire')) return;
+    sessionStorage.setItem('e2e.newOnWire', '1');
+    let d: (Daw & { engine: unknown }) | undefined;
+    Object.defineProperty(window, '__daw', {
       configurable: true,
-      get: () => e,
-      set: (v) => {
-        e = v;
-        if (v) queueMicrotask(() => void d.newProject());
+      get: () => d,
+      set: (v: Daw & { engine: unknown }) => {
+        d = v;
+        let e: unknown = v.engine;
+        Object.defineProperty(v, 'engine', {
+          configurable: true,
+          enumerable: true,
+          get: () => e,
+          set: (x) => {
+            e = x;
+            if (x) queueMicrotask(() => void v.newProject());
+          },
+        });
       },
     });
-    document.querySelector<HTMLButtonElement>('button.overlay')!.click();
   });
-  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await page.goto('/');
+  await startApp(page);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length)).toBe(1);
   await page.waitForTimeout(500);
   await expect(page.getByTestId('restore')).toBeHidden(); // no offer of the session New discarded
@@ -422,8 +434,7 @@ test('a second tab neither autosaves nor offers the first tab\'s session', async
   await second.goto('/');
   await expect(second.getByTestId('autosave-off')).toContainText('Autosave is off — this project is open in another tab');
   await second.waitForTimeout(300);
-  await second.getByRole('button', { name: 'Click to start audio' }).click();
-  await expect(second.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await startApp(second);
   await expect(second.getByTestId('autosave-off')).toContainText('Autosave is off — this project is open in another tab');
   await second.waitForTimeout(300);
   await expect(second.getByTestId('restore')).toBeHidden();

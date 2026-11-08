@@ -43,6 +43,10 @@ function pv(): Preview {
 export async function togglePreview(key: string, label: string, load: () => Promise<Blob>): Promise<void> {
   if (previewState.key === key) return stopPreview();
   pendingLabel = label;
+  // The preview plays on the engine's context: ask it to run (a no-op once it
+  // does; still paused before the page's first gesture). Not awaited: Chrome
+  // keeps the request pending until a gesture allows it.
+  boundTo?.resume().catch(() => {});
   await pv().play(key, load);
 }
 

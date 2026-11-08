@@ -237,3 +237,62 @@ test('wide rack scrolls', async ({ page }) => {
   // The moved VCA is on screen now: its cables' ends are among those checked above.
   await expect(page.getByTestId('module-6')).toBeInViewport();
 });
+
+test('drop back on its own spot is not an edit', async ({ page }) => {
+  await loadBrass(page);
+  const before = await undoLabel(page);
+  const a = await headerGrip(page, 4);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 60, a.y + 30, { steps: 4 }); // past the 3 px slop: the outline shows
+  await expect(page.getByTestId('rack-drop-outline')).toBeVisible();
+  await page.mouse.move(a.x, a.y, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForTimeout(50);
+  expect(await anyPos(page)).toBe(false); // not even pinned
+  expect(await undoLabel(page)).toBe(before);
+});
+
+test('x stays within 0..1000', async ({ page }) => {
+  await loadBrass(page);
+  const cx = () => page.locator('[data-testid="rail"] > .content').evaluate((c) => c.getBoundingClientRect().left);
+  // Drag the VCA (6) to grid x 1200: clamped to 1000.
+  let a = await headerGrip(page, 6);
+  let rects = await panelRects(page);
+  let c = await cx();
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(c + 6 + 12000 + (a.x - c - rects[6].left), a.y, { steps: 10 });
+  await page.mouse.up();
+  let pos = await positions(page);
+  expect(pos[6]?.x).toBe(1000);
+  // Alt+Right at the bound writes nothing.
+  await page.getByTestId('module-header-6').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  expect(await positions(page)).toEqual(pos);
+
+  // Module 7 (same row) right up against the VCA: a nudge would push it to 1001.
+  const w7 = Math.ceil(rects[7].width / 10);
+  a = await headerGrip(page, 7);
+  rects = await panelRects(page);
+  c = await cx();
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(c + 6 + (1000 - w7) * 10 + (a.x - c - rects[7].left), a.y, { steps: 10 });
+  await page.mouse.up();
+  pos = await positions(page);
+  expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 });
+  await page.getByTestId('module-header-7').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  expect(await positions(page)).toEqual(pos); // refused, nothing written
+
+  // A drop that would push the VCA past 1000 is refused too (red outline, no write).
+  a = await headerGrip(page, 7);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 50, a.y, { steps: 4 });
+  await expect(page.getByTestId('rack-drop-outline')).toHaveAttribute('data-refused', 'true');
+  await page.mouse.up();
+  await page.waitForTimeout(50);
+  expect(await positions(page)).toEqual(pos);
+});

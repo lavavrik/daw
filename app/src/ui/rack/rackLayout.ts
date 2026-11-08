@@ -6,6 +6,9 @@
 import type { RackPos } from '../../state/project.svelte';
 
 export const GRID = 10;
+/** The saved bounds (state/patches.ts validates them: an out-of-range pos drops the whole rack's layout). */
+export const MAX_ROW = 31;
+export const MAX_X = 1000;
 
 /** x, w in grid units. */
 export interface Placed { idx: number; row: number; x: number; w: number }
@@ -88,6 +91,11 @@ export function pinFromRects(
     out.push({ idx: r.idx, row, x: Math.max(0, Math.round((r.left - padLeft) / GRID)), w: wUnits(r.width) });
   }
   return out;
+}
+
+/** Every module within the saved bounds: a move whose result is not (a push past x 1000, a 33rd row) must not be written. */
+export function inBounds(placed: readonly Placed[]): boolean {
+  return placed.every((p) => p.row <= MAX_ROW && p.x <= MAX_X);
 }
 
 export function toPositions(placed: readonly Placed[]): { idx: number; pos: RackPos }[] {

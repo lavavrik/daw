@@ -101,7 +101,7 @@
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
   import VoiceLeds from './VoiceLeds.svelte';
-  import { GRID, layoutRack, moveTo, pinFromRects, toPositions } from './rackLayout';
+  import { GRID, MAX_X, inBounds, layoutRack, moveTo, pinFromRects, toPositions } from './rackLayout';
   import type { Placed } from './rackLayout';
 
   let { p, engine, track, onpianoroll }: {
@@ -327,6 +327,9 @@
    * Where the module would land: the row band under the pointer (below the
    * last one: a new row), x = the panel's left on the grid; moveTo pushes the
    * overlapped panels right. `top` is the band's (or the new row's) top.
+   * x is clamped to MAX_X; `ok` is false when the result leaves the saved
+   * bounds (a push past x 1000, a 33rd row): the outline turns red and the
+   * release writes nothing (patches.ts would drop the whole layout on load).
    */
   const landing = $derived.by(() => {
     const d = mdrag;
@@ -335,22 +338,22 @@
     const newTop = (last?.bottom ?? PAD - ROW_GAP) + ROW_GAP;
     const found = d.bands.findIndex((b) => d.at.y < b.bottom + ROW_GAP / 2);
     const row = found < 0 ? d.bands.length : found;
-    const x = Math.max(0, Math.round((d.at.x - d.grab.x - PAD) / GRID));
+    const x = Math.min(MAX_X, Math.max(0, Math.round((d.at.x - d.grab.x - PAD) / GRID)));
     const result = moveTo(d.base, d.idx, row, x);
     const me = result.find((q) => q.idx === d.idx)!;
-    return { result, newTop, left: PAD + me.x * GRID, top: row < d.bands.length ? d.bands[row].top : newTop };
+    return { result, ok: inBounds(result), newTop, left: PAD + me.x * GRID, top: row < d.bands.length ? d.bands[row].top : newTop };
   });
 
   function headerDown(e: PointerEvent, idx: number) {
     if (drag?.kbd) drag = null; // a press cancels a keyboard pick
     if (e.button !== 0 || !content || drag || mdrag) return;
+    const rects = panelRects();
+    const me = rects.find((r) => r.idx === idx);
+    if (!me) return; // before the capture below: nothing may be left holding the pointer
     e.preventDefault(); // no text selection
     const el = e.currentTarget as HTMLElement;
     el.focus({ preventScroll: true }); // Alt+arrows go on from here
     el.setPointerCapture(e.pointerId);
-    const rects = panelRects();
-    const me = rects.find((r) => r.idx === idx);
-    if (!me) return;
     const base = moveBase();
     const bands: { top: number; bottom: number }[] = [];
     for (const q of base) {
@@ -383,11 +386,11 @@
       return l;
     };
     // The one write of the drag (inside its pointer gesture: one undo entry,
-    // "Move module"; in a flow rack it pins every module too). A click, or a
-    // drop on the module's own spot, writes nothing.
+    // "Move module"; in a flow rack it pins every module too). A click, a
+    // drop on the module's own spot, or one out of bounds writes nothing.
     const up = () => {
       const l = cleanup();
-      if (l && !samePlacement(l.result, base) && setRackLayout(p, track.id, toPositions(l.result), 'Move module')) edited.add(track.id);
+      if (l?.ok && !samePlacement(l.result, base) && setRackLayout(p, track.id, toPositions(l.result), 'Move module')) edited.add(track.id);
     };
     const cancel = () => void cleanup();
     const esc = (ev: KeyboardEvent) => {
@@ -422,15 +425,16 @@
   const NUDGE: Record<string, [dRow: number, dx: number]> = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
   function headerKey(e: KeyboardEvent, idx: number) {
     const d = NUDGE[e.key];
-    if (!d || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    // Only the header itself: Alt+arrows on its × button are not a move.
+    if (!d || e.target !== e.currentTarget || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
     e.preventDefault(); // Alt+Left is the browser's Back on Windows / Linux
     e.stopPropagation();
     if (mdrag || !content) return;
     const base = moveBase();
     const me = base.find((q) => q.idx === idx);
     if (!me || me.row + d[0] < 0) return;
-    const result = moveTo(base, idx, me.row + d[0], Math.max(0, me.x + d[1]));
-    if (samePlacement(result, base)) return;
+    const result = moveTo(base, idx, me.row + d[0], Math.min(MAX_X, Math.max(0, me.x + d[1])));
+    if (!inBounds(result) || samePlacement(result, base)) return;
     if (!setRackLayout(p, track.id, toPositions(result), 'Move module', sweepKey(`rackmove:${track.id}`))) return;
     edited.add(track.id);
     const el = e.currentTarget as HTMLElement;
@@ -1057,7 +1061,7 @@
       {/each}
       {#if mdrag && landing}
         <div class="newrow" data-testid="rack-new-row" style:top={`${landing.newTop}px`} style:height={`${mdrag.h}px`}><span>new row</span></div>
-        <div class="outline" data-testid="rack-drop-outline"
+        <div class="outline" class:refused={!landing.ok} data-testid="rack-drop-outline" data-refused={!landing.ok || undefined}
           style:left={`${landing.left}px`} style:top={`${landing.top}px`} style:width={`${mdrag.w}px`} style:height={`${mdrag.h}px`}></div>
       {/if}
       {#if modules.length === 0}
@@ -1119,8 +1123,10 @@
   /* Drag feedback (plan 18): where the panel lands, and the band for a new row below the last one. */
   .outline, .newrow { position: absolute; box-sizing: border-box; pointer-events: none; border-radius: 3px; }
   .outline { border: 2px dashed #f0a23a; background: #f0a23a14; }
+  .outline.refused { border-color: #ff6b75; background: #ff6b7514; }
   .newrow { left: 6px; right: 6px; border: 1px dashed #4a4d58; color: #6f7280; font-size: 10px; padding: 4px 8px; }
-  .cables { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */
+  .cables { position: absolute; z-index: 4; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }
   .plug { opacity: 0.95; }

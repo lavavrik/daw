@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { layoutRack, moveTo, pinFromRects, toPositions, GRID, type Placed } from './rackLayout';
+import { inBounds, layoutRack, moveTo, pinFromRects, toPositions, GRID, MAX_ROW, MAX_X, type Placed } from './rackLayout';
 
 const widths = (o: Record<number, number>) => new Map(Object.entries(o).map(([k, v]) => [Number(k), v]));
 const P = (idx: number, row: number, x: number, w: number): Placed => ({ idx, row, x, w });
@@ -94,4 +94,19 @@ describe('pinFromRects', () => {
 
 it('toPositions maps to pos', () => {
   expect(toPositions([P(4, 1, 7, 3)])).toEqual([{ idx: 4, pos: { row: 1, x: 7 } }]);
+});
+
+describe('inBounds', () => {
+  it('push_past_max_x_is_out', () => {
+    // A at 990 (w 5) dropped at 996 pushes B (at 1000) to 1001: refused by the rack.
+    const base = [P(0, 0, 990, 5), P(1, 0, MAX_X, 4)];
+    expect(inBounds(base)).toBe(true);
+    const r = moveTo(base, 0, 0, 996);
+    expect(by(r, 1).x).toBe(1001);
+    expect(inBounds(r)).toBe(false);
+  });
+  it('row_past_max_row_is_out', () => {
+    expect(inBounds([P(0, MAX_ROW, 0, 1)])).toBe(true);
+    expect(inBounds([P(0, MAX_ROW + 1, 0, 1)])).toBe(false);
+  });
 });

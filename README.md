@@ -586,3 +586,4 @@ restart; click it to grant access again.
   run `--project=chromium --repeat-each=3` and then
   `--project=serial --no-deps --repeat-each=3`.
 - Follow-ups and decisions per plan: [docs/followups/](docs/followups/).
+- Sampler track: "+ Sampler track" on the timeline (drop a sample on it) makes a synth track on the Sampler patch; see [docs/architecture/modular.md](docs/architecture/modular.md#sampler-patch).

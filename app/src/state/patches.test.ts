@@ -14,10 +14,10 @@ describe('built-in patches', () => {
     expect(BUILTIN_GROUPS[0].label).toBe('Starter');
     expect(BUILTIN_GROUPS[0].patches).toBe(STARTER_PATCHES);
     expect(BUILTIN_GROUPS.map((g) => g.label)).toEqual([
-      'Starter', 'House · Leads & Stabs', 'House · Keys', 'House · Bass', 'House · Pads',
+      'Starter', 'Sampler', 'House · Leads & Stabs', 'House · Keys', 'House · Bass', 'House · Pads',
     ]);
     expect(BUILTIN_PATCHES).toEqual(BUILTIN_GROUPS.flatMap((g) => g.patches));
-    expect(BUILTIN_GROUPS.slice(1)).toEqual(HOUSE_GROUPS);
+    expect(BUILTIN_GROUPS.slice(2)).toEqual(HOUSE_GROUPS);
   });
   it('the House set has the Sax first, and every house patch a phrase', () => {
     expect(HOUSE_GROUPS[0].patches[0]?.name).toBe('Sax');

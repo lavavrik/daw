@@ -332,6 +332,19 @@ default 1), `loop` (Off/On), `loopStart` (0..1) and `fine` (−100..+100 ct).
 - Modules get the pool read-only as a `SampleView`, passed next to the FX
   pool down `Synths::render_add` → `Rack::render_add` → `Module::process`.
 
+### Sampler patch
+
+`SAMPLER_PATCH` (`app/src/state/patches.ts`, menu group "Sampler" after
+Starter): `midi_in` (8 voices) -> `sample_player` (sample -1 = silent until
+one is assigned) -> `vca` <- `adsr` (attack 2 ms, decay 0.2 s, sustain 1,
+release 0.25 s, vel_amt 0.7), VCA to `out` l and r. The gate drives both the
+Sample Player and the ADSR; velocity reaches the ADSR. It is not in the
+engine patch fixtures: without a sample it renders silence.
+"+ Sampler track" (`state/sampler-actions.ts`, `addSamplerTrack`) adds a
+synth track on it; a sample dropped on that button is imported first, then
+the track is created named after the file and the sample assigned, in one
+undo entry ("Add sampler track").
+
 ## Formant (17)
 
 A *Shaping* module (`rack/modules/formant.rs`): three resonant band-pass

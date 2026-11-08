@@ -299,9 +299,39 @@ export const STARTER_PATCHES: Patch[] = [
   },
 ];
 
+/**
+ * The Sampler: one Sample Player (no sample yet: sample -1, silent) played by
+ * MIDI, shaped by an ADSR through a VCA. The ADSR's vel_amt makes it
+ * velocity-sensitive; its release lets a held note ring out after the key
+ * goes up. Out is stereo (l, r), both fed by the mono VCA like the starters.
+ * "+ Sampler track" (state/sampler-actions.ts) adds a track with this patch
+ * and, for a dropped file, assigns it to the Sample Player.
+ */
+export const SAMPLER_PATCH: Patch = {
+  name: 'Sampler',
+  modules: [
+    { idx: 0, id: 'midi_in', params: { voices: 8 } },
+    { idx: 1, id: 'sample_player', params: { sample: -1 } },
+    { idx: 2, id: 'adsr', params: { attack: 0.002, decay: 0.2, sustain: 1, release: 0.25, vel_amt: 0.7 } },
+    { idx: 3, id: 'vca' },
+    { idx: 4, id: 'out' },
+  ],
+  cables: [
+    { from: [0, 'pitch'], to: [1, 'pitch'] },
+    { from: [0, 'gate'], to: [1, 'gate'] },
+    { from: [0, 'gate'], to: [2, 'gate'] },
+    { from: [0, 'vel'], to: [2, 'vel'] },
+    { from: [1, 'out'], to: [3, 'in'] },
+    { from: [2, 'env'], to: [3, 'cv'] },
+    { from: [3, 'out'], to: [4, 'l'] },
+    { from: [3, 'out'], to: [4, 'r'] },
+  ],
+};
+
 /** The patch menu's built-in sections, in order: Starter, then the House groups. */
 export const BUILTIN_GROUPS: { label: string; patches: Patch[] }[] = [
   { label: 'Starter', patches: STARTER_PATCHES },
+  { label: 'Sampler', patches: [SAMPLER_PATCH] },
   ...HOUSE_GROUPS,
 ];
 

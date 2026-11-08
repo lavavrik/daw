@@ -106,6 +106,7 @@
   import { peaksFrames, peaksLevel } from '../../audio/peaks';
   import { clipFocus, sampleName } from './clipFocus.svelte';
   import { addSynthTrack } from '../../state/rack-actions';
+  import { addSamplerTrack } from '../../state/sampler-actions';
   import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
   import type { AudioClip, AutomationLane, Clip, Project, Track } from '../../state/project.svelte';
@@ -1230,6 +1231,33 @@
     if (r.placed.length < r.imported) flashHint('Some files did not fit (song end or 256 clips per track)');
   }
 
+  // ---- "+ Sampler track": a sample dropped on the button makes the track ------
+  let samplerOver = $state(false);
+  function samplerDragOver(e: DragEvent) {
+    if (!isSampleDrag(e) || p.loading || tracksFull) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    samplerOver = true;
+  }
+  function samplerDrop(e: DragEvent) {
+    if (!isSampleDrag(e)) return;
+    e.preventDefault(); // handled here, never the window's "drop onto a row" error
+    e.stopPropagation();
+    samplerOver = false;
+    if (p.loading || tracksFull) return;
+    const pending = droppedFiles(e); // synchronously: the DataTransfer empties once this returns
+    void (async () => {
+      let files: File[];
+      try {
+        files = await pending;
+      } catch (err) {
+        banners.error = err instanceof Error ? err.message : String(err);
+        return;
+      }
+      if (files[0]) await addSamplerTrack(p, engine, files[0]);
+    })();
+  }
+
   // ---- keyboard (see KEYBOARD FOCUS RULE at the top) ---------------------------
   function nudge(dt: number) {
     const dts = clampGroupDt(snapshot(sel), dt);
@@ -1427,6 +1455,12 @@
       <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
       <button data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
       <button data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      <button
+        data-testid="add-sampler-track" class:over={samplerOver} disabled={tracksFull}
+        title={tracksFull ? FULL_TITLE : 'Add a sampler track: drop a sample here or on its Sample Player'}
+        onclick={() => { if (!tracksFull) void addSamplerTrack(p, engine); }}
+        ondragover={samplerDragOver} ondragleave={() => (samplerOver = false)} ondrop={samplerDrop}
+      >+ Sampler track</button>
       {#if !p.mixer.automation.length}
         <!-- The Master row (automation of the master and the returns); it stays once it has a lane. -->
         <button
@@ -1513,6 +1547,7 @@
   .foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 4px 6px; background: #1b1c21; border-top: 1px solid #2a2c33; }
   .foot button { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; white-space: nowrap; }
   .foot button:hover { background: #2e313a; }
+  .foot button.over { border-color: #f0a23a; background: #2e313a; }
   .foot button:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
   .hscroll { width: 140px; flex: none; margin-left: 8px; accent-color: #f0a23a; }
   .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9cbd3; }

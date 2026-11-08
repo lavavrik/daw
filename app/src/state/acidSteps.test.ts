@@ -302,9 +302,54 @@ describe('acid steps: convert', () => {
     expect(readSteps(after, 4, conv.base)).toEqual({ ok: true, base: conv.base, steps: conv.steps });
   });
 
+  it('convert_clamps_start_rounding_to_end', () => {
+    // 3830 rounds to step 16 of a 1-bar pattern: it must land on step 15, not vanish.
+    const notes = [mk(3830, 100, 40), mk(3700, 100, 44)];
+    const conv = convertSteps(notes, 1);
+    expect(conv.steps[15].kind).toBe('note');
+    expect(stepPitch(conv.base, conv.steps[15])).toBe(44); // highest of the two wins
+    expect(conv.steps.filter((s) => s.kind === 'note')).toHaveLength(1);
+  });
+
   it('convert keeps a readable pattern as it reads', () => {
     const notes = [mk(0, 300, 36), mk(240, 120, 38, 120)];
     const view = readSteps(notes, 1);
     expect(convertSteps(notes, 1)).toEqual(view.ok && { base: view.base, steps: view.steps });
+  });
+});
+
+// --- property ----------------------------------------------------------------
+
+describe('acid steps: edit property', () => {
+  it('random_edits_read_back_and_keep_notes_past_end', () => {
+    const rnd = mulberry32(2024);
+    for (let it = 0; it < 600; it++) {
+      const bars = 1 + (it % 4);
+      const base = [24, 36, 48, 60][it % 4];
+      const n = bars * 16;
+      // A piano-roll-like readable pattern: canonical notes, then random lengths
+      // (capped at next start + 30 so it stays readable) and velocities.
+      const notes = write(randomSteps(rnd, n), bars, base).map((a) => mk(a.start, a.len, a.pitch, a.vel));
+      notes.sort((a, b) => a.start - b.start);
+      notes.forEach((m, k) => {
+        if (rnd() < 0.5) return;
+        const gap = (notes[k + 1]?.start ?? n * 240) - m.start;
+        m.len = 1 + Math.floor(rnd() * (gap + 30));
+        m.vel = 1 + Math.floor(rnd() * 127);
+      });
+      // Off-grid, chord-ish junk past the end must stay untouched.
+      const past = [mk(n * 240 + Math.floor(rnd() * 500), 77, 5), mk(n * 240 + 240, 50, 120)];
+      const all = [...notes, ...past];
+      const before = readSteps(all, bars, base);
+      expect(before.ok).toBe(true);
+      if (!before.ok) return;
+      const steps = before.steps.map((s) => ({ ...s }));
+      const muts = 1 + Math.floor(rnd() * 5);
+      for (let m = 0; m < muts; m++) steps[Math.floor(rnd() * n)] = randomSteps(rnd, 1)[0];
+      const diff = planEdit(all, bars, before.base, steps);
+      const after = apply(all, diff);
+      expect(readSteps(after, bars, before.base)).toEqual({ ok: true, base: before.base, steps: normalizeSteps(steps, bars) });
+      for (const q of past) expect(after.find((x) => x.id === q.id)).toEqual(q);
+    }
   });
 });

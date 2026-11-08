@@ -245,8 +245,9 @@ export function convertSteps(notes: readonly Note[], bars: number): { base: numb
   const nSteps = Math.min(bars, ACID_MAX_BARS) * STEPS_PER_BAR;
   const byStep = new Map<number, NoteLike>();
   for (const n of shown(notes, bars * STEPS_PER_BAR)) {
-    const i = Math.round(n.start / STEP_TICKS);
-    if (i >= nSteps) continue;
+    if (n.start >= nSteps * STEP_TICKS) continue; // past the shown 64 steps
+    // A start that rounds up to nSteps (e.g. 3830 in 1 bar) belongs to the last step.
+    const i = Math.min(Math.round(n.start / STEP_TICKS), nSteps - 1);
     const held = byStep.get(i);
     if (!held || n.pitch > held.pitch) byStep.set(i, { pitch: n.pitch, vel: n.vel, start: i * STEP_TICKS, len: n.len });
   }

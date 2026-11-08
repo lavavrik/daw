@@ -29,12 +29,6 @@ const ALLOWED: string[] = [
   'ui/TopBar.svelte',
   'ui/Wheels.svelte',
   'ui/acid/AcidSteps.svelte',
-  'ui/mixer/AnalyserPanel.svelte',
-  'ui/mixer/Fader.svelte',
-  'ui/mixer/Meter.svelte',
-  'ui/mixer/MixerView.svelte',
-  'ui/mixer/Section.svelte',
-  'ui/mixer/Strip.svelte',
   'ui/pianoroll/PianoRoll.svelte',
   'ui/rack/Jack.svelte',
   'ui/rack/Knob.svelte',
@@ -47,9 +41,6 @@ const ALLOWED: string[] = [
   'ui/song/AutoLane.svelte',
   'ui/song/Timeline.svelte',
   'ui/song/TrackHeaders.svelte',
-  'ui/vis/Goniometer.svelte',
-  'ui/vis/Spectrum.svelte',
-  'ui/vis/WaveformView.svelte',
 ];
 
 function svelteFiles(dir: string): string[] {

@@ -15,6 +15,7 @@ import { addAudioFixture, addAutomationFixture, buildFixture, checkLog, fakeAudi
 import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
 import { withAppendedParams } from './testdata/appendedParams';
+import { learnMidi } from '../state/midiMap';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -354,7 +355,7 @@ describe('loadProject', () => {
     expect(p.tracks[2].automation.map((l) => l.lane)).toEqual([6]);
   });
 
-  it('a v2 project loads and saves as v3', async () => {
+  it('a v2 project loads and saves as v4', async () => {
     const v2 = JSON.parse(readFileSync(new URL('./testdata/v2-fixture.json', import.meta.url), 'utf8'));
     const { p: src } = await buildFixture();
     const { ids } = await addAudioFixture(src);
@@ -366,14 +367,49 @@ describe('loadProject', () => {
     expect(await loadProject(p, e, v2, files, fakeDecoder)).toEqual([]);
     expect(checkLog(e.log).errors).toEqual([]);
     const out = serialize(p);
-    expect(out.schemaVersion).toBe(3);
+    expect(out.schemaVersion).toBe(4);
     // Params appended to the catalog since are written with their defaults.
     expect(out).toEqual({
       ...v2,
-      schemaVersion: 3,
+      schemaVersion: 4,
       tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
       mixer: { ...v2.mixer, automation: [] },
+      midiMap: [],
     });
+  });
+
+  it('MIDI mappings survive a save and reopen (by slot, onto the new track ids)', async () => {
+    const { p: src, synth, drums } = await buildFixture();
+    learnMidi(src, 74, synth.id, { kind: 'rack', module: 4, param: 'cutoff' });
+    learnMidi(src, 7, drums.id, { kind: 'mix', param: 'fader' });
+    learnMidi(src, 10, 'delay', { kind: 'mix', param: 'delay_feedback' });
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    p.midiMap = [{ cc: 1, owner: 'master', target: { kind: 'mix', param: 'fader' } }]; // the old session's: gone
+    expect(await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    const bySlot = (slot: number) => p.tracks.find((t) => t.slot === slot)!.id;
+    expect(p.midiMap).toEqual([
+      { cc: 74, owner: bySlot(synth.slot), target: { kind: 'rack', module: 4, param: 'cutoff' } },
+      { cc: 7, owner: bySlot(drums.slot), target: { kind: 'mix', param: 'fader' } },
+      { cc: 10, owner: 'delay', target: { kind: 'mix', param: 'delay_feedback' } },
+    ]);
+    expect(serialize(p).midiMap).toEqual(json.midiMap);
+  });
+
+  it('a MIDI mapping on a module the FX pool drops goes with it', async () => {
+    const { p: src } = await buildFixture();
+    const json = roundJson(serialize(src));
+    const synth = json.tracks[2];
+    if (synth.kind !== 'synth') throw new Error('kind');
+    for (let i = 0; i < 9; i++) synth.patch.modules.push({ idx: 20 + i, id: 'reverb', params: {} });
+    json.midiMap = [
+      { cc: 20, track: synth.slot, target: { rack: [28, 'size'] } }, // a dropped reverb
+      { cc: 21, track: synth.slot, target: { rack: [20, 'size'] } }, // a kept one
+    ];
+    const p = new Project();
+    const warnings = await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder);
+    expect(warnings.filter((w) => /MIDI/.test(w))).toHaveLength(1);
+    expect(p.midiMap.map((m) => m.cc)).toEqual([21]);
   });
 
   it('a sidechain key the engine cannot take is dropped with a warning', async () => {

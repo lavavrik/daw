@@ -9,7 +9,8 @@ import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
 import type { AudioTrack, AutomationLane, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
 import { SCHEMA_VERSION } from './schema';
-import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
+import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MidiMapJson, MixParamsJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
+import { isMasterChannel } from '../state/automation';
 
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -143,6 +144,13 @@ export function serialize(p: Project): ProjectJson {
     mixer,
     samples,
     selection: { track: slotOf(p.selectedTrackId), synth: slotOf(p.lastSynthTrackId) },
+    midiMap: p.midiMap.flatMap((m): MidiMapJson[] => {
+      const t = m.target;
+      if (isMasterChannel(m.owner)) return t.kind === 'mix' ? [{ cc: m.cc, channel: m.owner, target: { mix: t.param } }] : [];
+      const slot = slotOf(m.owner);
+      if (slot === null) return []; // cannot happen: a track's removal drops its mappings
+      return [{ cc: m.cc, track: slot, target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] } }];
+    }),
   };
 }
 

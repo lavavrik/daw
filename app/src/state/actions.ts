@@ -7,6 +7,7 @@ import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, newChann
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
 import { edit, markEdited } from './edits';
+import { dropTrackMappings } from './midiMap';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -242,6 +243,7 @@ export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
     // track falls back to none (state only; the engine already does the same).
     delete p.mixer.channels[trackId];
     for (const ch of Object.values(p.mixer.channels)) if (ch.key?.trackId === trackId) ch.key = null;
+    dropTrackMappings(p, trackId); // its MIDI mappings go in the same undo entry
     sink.send(Op.REMOVE_TRACK, slot);
     if (p.selectedTrackId === trackId) {
       p.selectedTrackId = (p.tracks[i] ?? p.tracks[i - 1] ?? null)?.id ?? null;

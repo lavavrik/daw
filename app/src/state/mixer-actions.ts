@@ -41,9 +41,16 @@ export function accepts(def: MixParamDef, kind: MixTarget, index: number): boole
   return def.appliesTo.includes(kind);
 }
 
-/** Clamp to the catalog range (integers rounded, NaN -> default) and send MIX_SET. */
-export function setMix(p: Project, sink: CommandSink, target: MixChannelTarget, param: string, value: number) {
-  return edit(p, `Set ${MIX_PARAMS.find((d) => d.name === param)?.label ?? param}`, () => {
+/**
+ * Clamp to the catalog range (integers rounded, NaN -> default) and send
+ * MIX_SET. `opts` as rack-actions setParam's (a MIDI CC move: its own undo
+ * label and coalesce key).
+ */
+export function setMix(
+  p: Project, sink: CommandSink, target: MixChannelTarget, param: string, value: number,
+  opts?: { coalesce?: string; label?: string },
+) {
+  return edit(p, opts?.label ?? `Set ${MIX_PARAMS.find((d) => d.name === param)?.label ?? param}`, () => {
     const r = resolve(p, target);
     const def = MIX_PARAMS.find((d) => d.name === param);
     // The engine rejects params the channel does not take; so do we (nothing
@@ -52,7 +59,7 @@ export function setMix(p: Project, sink: CommandSink, target: MixChannelTarget, 
     const v = clampParam(def, value);
     r.ch.params[def.id] = v;
     sink.send(Op.MIX_SET, r.index, def.id, v);
-  });
+  }, opts?.coalesce !== undefined ? { coalesce: opts.coalesce } : undefined);
 }
 
 const flag = (p: Project, target: MixChannelTarget, name: string): number | null => {

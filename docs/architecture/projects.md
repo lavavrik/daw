@@ -10,7 +10,7 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 3
+  project.json            schemaVersion 4
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -19,11 +19,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 3)
+## project.json (schemaVersion 4)
 
 ```jsonc
 {
-  "schemaVersion": 3, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 4, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -63,7 +63,11 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
                      "target": { "mix": "limiter_ceiling" }, "points": [[0, 0, 0], [7680, -3, 0]] }]
   },
   "samples": [{ "id": 0, "name": "kick.wav", "type": "audio/wav", "file": "samples/0-1a2b3c4d-kick.wav" }],
-  "selection": { "track": 0, "synth": 1 }  // selected track, Keys → target (slots)
+  "selection": { "track": 0, "synth": 1 }, // selected track, Keys → target (slots)
+  "midiMap": [                             // plan 14: MIDI CC mappings, learning order
+    { "cc": 74, "track": 1, "target": { "rack": [4, "cutoff"] } },  // a track by slot
+    { "cc": 7, "track": 0, "target": { "mix": "fader" } },
+    { "cc": 10, "channel": "reverb", "target": { "mix": "rev_size" } } ]  // Master row channel by name
 }
 ```
 
@@ -101,6 +105,15 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   params, the rack params) is each target's **base value**, which plays
   wherever a lane does not apply (Pattern mode, a disabled lane). Which
   tracks show their lanes is UI state, not saved.
+- **MIDI mappings** (plan 14, spec addendum §2; [midi.md](midi.md)):
+  top-level `midiMap`, because a mapping names project tracks. Each maps a
+  CC number (0..119, omni) to one control, named like an automation target:
+  a track by `slot` with `{mix: name}` (its strip) or `{rack: [moduleIdx,
+  name]}` (its rack: synth tracks only), or a Master-row `channel`
+  (`reverb` / `delay` / `master`) with `{mix: name}`. Unlike a lane target,
+  an integer param may be mapped. One mapping per CC and per control. A
+  load turns the slots into the new track ids (`commands.ts`
+  `midiMapState`); no engine command (the engine knows nothing of MIDI CC).
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
@@ -122,14 +135,18 @@ folder's sample list all get it). It is pure (the input is not changed).
 |---|---|---|
 | 1 → 2 | 9 | Audio tracks. A v1 project has none, so only the version moves: lossless. |
 | 2 → 3 | 10 | Automation. A v2 project has none: every track object and the mixer object get an empty `automation`; nothing else changes, so it is lossless. |
+| 3 → 4 | 14 | MIDI CC mappings. A v3 project has none: a top-level `midiMap: []` is added; nothing else changes, so it is lossless. |
 
 A version newer than the build knows stays an error ("saved by a newer
 version of the app"); a save always writes the current version.
-`migrate.test.ts` pins v1 → v3 (through v2) on a frozen genuine v1 save
-(`project/testdata/v1-fixture.json`) and minimal v1 files, and v2 → v3 on a
+`migrate.test.ts` pins v1 → v4 (through v2, v3) on a frozen genuine v1 save
+(`project/testdata/v1-fixture.json`) and minimal v1 files, v2 → v4 on a
 frozen genuine v2 save with Audio tracks (`project/testdata/v2-fixture.json`,
-the plan-9 save of `buildFixture` + `addAudioFixture`); `load.test.ts` `a v2
-project loads and saves as v3` opens it and checks the save.
+the plan-9 save of `buildFixture` + `addAudioFixture`), and v3 → v4 on a
+frozen genuine v3 save with lanes (`project/testdata/v3-fixture.json`, the
+plan-13 save of `buildFixture` + `addAudioFixture` + `addAutomationFixture`);
+`load.test.ts` `a v2 project loads and saves as v4` opens the v2 one and
+checks the save.
 
 ## Sample memory (spec addendum §3.3)
 
@@ -211,7 +228,7 @@ its load, so the kit never retries into the gap between them.
 
 Never throws, never lets an out-of-range value through. Unknown fields are
 ignored. The file is migrated first (see above). A missing/non-integer
-`schemaVersion` or one greater than the current one (3) is an
+`schemaVersion` or one greater than the current one (4) is an
 **error** (nothing changes). Everything else becomes a **warning**, shown in a
 notice banner after the load (all of them in the console):
 
@@ -245,6 +262,13 @@ notice banner after the load (all of them in the console):
   values (the target's range) clamped, a repeated tick dropped (the first
   kept), at most 512 kept; the kept points keep their order (= their idx).
   `enabled` defaults to true.
+- a MIDI mapping (plan 14) is dropped when it is malformed, its `cc` is not
+  an integer 0..119, its `track` slot has no track or its `channel` is
+  unknown, its target is missing, unknown or not on its channel (or a rack
+  target off a synth track, or on a module the validated rack lacks), its
+  CC is already mapped, or its control already has a CC (the first entry
+  wins either way). `projectCommands`' normalize also drops one whose module
+  the FX pool dropped.
 
 ## Load order (`loadProject`)
 

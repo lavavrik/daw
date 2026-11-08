@@ -6,6 +6,7 @@ import { sampleFile } from '../state/sampleFiles';
 import { addAutomationFixture, buildFixture } from './testFixture';
 import { Project } from '../state/project.svelte';
 import { CLIP_GAIN_MIN_DB, addAudioClip, addAudioTrack, setAudioClip } from '../state/audio-actions';
+import { learnMidi } from '../state/midiMap';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -85,10 +86,10 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 4 };
+    const json = { ...serialize(new Project()), schemaVersion: 5 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
-    expect('error' in r && r.error).toMatch(/schema 4; this one reads up to 3/);
+    expect('error' in r && r.error).toMatch(/schema 5; this one reads up to 4/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
@@ -269,5 +270,58 @@ describe('project schema', () => {
     const rc = ok(validate(many));
     expect(rc.project.tracks[at].automation[0].points).toHaveLength(512);
     expect(rc.warnings.join('\n')).toMatch(/512/);
+  });
+
+  it('MIDI mappings round-trip (by slot / channel name)', async () => {
+    const { p, synth } = await buildFixture();
+    learnMidi(p, 74, synth.id, { kind: 'rack', module: 4, param: 'cutoff' });
+    learnMidi(p, 7, 'master', { kind: 'mix', param: 'fader' });
+    const json = serialize(p);
+    expect(json.midiMap).toEqual([
+      { cc: 74, track: synth.slot, target: { rack: [4, 'cutoff'] } },
+      { cc: 7, channel: 'master', target: { mix: 'fader' } },
+    ]);
+    const r = ok(validate(roundJson(json)));
+    expect(r.warnings).toEqual([]);
+    expect(r.project).toEqual(json);
+    expect(serialize(new Project()).midiMap).toEqual([]);
+  });
+
+  it('validates MIDI mappings', async () => {
+    const { p, drums, synth } = await buildFixture();
+    const json = roundJson(serialize(p)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const keep = [
+      { cc: 74, track: synth.slot, target: { rack: [4, 'cutoff'] } },
+      { cc: 7, track: drums.slot, target: { mix: 'fader' } },
+      { cc: 10, channel: 'reverb', target: { mix: 'rev_size' } },
+      { cc: 0, track: synth.slot, target: { rack: [1, 'octave'] } }, // integer knobs are learnable
+    ];
+    json.midiMap = [
+      ...keep,
+      'junk',
+      { cc: 120, track: drums.slot, target: { mix: 'pan' } }, // panic range
+      { cc: 3.5, track: drums.slot, target: { mix: 'pan' } }, // not an integer
+      { cc: 11, track: 29, target: { mix: 'pan' } }, // no such slot
+      { cc: 12, channel: 'bus', target: { mix: 'fader' } }, // no such channel
+      { cc: 13, track: synth.slot, target: { rack: [30, 'cutoff'] } }, // no module 30
+      { cc: 14, track: drums.slot, target: { rack: [4, 'cutoff'] } }, // drums have no rack
+      { cc: 15, track: synth.slot, target: { rack: [4, 'wobble'] } }, // unknown rack param
+      { cc: 16, channel: 'master', target: { mix: 'pan' } }, // master takes no pan
+      { cc: 17, track: drums.slot, target: { mix: 'nope' } }, // unknown mixer param
+      { cc: 18, track: drums.slot, target: 'fader' }, // malformed target
+      { cc: 74, track: drums.slot, target: { mix: 'pan' } }, // duplicate cc
+      { cc: 19, track: synth.slot, target: { rack: [4, 'cutoff'] } }, // duplicate control
+    ];
+    const r = ok(validate(json));
+    expect(r.project.midiMap).toEqual(keep);
+    const w = r.warnings.filter((x) => /MIDI/.test(x));
+    expect(w).toHaveLength(13);
+    for (const re of [/malformed/, /CC 120/, /CC 3.5/, /slot 29/, /bus/, /module 30/, /only synth tracks/, /wobble/, /pan/, /nope/, /already mapped/, /already has CC 74/]) {
+      expect(w.join('\n')).toMatch(re);
+    }
+    // Not an array: none, with a warning.
+    const r2 = ok(validate({ ...roundJson(serialize(p)), midiMap: { cc: 1 } }));
+    expect(r2.project.midiMap).toEqual([]);
+    expect(r2.warnings.join('\n')).toMatch(/MIDI/);
   });
 });

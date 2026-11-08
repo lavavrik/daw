@@ -24,8 +24,9 @@
 // still checked against what only a whole project knows: the shared FX pool
 // (pooled effects beyond it are dropped) and the MAX_KEYS distinct drum-row
 // sidechain keys (a key beyond them is dropped), each with a warning, and a
-// rack lane whose module was one of those dropped effects goes too; the
-// returned `project` is the normalized one the commands realize.
+// rack lane or MIDI mapping whose module was one of those dropped effects
+// goes too; the returned `project` is the normalized one the commands
+// realize. MIDI mappings send no commands (they are UI state: midiMapState).
 import { MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, keyCode } from '../audio/protocol';
 import { fxPoolSlots, moduleDef } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
@@ -35,9 +36,10 @@ import { patchRack } from '../state/rack-actions';
 import type { EngineCommand } from '../state/rack-actions';
 import { MAX_NOTES } from '../audio/protocol';
 import type { AudioTrack, AutomationLane, Clip, DrumTrack, SynthTrack, Track } from '../state/project.svelte';
+import type { MidiMapping } from '../state/midiMap';
 import { clipGainLinear } from '../state/audio-actions';
 import { MASTER_CHANNEL_INDEX, laneSet } from '../state/automation';
-import type { AudioClipJson, LaneJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
+import type { AudioClipJson, LaneJson, MidiMapJson, MixParamsJson, ProjectJson, SampleJson, TrackJson } from './schema';
 
 export type { EngineCommand };
 
@@ -262,7 +264,32 @@ function normalize(json: ProjectJson, ids: Map<number, number>, warnings: string
     .filter((s) => ids.has(s.id))
     .map((s) => ({ ...s, id: ids.get(s.id)! }))
     .sort((a, b) => a.id - b.id);
-  return { ...json, tracks, mixer: { ...json.mixer, tracks: strips }, samples };
+  // A MIDI mapping on a module dropped above.
+  const midiMap = json.midiMap.filter((m) => {
+    if (!('track' in m) || !('rack' in m.target)) return true;
+    const [idx, param] = m.target.rack;
+    const t = tracks.find((x) => x.slot === m.track);
+    if (t?.kind === 'synth' && t.patch.modules.some((x) => x.idx === idx)) return true;
+    warnings.push(`Track "${t?.name ?? m.track}": the MIDI mapping of CC ${m.cc} (${param}) lost its module (dropped)`);
+    return false;
+  });
+  return { ...json, tracks, mixer: { ...json.mixer, tracks: strips }, samples, midiMap };
+}
+
+/**
+ * UI mappings of a normalized mapping list; `idOf` gives the live track id
+ * of a slot (an entry whose slot has no track is skipped).
+ */
+export function midiMapState(list: MidiMapJson[], idOf: (slot: number) => string | undefined): MidiMapping[] {
+  const out: MidiMapping[] = [];
+  for (const m of list) {
+    const target = 'mix' in m.target
+      ? { kind: 'mix' as const, param: m.target.mix }
+      : { kind: 'rack' as const, module: m.target.rack[0], param: m.target.rack[1] };
+    const owner = 'track' in m ? idOf(m.track) : m.channel;
+    if (owner !== undefined) out.push({ cc: m.cc, owner, target });
+  }
+  return out;
 }
 
 /**

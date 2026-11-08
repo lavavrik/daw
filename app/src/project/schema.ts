@@ -1,7 +1,8 @@
-// project.json: the saved form of a Project (schemaVersion 3) and its
+// project.json: the saved form of a Project (schemaVersion 4) and its
 // validator. See docs/architecture/projects.md. An older file is migrated
 // first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had; v2 -> v3
-// adds automation lanes, which v2 never had).
+// adds automation lanes, which v2 never had; v3 -> v4 adds the MIDI CC
+// mappings, which v3 never had).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
@@ -36,8 +37,8 @@ import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEP
 import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
 
-/** Plan 9: 2 (Audio tracks); plan 10: 3 (automation). Older files are migrated (migrate.ts). */
-export const SCHEMA_VERSION = 3;
+/** Plan 9: 2 (Audio tracks); plan 10: 3 (automation); plan 14: 4 (MIDI mappings). Older files are migrated (migrate.ts). */
+export const SCHEMA_VERSION = 4;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -58,7 +59,20 @@ export interface ProjectJson {
   samples: SampleJson[];
   /** Selected track and last-selected synth (the Keys → target), by slot. */
   selection: { track: number | null; synth: number | null };
+  /** MIDI CC mappings (plan 14, state/midiMap.ts), in learning order. */
+  midiMap: MidiMapJson[];
 }
+
+/**
+ * One MIDI CC mapping: CC `cc` (0..119, unique) moves a param of track
+ * `track` (by slot: its mixer strip {mix}, or module `moduleIdx` of its rack
+ * {rack}: synth tracks only) or of a Master-row channel (by name; {mix}
+ * only). Params by catalog name; integer ones allowed. One mapping per
+ * control.
+ */
+export type MidiMapJson =
+  | { cc: number; track: number; target: { mix: string } | { rack: [moduleIdx: number, name: string] } }
+  | { cc: number; channel: 'reverb' | 'delay' | 'master'; target: { mix: string } };
 
 interface TrackCommon {
   /** Engine track slot 0..31, unique. */
@@ -345,13 +359,14 @@ export function validate(input: unknown): Validated {
   }
 
   const mixer = readMixer(r, json.mixer, tracks, lanes);
+  const midiMap = readMidiMap(r, json.midiMap, tracks);
   const sel = isObj(json.selection) ? json.selection : {};
   const slotOf = (v: unknown, synthOnly: boolean) =>
     tracks.find((t) => t.slot === v && (!synthOnly || t.kind === 'synth'))?.slot ?? null;
   const selection = { track: slotOf(sel.track, false), synth: slotOf(sel.synth, true) };
 
   return {
-    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection },
+    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection, midiMap },
     warnings: r.warnings,
   };
 }
@@ -612,6 +627,97 @@ function readMasterLanes(r: Reader, v: unknown, lanes: Lanes): MasterLaneJson[] 
     for (const l of got) out.push({ channel: ch, ...l });
   }
   return out;
+}
+
+/**
+ * The MIDI mappings. Dropped, with a warning: a malformed entry, a CC
+ * outside 0..119 (or not an integer), an unknown track slot or channel, a
+ * target the owner does not have (mappingTargetWhy), a CC already mapped,
+ * and a control that already has a CC (first wins, as in learnMidi).
+ */
+function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] {
+  const out: MidiMapJson[] = [];
+  if (v !== undefined && !Array.isArray(v)) r.warn('MIDI mappings: not a list (none kept)');
+  const ccs = new Map<number, string>(); // cc -> control key
+  const controls = new Map<string, number>(); // control key -> cc
+  for (const x of arr(v)) {
+    if (!isObj(x)) {
+      r.warn('MIDI: dropped a malformed mapping');
+      continue;
+    }
+    const cc = x.cc;
+    const at = `MIDI CC ${String(cc)}`;
+    if (typeof cc !== 'number' || !Number.isInteger(cc) || cc < 0 || cc > 119) {
+      r.warn(`${at}: not a learnable CC (0..119; dropped)`);
+      continue;
+    }
+    let owner: { track: number } | { channel: 'reverb' | 'delay' | 'master' };
+    let why: string | null;
+    if (x.track !== undefined) {
+      const t = tracks.find((tj) => tj.slot === x.track);
+      if (!t) {
+        r.warn(`${at}: no track in slot ${String(x.track)} (dropped)`);
+        continue;
+      }
+      owner = { track: t.slot };
+      why = mappingTargetWhy(x.target, 'track', t.slot, t.kind === 'synth' ? t.patch : null);
+    } else {
+      const ch = x.channel;
+      if (ch !== 'reverb' && ch !== 'delay' && ch !== 'master') {
+        r.warn(`${at}: no channel "${String(ch)}" (dropped)`);
+        continue;
+      }
+      owner = { channel: ch };
+      const [kind, index] = MASTER_CHANNELS[ch];
+      why = mappingTargetWhy(x.target, kind, index, null);
+    }
+    if (why !== null) {
+      r.warn(`${at}: ${why} (dropped)`);
+      continue;
+    }
+    const t = x.target as Record<string, unknown>;
+    const target = typeof t.mix === 'string' ? { mix: t.mix } : { rack: [(t.rack as [number, string])[0], (t.rack as [number, string])[1]] as [number, string] };
+    const key = JSON.stringify([owner, target]);
+    if (ccs.has(cc)) {
+      r.warn(`${at}: already mapped (dropped)`);
+      continue;
+    }
+    const had = controls.get(key);
+    if (had !== undefined) {
+      r.warn(`${at}: ${'mix' in target ? target.mix : target.rack[1]} already has CC ${had} (dropped)`);
+      continue;
+    }
+    ccs.set(cc, key);
+    controls.set(key, cc);
+    out.push({ cc, ...owner, target } as MidiMapJson);
+  }
+  return out;
+}
+
+/**
+ * Why a mapping cannot use `target` on a mixer channel (`kind`, `index`) and,
+ * for a synth track, its rack `patch` (validated); null when it can. Like
+ * laneDef, but integer params are allowed (state/midiMap.ts mappingDef).
+ */
+function mappingTargetWhy(target: unknown, kind: MixTarget, index: number, patch: Patch | null): string | null {
+  if (!isObj(target)) return 'no target';
+  if (typeof target.mix === 'string') {
+    const name = target.mix;
+    const def = MIX_PARAMS.find((d) => d.name === name);
+    if (!def) return `unknown param "${name}"`;
+    if (!accepts(def, kind, index)) return `${name} does not apply here`;
+    return null;
+  }
+  const rack = target.rack;
+  if (kind === 'track' && Array.isArray(rack) && rack.length === 2 && typeof rack[1] === 'string') {
+    const [mod, name] = rack as [unknown, string];
+    if (!patch) return `${name}: only synth tracks have a rack`;
+    const pm = patch.modules.find((m) => m.idx === mod);
+    if (!pm) return `${name}: no module ${String(mod)} in the rack`;
+    if (!moduleDef(pm.id).params.some((d) => d.name === name)) return `unknown param "${name}" of module ${String(mod)}`;
+    return null;
+  }
+  return 'no target';
 }
 
 /** Engine lanes used so far, and how many lanes were kept (at most MAX_AUTO_LANES). */

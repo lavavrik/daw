@@ -10,6 +10,9 @@
 //                      (an object in `tracks`) and the mixer (if it is an
 //                      object) get an empty `automation`; nothing else
 //                      changes, so it is lossless too.
+//   v3 -> v4 (plan 14): MIDI CC mappings. A v3 project has none: the step
+//                      adds a top-level `midiMap: []` (replacing anything a
+//                      v3 file had under that name, which v3 never wrote).
 //
 // Anything that is not a v1..current project object (no or a bad
 // schemaVersion, a NEWER version than this build knows) is returned as is
@@ -28,6 +31,7 @@ const STEPS = new Map<unknown, (json: Json) => Json>([
     ...(Array.isArray(json.tracks) ? { tracks: json.tracks.map((t) => (isObj(t) ? { ...t, automation: [] } : t)) } : {}),
     ...(isObj(json.mixer) ? { mixer: { ...json.mixer, automation: [] } } : {}),
   })],
+  [3, (json) => ({ ...json, schemaVersion: 4, midiMap: [] })],
 ]);
 
 /** `json` brought up to the current schema version (see above). */

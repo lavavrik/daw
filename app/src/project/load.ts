@@ -22,7 +22,8 @@
 //      AUTO_LANE_ENABLE) -> tempo, metronome, mode, loop and the live input
 //      track (RESET_ALL put the transport back to 124 BPM / Pattern / loop
 //      off / metronome off / no input track, so these are always sent) --
-//      and the normalized project the UI state (projectState) is built from.
+//      and the normalized project the UI state (projectState) is built from
+//      (MIDI mappings included: UI state only, by track slot -> new id).
 // The rack goes through patchRack, the same builder loadPatch uses.
 //
 // replayInto (below) is the audio restart's variant (audio/restart.ts): the
@@ -48,7 +49,7 @@ import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
 import { fitsBudget, overBudgetText, sampleFloats } from '../state/sampleBudget';
 import { deferSampleAssign } from '../state/sampleLoads';
-import { lanesState, projectCommands, trackState } from './commands';
+import { lanesState, midiMapState, projectCommands, trackState } from './commands';
 import type { EngineCommand } from './commands';
 import { serialize } from './serialize';
 import { validate } from './schema';
@@ -384,6 +385,7 @@ export function blankState(p: Project) {
   p.selectedTrackId = null;
   p.lastSynthTrackId = null;
   p.mixer = newMixer();
+  p.midiMap = [];
   p.mode = 'pattern';
   p.loop = { on: false, start: 0, end: DEFAULT_LOOP_END };
   p.songPosition = 0;
@@ -434,6 +436,7 @@ export function projectState(p: Project, proj: ProjectJson) {
   setParams(p.mixer.master, proj.mixer.master);
   const master = lanesState(proj.mixer.automation);
   p.mixer.automation = proj.mixer.automation.map((mj, i) => ({ channel: mj.channel, lane: master[i] }));
+  p.midiMap = midiMapState(proj.midiMap, (slot) => bySlot.get(slot)?.id);
   p.tempo = proj.tempo;
   p.metronome = proj.metronome;
   p.mode = proj.mode;

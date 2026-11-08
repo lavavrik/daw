@@ -1,0 +1,945 @@
+{
+  "schemaVersion": 3,
+  "name": "Fixture",
+  "tempo": 132.5,
+  "metronome": true,
+  "mode": "song",
+  "loop": {
+    "on": true,
+    "start": 3840,
+    "end": 19200
+  },
+  "tracks": [
+    {
+      "kind": "drum",
+      "slot": 0,
+      "name": "Drums",
+      "color": "#ff6b6b",
+      "rows": [
+        {
+          "name": "kick",
+          "sample": 0,
+          "gain": 1,
+          "pan": 0,
+          "mute": false
+        },
+        {
+          "name": "snare",
+          "sample": 1,
+          "gain": 0.5,
+          "pan": -0.25,
+          "mute": false
+        },
+        {
+          "name": "Row 3",
+          "sample": null,
+          "gain": 1,
+          "pan": 0,
+          "mute": true
+        },
+        {
+          "name": "Row 4",
+          "sample": null,
+          "gain": 1,
+          "pan": 0,
+          "mute": false
+        },
+        {
+          "name": "Row 5",
+          "sample": null,
+          "gain": 1,
+          "pan": 0,
+          "mute": false
+        }
+      ],
+      "patterns": [
+        {
+          "engineIdx": 0,
+          "name": "Pattern 1",
+          "stepCount": 16,
+          "swing": 0.2,
+          "hits": [
+            [
+              0,
+              0,
+              100
+            ],
+            [
+              0,
+              4,
+              100
+            ],
+            [
+              0,
+              8,
+              100
+            ],
+            [
+              0,
+              12,
+              100
+            ],
+            [
+              1,
+              4,
+              60
+            ]
+          ]
+        },
+        {
+          "engineIdx": 1,
+          "name": "Pattern 2",
+          "stepCount": 32,
+          "swing": 0.2,
+          "hits": [
+            [
+              4,
+              31,
+              127
+            ]
+          ]
+        }
+      ],
+      "currentPattern": 0,
+      "clips": [
+        {
+          "idx": 0,
+          "pattern": 0,
+          "start": 0,
+          "len": 3840,
+          "offset": 0
+        },
+        {
+          "idx": 1,
+          "pattern": 1,
+          "start": 3840,
+          "len": 7680,
+          "offset": 240
+        }
+      ],
+      "automation": [
+        {
+          "lane": 0,
+          "enabled": true,
+          "target": {
+            "mix": "send_a"
+          },
+          "points": [
+            [
+              0,
+              -60,
+              0
+            ],
+            [
+              7680,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "synth",
+      "slot": 1,
+      "name": "Bass",
+      "color": "#ffa94d",
+      "patch": {
+        "name": "Deep Bass",
+        "modules": [
+          {
+            "idx": 0,
+            "id": "midi_in",
+            "params": {
+              "voices": 8,
+              "mode": 1,
+              "glide": 0.04,
+              "bend": 2,
+              "glide_mode": 0
+            }
+          },
+          {
+            "idx": 1,
+            "id": "osc",
+            "params": {
+              "wave": 0,
+              "octave": -1,
+              "tune": 0,
+              "fine": 0,
+              "pw": 0.5,
+              "fm": 0,
+              "unison": 1,
+              "detune": 15
+            }
+          },
+          {
+            "idx": 2,
+            "id": "osc",
+            "params": {
+              "wave": 1,
+              "octave": -2,
+              "tune": 0,
+              "fine": 0,
+              "pw": 0.5,
+              "fm": 0,
+              "unison": 1,
+              "detune": 15
+            }
+          },
+          {
+            "idx": 3,
+            "id": "mixer",
+            "params": {
+              "lvl1": 0.8,
+              "lvl2": 0.8,
+              "lvl3": 0.8,
+              "lvl4": 0.8
+            }
+          },
+          {
+            "idx": 4,
+            "id": "filter",
+            "params": {
+              "mode": 0,
+              "cutoff": 1234,
+              "reso": 0.35,
+              "cv_amt": 3,
+              "drive": 0
+            }
+          },
+          {
+            "idx": 5,
+            "id": "adsr",
+            "params": {
+              "attack": 0.002,
+              "decay": 0.25,
+              "sustain": 0.25,
+              "release": 0.12,
+              "delay": 0,
+              "vel_amt": 0
+            }
+          },
+          {
+            "idx": 6,
+            "id": "vca",
+            "params": {
+              "level": 1
+            }
+          },
+          {
+            "idx": 7,
+            "id": "out",
+            "params": {
+              "level": 0.8
+            }
+          },
+          {
+            "idx": 8,
+            "id": "reverb",
+            "params": {
+              "size": 0.9,
+              "decay": 2.2,
+              "damping": 0.5,
+              "predelay": 20,
+              "mix": 0.3
+            }
+          },
+          {
+            "idx": 9,
+            "id": "sample_player",
+            "params": {
+              "sample": 2,
+              "gain": 1,
+              "start": 0,
+              "pitchTrack": 1,
+              "root": 60
+            }
+          }
+        ],
+        "cables": [
+          {
+            "from": [
+              0,
+              "pitch"
+            ],
+            "to": [
+              1,
+              "pitch"
+            ]
+          },
+          {
+            "from": [
+              0,
+              "pitch"
+            ],
+            "to": [
+              2,
+              "pitch"
+            ]
+          },
+          {
+            "from": [
+              0,
+              "gate"
+            ],
+            "to": [
+              5,
+              "gate"
+            ]
+          },
+          {
+            "from": [
+              1,
+              "out"
+            ],
+            "to": [
+              3,
+              "in1"
+            ]
+          },
+          {
+            "from": [
+              2,
+              "out"
+            ],
+            "to": [
+              3,
+              "in2"
+            ]
+          },
+          {
+            "from": [
+              3,
+              "out"
+            ],
+            "to": [
+              4,
+              "in"
+            ]
+          },
+          {
+            "from": [
+              5,
+              "env"
+            ],
+            "to": [
+              4,
+              "cv"
+            ]
+          },
+          {
+            "from": [
+              4,
+              "out"
+            ],
+            "to": [
+              6,
+              "in"
+            ]
+          },
+          {
+            "from": [
+              5,
+              "env"
+            ],
+            "to": [
+              6,
+              "cv"
+            ]
+          },
+          {
+            "from": [
+              6,
+              "out"
+            ],
+            "to": [
+              7,
+              "l"
+            ]
+          },
+          {
+            "from": [
+              6,
+              "out"
+            ],
+            "to": [
+              7,
+              "r"
+            ]
+          },
+          {
+            "from": [
+              6,
+              "out"
+            ],
+            "to": [
+              8,
+              "l"
+            ]
+          }
+        ]
+      },
+      "patterns": [
+        {
+          "engineIdx": 0,
+          "name": "Pattern 1",
+          "bars": 4,
+          "notes": [
+            {
+              "idx": 0,
+              "pitch": 36,
+              "vel": 110,
+              "start": 0,
+              "len": 480
+            },
+            {
+              "idx": 1,
+              "pitch": 43,
+              "vel": 100,
+              "start": 960,
+              "len": 240
+            }
+          ]
+        },
+        {
+          "engineIdx": 1,
+          "name": "Pattern 2",
+          "bars": 2,
+          "notes": [
+            {
+              "idx": 0,
+              "pitch": 48,
+              "vel": 100,
+              "start": 3840,
+              "len": 3840
+            }
+          ]
+        }
+      ],
+      "currentPattern": 1,
+      "clips": [
+        {
+          "idx": 0,
+          "pattern": 1,
+          "start": 0,
+          "len": 7680,
+          "offset": 0
+        }
+      ],
+      "automation": [
+        {
+          "lane": 1,
+          "enabled": true,
+          "target": {
+            "mix": "fader"
+          },
+          "points": [
+            [
+              0,
+              -24,
+              0
+            ],
+            [
+              3840,
+              0,
+              1
+            ],
+            [
+              5760,
+              -60,
+              0
+            ]
+          ]
+        },
+        {
+          "lane": 2,
+          "enabled": true,
+          "target": {
+            "rack": [
+              4,
+              "cutoff"
+            ]
+          },
+          "points": [
+            [
+              0,
+              200,
+              0
+            ],
+            [
+              7680,
+              8000,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "synth",
+      "slot": 2,
+      "name": "Keys",
+      "color": "#ffd43b",
+      "patch": {
+        "name": "Chord Stab",
+        "modules": [
+          {
+            "idx": 0,
+            "id": "midi_in",
+            "params": {
+              "voices": 8,
+              "mode": 0,
+              "glide": 0,
+              "bend": 2,
+              "glide_mode": 0
+            }
+          },
+          {
+            "idx": 1,
+            "id": "osc",
+            "params": {
+              "wave": 0,
+              "octave": 0,
+              "tune": 0,
+              "fine": 0,
+              "pw": 0.5,
+              "fm": 0,
+              "unison": 2,
+              "detune": 12
+            }
+          },
+          {
+            "idx": 2,
+            "id": "filter",
+            "params": {
+              "mode": 0,
+              "cutoff": 500,
+              "reso": 0.3,
+              "cv_amt": 4,
+              "drive": 0
+            }
+          },
+          {
+            "idx": 3,
+            "id": "adsr",
+            "params": {
+              "attack": 0.002,
+              "decay": 0.18,
+              "sustain": 0,
+              "release": 0.15,
+              "delay": 0,
+              "vel_amt": 0
+            }
+          },
+          {
+            "idx": 4,
+            "id": "vca",
+            "params": {
+              "level": 1
+            }
+          },
+          {
+            "idx": 5,
+            "id": "out",
+            "params": {
+              "level": 0.4
+            }
+          }
+        ],
+        "cables": [
+          {
+            "from": [
+              0,
+              "pitch"
+            ],
+            "to": [
+              1,
+              "pitch"
+            ]
+          },
+          {
+            "from": [
+              0,
+              "gate"
+            ],
+            "to": [
+              3,
+              "gate"
+            ]
+          },
+          {
+            "from": [
+              1,
+              "out"
+            ],
+            "to": [
+              2,
+              "in"
+            ]
+          },
+          {
+            "from": [
+              3,
+              "env"
+            ],
+            "to": [
+              2,
+              "cv"
+            ]
+          },
+          {
+            "from": [
+              2,
+              "out"
+            ],
+            "to": [
+              4,
+              "in"
+            ]
+          },
+          {
+            "from": [
+              3,
+              "env"
+            ],
+            "to": [
+              4,
+              "cv"
+            ]
+          },
+          {
+            "from": [
+              4,
+              "out"
+            ],
+            "to": [
+              5,
+              "l"
+            ]
+          },
+          {
+            "from": [
+              4,
+              "out"
+            ],
+            "to": [
+              5,
+              "r"
+            ]
+          }
+        ]
+      },
+      "patterns": [
+        {
+          "engineIdx": 0,
+          "name": "Pattern 1",
+          "bars": 4,
+          "notes": []
+        }
+      ],
+      "currentPattern": 0,
+      "clips": [],
+      "automation": []
+    },
+    {
+      "kind": "audio",
+      "slot": 3,
+      "name": "Loop",
+      "color": "#69db7c",
+      "clips": [
+        {
+          "idx": 0,
+          "sample": 3,
+          "start": 0,
+          "len": 7680,
+          "offset": 0,
+          "loop": true,
+          "gain": -3,
+          "fadeIn": 0,
+          "fadeOut": 0
+        },
+        {
+          "idx": 1,
+          "sample": null,
+          "start": 11520,
+          "len": 3840,
+          "offset": 0,
+          "loop": false,
+          "gain": 0,
+          "fadeIn": 0,
+          "fadeOut": 0
+        }
+      ],
+      "automation": []
+    },
+    {
+      "kind": "audio",
+      "slot": 4,
+      "name": "Vox",
+      "color": "#38d9a9",
+      "clips": [
+        {
+          "idx": 0,
+          "sample": 4,
+          "start": 2400,
+          "len": 1640,
+          "offset": 0.22641509433962265,
+          "loop": false,
+          "gain": 3,
+          "fadeIn": 240,
+          "fadeOut": 480
+        }
+      ],
+      "automation": []
+    }
+  ],
+  "mixer": {
+    "tracks": [
+      {
+        "slot": 0,
+        "params": {
+          "fader": -3,
+          "pan": 0,
+          "mute": 0,
+          "solo": 0,
+          "eq_on": 0,
+          "eq_hp": 20,
+          "eq_low": 0,
+          "eq_mid_freq": 1000,
+          "eq_mid_gain": 0,
+          "eq_mid_q": 0.7,
+          "eq_high": 0,
+          "comp_on": 0,
+          "comp_threshold": -18,
+          "comp_ratio": 4,
+          "comp_attack": 5,
+          "comp_release": 120,
+          "comp_makeup": 0,
+          "send_a": -10,
+          "send_a_pre": 0,
+          "send_b": -60,
+          "send_b_pre": 0
+        },
+        "key": null
+      },
+      {
+        "slot": 1,
+        "params": {
+          "fader": 0,
+          "pan": 0.3,
+          "mute": 0,
+          "solo": 0,
+          "eq_on": 0,
+          "eq_hp": 20,
+          "eq_low": 0,
+          "eq_mid_freq": 1000,
+          "eq_mid_gain": 0,
+          "eq_mid_q": 0.7,
+          "eq_high": 0,
+          "comp_on": 1,
+          "comp_threshold": -18,
+          "comp_ratio": 4,
+          "comp_attack": 5,
+          "comp_release": 120,
+          "comp_makeup": 0,
+          "send_a": -60,
+          "send_a_pre": 0,
+          "send_b": -60,
+          "send_b_pre": 0
+        },
+        "key": {
+          "track": 0,
+          "row": 0
+        }
+      },
+      {
+        "slot": 2,
+        "params": {
+          "fader": 0,
+          "pan": 0,
+          "mute": 0,
+          "solo": 0,
+          "eq_on": 0,
+          "eq_hp": 20,
+          "eq_low": 0,
+          "eq_mid_freq": 1000,
+          "eq_mid_gain": 0,
+          "eq_mid_q": 0.7,
+          "eq_high": 0,
+          "comp_on": 0,
+          "comp_threshold": -18,
+          "comp_ratio": 4,
+          "comp_attack": 5,
+          "comp_release": 120,
+          "comp_makeup": 0,
+          "send_a": -60,
+          "send_a_pre": 0,
+          "send_b": -60,
+          "send_b_pre": 0
+        },
+        "key": {
+          "track": 1,
+          "row": null
+        }
+      },
+      {
+        "slot": 3,
+        "params": {
+          "fader": 0,
+          "pan": 0,
+          "mute": 0,
+          "solo": 0,
+          "eq_on": 0,
+          "eq_hp": 20,
+          "eq_low": 0,
+          "eq_mid_freq": 1000,
+          "eq_mid_gain": 0,
+          "eq_mid_q": 0.7,
+          "eq_high": 0,
+          "comp_on": 0,
+          "comp_threshold": -18,
+          "comp_ratio": 4,
+          "comp_attack": 5,
+          "comp_release": 120,
+          "comp_makeup": 0,
+          "send_a": -60,
+          "send_a_pre": 0,
+          "send_b": -60,
+          "send_b_pre": 0
+        },
+        "key": null
+      },
+      {
+        "slot": 4,
+        "params": {
+          "fader": -2,
+          "pan": 0,
+          "mute": 0,
+          "solo": 0,
+          "eq_on": 0,
+          "eq_hp": 20,
+          "eq_low": 0,
+          "eq_mid_freq": 1000,
+          "eq_mid_gain": 0,
+          "eq_mid_q": 0.7,
+          "eq_high": 0,
+          "comp_on": 1,
+          "comp_threshold": -18,
+          "comp_ratio": 4,
+          "comp_attack": 5,
+          "comp_release": 120,
+          "comp_makeup": 0,
+          "send_a": -60,
+          "send_a_pre": 0,
+          "send_b": -60,
+          "send_b_pre": 0
+        },
+        "key": {
+          "track": 3,
+          "row": null
+        }
+      }
+    ],
+    "reverb": {
+      "fader": 0,
+      "pan": 0,
+      "mute": 0,
+      "eq_on": 0,
+      "eq_hp": 20,
+      "eq_low": 0,
+      "eq_mid_freq": 1000,
+      "eq_mid_gain": 0,
+      "eq_mid_q": 0.7,
+      "eq_high": 0,
+      "rev_size": 0.8,
+      "rev_decay": 2.2,
+      "rev_damping": 0.5,
+      "rev_predelay": 20
+    },
+    "delay": {
+      "fader": 0,
+      "pan": 0,
+      "mute": 0,
+      "eq_on": 0,
+      "eq_hp": 20,
+      "eq_low": 0,
+      "eq_mid_freq": 1000,
+      "eq_mid_gain": 0,
+      "eq_mid_q": 0.7,
+      "eq_high": 0,
+      "delay_time": 3,
+      "delay_feedback": 0.35,
+      "delay_ping_pong": 1,
+      "delay_high_cut": 6000
+    },
+    "master": {
+      "fader": 0,
+      "eq_on": 0,
+      "eq_hp": 20,
+      "eq_low": 0,
+      "eq_mid_freq": 1000,
+      "eq_mid_gain": 0,
+      "eq_mid_q": 0.7,
+      "eq_high": 0,
+      "limiter_ceiling": -1
+    },
+    "automation": [
+      {
+        "channel": "master",
+        "lane": 3,
+        "enabled": false,
+        "target": {
+          "mix": "limiter_ceiling"
+        },
+        "points": [
+          [
+            0,
+            0,
+            0
+          ],
+          [
+            7680,
+            -3,
+            0
+          ]
+        ]
+      }
+    ]
+  },
+  "samples": [
+    {
+      "id": 0,
+      "name": "kick.wav",
+      "type": "audio/wav",
+      "file": "samples/0-bb5fdc36-kick.wav"
+    },
+    {
+      "id": 1,
+      "name": "snare.wav",
+      "type": "audio/wav",
+      "file": "samples/1-f17c33d9-snare.wav"
+    },
+    {
+      "id": 2,
+      "name": "vox.wav",
+      "type": "audio/wav",
+      "file": "samples/2-3c9306e3-vox.wav"
+    },
+    {
+      "id": 3,
+      "name": "loop.wav",
+      "type": "audio/wav",
+      "file": "samples/3-d437851b-loop.wav"
+    },
+    {
+      "id": 4,
+      "name": "vox.wav",
+      "type": "audio/wav",
+      "file": "samples/4-ca8ccc9c-vox.wav"
+    }
+  ],
+  "selection": {
+    "track": 4,
+    "synth": 1
+  }
+}

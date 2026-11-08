@@ -7,6 +7,7 @@ import type { Project, RackCable, RackModule, SynthTrack } from './project.svelt
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { edit } from './edits';
+import { dropModuleMappings, dropRackMappings } from './midiMap';
 import { STARTER_PATCHES, validatePatch } from './patches';
 import { makeNotePattern } from './pattern-actions';
 import type { Patch } from './patches';
@@ -69,6 +70,7 @@ export function loadPatch(p: Project, sink: CommandSink, trackId: string, patch:
     for (const c of rack.commands) sink.send(c[0], c[1], c[2], c[3], c[4]);
     // RACK_CLEAR clears every rack lane of the slot in the engine; mirror it.
     if (t.automation.some((l) => l.target.kind === 'rack')) t.automation = t.automation.filter((l) => l.target.kind !== 'rack');
+    dropRackMappings(p, t.id); // the new rack's modules are other controls (mixer mappings stay)
     t.modules = rack.modules;
     t.cables = rack.cables;
     t.patchName = v.name;
@@ -156,6 +158,7 @@ export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: 
   t.modules = t.modules.filter((m) => m.idx !== idx);
   t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
   dropModuleLanes(t, idx); // the engine refused their AUTO_LANE_SET (no such module)
+  dropModuleMappings(p, t.id, idx);
   return fxPoolFullText(moduleDef(kind)) || `No room for another ${moduleDef(kind).name}`;
 }
 
@@ -198,6 +201,7 @@ export function removeModule(p: Project, sink: CommandSink, trackId: string, idx
     t.modules = t.modules.filter((m) => m.idx !== idx);
     t.cables = t.cables.filter((c) => c.from.m !== idx && c.to.m !== idx);
     dropModuleLanes(t, idx);
+    dropModuleMappings(p, t.id, idx); // same undo entry as the removal
     sink.send(Op.RACK_REMOVE_MODULE, t.slot, idx);
   });
 }
@@ -236,8 +240,16 @@ function paramLabel(p: Project, trackId: string, idx: number, paramIdx: number):
   return `Set ${(m && moduleDef(m.kind).params[paramIdx]?.label) || 'param'}`;
 }
 
-export function setParam(p: Project, sink: CommandSink, trackId: string, idx: number, paramIdx: number, value: number) {
-  return edit(p, paramLabel(p, trackId, idx, paramIdx), () => {
+/**
+ * `opts` (a MIDI CC move, state/midiMap.ts applyCc): `label` replaces the
+ * undo label, and consecutive edits with the same `coalesce` key merge into
+ * one entry (edits.ts). Without them: "Set <label>", no merging.
+ */
+export function setParam(
+  p: Project, sink: CommandSink, trackId: string, idx: number, paramIdx: number, value: number,
+  opts?: { coalesce?: string; label?: string },
+) {
+  return edit(p, opts?.label ?? paramLabel(p, trackId, idx, paramIdx), () => {
     const t = synthTrack(p, trackId);
     const m = t?.modules.find((x) => x.idx === idx);
     if (!t || !m || Number.isNaN(value)) return;
@@ -245,5 +257,5 @@ export function setParam(p: Project, sink: CommandSink, trackId: string, idx: nu
     if (!pd) return;
     m.params[paramIdx] = clampParam(pd, value);
     sink.send(Op.RACK_SET_PARAM, t.slot, idx, paramIdx, m.params[paramIdx]);
-  });
+  }, opts?.coalesce !== undefined ? { coalesce: opts.coalesce } : undefined);
 }

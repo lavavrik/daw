@@ -3,6 +3,7 @@
 import { BAR_TICKS, STEP_TICKS } from '../audio/protocol';
 import { defaultMixParams } from '../audio/mixerCatalog';
 import type { History } from '../history/history';
+import type { MidiMapping } from './midiMap';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -365,6 +366,12 @@ export class Project {
   nextSampleId = $state(0);
   /** Mixer strips, returns and master; edit only through mixer-actions.ts. */
   mixer = $state<MixerState>(newMixer());
+  /**
+   * MIDI CC mappings (state/midiMap.ts): saved with the project, edited only
+   * through midiMap.ts (learnMidi / forgetMidi, and the drop* helpers the
+   * track/module/patch removals call). At most one per CC and per control.
+   */
+  midiMap = $state<MidiMapping[]>([]);
   /** 'pattern': each track loops its current pattern; 'song': clips play on the timeline. */
   mode = $state<'pattern' | 'song'>('pattern');
   /** Song-mode loop range in ticks (sent to the engine only while `on`). */

@@ -2,7 +2,7 @@
 // An old project loads them with their catalog defaults and a save writes
 // them (trackPatch writes every param), so a round-trip of a frozen fixture
 // equals the fixture plus these. Used by load.test.ts and the e2e
-// `v1/v2 project opens in v3` tests; extend it when the catalog grows.
+// `v1/v2 project opens in v4` tests; extend it when the catalog grows.
 
 /** Module id -> the appended params and their defaults. */
 export const APPENDED_PARAMS: Record<string, Record<string, number>> = {

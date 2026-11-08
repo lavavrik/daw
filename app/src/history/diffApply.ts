@@ -36,7 +36,9 @@
 //      kept one gets its point difference by idx (state/automation.ts
 //      pointCommands: removals before sets) and its enable flag. Lane and
 //      point UI ids survive when their engine lane / idx is kept;
-//   4. tempo, metronome, loop, mode; selection and the live input track.
+//   4. tempo, metronome, loop, mode; selection and the live input track;
+//      the MIDI mappings (UI state only, no command: rebuilt from `to` by
+//      slot, so a track rebuilt in step 2 under a fresh id keeps them).
 // The project name is not restored (a Save As names the project, not an edit).
 import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
@@ -56,7 +58,7 @@ import type {
   AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
   Project, SidechainKey, SynthTrack, Track,
 } from '../state/project.svelte';
-import { laneCommands, lanesState, trackCommands, trackState } from '../project/commands';
+import { laneCommands, lanesState, midiMapState, trackCommands, trackState } from '../project/commands';
 import { MASTER_CHANNEL_INDEX, pointCommands, pointMap } from '../state/automation';
 import type { PointTuple } from '../state/automation';
 import type {
@@ -162,6 +164,8 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   const synth = to.selection.synth !== null ? bySlot.get(to.selection.synth) : order.find((t) => t.kind === 'synth');
   p.selectedTrackId = sel?.id ?? null;
   p.lastSynthTrackId = sel?.kind === 'synth' ? sel.id : (synth?.id ?? null);
+  const midiMap = midiMapState(to.midiMap, (slot) => bySlot.get(slot)?.id);
+  if (!same(p.midiMap, midiMap)) p.midiMap = midiMap;
   const input = liveInputTrack(p)?.slot ?? -1;
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
   markEdited(p); // also when only UI-only fields (names) changed

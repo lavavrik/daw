@@ -3,8 +3,7 @@
 // overlap is always re-resolved here (a panel that grows pushes its right-hand
 // neighbours instead of covering them).
 
-/** Mirrors the model type in state/project.svelte.ts (switch to that import once it lands). */
-export type RackPos = { row: number; x: number };
+import type { RackPos } from '../../state/project.svelte';
 
 export const GRID = 10;
 

@@ -6,18 +6,77 @@ the audio thread renders in small sub-blocks. Code: `engine/src/rack/mod.rs` (gr
 `engine/src/rack/modules/*.rs` (the DSP); the generated module list is
 `engine/catalog.json`.
 
-## Rack layout (plan 13)
+## Layout (plan 18)
 
-The Instrument tab's rack (`app/src/ui/rack/Rack.svelte`) wraps into rows
-like VCV Rack instead of one long horizontal rail. `.content` is a wrapping
-flex container the width of the rail (`flex-wrap: wrap; width: 100%`), 14 px
-between rows, each row as tall as its tallest panel. The rail scrolls
-vertically, and horizontally only if a single panel is wider than the rail.
-Module order is unchanged (by `idx`, left to right, then down); nothing
-saved changes. Cables are an SVG layer over `.content`; jack centres are
-measured relative to it, and the ResizeObserver on `.content` re-measures
-whenever a wrap or window resize reflows the panels (e2e
-`tests/e2e/rack.spec.ts`, `cables follow wrapped rows`).
+The Instrument tab's rack (`app/src/ui/rack/Rack.svelte`) has two layouts.
+Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3.
+
+- **Flow** (no module has a `pos`: house patches, older projects). This is
+  plan 13's wrapping rail, unchanged. `.content` is a wrapping flex container
+  the width of the rail (`flex-wrap: wrap; width: 100%`), with 14 px between
+  rows, and each row is as tall as its tallest panel. Panels go by `idx`,
+  left to right, then down.
+- **Positioned** (any module has a `pos: {row, x}`, `x` in 10 px grid units).
+  - The panels are absolutely positioned inside `.content` at
+    `left = 6 + x·10`. The top of a row is the sum of the heights of the rows
+    above it plus 14 px gaps.
+  - A row is as tall as its tallest panel, measured from the DOM.
+  - Panels keep their natural height and `width: max-content`. Far to the
+    right, shrink-to-fit would squeeze them.
+  - `.content` gets an explicit width (at least 100 %) and height, so the
+    rail scrolls both ways.
+  - The pure layout is in `app/src/ui/rack/rackLayout.ts`:
+    - `layoutRack` resolves overlap left to right in each row, so a panel
+      that grows pushes its neighbours instead of covering them;
+    - modules without a `pos` go at the end of the bottom row;
+    - empty rows are compacted.
+
+**Measuring.** `measure()` reads every panel's `offsetWidth`/`offsetHeight`
+(a transform doesn't change them) into `dims`. The layout is derived from
+`dims`.
+
+- When a size changes, the layout changes, so measure runs again after the
+  DOM update. This converges, because positions never change a panel's size.
+- An effect on the derived geometry re-measures after a move that changed
+  no size.
+- Jack centres are measured relative to `.content`. The ResizeObserver
+  watches the rail, `.content` and every panel.
+
+**Dragging.** The panel header (`module-header-<idx>`, focusable) is the
+handle. A press on its × is not a drag.
+
+- While dragging:
+  - the panel follows the pointer with a translate, and the cables
+    re-measure every frame;
+  - the target row is the row band under the pointer (bands come from the
+    panel rects at the press), and below the last band a dashed "new row"
+    band shows;
+  - x is `round((pointer − grab offset − 6) / 10)`;
+  - a dashed outline shows `moveTo`'s placement of the module.
+- On release, with more than 3 px of travel and a changed placement, there
+  is one `setRackLayout(…, 'Move module')`. It runs inside the pointer
+  gesture, so it makes one undo entry.
+- In a flow rack the base is `pinFromRects` of the on-screen rects: the
+  first drag pins every module and moves this one in that same entry. Flow
+  keeps rendering until the drop.
+- Esc, Cmd/Ctrl+Z or redo mid-drag cancel it through `registerDragCancel`,
+  and nothing is written.
+
+**Keyboard.** Alt+arrows on a focused header move the module by 1 grid unit
+or 1 row, with the same push rules.
+
+- Quick nudges are one entry: the coalesce key is
+  `sweepKey('rackmove:<trackId>')` (`history/sweep.ts`), and it steps after
+  1 s idle.
+
+**Tidy** (toolbar, `rack-tidy`) removes every `pos` ("Tidy rack"). It is
+disabled when the rack already flows.
+
+**Tests.** The e2e tests are in `tests/e2e/rack.spec.ts`:
+
+- `cables follow wrapped rows`;
+- the plan 18 drag tests: new row, push, click, Tidy, undo mid drag,
+  keyboard, wide rack.
 
 ## Signals
 

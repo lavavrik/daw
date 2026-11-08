@@ -529,7 +529,7 @@ test('knob values can be typed: click the readout, Enter applies, Esc cancels, j
 test('rack shows the patch and knobs show values', async ({ page }) => {
   await addSynth(page);
   const names = ['MIDI In', 'Oscillator', 'Oscillator', 'Mixer', 'Filter', 'ADSR', 'VCA', 'Out'];
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(names.length);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(names.length);
   for (const [i, n] of names.entries()) await expect(page.getByTestId(`module-${i}`)).toContainText(n);
   await expect(page.getByTestId('knob-4-cutoff')).toContainText('300 Hz');
   await expect(page.getByTestId('knob-4-cutoff')).toContainText('Cutoff');
@@ -588,7 +588,7 @@ test('turning cutoff updates readout and engine accepts it', async ({ page }) =>
   await page.getByTestId('patch-select').selectOption('Pad');
   await page.getByTestId('inline-confirm-ok').click();
   await expect(page.getByTestId('patch-select')).toHaveValue('Pad');
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(7);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(7);
   await expect(page.getByTestId('patch-edited')).toBeHidden();
 });
 
@@ -727,7 +727,7 @@ test('add module menu adds Noise', async ({ page }) => {
   await expect(items.last()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(9);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(9);
 });
 
 test('effect modules: pink Effect group, a Delay in the signal path, pool limit greys the 9th', async ({ page }) => {
@@ -756,21 +756,21 @@ test('effect modules: pink Effect group, a Delay in the signal path, pool limit 
     await addBtn.click();
     await page.getByTestId('add-delay').click();
   }
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(16);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(16);
   await addBtn.click();
   const ninth = page.getByTestId('add-delay');
   await expect(ninth).toHaveAttribute('aria-disabled', 'true');
   await expect(ninth).toContainText('All 8 delays in use');
   await ninth.click({ force: true }); // aria-disabled: Playwright would wait
   await expect(menu).toBeVisible(); // nothing added, the menu says why
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(16);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(16);
   await expect(page.getByTestId('add-reverb')).not.toHaveAttribute('aria-disabled', 'true');
 });
 
 test('loading the Chord Stab patch replaces the rack and plays chords', async ({ page }) => {
   await addSynth(page);
   await page.getByTestId('patch-select').selectOption('Chord Stab');
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(6);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(6);
   await expect(page.getByTestId('module-5')).toContainText('Out');
   await expect(page.getByTestId('track-1')).toContainText('Synth · Chord Stab');
   await expect(page.getByTestId('patch-edited')).toBeHidden();
@@ -790,7 +790,7 @@ test('a cable can also be drawn from an empty input to an output; a full rack sa
     await addBtn.click();
     await page.getByTestId('add-noise').click();
   }
-  await expect(page.locator('[data-testid^="module-"]')).toHaveCount(32);
+  await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])')).toHaveCount(32);
   await addBtn.click();
   await expect(page.getByTestId('add-menu')).toContainText('Rack is full');
   await page.mouse.click(5, 5); // outside click closes it

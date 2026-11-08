@@ -1,5 +1,6 @@
 <script module lang="ts">
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+  import { createSweepKeys } from '../../history/sweep';
   /**
    * Track ids whose rack was edited since its patch was loaded: drives the
    * "(edited)" marker next to the patch name. UI state only (not saved, not
@@ -11,22 +12,45 @@
    * from (library/patchSource.ts): tells a library "Pad" from the starter.
    */
   const loadedFrom = new SvelteMap<string, string>();
+  /** Alt+arrow module nudges: `rackmove:<trackId>:<n>`, a new undo entry after 1 s idle (history/sweep.ts). */
+  const sweepKey = createSweepKeys();
 </script>
 
 <script lang="ts">
   // The Instrument tab: a VCV-Rack-style rail of module panels, with cables
   // drawn on an SVG layer above them.
   //
-  // Layout (plan 13, multirow like VCV Rack): `.rail` is the scroller
-  // (vertical; horizontal only if one panel is wider than the rail);
-  // `.content` (position: relative, width = the rail's width) is a wrapping
-  // flex container: panels flow left to right and wrap into rows, each row as
-  // tall as its tallest panel (align-items: stretch), rows 14 px apart. It
-  // holds the panels AND the cable <svg>, so cables scroll with the panels.
-  // Jack centres are measured relative to `.content` (see measure()) on patch
-  // change, scroll, and whenever the ResizeObserver sees `.rail` or `.content`
-  // change size: a wrap reflow changes `.content`'s height (and a resize its
-  // width), so the observer on `.content` is what re-measures after a wrap.
+  // Layout (docs/architecture/modular.md "Layout (plan 18)"): `.rail` is the
+  // scroller; `.content` (position: relative) holds the panels AND the cable
+  // <svg>, so cables scroll with the panels. Two modes:
+  //   - flow (no module has a `pos`; plan 13): `.content` is a wrapping flex
+  //     container the rail's width: panels by idx, left to right, wrapping
+  //     into rows as tall as their tallest panel (align-items: stretch),
+  //     rows 14 px apart;
+  //   - positioned (any `pos`): `placed` = rackLayout.ts layoutRack(modules,
+  //     measured widths); each panel is absolute at left = PAD + x·GRID, top =
+  //     the sum of the rows above (each as tall as its tallest panel) + 14 px
+  //     gaps; `.content` gets an explicit width (>= 100 %) and height, so the
+  //     rail scrolls both ways.
+  // Measuring: measure() reads every panel's offsetWidth/Height into `dims`
+  // (what the layout is derived from; a change re-measures after the DOM
+  // update) and the jack centres relative to `.content`. It runs on patch
+  // change, a layout change, scroll, and whenever the ResizeObserver sees
+  // `.rail`, `.content` or a panel change size (a wrap reflow changes
+  // `.content`'s height; a panel that grows moves its row-mates).
+  //
+  // Module drag (plan 18): a press on a panel header (ModulePanel's
+  // `onheaderdown`, not its ×) starts `mdrag`. The panel follows the pointer
+  // by a translate and the cables re-measure every frame; the target row is
+  // the row band under the pointer (below the last: a new row, a dashed band
+  // shows), x = the panel's left snapped to GRID, and `landing` = moveTo of
+  // the base layout (the drawn one, or in a flow rack pinFromRects of the
+  // panels on screen; flow keeps rendering until the drop) draws the dashed
+  // outline. Release after > 3 px with a changed placement: ONE
+  // setRackLayout('Move module') inside the pointer gesture (one undo entry,
+  // pins included). Esc / Cmd+Z / redo mid-drag cancel (registerDragCancel).
+  // Alt+arrows on a focused header nudge (coalesced, history/sweep.ts);
+  // Tidy drops every pos.
   //
   // Cables: the SVG has `pointer-events: none` everywhere, so it never steals
   // clicks from knobs. Cables are grabbed by their INPUT jack instead (VCV
@@ -69,7 +93,7 @@
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import {
-    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam, setParams,
+    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam, setParams, setRackLayout,
   } from '../../state/rack-actions';
   import { deferSampleAssign } from '../../state/sampleLoads';
   import { importSample } from '../../state/sampleImport';
@@ -77,6 +101,8 @@
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
   import VoiceLeds from './VoiceLeds.svelte';
+  import { GRID, layoutRack, moveTo, pinFromRects, toPositions } from './rackLayout';
+  import type { Placed } from './rackLayout';
 
   let { p, engine, track, onpianoroll }: {
     p: Project;
@@ -143,6 +169,7 @@
   function measure() {
     measureRaf = 0;
     if (!content) return;
+    measurePanels();
     const r0 = content.getBoundingClientRect();
     const next: Record<string, Pt> = {};
     for (const el of content.querySelectorAll<HTMLElement>('[data-jack]')) {
@@ -160,6 +187,7 @@
     // the focused jack for a keyboard pick (it has no pointer position).
     if (drag?.kbd) drag.at = (drag.kbdAt && next[drag.kbdAt]) || drag.at;
     else if (drag) drag.at = { x: drag.client.x - r0.left, y: drag.client.y - r0.top };
+    if (mdrag) mdrag.at = { x: mdrag.client.x - r0.left, y: mdrag.client.y - r0.top };
   }
   /** Coalesced to one measure per frame (scroll and resize fire often). */
   function remeasure() {
@@ -204,6 +232,215 @@
       measureRaf = 0;
     };
   });
+
+  // ---- layout (plan 18: free placement) ---------------------------------------
+  /** `.content`'s padding and the gap between rows (px): the CSS below. */
+  const PAD = 6;
+  const ROW_GAP = 14;
+
+  /** The module panels among `.content`'s children (not the drop outline / new-row band). */
+  function panels(): [idx: number, el: HTMLElement][] {
+    if (!content) return [];
+    const out: [number, HTMLElement][] = [];
+    for (const el of content.children) {
+      const m = el instanceof HTMLElement ? /^module-(\d+)$/.exec(el.dataset.testid ?? '') : null;
+      if (m) out.push([Number(m[1]), el as HTMLElement]);
+    }
+    return out;
+  }
+
+  /** Measured panel sizes (offsetWidth/Height px; a transform does not change them), by idx. */
+  let dims = $state(new Map<number, { w: number; h: number }>());
+  /**
+   * Re-read every panel's size; when one changed, the layout below changes,
+   * so measure again once the DOM has it (jacks moved). Converges: positions
+   * never change a panel's size (`width: max-content` when positioned).
+   */
+  function measurePanels() {
+    const next = new Map<number, { w: number; h: number }>();
+    for (const [idx, el] of panels()) next.set(idx, { w: el.offsetWidth, h: el.offsetHeight });
+    const same = next.size === dims.size && [...next].every(([i, d]) => dims.get(i)?.w === d.w && dims.get(i)?.h === d.h);
+    if (same) return;
+    dims = next;
+    void tick().then(remeasure);
+  }
+  const widths = $derived(new Map([...dims].map(([i, d]) => [i, d.w])));
+  /** The positioned layout (rackLayout.ts), or null: no module has a `pos`, today's flex-wrap flow. */
+  const placed = $derived(layoutRack(modules, widths));
+  /** Positioned: each panel's left/top in `.content` px, and `.content`'s size. Rows are as tall as their tallest panel. */
+  const geometry = $derived.by(() => {
+    if (!placed) return null;
+    const rowH: number[] = [];
+    for (const q of placed) rowH[q.row] = Math.max(rowH[q.row] ?? 0, dims.get(q.idx)?.h ?? 0);
+    const tops: number[] = [];
+    let y = PAD;
+    for (let r = 0; r < rowH.length; r++) {
+      tops[r] = y;
+      y += (rowH[r] ?? 0) + ROW_GAP;
+    }
+    const at = new Map(placed.map((q) => [q.idx, { left: PAD + q.x * GRID, top: tops[q.row] }]));
+    const right = Math.max(0, ...placed.map((q) => q.x * GRID + (dims.get(q.idx)?.w ?? q.w * GRID)));
+    return { at, w: right + 2 * PAD, h: y - ROW_GAP + PAD };
+  });
+  // A move changes no module's identity and maybe no size: re-measure the jacks once it is drawn.
+  $effect(() => {
+    void geometry;
+    void tick().then(remeasure);
+  });
+
+  /** Panel rects relative to `.content` (px). */
+  function panelRects() {
+    const r0 = content!.getBoundingClientRect();
+    return panels().map(([idx, el]) => {
+      const r = el.getBoundingClientRect();
+      return { idx, left: r.left - r0.left, top: r.top - r0.top, width: r.width, height: r.height };
+    });
+  }
+  /** The layout a move applies to: the drawn one, or in a flow rack the pins of what is on screen (first drag pins). */
+  function moveBase(): Placed[] {
+    return placed ?? pinFromRects(panelRects(), PAD);
+  }
+  const samePlacement = (a: readonly Placed[], b: readonly Placed[]) =>
+    a.length === b.length && a.every((q) => b.some((o) => o.idx === q.idx && o.row === q.row && o.x === q.x));
+
+  type ModDrag = {
+    idx: number;
+    /** The layout the drop applies to (moveBase() at the press). */
+    base: Placed[];
+    /** Each base row's band (`.content` px; the row's panels as they are drawn at the press). */
+    bands: { top: number; bottom: number }[];
+    /** Pointer at the press, now (viewport, to re-derive `at` after a scroll) and in `.content` px. */
+    start: Pt;
+    client: Pt;
+    at0: Pt;
+    at: Pt;
+    /** Pointer minus the panel's left/top at the press (px). */
+    grab: Pt;
+    /** The dragged panel's size (px). */
+    w: number;
+    h: number;
+  };
+  let mdrag = $state<ModDrag | null>(null);
+  /** Past the 3 px click slop: the outline shows and a release moves. */
+  const travelled = $derived(!!mdrag && Math.hypot(mdrag.client.x - mdrag.start.x, mdrag.client.y - mdrag.start.y) > 3);
+  /**
+   * Where the module would land: the row band under the pointer (below the
+   * last one: a new row), x = the panel's left on the grid; moveTo pushes the
+   * overlapped panels right. `top` is the band's (or the new row's) top.
+   */
+  const landing = $derived.by(() => {
+    const d = mdrag;
+    if (!d || !travelled) return null;
+    const last = d.bands[d.bands.length - 1];
+    const newTop = (last?.bottom ?? PAD - ROW_GAP) + ROW_GAP;
+    const found = d.bands.findIndex((b) => d.at.y < b.bottom + ROW_GAP / 2);
+    const row = found < 0 ? d.bands.length : found;
+    const x = Math.max(0, Math.round((d.at.x - d.grab.x - PAD) / GRID));
+    const result = moveTo(d.base, d.idx, row, x);
+    const me = result.find((q) => q.idx === d.idx)!;
+    return { result, newTop, left: PAD + me.x * GRID, top: row < d.bands.length ? d.bands[row].top : newTop };
+  });
+
+  function headerDown(e: PointerEvent, idx: number) {
+    if (drag?.kbd) drag = null; // a press cancels a keyboard pick
+    if (e.button !== 0 || !content || drag || mdrag) return;
+    e.preventDefault(); // no text selection
+    const el = e.currentTarget as HTMLElement;
+    el.focus({ preventScroll: true }); // Alt+arrows go on from here
+    el.setPointerCapture(e.pointerId);
+    const rects = panelRects();
+    const me = rects.find((r) => r.idx === idx);
+    if (!me) return;
+    const base = moveBase();
+    const bands: { top: number; bottom: number }[] = [];
+    for (const q of base) {
+      const r = rects.find((x) => x.idx === q.idx);
+      if (!r) continue;
+      const b = bands[q.row];
+      bands[q.row] = b ? { top: Math.min(b.top, r.top), bottom: Math.max(b.bottom, r.top + r.height) } : { top: r.top, bottom: r.top + r.height };
+    }
+    const at = local(e);
+    const client = { x: e.clientX, y: e.clientY };
+    mdrag = { idx, base, bands, start: client, client, at0: at, at, grab: { x: at.x - me.left, y: at.y - me.top }, w: me.width, h: me.height };
+
+    const move = (ev: PointerEvent) => {
+      if (!mdrag) return;
+      mdrag.client = { x: ev.clientX, y: ev.clientY };
+      mdrag.at = local(ev);
+      remeasure(); // the cables follow the panel (a frame at most behind)
+    };
+    const cleanup = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', cancel);
+      el.removeEventListener('lostpointercapture', cancel);
+      window.removeEventListener('keydown', esc, true);
+      offUndo();
+      endPointerDrag = null;
+      const l = landing;
+      mdrag = null;
+      remeasure();
+      return l;
+    };
+    // The one write of the drag (inside its pointer gesture: one undo entry,
+    // "Move module"; in a flow rack it pins every module too). A click, or a
+    // drop on the module's own spot, writes nothing.
+    const up = () => {
+      const l = cleanup();
+      if (l && !samePlacement(l.result, base) && setRackLayout(p, track.id, toPositions(l.result), 'Move module')) edited.add(track.id);
+    };
+    const cancel = () => void cleanup();
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      cleanup();
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    };
+    // Cmd/Ctrl+Z or redo mid-drag: the same as Escape (nothing was written yet).
+    const mine = mdrag;
+    const offUndo = registerDragCancel(() => {
+      if (mdrag !== mine) {
+        offUndo();
+        return false;
+      }
+      cleanup();
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      return true;
+    });
+    endPointerDrag = cancel;
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', cancel);
+    el.addEventListener('lostpointercapture', cancel);
+    window.addEventListener('keydown', esc, true);
+  }
+
+  // Keyboard: Alt+arrows on a focused header move the module one grid unit /
+  // one row (same push rules). Quick nudges are one undo entry: coalesce key
+  // sweepKey(`rackmove:<trackId>`), which steps after 1 s idle.
+  const NUDGE: Record<string, [dRow: number, dx: number]> = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
+  function headerKey(e: KeyboardEvent, idx: number) {
+    const d = NUDGE[e.key];
+    if (!d || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault(); // Alt+Left is the browser's Back on Windows / Linux
+    e.stopPropagation();
+    if (mdrag || !content) return;
+    const base = moveBase();
+    const me = base.find((q) => q.idx === idx);
+    if (!me || me.row + d[0] < 0) return;
+    const result = moveTo(base, idx, me.row + d[0], Math.max(0, me.x + d[1]));
+    if (samePlacement(result, base)) return;
+    if (!setRackLayout(p, track.id, toPositions(result), 'Move module', sweepKey(`rackmove:${track.id}`))) return;
+    edited.add(track.id);
+    const el = e.currentTarget as HTMLElement;
+    void tick().then(() => el.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+  }
+
+  /** Back to the wrapping flow: every `pos` removed (one undo entry). */
+  function tidy() {
+    if (setRackLayout(p, track.id, null, 'Tidy rack')) edited.add(track.id);
+  }
 
   // ---- cables ----------------------------------------------------------------
   type Drag = {
@@ -255,7 +492,7 @@
 
   function jackDown(e: PointerEvent, m: number, dir: 'in' | 'out', port: number) {
     if (drag?.kbd) drag = null; // a press cancels a keyboard pick
-    if (e.button !== 0 || !content || drag) return;
+    if (e.button !== 0 || !content || drag || mdrag) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
@@ -373,10 +610,13 @@
       window.removeEventListener('pointerdown', press, true);
     };
   });
-  // Another track's rack: a pick from this one is dropped.
+  // Another track's rack: a pick (or a module drag) from this one is dropped.
   $effect(() => {
     void track.id;
-    untrack(() => { if (drag?.kbd) drag = null; });
+    untrack(() => {
+      if (drag?.kbd) drag = null;
+      if (mdrag) endPointerDrag?.();
+    });
   });
   const pickedText = $derived.by(() => {
     const k = drag?.kbd;
@@ -705,6 +945,9 @@
     {/if}
     <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
     <VoiceLeds {track} />
+    <button class="add" data-testid="rack-tidy" disabled={!placed}
+      title={placed ? 'Remove every module position: back to the wrapping layout' : 'The rack already wraps (drag a module header to place it)'}
+      onclick={tidy}>Tidy</button>
     <button class="add" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
     <div class="addwrap">
       <button
@@ -780,7 +1023,10 @@
   <!-- Keyboard patching status (screen readers; the picked jack is ringed). -->
   <p class="sr-only" data-testid="jack-status" aria-live="polite">{pickedText}</p>
   <div class="rail" data-testid="rail" bind:this={rail}>
-    <div class="content" bind:this={content}>
+    <div
+      class="content" bind:this={content}
+      style:width={geometry ? `max(100%, ${geometry.w}px)` : undefined} style:height={geometry ? `${geometry.h}px` : undefined}
+    >
       {#each modules as m (m.idx)}
         <ModulePanel
           module={m}
@@ -803,8 +1049,17 @@
           sampleRate={engine.sampleRate}
           lastNote={moduleDef(m.kind).id === 'sample_player' ? lastLive.note : null}
           scope={moduleDef(m.kind).id === 'scope' ? { track: track.slot, sampleRate: engine.sampleRate } : null}
+          place={geometry?.at.get(m.idx) ?? null}
+          shift={mdrag?.idx === m.idx ? { x: mdrag.at.x - mdrag.at0.x, y: mdrag.at.y - mdrag.at0.y } : null}
+          onheaderdown={(e) => headerDown(e, m.idx)}
+          onheaderkey={(e) => headerKey(e, m.idx)}
         />
       {/each}
+      {#if mdrag && landing}
+        <div class="newrow" data-testid="rack-new-row" style:top={`${landing.newTop}px`} style:height={`${mdrag.h}px`}><span>new row</span></div>
+        <div class="outline" data-testid="rack-drop-outline"
+          style:left={`${landing.left}px`} style:top={`${landing.top}px`} style:width={`${mdrag.w}px`} style:height={`${mdrag.h}px`}></div>
+      {/if}
       {#if modules.length === 0}
         <p class="empty">Empty rack — pick a patch or add modules. A synth needs at least MIDI In → Oscillator → Out.</p>
       {/if}
@@ -861,6 +1116,10 @@
   /* Wraps into rows; `width: 100%` (not max-content) so the rail's width is the wrap point. */
   .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 4px; width: 100%; box-sizing: border-box; padding: 6px; }
   .empty { color: #7d808c; margin: 8px; }
+  /* Drag feedback (plan 18): where the panel lands, and the band for a new row below the last one. */
+  .outline, .newrow { position: absolute; box-sizing: border-box; pointer-events: none; border-radius: 3px; }
+  .outline { border: 2px dashed #f0a23a; background: #f0a23a14; }
+  .newrow { left: 6px; right: 6px; border: 1px dashed #4a4d58; color: #6f7280; font-size: 10px; padding: 4px 8px; }
   .cables { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }

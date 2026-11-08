@@ -28,6 +28,14 @@
   // change the view) (`owner` = the track: Knob.svelte
   // registers module idx + param name with the app's autoBus) and offer
   // "Automate" on right-click when the param is continuous.
+  //
+  // Free layout (plan 18): the header is the panel's drag handle (focusable;
+  // Alt+arrow keys move the panel). Rack.svelte owns the drag: it gets the
+  // press through `onheaderdown` (a press on the header's × does not start
+  // one) and the keys through `onheaderkey`, and places the panel with
+  // `place` (positioned rack: absolute left/top inside `.content`; null =
+  // flow) and `shift` (the dragged panel's translate while it follows the
+  // pointer).
   import type { ModuleDef } from '../../audio/catalog';
   import { isSampleDrag } from '../../library/drag';
   import type { RackModule, SampleMeta } from '../../state/project.svelte';
@@ -43,7 +51,7 @@
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onparams, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
-    sampleMeta = null, sampleRate = 48000, lastNote = null,
+    sampleMeta = null, sampleRate = 48000, lastNote = null, place = null, shift = null, onheaderdown, onheaderkey,
   }: {
     module: RackModule;
     def: ModuleDef;
@@ -77,7 +85,21 @@
     lastNote?: number | null;
     /** Scope only: the track's engine slot and the sample rate (its screen). */
     scope?: { track: number; sampleRate: number } | null;
+    /** Positioned rack: the panel's left/top in `.content` px; null = flow (flex-wrap). */
+    place?: { left: number; top: number } | null;
+    /** While dragged: the translate (px) that keeps it under the pointer. */
+    shift?: { x: number; y: number } | null;
+    /** A primary press on the header (not on its × button): Rack starts a module drag. */
+    onheaderdown?: (e: PointerEvent) => void;
+    /** A key on the focused header (Alt+arrows move the module). */
+    onheaderkey?: (e: KeyboardEvent) => void;
   } = $props();
+
+  /** Presses on the header's own controls (×) are theirs, not a drag. */
+  function headerDown(e: PointerEvent) {
+    if ((e.target as Element).closest('button, select, input, [data-jack]')) return;
+    onheaderdown?.(e);
+  }
 
   /** The `sample` param, shown as a dropdown (Sample Player). */
   const sampleIdx = $derived(samples ? def.params.findIndex((pd) => pd.name === 'sample') : -1);
@@ -139,10 +161,17 @@
 </script>
 
 <div
-  class="panel" class:dropping data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
+  class="panel" class:dropping class:placed={!!place} class:lifted={!!shift} data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
+  style:left={place ? `${place.left}px` : undefined} style:top={place ? `${place.top}px` : undefined}
+  style:transform={shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined}
   ondragenter={over} ondragover={over} ondragleave={() => (dropping = false)} ondrop={drop}
 >
-  <header>
+  <!-- The drag handle (plan 18): pointer drag, or Alt+arrows when focused. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <header
+    data-testid={`module-header-${module.idx}`} tabindex="0" role="group" aria-roledescription="draggable module"
+    aria-label={`${title}: drag to move, or Alt+arrow keys`} onpointerdown={headerDown} onkeydown={onheaderkey}
+  >
     <span class="title">{title}</span>
     <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}>×</button>
   </header>
@@ -231,7 +260,12 @@
   .root-last:disabled { opacity: 0.45; cursor: default; }
   .root-last:focus-visible { outline: 1px solid #f0a23a; }
   .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
-  header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); }
+  header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); cursor: grab; touch-action: none; user-select: none; }
+  header:focus-visible { outline: 1px solid #f0a23a; outline-offset: -1px; }
+  /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel). */
+  .panel.placed { position: absolute; width: max-content; }
+  .panel.lifted { z-index: 3; box-shadow: 0 8px 24px #000c; opacity: 0.92; }
+  .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }
   .x { border: 0; background: transparent; color: #8d90a0; font-size: 14px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: 0.6; }
   .panel:hover .x, .x:focus-visible { opacity: 1; }

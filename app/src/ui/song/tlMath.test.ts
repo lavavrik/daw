@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AUTO_H, BAR, BEAT, LANE_H, LANE_MAX_H, LANE_MIN_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
   clipLaneAt, followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
-  snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks,
+  snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks, drumPreview, notePreview, periodStarts,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
 import { moduleDef } from '../../audio/catalog';
@@ -485,5 +485,45 @@ describe('play follow and the drawn curve (plan 10 review)', () => {
         expect(Math.abs(yAt(x) - want)).toBeLessThan(def === glide ? 1 : 1e-6);
       }
     }
+  });
+});
+
+describe('clip previews (plan 20)', () => {
+  it('drumPreview: a mark per hit, one band per row that has a hit (rows without hits take no space)', () => {
+    const steps = [
+      [127, 0, 0, 0, 99], // step 4 is past stepCount: not shown
+      [0, 0, 0, 0],
+      [0, 64, 0, 1],
+      [127, 127, 127, 127], // past the track's rows: not shown
+    ];
+    expect(drumPreview(steps, 3, 4)).toEqual([
+      { t0: 0, t1: 0.25, y: 0, h: 0.5 },
+      { t0: 0.25, t1: 0.5, y: 0.5, h: 0.5 },
+      { t0: 0.75, t1: 1, y: 0.5, h: 0.5 },
+    ]);
+    expect(drumPreview([[0, 0], [0, 0]], 2, 16)).toEqual([]);
+  });
+
+  it('notePreview: a dash per note in the loop, at its pitch (highest on top), cut at the loop end', () => {
+    const marks = notePreview([
+      { pitch: 60, start: 0, len: BEAT },
+      { pitch: 64, start: 2 * BEAT, len: BAR }, // runs past the 1-bar loop: cut at its end
+      { pitch: 72, start: BAR, len: BEAT }, // starts after the loop: not played, not shown
+    ], 1);
+    expect(marks).toEqual([
+      { t0: 0, t1: 0.25, y: 0.8, h: 0.2 },
+      { t0: 0.5, t1: 1, y: 0, h: 0.2 },
+    ]);
+    // A narrow range is centred in at least 4 pitch rows (one pitch is not a full-height bar).
+    expect(notePreview([{ pitch: 60, start: 0, len: BEAT }], 2)).toEqual([{ t0: 0, t1: 0.125, y: 0.25, h: 0.25 }]);
+    expect(notePreview([], 1)).toEqual([]);
+  });
+
+  it('periodStarts: the pattern periods of a clip that overlap a tick range', () => {
+    // Starts at bar 2 with a 1-beat offset: the pattern began a beat before the clip.
+    expect(periodStarts(BAR, 3 * BAR, BEAT, BAR, 0, Infinity)).toEqual([BAR - BEAT, 2 * BAR - BEAT, 3 * BAR - BEAT, 4 * BAR - BEAT]);
+    expect(periodStarts(BAR, 3 * BAR, BEAT, BAR, 7000, 9000)).toEqual([2 * BAR - BEAT]);
+    expect(periodStarts(BAR, 3 * BAR, 0, BAR, 0, BAR)).toEqual([]); // the range ends where the clip starts
+    expect(periodStarts(0, BAR, 0, 0, 0, Infinity)).toEqual([]);
   });
 });

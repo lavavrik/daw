@@ -8,13 +8,15 @@
   //
   // Drawing (its own canvas, so editing a lane never redraws the clips and
   // their waveforms): the curve in the owner's colour (the Master row's in
-  // the master grey), filled below; before the first point and after the
-  // last the lane holds that point's value. A linear segment is a straight
+  // the master grey), a 2 px line over a filled area at 22 % (plan 20, spec
+  // §4: a filled curve); before the first point and after the last the lane
+  // holds that point's value. Colours are theme tokens (ui/theme.ts). A linear segment is a straight
   // line: values are drawn at their KNOB position (an exp param, e.g. a
   // cutoff, logarithmically), which is the space the engine interpolates in;
   // a curved one bends in that space (tlMath.lanePolyline samples it).
   // A hold point keeps its value up to the next point, then steps (drawn as a
-  // square dot). Selected points are white. A disabled lane is dimmed; a
+  // square dot). Points are dots in the lane colour ringed in --well;
+  // selected points are white. A disabled lane is dimmed; a
   // suspended one (a manual move overrides it until its next point: Task 4's
   // knob-follow loop sets laneView.suspended) is grey. An empty lane shows
   // its target's base value as a dashed line.
@@ -63,6 +65,7 @@
   import type { AutomationLane, Project } from '../../state/project.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { formatValue, fromPos, toPos } from '../rack/knobMath';
+  import { THEME } from '../theme';
   import {
     AUTO_H, AUTO_PAD, BEAT, curveDrag, lanePolyline, pointBox, pointHit, posToY, segmentHit, snap, tickToX, xToTick, yToPos,
   } from './tlMath';
@@ -140,7 +143,7 @@
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    const col = suspended ? '#7d808c' : color;
+    const col = suspended ? THEME.raised : color; // grey, darker than the Master row's
     const pts = lane.points.map((x) => ({ id: x.id, x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), H), hold: x.hold }));
     ctx.globalAlpha = lane.enabled ? 1 : 0.4;
     if (!pts.length) {
@@ -153,8 +156,8 @@
       ctx.lineTo(W, y);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
-      ctx.fillStyle = '#8d90a0';
+      ctx.font = `10px ${THEME.fontUi}`;
+      ctx.fillStyle = THEME.text2;
       ctx.textBaseline = 'top';
       ctx.fillText(`Click to add a point · ${IS_MAC ? 'Cmd' : 'Ctrl'}-drag to draw`, 6, y < H / 2 ? y + 4 : y - 14);
     } else {
@@ -167,29 +170,30 @@
       fill.closePath();
       const a0 = ctx.globalAlpha;
       ctx.fillStyle = col;
-      ctx.globalAlpha = a0 * 0.14;
+      ctx.globalAlpha = a0 * 0.22;
       ctx.fill(fill);
       ctx.globalAlpha = a0;
       ctx.strokeStyle = col;
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
       ctx.stroke(path);
-      // The points (only those in view): hold points square, the selection white.
+      // The points (only those in view): hold points square, the selection white, each ringed in --well.
       for (const q of pts) {
         if (q.x < -6 || q.x > W + 6) continue;
         const on = selected.has(q.id);
-        ctx.fillStyle = on ? '#ffffff' : '#17181c';
-        ctx.strokeStyle = on ? '#ffffff' : col;
-        ctx.lineWidth = 1.5;
+        ctx.fillStyle = on ? THEME.text : col;
+        ctx.strokeStyle = THEME.well;
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        if (q.hold) ctx.rect(q.x - 3, q.y - 3, 6, 6);
-        else ctx.arc(q.x, q.y, 3.5, 0, Math.PI * 2);
-        ctx.fill();
+        if (q.hold) ctx.rect(q.x - 3.5, q.y - 3.5, 7, 7);
+        else ctx.arc(q.x, q.y, 4, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.fill();
       }
     }
     ctx.globalAlpha = 1;
     if (stroke && stroke.length) {
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = THEME.text;
       ctx.lineWidth = 1;
       ctx.beginPath();
       stroke.forEach((s, i) => (i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y)));
@@ -198,10 +202,12 @@
     if (box) {
       const bx = Math.min(box.x0, box.x1);
       const by = Math.min(box.y0, box.y1);
-      ctx.fillStyle = 'rgba(240,162,58,0.12)';
-      ctx.strokeStyle = '#f0a23a';
-      ctx.lineWidth = 1;
+      ctx.fillStyle = THEME.accent;
+      ctx.globalAlpha = 0.12;
       ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = THEME.accent;
+      ctx.lineWidth = 1;
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
   }
@@ -600,12 +606,12 @@
 
 <style>
   .auto { position: absolute; left: 0; right: 0; outline: none; touch-action: none; }
-  .auto:focus-visible { box-shadow: inset 0 0 0 1px #f0a23a88; }
+  .auto:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
   .cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  .tip { position: absolute; pointer-events: none; padding: 1px 4px; border-radius: 3px; background: rgba(18, 19, 23, 0.85); color: #e4e5ea; font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
-  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 4px; background: #24262c; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }
-  .menu-ttl { font-size: 10px; color: #8d90a0; padding: 2px 6px 4px; white-space: nowrap; }
-  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: 3px; background: transparent; color: #e4e5ea; cursor: pointer; }
-  .menu button:hover, .menu button:focus-visible { background: #343846; outline: none; }
+  .tip { position: absolute; pointer-events: none; padding: 1px 5px; border-radius: var(--r-sm); background: var(--lcd); color: var(--text); font: 10px/1.4 var(--font-mono); white-space: nowrap; }
+  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; }
+  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button:hover, .menu button:focus-visible { background: var(--raised); outline: none; }
   .menu .check { display: inline-block; width: 14px; }
 </style>

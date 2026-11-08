@@ -138,7 +138,11 @@ test('drop a WAV below the lanes makes an audio track', async ({ page }) => {
   const box = (await clip.boundingBox())!;
   const cv = (await page.getByTestId('tl-canvas').boundingBox())!;
   const color = await page.evaluate((slot) => (window as any).__daw.project.tracks.find((t: { slot: number }) => t.slot === slot).color as string, slot);
-  /** Fraction of the pixels on the clip's middle row (its middle third: no name, no edges) drawn in the track colour. */
+  /**
+   * Fraction of the pixels on the clip's middle row (its middle third: no
+   * name, no edges) where the waveform is drawn: the body is the track colour
+   * and the waveform darkens it (--on-color over it, plan 20).
+   */
   const lit = () => page.evaluate(
     ({ x0, x1, y0, y1, color }) => {
       const c = document.querySelector('[data-testid="tl-canvas"]') as HTMLCanvasElement;
@@ -146,12 +150,13 @@ test('drop a WAV below the lanes makes an audio track', async ({ page }) => {
       const d = c.getContext('2d')!.getImageData(Math.round((x0 + (x1 - x0) / 3) * k), Math.round(((y0 + y1) / 2) * k), Math.round(((x1 - x0) / 3) * k), 1).data;
       const rgb = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
       let n = 0;
-      for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - rgb[0]) + Math.abs(d[i + 1] - rgb[1]) + Math.abs(d[i + 2] - rgb[2]) < 80) n++;
+      const body = rgb[0] + rgb[1] + rgb[2];
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] < body - 120) n++;
       return n / (d.length / 4);
     },
     { x0: box.x - cv.x, x1: box.x - cv.x + box.width, y0: box.y - cv.y, y1: box.y - cv.y + box.height, color },
   );
-  // The sine fills the middle of the clip in the track colour; the body around it is a dim tint.
+  // The sine fills the middle of the clip, dark over the track-colour body.
   expect(await lit()).toBeGreaterThan(0.9);
   await expect(page.getByTestId('banner')).toBeHidden();
   // The Browser footer counts the sample memory.

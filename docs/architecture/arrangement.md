@@ -205,6 +205,42 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
   (history/gestures.ts), each key press its own.
   `shortcuts.ts tabFor` says which tab fits which track kind.
 
+## The playlist look (plan 20)
+Spec `docs/superpowers/specs/2026-11-14-redesign.md` §4 *Playlist*; code in
+`ui/song/Timeline.svelte` (LOOK comment), `TrackHeaders.svelte` (LOOK,
+VOLUME SLIDER), `AutoLane.svelte`, `tlMath.ts` (clip previews).
+
+- **Colours.** The canvases read the theme tokens from `ui/theme.ts`
+  (`theme.css` for the HTML); a shade between tokens is a token under a
+  white or black veil. Track colours are data. No `.svelte` file here has a
+  hex literal (`noHexColors.test.ts`).
+- **Clips.** A rounded body in the track colour with the `--gloss` recipe
+  drawn on canvas (white 30 % → 0 over the top 60 %, a 1 px top highlight, a
+  2 px darker bottom edge), the name in `--on-color`, and a mini preview in
+  `--on-color` under the name: a mark per drum hit (one band per row that
+  has hits, `drumPreview`), a dash per note at its pitch (`notePreview`), or
+  for audio the waveform from the peaks. A missing or failed sample's clip
+  is grey with a `--rec` hatch. The selection is a light outline with grips.
+- **Preview cost.** The marks are a `$derived` per used pattern, normalised
+  to one period, so a scroll or zoom never recomputes them; only visible
+  clips draw, only the periods in view are placed (`periodStarts`), and a
+  period up to 2048 device px wide is rendered once per pattern and zoom
+  into a cached bitmap and stamped (one `drawImage` per period). Periods
+  under 8 px get no preview; wider than the cap (deep zoom: a few in view)
+  draw their marks directly.
+- **Ruler and playhead.** The loop range is an `--accent` bar along the
+  ruler's top over a faint band (dim while the loop is off or in Pattern
+  mode); bar numbers are in the mono font. The playhead is white (`--text`)
+  with a soft glow; the parked song position a dim line.
+- **Track headers.** A 6 px colour bar, the name (and kind) over a thin
+  volume slider, raised M / S / A (lit: `--accent`, `--play`, the track
+  colour). The slider (`track-vol-<slot>`) is a skinned range input bound to
+  the track's mixer fader: `setMix('fader')` like the strip's Fader, its
+  travel on the fader law (`mixMath.faderPos` / `faderDb`), one undo entry
+  per drag (the window gesture bracket), Escape or Cmd/Ctrl+Z mid-drag
+  restores the value from before the press (`registerDragCancel`), arrows
+  ±1 dB, double-click 0 dB. The Master row has no slider.
+
 ## Limits
 | What | Limit |
 |---|---|

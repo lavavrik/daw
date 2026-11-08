@@ -14,5 +14,5 @@
 </section>
 
 <style>
-  .pane { background: #1b1c21; border: 1px solid #2a2c33; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .pane { background: var(--work); border: 1px solid var(--line); min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 </style>

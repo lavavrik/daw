@@ -13,6 +13,7 @@ import { MAX_SONG_TICKS } from '../../audio/protocol';
 import { toPos } from '../rack/knobMath';
 import type { CurveDef } from '../rack/knobMath';
 import { bend } from '../../state/automation';
+import { THEME } from '../theme';
 
 /** Ticks per beat / bar (4/4 at 960 PPQ). */
 export const BEAT = 960;
@@ -24,8 +25,8 @@ export const AUTO_H = 48;
 /** Resized lane row heights stay within these (px). */
 export const LANE_MIN_H = 32;
 export const LANE_MAX_H = 240;
-/** Width of the track-header column (px). */
-export const HEADER_W = 160;
+/** Width of the track-header column (px): colour bar, name over the volume slider, M/S/A, ×. */
+export const HEADER_W = 176;
 export const RULER_H = 20;
 /** Resize handles: the outer EDGE_ZONE px at each end of a clip. */
 export const EDGE_ZONE = 6;
@@ -51,8 +52,8 @@ export const xToTick = (x: number, v: TlView) => x * v.ticksPerPx + v.scrollTick
 
 /** The Master row's trackId (its rows and lanes), and its key in rowLayout's `open`. */
 export const MASTER_ROW = 'master';
-/** The Master row's colour: its header and its lanes' curves. */
-export const MASTER_GREY = '#9aa0ad';
+/** The Master row's colour: its header and its lanes' curves (a theme grey, not a track colour). */
+export const MASTER_GREY = THEME.textDim;
 
 /**
  * One row of the timeline, top to bottom:
@@ -206,6 +207,75 @@ export function boxSelect(
   const yB = Math.max(y0, y1);
   const lanes = new Set(rows.filter((r) => r.kind === 'clips' && r.y <= yB && r.y + r.h > yA).map((r) => r.track));
   return clips.filter((c) => lanes.has(c.lane) && c.start < tB && c.start + c.len > tA).map((c) => c.id);
+}
+
+// ---- clip previews (plan 20) -----------------------------------------------------
+// A pattern clip shows a mini preview of its pattern under its name: step
+// marks for a drum pattern, note dashes for a synth pattern. The marks are
+// computed once per pattern content (Timeline's `previews`), normalised to one
+// pattern period, so a scroll or zoom only re-places them (periodStarts).
+
+/**
+ * One mark of a preview, normalised: `t0`..`t1` as fractions of the pattern
+ * length, `y` and `h` as fractions of the preview band's height (0 = top).
+ */
+export interface PreviewMark {
+  t0: number;
+  t1: number;
+  y: number;
+  h: number;
+}
+
+/**
+ * Drum pattern preview: a mark per hit (velocity > 0) in the first
+ * `stepCount` steps of the track's first `rows` rows. Each row with a hit
+ * gets an equal band, top to bottom in row order; rows without hits take no
+ * space, so a two-sound beat stays readable in a 6 px band.
+ */
+export function drumPreview(steps: readonly (readonly number[])[], rows: number, stepCount: number): PreviewMark[] {
+  const used: number[] = [];
+  for (let r = 0; r < Math.min(rows, steps.length); r++) {
+    for (let s = 0; s < stepCount; s++) if (steps[r][s] > 0) { used.push(r); break; }
+  }
+  const out: PreviewMark[] = [];
+  const h = 1 / (used.length || 1);
+  used.forEach((r, k) => {
+    for (let s = 0; s < stepCount; s++) if (steps[r][s] > 0) out.push({ t0: s / stepCount, t1: (s + 1) / stepCount, y: k * h, h });
+  });
+  return out;
+}
+
+/**
+ * Note pattern preview: a dash per note that starts inside the loop (`bars`;
+ * notes after it don't play), from its start to its end, cut at the loop
+ * end; the pattern's pitch range spans the band (highest on top), at least
+ * 4 pitch rows tall so a one-note line is a dash, not a block.
+ */
+export function notePreview(notes: readonly { pitch: number; start: number; len: number }[], bars: number): PreviewMark[] {
+  const loop = bars * BAR;
+  const inLoop = notes.filter((n) => n.start < loop);
+  if (!inLoop.length || !(loop > 0)) return [];
+  const lo = Math.min(...inLoop.map((n) => n.pitch));
+  const hi = Math.max(...inLoop.map((n) => n.pitch));
+  const rows = Math.max(4, hi - lo + 1);
+  const top = hi + Math.floor((rows - (hi - lo + 1)) / 2);
+  return inLoop.map((n) => ({ t0: n.start / loop, t1: Math.min(1, (n.start + n.len) / loop), y: (top - n.pitch) / rows, h: 1 / rows }));
+}
+
+/**
+ * The song ticks where the clip's pattern periods start (the clip plays
+ * pattern position (offset + t - start) mod patLen), for the periods that
+ * overlap both the clip and song ticks [t0, t1): the ones a preview draws.
+ */
+export function periodStarts(start: number, len: number, offset: number, patLen: number, t0: number, t1: number): number[] {
+  const out: number[] = [];
+  if (!(patLen > 0)) return out;
+  const lo = Math.max(start, t0);
+  const hi = Math.min(start + len, t1);
+  const first = start - mod(offset, patLen);
+  let t = first + Math.max(0, Math.floor((lo - first) / patLen)) * patLen;
+  for (; t < hi && out.length < MAX_MARKS; t += patLen) if (t + patLen > lo) out.push(t);
+  return out;
 }
 
 // ---- clip edits ----------------------------------------------------------------

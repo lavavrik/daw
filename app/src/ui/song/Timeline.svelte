@@ -19,6 +19,26 @@
   // in Pattern mode too; the playhead (heard, latency-compensated) and the
   // parked song position are drawn only in Song mode.
   //
+  // LOOK (plan 20, spec §4 Playlist). Every canvas colour is a theme token
+  // read from ui/theme.ts (C below); shades between tokens are a token under
+  // a white or black veil. A clip is a rounded body in the track colour with
+  // the --gloss recipe drawn on canvas (drawBody: a white 30 % -> 0 gradient
+  // over the top 60 %, a 1 px top highlight, a 2 px darker bottom edge), its
+  // name in --on-color, and a mini preview of what it plays in --on-color:
+  //   - drum pattern: a mark per hit, one band per row that has hits;
+  //   - synth pattern: a dash per note at its pitch;
+  //   - audio: the waveform from the sample's peaks (drawAudio).
+  // Preview cost stays bounded: the marks are computed once per pattern
+  // content (`previews`, a $derived: a scroll or zoom does not recompute
+  // them), only visible clips draw, only the pattern periods in view are
+  // placed (tlMath.periodStarts), and a period narrower than BITMAP_MAX_PX is
+  // rendered once into a cached bitmap per pattern and zoom
+  // (previewBitmap) and stamped, so a zoomed-out song is one drawImage per
+  // period. Below PREVIEW_MIN_PX per period there is no preview. The selection is a
+  // light outline with resize grips. The loop range is an --accent bar on the
+  // ruler (dim while the loop is off or in Pattern mode) over a faint band;
+  // the playhead is white (--text) with a soft glow.
+  //
   // AUDIO LANES (plan 9; spec addendum §3.1/3.2). An Audio track's clips draw,
   // in the track colour: the min/max waveform from the sample's peaks
   // (audio/peaks.ts, the level that matches the zoom; scaled by the clip's
@@ -95,7 +115,7 @@
   //   Escape               cancel a drag / close the menu, else clear the selection
   //   ← / →                nudge the selection one beat (Shift: one bar)
   // Every other key bubbles on: letters keep playing the QWERTY piano, Space
-  // toggles the transport, Shift+L toggles PAT/SONG.
+  // toggles the transport.
   import { onDestroy, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
@@ -114,6 +134,7 @@
   import type { AudioClip, AutomationLane, Clip, Project, Track } from '../../state/project.svelte';
   import type { AutoOwner } from '../../state/automation';
   import { MAX_TRACKS, currentPattern, isPatternTrack, patternLength } from '../../state/project.svelte';
+  import { RADII, THEME } from '../theme';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
@@ -128,10 +149,11 @@
   import { targetDef } from '../../state/automation';
   import {
     BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
-    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, fileTicks, followPage, hitTest, loopFromDrag, placeLen,
-    repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX, xToTick, zoomAt,
+    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, fileTicks, followPage, hitTest, loopFromDrag,
+    notePreview, periodStarts, placeLen, repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX,
+    xToTick, zoomAt,
   } from './tlMath';
-  import type { ClipBox, TlView } from './tlMath';
+  import type { ClipBox, PreviewMark, TlView } from './tlMath';
 
   let { p, engine, clock }: { p: Project; engine: CommandSink & ImportEngine; clock: AudioClock | null } = $props();
 
@@ -245,7 +267,7 @@
       return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)} · ${times}${inEditor ? '' : ' · double-click to edit'}`;
     }
     if (sel.length > 1) return `${sel.length} clips selected`;
-    if (p.mode === 'pattern' && byId.size) return 'Pattern mode: tracks loop their pattern — SONG (Shift+L) plays the timeline';
+    if (p.mode === 'pattern' && byId.size) return 'The pattern transport ran last: play the song (top bar) to hear the clips';
     return 'Click a lane to place its pattern · drop audio files on the timeline · drag the ruler to loop';
   });
 
@@ -301,10 +323,23 @@
   /** Heard song tick while playing in Song mode, else null. Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
 
+  /**
+   * Canvas colours: theme tokens (ui/theme.ts mirrors theme.css). A shade
+   * between tokens is a token under a veil (`veil`), never a literal.
+   */
   const C = {
-    bg: '#17181c', laneA: '#1c1d22', laneB: '#1f2026', laneSel: '#262935', beat: '#25272e', bar: '#353842',
-    bar4: '#4a4e5b', auto: '#191a1f', master: '#202128', ruler: '#202227', rulerText: '#c9cbd3', dimText: '#7d808c', accent: '#f0a23a', playhead: '#ffffff',
+    lane: THEME.work, // clip rows (the playlist area)
+    sep: THEME.grid, // row separators, beat lines
+    bar: THEME.line,
+    bar4: THEME.raised,
+    ruler: THEME.panel,
+    rulerText: THEME.text2,
+    accent: THEME.accent,
+    playhead: THEME.text, // "white"
+    onColor: THEME.onColor, // clip names and previews
   };
+  /** White (lighter) or black (darker) at `a` over what is there: the shades between tokens. */
+  const veil = (light: boolean, a: number) => (light ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`);
   /** The loop range counts (bright) only while on and in Song mode; otherwise it is shown dimmed. */
   const loopLive = () => p.loop.on && p.mode === 'song';
 
@@ -325,6 +360,103 @@
     return p.playing ? null : { t: p.songPosition, live: false };
   }
 
+  // ---- clip previews (LOOK at the top) ----------------------------------------
+  /** No preview when one pattern period is narrower than this (px): the marks would be noise. */
+  const PREVIEW_MIN_PX = 8;
+  /** A period up to this wide (device px) is stamped from a cached bitmap; a wider one draws its marks directly. */
+  const BITMAP_MAX_PX = 2048;
+  /** The preview band starts this far below the clip's top (under the name). */
+  const PREVIEW_TOP = 14;
+  /**
+   * Each used pattern's preview marks by pattern id (tlMath drumPreview /
+   * notePreview), normalised to one period. A $derived: Svelte recomputes it
+   * when a used pattern's steps or notes change, never on a scroll or zoom.
+   * Only patterns a clip uses are computed.
+   */
+  const previews = $derived.by(() => {
+    const m = new Map<string, { marks: PreviewMark[]; drum: boolean }>();
+    for (const t of p.tracks) {
+      if (t.kind === 'audio') continue;
+      for (const c of t.clips) {
+        if (m.has(c.patternId)) continue;
+        const pat = patternOf(t, c.patternId);
+        if (!pat) continue;
+        if ('stepCount' in pat) m.set(pat.id, { marks: drumPreview(pat.steps, t.kind === 'drum' ? t.rows.length : 0, pat.stepCount), drum: true });
+        else m.set(pat.id, { marks: notePreview(pat.notes, pat.bars), drum: false });
+      }
+    }
+    return m;
+  });
+  /** A mark's rectangle in a period `periodPx` wide and a band `bandH` tall (px, from the period's top left). */
+  function markRect(m: PreviewMark, periodPx: number, bandH: number, drum: boolean): [number, number, number, number] {
+    const w = (m.t1 - m.t0) * periodPx;
+    const h = m.h * bandH;
+    // Steps keep a 1 px gap when there is room; a note dash is at least 1.5 px tall.
+    return [m.t0 * periodPx, m.y * bandH, Math.max(1, drum && w > 3 ? w - 1 : w), Math.max(drum ? 1 : 1.5, h > 2 ? h - 0.5 : h)];
+  }
+  /** One period's marks rendered once per pattern content and zoom (see LOOK); evicted when the pattern is no longer used. */
+  const previewCache = new Map<string, { marks: PreviewMark[]; periodPx: number; bandH: number; dpr: number; cv: OffscreenCanvas }>();
+  function previewBitmap(id: string, marks: PreviewMark[], drum: boolean, periodPx: number, bandH: number): OffscreenCanvas | null {
+    const hit = previewCache.get(id);
+    if (hit && hit.marks === marks && hit.periodPx === periodPx && hit.bandH === bandH && hit.dpr === dpr) return hit.cv;
+    const cv = hit?.cv ?? new OffscreenCanvas(1, 1);
+    cv.width = Math.max(1, Math.ceil(periodPx * dpr));
+    cv.height = Math.max(1, Math.ceil(bandH * dpr));
+    const g = cv.getContext('2d');
+    if (!g) return null;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = C.onColor;
+    for (const m of marks) g.fillRect(...markRect(m, periodPx, bandH, drum));
+    previewCache.set(id, { marks, periodPx, bandH, dpr, cv });
+    return cv;
+  }
+  /** A pattern clip's preview, under its name (the caller has clipped to the clip's body). */
+  function drawPreview(ctx: CanvasRenderingContext2D, t: Track, c: Clip, y: number, h: number, v: TlView, W: number) {
+    if (!isPatternTrack(t)) return;
+    const pat = patternOf(t, c.patternId);
+    const pv = pat && previews.get(pat.id);
+    if (!pat || !pv || !pv.marks.length) return;
+    const patLen = patternLength(pat);
+    const periodPx = patLen / v.ticksPerPx;
+    if (periodPx < PREVIEW_MIN_PX) return;
+    const bandY = y + PREVIEW_TOP;
+    const bandH = h - PREVIEW_TOP - 3;
+    const bmp = periodPx * dpr <= BITMAP_MAX_PX ? previewBitmap(pat.id, pv.marks, pv.drum, periodPx, bandH) : null;
+    ctx.fillStyle = C.onColor;
+    ctx.globalAlpha = 0.6;
+    for (const ps of periodStarts(c.start, c.len, c.offset, patLen, xToTick(0, v), xToTick(W, v))) {
+      const px = Math.round(tickToX(ps, v) * dpr) / dpr; // on a device pixel: crisp stamps
+      if (bmp) ctx.drawImage(bmp, px, bandY, bmp.width / dpr, bmp.height / dpr);
+      else {
+        // A period wider than the bitmap cap (deep zoom): at most a few in view, marks drawn directly.
+        for (const m of pv.marks) {
+          const [mx, my, mw, mh] = markRect(m, periodPx, bandH, pv.drum);
+          if (px + mx + mw >= 0 && px + mx <= W) ctx.fillRect(px + mx, bandY + my, mw, mh);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * A clip's body (LOOK at the top): `color` with the gloss drawn as on CSS
+   * --gloss (white 30 % -> 0 at 60 % of the height), a 1 px top highlight and
+   * a 2 px darker bottom edge. The caller has clipped to the rounded body.
+   */
+  function drawBody(ctx: CanvasRenderingContext2D, color: string, x: number, y: number, w: number, h: number) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, veil(true, 0.3));
+    g.addColorStop(0.6, veil(true, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = veil(true, 0.5);
+    ctx.fillRect(x, y, w, 1);
+    ctx.fillStyle = veil(false, 0.18);
+    ctx.fillRect(x, y + h - 2, w, 2);
+  }
+
   /** Reads every reactive input, so the $effect below redraws on any change. */
   function drawLanes() {
     const cv = canvas;
@@ -338,17 +470,22 @@
     const t1 = xToTick(W, v);
 
     for (const r of layout) {
-      if (r.kind === 'clips') ctx.fillStyle = r.trackId === p.selectedTrackId ? C.laneSel : r.track % 2 ? C.laneB : C.laneA;
-      else ctx.fillStyle = r.kind === 'master' ? C.master : C.auto; // AutoLane draws the curve on its own canvas
+      ctx.fillStyle = C.lane;
       ctx.fillRect(0, r.y, W, r.h);
-      ctx.fillStyle = '#16171b';
+      // The selected track's row a shade lighter; lane rows (AutoLane draws the curve on its own canvas) and the Master row darker.
+      const shade = r.kind === 'clips' ? (r.trackId === p.selectedTrackId ? veil(true, 0.06) : null) : veil(false, r.kind === 'master' ? 0.06 : 0.1);
+      if (shade) {
+        ctx.fillStyle = shade;
+        ctx.fillRect(0, r.y, W, r.h);
+      }
+      ctx.fillStyle = C.sep;
       ctx.fillRect(0, r.y + r.h - 1, W, 1);
     }
     const vline = (t: number, style: string) => {
       ctx.fillStyle = style;
       ctx.fillRect(Math.round(tickToX(t, v)), 0, 1, H);
     };
-    if (BEAT / v.ticksPerPx >= 8) for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) if (t % BAR) vline(t, C.beat);
+    if (BEAT / v.ticksPerPx >= 8) for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) if (t % BAR) vline(t, C.sep);
     const step = barLabelStep(v.ticksPerPx);
     for (let t = snapFloor(t0, BAR); t <= t1; t += BAR) {
       const bar = t / BAR;
@@ -359,8 +496,10 @@
     const lx0 = tickToX(p.loop.start, v);
     const lx1 = tickToX(p.loop.end, v);
     if (lx1 > 0 && lx0 < W) {
-      ctx.fillStyle = loopLive() ? 'rgba(240,162,58,0.07)' : 'rgba(240,162,58,0.025)';
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = loopLive() ? 0.07 : 0.025;
       ctx.fillRect(lx0, 0, lx1 - lx0, H);
+      ctx.globalAlpha = 1;
     }
 
     // Audio lanes redraw when peaks land (peaksVersion) and when a deferred
@@ -371,12 +510,17 @@
 
     // A sample drag over an audio lane: that lane lights up.
     if (dropHover && dropHover !== 'new') {
-      ctx.fillStyle = 'rgba(240,162,58,0.16)';
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = 0.16;
       ctx.fillRect(0, clipY[dropHover.lane] ?? 0, W, LANE_H - 1);
+      ctx.globalAlpha = 1;
     }
 
+    // Bitmaps of patterns no clip uses any more go.
+    for (const id of previewCache.keys()) if (!previews.has(id)) previewCache.delete(id);
+
     // clips (unselected first; the selection on top)
-    ctx.font = 'bold 10px ui-sans-serif, system-ui, sans-serif';
+    ctx.font = `700 10px ${THEME.fontUi}`;
     ctx.textBaseline = 'top';
     for (const b of boxes) {
       const { t, c } = byId.get(b.id)!;
@@ -387,37 +531,42 @@
       const y = (clipY[b.lane] ?? 0) + 2;
       const h = LANE_H - 5;
       const w = x1 - x0;
+      const st = isAudio(c) ? audioState(c, pending) : null;
+      const broken = st === 'missing' || st === 'failed';
+      // The body, cut to the view (+ a corner's width): a clip far wider than the view costs no more than the view.
+      const rad = Math.min(RADII.sm, w / 2, h / 2);
+      const bx0 = Math.max(x0, -rad - 1);
+      const bx1 = Math.min(x1, W + rad + 1);
+      const body = new Path2D();
+      body.roundRect(bx0, y, bx1 - bx0, h, rad);
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(x0, y, w, h);
-      ctx.clip();
-      ctx.fillStyle = '#121317';
-      ctx.fillRect(x0, y, w, h);
-      ctx.globalAlpha = isSel ? 0.42 : 0.26;
-      ctx.fillStyle = t.color;
-      ctx.fillRect(x0, y, w, h);
-      ctx.globalAlpha = 1;
-      ctx.fillRect(x0, y, w, 2); // solid top edge in the track colour
-      if (isAudio(c)) drawAudio(ctx, t.color, c, x0, x1, y, h, v, W, pending);
-      else drawRepeats(ctx, t.color, repeatTicks(c.start, c.len, c.offset, patLenOf(t, c)), x0, x1, y, h, v);
-      if (w > 18) { // name in the track colour; pinned to the left edge while scrolled
-        const st = isAudio(c) ? audioState(c, pending) : null;
+      ctx.clip(body);
+      drawBody(ctx, broken ? THEME.raised : t.color, bx0, y, bx1 - bx0, h);
+      if (isAudio(c)) drawAudio(ctx, c, x0, x1, y, h, v, W, pending, st);
+      else {
+        drawPreview(ctx, t, c, y, h, v, W);
+        drawRepeats(ctx, repeatTicks(c.start, c.len, c.offset, patLenOf(t, c)), x0, x1, y, h, v);
+      }
+      if (w > 18) { // the name, pinned to the left edge while scrolled
         const name = patNameOf(t, c) + (st === 'failed' ? ' · sample failed to load' : '');
-        if (isAudio(c)) { // over the waveform: on a dark backing
-          ctx.fillStyle = 'rgba(18,19,23,0.75)';
-          ctx.fillRect(Math.max(x0, 0) + 2, y + 3, ctx.measureText(name).width + 4, 12);
+        const lx = Math.max(x0, 0) + 5;
+        if (isAudio(c)) { // over the waveform: on a backing in the body colour
+          ctx.fillStyle = broken ? THEME.raised : t.color;
+          ctx.globalAlpha = 0.85;
+          ctx.fillRect(lx - 3, y + 2, ctx.measureText(name).width + 6, 12);
+          ctx.globalAlpha = 1;
         }
-        ctx.fillStyle = st === 'missing' || st === 'failed' ? MISSING : t.color;
-        ctx.fillText(name, Math.max(x0, 0) + 4, y + 5);
+        ctx.fillStyle = C.onColor;
+        ctx.fillText(name, lx, y + 3);
       }
       ctx.restore();
       ctx.lineWidth = isSel ? 1.5 : 1;
-      ctx.strokeStyle = isSel ? '#ffffff' : t.color;
-      ctx.globalAlpha = isSel ? 1 : 0.8;
-      ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(1, w - 1), h - 1);
-      ctx.globalAlpha = 1;
+      ctx.strokeStyle = isSel ? C.playhead : veil(false, 0.35);
+      ctx.beginPath();
+      ctx.roundRect(bx0 + 0.5, y + 0.5, Math.max(1, bx1 - bx0 - 1), h - 1, rad);
+      ctx.stroke();
       if (isSel && w > 14) { // resize grips
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = C.playhead;
         ctx.fillRect(x0 + 2, y + 7, 1.5, h - 11);
         ctx.fillRect(x1 - 3.5, y + 7, 1.5, h - 11);
       }
@@ -426,10 +575,12 @@
     if (box) {
       const bx = Math.min(box.x0, box.x1);
       const by = Math.min(box.y0, box.y1);
-      ctx.fillStyle = 'rgba(240,162,58,0.12)';
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+      ctx.globalAlpha = 1;
       ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1;
-      ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
   }
@@ -437,7 +588,8 @@
   /**
    * The playhead / parked position over the lanes, on its own transparent
    * canvas on top: while playing only this (and the ruler) is redrawn every
-   * frame, never the lanes and their waveforms.
+   * frame, never the lanes and their waveforms. The playhead is white with a
+   * soft glow; the parked position a dim line without one.
    */
   function drawPlayhead() {
     const cv = ovCanvas;
@@ -450,21 +602,31 @@
     ctx.clearRect(0, 0, W, H);
     const m = marker();
     if (m) {
-      const x = Math.round(tickToX(m.t, v)) + 0.5;
-      if (x >= 0 && x <= W) {
-        ctx.fillStyle = m.live ? C.playhead : 'rgba(255,255,255,0.35)';
-        ctx.fillRect(x - 0.75, 0, 1.5, H);
+      const x = Math.round(tickToX(m.t, v));
+      if (x >= -1 && x <= W + 1) {
+        ctx.fillStyle = C.playhead;
+        if (m.live) {
+          ctx.shadowColor = veil(true, 0.6);
+          ctx.shadowBlur = 6;
+          ctx.fillRect(x - 1, 0, 2, H);
+          ctx.shadowBlur = 0;
+          ctx.shadowColor = 'transparent';
+        } else {
+          ctx.globalAlpha = 0.4;
+          ctx.fillRect(x - 0.75, 0, 1.5, H);
+          ctx.globalAlpha = 1;
+        }
       }
     }
   }
 
-  /** A notch + dashed line at each tick where the clip's material starts again (pattern, or a loop clip's file). */
-  function drawRepeats(ctx: CanvasRenderingContext2D, color: string, ticks: number[], x0: number, x1: number, y: number, h: number, v: TlView) {
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
+  /** A notch + dashed line at each tick where the clip's material starts again (pattern, or a loop clip's file), in --on-color. */
+  function drawRepeats(ctx: CanvasRenderingContext2D, ticks: number[], x0: number, x1: number, y: number, h: number, v: TlView) {
+    ctx.strokeStyle = C.onColor;
+    ctx.fillStyle = C.onColor;
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 2]);
-    ctx.globalAlpha = 0.7;
+    ctx.globalAlpha = 0.45;
     ctx.beginPath();
     for (const r of ticks) {
       const rx = Math.round(tickToX(r, v)) + 0.5;
@@ -474,26 +636,25 @@
     }
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.7;
     for (const r of ticks) {
       const rx = Math.round(tickToX(r, v)) + 0.5;
       if (rx < x0 || rx > x1) continue;
       ctx.beginPath();
-      ctx.moveTo(rx - 3, y + 2);
-      ctx.lineTo(rx + 3, y + 2);
-      ctx.lineTo(rx, y + 6);
+      ctx.moveTo(rx - 3, y + 1);
+      ctx.lineTo(rx + 3, y + 1);
+      ctx.lineTo(rx, y + 5);
       ctx.fill();
     }
+    ctx.globalAlpha = 1;
   }
-
-  const MISSING = '#ff8a92';
 
   /**
    * What is wrong with an audio clip's sample, if anything: `missing` (none:
    * not in the project folder), `failed` (its deferred load failed:
    * sampleLoads.sampleFailed; it plays nothing), `pending` (its deferred
-   * load waits for Stop). Drawn hatched (red for the first two), and said in
-   * the overlay's aria-label and data-state.
+   * load waits for Stop). Drawn hatched (the first two in --rec on a grey
+   * body), and said in the overlay's aria-label and data-state.
    */
   function audioState(c: AudioClip, pending: ReadonlySet<number>): 'missing' | 'failed' | 'pending' | null {
     if (c.sampleId === null) return 'missing';
@@ -503,12 +664,14 @@
   const STATE_TEXT = { missing: 'missing sample', failed: 'sample failed to load: stop and drop it again', pending: 'loads when playback stops' };
 
   /** Diagonal stripes over [x0, x1) × [y, y + h) (the caller has clipped to the clip). */
-  function hatch(ctx: CanvasRenderingContext2D, color: string, x0: number, x1: number, y: number, h: number) {
+  function hatch(ctx: CanvasRenderingContext2D, color: string, alpha: number, x0: number, x1: number, y: number, h: number) {
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
-    for (let x = Math.floor(x0 / 8) * 8 - h; x < x1; x += 8) {
+    const xs = Math.max(x0, -h); // only the stripes in view
+    const xe = Math.min(x1, width + h);
+    for (let x = Math.floor(xs / 8) * 8 - h; x < xe; x += 8) {
       ctx.moveTo(x, y + h);
       ctx.lineTo(x + h, y);
     }
@@ -517,21 +680,22 @@
   }
 
   /**
-   * An audio clip's body (see AUDIO LANES at the top): the waveform, the
-   * fade ramps, the loop notches or the end-of-file mark, and the hatch of a
-   * deferred or missing sample. The caller has clipped to the clip's box and
-   * draws the name and the outline.
+   * An audio clip's body (see AUDIO LANES at the top), in --on-color over the
+   * track colour: the waveform, the fade ramps, the loop notches or the
+   * end-of-file mark, and the hatch of a deferred or missing sample. The
+   * caller has clipped to the clip's box and draws the body, the name and
+   * the outline.
    */
   function drawAudio(
-    ctx: CanvasRenderingContext2D, color: string, c: AudioClip, x0: number, x1: number, y: number, h: number,
-    v: TlView, W: number, pending: Set<number>,
+    ctx: CanvasRenderingContext2D, c: AudioClip, x0: number, x1: number, y: number, h: number,
+    v: TlView, W: number, pending: Set<number>, st: ReturnType<typeof audioState>,
   ) {
     const meta = c.sampleId !== null ? p.sampleMeta.get(c.sampleId) : undefined;
     const seconds = meta?.seconds ?? null;
     const tps = fileTicks(1, p.tempo); // ticks per second
     const end = c.start + c.len;
-    const top = y + 3; // full height: the name is drawn over it on a dark backing
-    const bottom = y + h - 1;
+    const top = y + 3; // full height: the name is drawn over it on a backing
+    const bottom = y + h - 2;
     const mid = (top + bottom) / 2;
     const amp = (bottom - top) / 2;
     const xa = Math.max(Math.floor(x0), 0);
@@ -545,14 +709,15 @@
       return g;
     };
 
-    ctx.fillStyle = color;
+    // The waveform: one min/max bar per pixel from the peaks level that matches the zoom (downsampled already).
+    ctx.fillStyle = C.onColor;
     if (meta?.peaks && seconds && seconds > 0) {
       const pk = meta.peaks;
       const frames = peaksFrames(pk);
       const fps = frames / seconds; // file frames per second (the rate the peaks were made at)
       const lv = peaksLevel(pk, (v.ticksPerPx / tps) * fps);
       const pairs = lv.data[0]?.length / 2 || 0;
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = 0.55;
       for (let px = xa; px < xb && pairs > 0; px++) {
         const ta = Math.max(c.start, xToTick(px, v));
         const tb = Math.min(end, xToTick(px + 1, v));
@@ -582,21 +747,21 @@
       ctx.globalAlpha = 1;
     } else if (!pending.has(c.sampleId ?? -1) && c.sampleId !== null) {
       // No peaks yet: a flat placeholder line.
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = 0.4;
       ctx.fillRect(xa, Math.round(mid), xb - xa, 1);
       ctx.globalAlpha = 1;
     }
 
-    // Fade ramps: the faded-out corner dimmed, the ramp drawn as a line.
+    // Fade ramps: the faded-out corner darkened, the ramp drawn as a line.
     const ramp = (xs: number, ys: number, xe: number, ye: number, corner: [number, number]) => {
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillStyle = veil(false, 0.3);
       ctx.beginPath();
       ctx.moveTo(xs, ys);
       ctx.lineTo(xe, ye);
       ctx.lineTo(corner[0], corner[1]);
       ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = C.onColor;
+      ctx.globalAlpha = 0.8;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(xs, ys);
@@ -614,14 +779,14 @@
     }
 
     const marks = audioMarks(c, seconds, p.tempo);
-    if (marks.repeats.length) drawRepeats(ctx, color, marks.repeats, x0, x1, y, h, v);
+    if (marks.repeats.length) drawRepeats(ctx, marks.repeats, x0, x1, y, h, v);
     if (marks.fileEnd !== null) {
-      // The file runs out before the clip ends (a tempo change): the rest is silent.
+      // The file runs out before the clip ends (a tempo change): the rest is silent, darkened.
       const xe = Math.round(tickToX(marks.fileEnd, v));
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(xe, y + 2, x1 - xe, h - 2);
-      ctx.fillStyle = '#ffd98a';
-      ctx.fillRect(xe, y + 2, 1.5, h - 2);
+      ctx.fillStyle = veil(false, 0.45);
+      ctx.fillRect(xe, y, x1 - xe, h);
+      ctx.fillStyle = C.onColor;
+      ctx.fillRect(xe, y, 1.5, h);
       ctx.beginPath();
       ctx.moveTo(xe, y + h);
       ctx.lineTo(xe + 4, y + h);
@@ -629,9 +794,8 @@
       ctx.fill();
     }
 
-    const st = audioState(c, pending);
-    if (st === 'missing' || st === 'failed') hatch(ctx, MISSING, x0, x1, y, h);
-    else if (st === 'pending') hatch(ctx, color, x0, x1, y, h);
+    if (st === 'missing' || st === 'failed') hatch(ctx, THEME.rec, 0.7, x0, x1, y, h);
+    else if (st === 'pending') hatch(ctx, C.onColor, 0.3, x0, x1, y, h);
   }
 
   function drawRuler() {
@@ -646,16 +810,20 @@
     ctx.fillStyle = C.ruler;
     ctx.fillRect(0, 0, W, RULER_H);
 
-    // loop range band (bright while live, dim otherwise)
+    // Loop range: a faint band and the --accent bar along the top (bright while live, dim otherwise).
     const lx0 = tickToX(p.loop.start, v);
     const lx1 = tickToX(p.loop.end, v);
     if (lx1 > 0 && lx0 < W) {
       const live = loopLive();
-      ctx.fillStyle = live ? 'rgba(240,162,58,0.42)' : 'rgba(240,162,58,0.14)';
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = live ? 0.16 : 0.05;
       ctx.fillRect(lx0, 0, lx1 - lx0, RULER_H);
-      ctx.fillStyle = live ? C.accent : 'rgba(240,162,58,0.45)';
-      ctx.fillRect(Math.round(lx0), 0, 2, RULER_H);
-      ctx.fillRect(Math.round(lx1) - 2, 0, 2, RULER_H);
+      ctx.globalAlpha = live ? 0.9 : 0.35;
+      const bx0 = Math.max(lx0, -4);
+      ctx.beginPath();
+      ctx.roundRect(bx0, 0, Math.min(lx1, W + 4) - bx0, 6, [0, 0, 3, 3]);
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
 
     ctx.textBaseline = 'middle';
@@ -664,26 +832,28 @@
       for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) if (t % BAR) ctx.fillRect(Math.round(tickToX(t, v)), RULER_H - 5, 1, 5);
     }
     const step = barLabelStep(v.ticksPerPx);
-    ctx.font = 'bold 11px ui-sans-serif, system-ui, sans-serif';
+    ctx.font = `500 10px ${THEME.fontMono}`;
     for (let t = snapFloor(t0, BAR * step); t <= t1; t += BAR * step) {
       const x = Math.round(tickToX(t, v));
       ctx.fillStyle = C.bar4;
       ctx.fillRect(x, 0, 1, RULER_H);
       ctx.fillStyle = C.rulerText;
-      ctx.fillText(String(t / BAR + 1), x + 4, RULER_H / 2 + 1);
+      ctx.fillText(String(t / BAR + 1), x + 4, RULER_H / 2 + 2);
     }
 
     const m = marker();
     if (m) {
       const x = tickToX(m.t, v);
       if (x >= -6 && x <= W + 6) {
-        ctx.fillStyle = m.live ? C.playhead : 'rgba(255,255,255,0.55)';
+        ctx.fillStyle = C.playhead;
+        ctx.globalAlpha = m.live ? 1 : 0.55;
         ctx.beginPath();
         ctx.moveTo(x - 6, 0);
         ctx.lineTo(x + 6, 0);
         ctx.lineTo(x, 9);
         ctx.fill();
-        ctx.fillRect(Math.round(x) - 0.75, 0, 1.5, RULER_H);
+        ctx.fillRect(Math.round(x) - 1, 0, 2, RULER_H);
+        ctx.globalAlpha = 1;
       }
     }
   }
@@ -963,8 +1133,8 @@
     else if (d.kind === 'move' && !d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
     else if (d.kind === 'ruler' && !d.moved) {
       seek(p, engine, seekTick(d.t0, e.altKey));
-      // In Pattern mode the engine ignores the song position until SONG is on.
-      if (p.mode === 'pattern') flashHint(`Song position set to bar ${Math.floor(p.songPosition / BAR) + 1} — plays in SONG`);
+      // In Pattern mode the engine ignores the song position until the song transport plays.
+      if (p.mode === 'pattern') flashHint(`Song position set to bar ${Math.floor(p.songPosition / BAR) + 1} — play the song (top bar) from here`);
     }
   }
 
@@ -1361,7 +1531,7 @@
   <!-- Sample drops anywhere over the timeline (AUDIO LANES at the top). -->
   <div class="scroll" bind:this={scrollEl} role="presentation" ondragenter={dragOver} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}>
     <div class="grid">
-      <div class="corner">Tracks</div>
+      <div class="corner lbl">Tracks</div>
       <div class="ruler-wrap">
         <canvas
           bind:this={rulerCv}
@@ -1464,10 +1634,10 @@
     </div>
     <div class="foot">
       <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
-      <button data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
-      <button data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
+      <button class="btn" data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
+      <button class="btn" data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
       <button
-        data-testid="add-sampler-track" class:over={samplerOver} disabled={tracksFull}
+        class="btn" data-testid="add-sampler-track" class:over={samplerOver} disabled={tracksFull}
         title={tracksFull ? FULL_TITLE : 'Add a sampler track: drop a sample here or on its Sample Player'}
         onclick={() => { if (!tracksFull) void addSamplerTrack(p, engine); }}
         ondragover={samplerDragOver} ondragleave={() => (samplerOver = false)} ondrop={samplerDrop}
@@ -1475,12 +1645,12 @@
       {#if !p.mixer.automation.length}
         <!-- The Master row (automation of the master and the returns); it stays once it has a lane. -->
         <button
-          data-testid="tl-master-toggle" aria-pressed={laneView.master}
+          class="btn quiet" data-testid="tl-master-toggle" aria-pressed={laneView.master}
           title={laneView.master ? 'Hide the Master row' : 'Show the Master row: automation lanes for the master, reverb and delay'}
           onclick={() => { laneView.master = !laneView.master; if (laneView.master) setOpen(MASTER_ROW, true); }}
         >{laneView.master ? '− Master row' : '+ Master row'}</button>
       {/if}
-      <button data-testid="add-audio-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add an audio track: drop audio files on its lane'} onclick={() => { if (addAudioTrack(p, engine)) p.mixerOpen = false; }}>+ Audio track</button>
+      <button class="btn" data-testid="add-audio-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add an audio track: drop audio files on its lane'} onclick={() => { if (addAudioTrack(p, engine)) p.mixerOpen = false; }}>+ Audio track</button>
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
         class="hscroll"
@@ -1491,6 +1661,7 @@
         max={Math.max(0, MAX_SONG_TICKS - width * (view?.ticksPerPx ?? 1))}
         step={BAR / 4}
         value={view?.scrollTick ?? 0}
+        style:--fill="{view ? (100 * view.scrollTick) / Math.max(1, MAX_SONG_TICKS - width * view.ticksPerPx) : 0}%"
         oninput={(e) => { if (view) view = clampView({ ...view, scrollTick: Number(e.currentTarget.value) }); }}
       />
       <output class="readout" class:hint={!!hint} data-testid="tl-readout">{readoutText}</output>
@@ -1538,34 +1709,34 @@
 </div>
 
 <style>
-  .tl { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; }
+  /* Tokens only (theme.css); the canvases read the same values from ui/theme.ts. */
+  .tl { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; height: 100%; background: var(--work); }
   .scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; }
   .grid { display: grid; grid-template-columns: var(--header-w) minmax(0, 1fr); flex: 1 0 auto; align-content: start; }
-  .corner, .ruler-wrap { position: sticky; top: 0; z-index: 2; height: var(--ruler-h); background: #202227; border-bottom: 1px solid #2a2c33; }
-  .corner { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #7d808c; line-height: var(--ruler-h); padding-left: 8px; }
+  .corner, .ruler-wrap { position: sticky; top: 0; z-index: 2; height: var(--ruler-h); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .corner { box-sizing: border-box; line-height: var(--ruler-h); padding-left: 10px; border-right: 1px solid var(--line); }
   .ruler-wrap { min-width: 0; }
   .ruler { display: block; width: 100%; height: var(--ruler-h); cursor: text; touch-action: none; }
-  .lanes { position: relative; min-width: 0; overflow: hidden; outline: none; touch-action: none; background: #17181c; }
-  .lanes:focus-visible { box-shadow: inset 0 0 0 1px #f0a23a88; }
+  .lanes { position: relative; min-width: 0; overflow: hidden; outline: none; touch-action: none; background: var(--work); }
+  .lanes:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
   .lanes-cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .lanes-cv.ov { pointer-events: none; z-index: 1; }
   .lane { position: absolute; left: 0; right: 0; height: var(--lane-h); }
   .clip { position: absolute; top: 2px; height: 23px; }
-  .auto-empty, .master-row { display: flex; align-items: center; padding-left: 8px; font-size: 10px; color: #5d606b; pointer-events: none; }
-  .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: #4d505b; font-size: 11px; }
-  .below.over { background: rgba(240, 162, 58, 0.12); border-top-color: #f0a23a; color: #ffd98a; }
+  .auto-empty, .master-row { display: flex; align-items: center; padding-left: 8px; font-size: var(--fs-lbl); color: var(--text-2); pointer-events: none; }
+  .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: var(--text-2); font-size: 11px; opacity: 0.7; }
+  .below.over { opacity: 1; background: color-mix(in srgb, var(--accent) 12%, transparent); border-top-color: var(--accent); color: var(--accent); }
   .menu .check { display: inline-block; width: 14px; }
-  .foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 4px 6px; background: #1b1c21; border-top: 1px solid #2a2c33; }
-  .foot button { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; white-space: nowrap; }
-  .foot button:hover { background: #2e313a; }
-  .foot button.over { border-color: #f0a23a; background: #2e313a; }
-  .foot button:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
-  .hscroll { width: 140px; flex: none; margin-left: 8px; accent-color: #f0a23a; }
-  .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9cbd3; }
-  .readout.hint { color: #ffd98a; }
-  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: #24262c; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }
-  .menu-ttl { font-size: 10px; color: #8d90a0; padding: 2px 6px 4px; white-space: nowrap; }
-  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: 3px; background: transparent; color: #e4e5ea; cursor: pointer; }
-  .menu button:hover:not(:disabled), .menu button:focus-visible { background: #343846; outline: none; }
-  .menu button:disabled { color: #6d707c; cursor: not-allowed; }
+  .foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--panel); border-top: 1px solid var(--line); }
+  /* Pills (.btn), smaller than the default 30 px. */
+  .foot .btn { padding: 4px 10px; font-size: 11px; }
+  .foot .btn.over { box-shadow: var(--raised-shadow), 0 0 0 2px var(--accent); }
+  .hscroll { width: 140px; flex: none; margin-left: 8px; --c: var(--text-dim); }
+  .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--font-mono); color: var(--text-2); }
+  .readout.hint { color: var(--accent); }
+  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; }
+  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
+  .menu button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
 </style>

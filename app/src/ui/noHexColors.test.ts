@@ -22,7 +22,6 @@ const ALLOWED: string[] = [
   'ui/InlineConfirm.svelte',
   'ui/MidiPopover.svelte',
   'ui/Settings.svelte',
-  'ui/SongArea.svelte',
   'ui/StartOverlay.svelte',
   'ui/TopBar.svelte',
   'ui/Wheels.svelte',
@@ -36,9 +35,6 @@ const ALLOWED: string[] = [
   'ui/rack/ScopeView.svelte',
   'ui/rack/ShapePreview.svelte',
   'ui/rack/VoiceLeds.svelte',
-  'ui/song/AutoLane.svelte',
-  'ui/song/Timeline.svelte',
-  'ui/song/TrackHeaders.svelte',
 ];
 
 function svelteFiles(dir: string): string[] {

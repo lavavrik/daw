@@ -19,8 +19,8 @@
   // to remove the lane (one undo entry; no question: undo brings it back),
   // and on the owner's last lane row the "+ Lane" <select> of the targets
   // that have no lane yet. An open track without lanes shows one empty lane
-  // row with just the select. In Pattern mode a lane header says it plays in
-  // SONG only. The Master row (pinned under the last track) holds the
+  // row with just the select. While the pattern transport ran last (Pattern
+  // mode) a lane header says lanes play with the song only. The Master row (pinned under the last track) holds the
   // master's and both returns' lanes; its own A, and × to hide it while it
   // has no lane (the timeline footer's "+ Master row" shows it).
   //
@@ -34,13 +34,34 @@
   // undo entry, not dirty. Escape, a lost pointer capture, or Cmd/Ctrl+Z
   // mid-drag (registerDragCancel) put back the height from before the drag.
   // The empty lane row (no lane yet) has no strip: it is always AUTO_H.
+  //
+  // LOOK (plan 20, spec §4 Playlist): a 6 px colour bar in the track colour
+  // (with the gloss), the name (and kind) over a thin volume slider, raised
+  // M / S / A buttons (lit: M --accent, S --play, A the track colour). Tokens
+  // only; the track colour is data, passed in as --c.
+  //
+  // VOLUME SLIDER (`track-vol-<slot>`, track rows only; the Master row has
+  // none). A skinned <input type="range"> bound to the track's mixer fader:
+  // the same value and the same action as the strip's fader (setMix 'fader'),
+  // so the two always agree. Its 0..1 travel is the fader law (mixMath
+  // faderPos / faderDb: 0 dB at 3/4, snapped to 0.1 dB), not linear dB.
+  // As on the Fader: a drag is one undo entry (the window's gesture
+  // bracket, history/gestures.ts, spans the native press .. release); Escape
+  // or Cmd/Ctrl+Z mid-drag (registerDragCancel) puts back the value from
+  // before the press and ignores the rest of that press; arrows ±1 dB (Shift
+  // 0.1 dB), Home −∞, End +6 dB; double-click 0 dB; an edit first overrides
+  // the fader's automation lane (autoBus.touch, as the Fader does). Chrome
+  // aligns pointer moves to frames, so a drag sends at most one value per
+  // frame without the Fader's own coalescing.
   import { onDestroy } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
   import { removeTrack, selectTrack } from '../../state/actions';
-  import { toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { useAutoBus } from '../autoBus';
+  import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
@@ -100,6 +121,66 @@
   function remove(t: Track, anchor: HTMLElement) {
     releaseHeldKeys();
     asking = { track: t, anchor };
+  }
+
+  // ---- volume slider (see VOLUME SLIDER at the top) ---------------------------------
+  const bus = useAutoBus();
+  const FADER = { kind: 'mix', param: 'fader' } as const;
+  /** A track's fader (dB), as its mixer strip shows it. */
+  const faderOf = (t: Track) => p.mixer.channels[t.id]?.params[mixParam('fader').id] ?? mixParam('fader').default;
+  function setVol(t: Track, db: number) {
+    if (db === faderOf(t)) return;
+    bus?.touch(t.id, FADER);
+    setMix(p, engine, t.id, 'fader', db);
+  }
+  /** The slider press in progress: its track, the value before it, and whether Escape / Cmd+Z cancelled it. */
+  let vol: { trackId: string; db0: number; cancelled: boolean } | null = null;
+  function volDown(e: PointerEvent, t: Track) {
+    if (e.button !== 0) return;
+    vol = { trackId: t.id, db0: faderOf(t), cancelled: false };
+    // The native slider keeps the pointer: its release can land anywhere.
+    const end = () => {
+      vol = null;
+      window.removeEventListener('pointerup', end, true);
+      window.removeEventListener('pointercancel', end, true);
+    };
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+  }
+  function volInput(e: Event & { currentTarget: HTMLInputElement }, t: Track) {
+    if (vol?.cancelled && vol.trackId === t.id) {
+      e.currentTarget.value = String(faderPos(faderOf(t))); // the thumb stays at the restored value
+      return;
+    }
+    setVol(t, faderDb(e.currentTarget.valueAsNumber));
+  }
+  /** Abort the press: the value from before it, and the rest of the press is ignored. False when none is on. */
+  function volCancel(): boolean {
+    const v = vol;
+    if (!v || v.cancelled) return false;
+    v.cancelled = true;
+    const t = trackById.get(v.trackId);
+    // The old base back without a new override (as the Fader's Escape).
+    if (t && faderOf(t) !== v.db0) setMix(p, engine, t.id, 'fader', v.db0);
+    return true;
+  }
+  const unregisterVol = registerDragCancel(volCancel);
+  onDestroy(unregisterVol);
+  function volKey(e: KeyboardEvent, t: Track) {
+    let db: number | null = null;
+    if (e.key === 'Escape' && vol && !vol.cancelled) {
+      e.preventDefault();
+      e.stopPropagation();
+      volCancel();
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') db = faderKeyStep(faderOf(t), 1, e.shiftKey);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') db = faderKeyStep(faderOf(t), -1, e.shiftKey);
+    else if (e.key === 'Home') db = FADER_MIN_DB;
+    else if (e.key === 'End') db = FADER_MAX_DB;
+    if (db === null) return;
+    e.preventDefault(); // not the native 0.001 step
+    setVol(t, db);
   }
 
   // ---- lane height (see LANE HEIGHT at the top) ----------------------------------
@@ -183,19 +264,21 @@
       {@const muted = flagOn(t, 'mute')}
       {@const soloed = flagOn(t, 'solo')}
       {@const open = laneView.open.has(t.id)}
+      {@const db = faderOf(t)}
       <div class="row" class:sel class:muted style:--c={t.color} style:height="{r.h}px">
-        <button
-          class="main"
-          data-testid={`track-${t.slot}`}
-          aria-pressed={sel}
-          title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
-          onclick={() => {
-            selectTrack(p, engine, t.id);
-            p.mixerOpen = false; // show this track's editor, not the mixer
-          }}
-        >
-          <span class="mark">{sel ? '▶' : ''}</span>
-          <span class="txt">
+        <span class="bar" aria-hidden="true"></span>
+        <div class="body">
+          <button
+            class="main"
+            data-testid={`track-${t.slot}`}
+            aria-pressed={sel}
+            title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
+            onclick={() => {
+              selectTrack(p, engine, t.id);
+              p.mixerOpen = false; // show this track's editor, not the mixer
+            }}
+          >
+            <span class="mark">{sel ? '▶' : ''}</span>
             <b class="name">{t.name}</b>
             {#if t.kind === 'synth'}
               <span class="kind">Synth · {t.patchName}</span>
@@ -206,8 +289,26 @@
               <!-- "Drums 2" already says it; a renamed track gets the kind line. -->
               <span class="kind">Drum track</span>
             {/if}
-          </span>
-        </button>
+          </button>
+          <!-- The track's mixer fader (VOLUME SLIDER at the top); --c (the track colour) fills it. -->
+          <input
+            type="range"
+            class="vol"
+            min="0"
+            max="1"
+            step="0.001"
+            value={faderPos(db)}
+            style:--fill="{faderPos(db) * 100}%"
+            data-testid={`track-vol-${t.slot}`}
+            aria-label={`${t.name} volume`}
+            aria-valuetext={formatDb(db)}
+            title={`${t.name} volume: ${formatDb(db)} (the mixer fader) — double-click: 0 dB, arrows: ±1 dB (Shift: 0.1 dB)`}
+            onpointerdown={(e) => volDown(e, t)}
+            oninput={(e) => volInput(e, t)}
+            onkeydown={(e) => volKey(e, t)}
+            ondblclick={() => setVol(t, 0)}
+          />
+        </div>
         <span class="ms">
           <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
           <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (and other soloed ones)`} onclick={() => toggleSolo(p, engine, t.id)}>S</button>
@@ -228,9 +329,10 @@
     {:else if r.kind === 'master'}
       {@const open = laneView.open.has(MASTER_ROW)}
       <div class="row master" style:--c={MASTER_GREY} style:height="{r.h}px" data-testid="master-head">
+        <span class="bar" aria-hidden="true"></span>
         <span class="main static">
           <span class="mark"></span>
-          <span class="txt"><b class="name">Master</b><span class="kind">Master · Reverb · Delay</span></span>
+          <b class="name">Master</b><span class="kind">Master · Reverb · Delay</span>
         </span>
         <span class="ms">
           <button
@@ -267,7 +369,7 @@
         {/if}
         <div class="lrow">
           {#if isLastOfOwner(i)}{@render addSelect(r.trackId)}{/if}
-          {#if p.mode === 'pattern' && info}<span class="pat" title="Lanes are editable in Pattern mode but play only in Song mode (SONG, Shift+L)">SONG only</span>{/if}
+          {#if p.mode === 'pattern' && info}<span class="pat" title="Lanes play with the song: press Play in the top bar to hear them (the pattern transport ignores them)">Song only</span>{/if}
         </div>
         {#if info && r.laneId}
           {@const laneId = r.laneId}
@@ -316,48 +418,57 @@
 {/if}
 
 <style>
-  .heads { display: flex; flex-direction: column; }
-  .row { box-sizing: border-box; display: flex; align-items: stretch; border-left: 4px solid var(--c); border-bottom: 1px solid #16171b; background: #20222a; }
-  .row:hover, .row:focus-within { background: #272a33; }
-  .row.sel { background: #343846; box-shadow: inset 0 0 0 1px #4a4f63; }
-  .main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 2px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  .main:focus-visible, .x:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
-  .mark { width: 9px; flex: none; color: #f0a23a; font-size: 8px; }
-  .txt { min-width: 0; display: flex; flex-direction: column; line-height: 1.1; }
-  .name { color: #e6e7ec; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .row:not(.sel) .name { font-weight: 500; color: #c9cbd3; }
-  .kind { color: #8d90a0; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .x { width: 20px; flex: none; border: 0; background: transparent; color: #9a9dab; font-size: 14px; cursor: pointer; opacity: 0; }
+  /* Tokens only (theme.css); --c is the row's track colour (data). */
+  .heads { display: flex; flex-direction: column; background: var(--panel); }
+  .row { box-sizing: border-box; display: flex; align-items: stretch; gap: 4px; padding-right: 2px; border-bottom: 1px solid var(--grid); border-right: 1px solid var(--line); background: var(--panel); }
+  .row:hover, .row:focus-within { background: color-mix(in srgb, var(--panel), var(--text) 4%); }
+  .row.sel { background: color-mix(in srgb, var(--panel), var(--text) 10%); }
+  .bar { width: 6px; flex: none; background: var(--c) var(--gloss); box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.18); }
+  .body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+  .main { min-width: 0; display: flex; align-items: baseline; gap: 4px; padding: 0 2px 0 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; }
+  .main:focus-visible, .x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .mark { width: 8px; flex: none; color: var(--accent); font-size: 8px; }
+  .name { flex: none; max-width: 100%; color: var(--text); font-size: var(--fs-ctl); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+  .row:not(.sel) .name { font-weight: 600; color: var(--text-2); }
+  .kind { min-width: 0; color: var(--text-2); font-size: var(--fs-lbl); opacity: 0.8; overflow: hidden; text-overflow: ellipsis; }
+  /* The thin volume slider: theme.css's range skin, scaled down (4 px groove, 10 px handle). */
+  .vol { display: block; width: calc(100% - 8px); height: 10px; margin-left: 10px; }
+  .vol::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; }
+  .vol::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -3px; }
+  .x { width: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--text-2); font-size: 14px; cursor: pointer; opacity: 0; }
   .row:hover .x, .row:focus-within .x, .x:focus-visible { opacity: 1; }
-  .x:hover { color: #ff8a92; }
-  .ms { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 2px; }
-  .ms button { width: 16px; height: 16px; padding: 0; border: 1px solid #3a3d48; border-radius: 3px; background: #1a1b20; color: #8d90a0; font: inherit; font-size: 9px; font-weight: 700; line-height: 14px; cursor: pointer; }
-  .ms button:focus-visible { outline: 2px solid #f0a23a; outline-offset: 0; }
-  .m.lit { background: #e0a030; border-color: #e0a030; color: #111; }
-  .s.lit { background: #4fb3e0; border-color: #4fb3e0; color: #111; }
-  .row.muted .txt { opacity: 0.5; }
-  .a.lit { background: #8fd18f; border-color: #8fd18f; color: #111; }
-  .a.has:not(.lit) { color: #8fd18f; border-color: #4d6b4d; }
-  .main.static { cursor: default; }
-  .row.master { background: #262830; }
-  .row.lane { position: relative; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 6px; background: #1b1c22; }
+  .x:hover { color: var(--rec); }
+  .ms { flex: none; display: flex; align-items: center; gap: 3px; }
+  /* Raised M / S / A: lit M is --accent, S --play, A the track colour; text on a lit button is --on-color. */
+  .ms button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px; background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text-2); font: 700 9px/18px var(--font-ui); cursor: pointer; }
+  .ms button:hover { color: var(--text); }
+  .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ms button.lit { color: var(--on-color); }
+  .m.lit { background-color: var(--accent); box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .s.lit { background-color: var(--play); box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--play) 40%, transparent); }
+  .a.lit { background-color: var(--c); box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--c) 40%, transparent); }
+  .a.has:not(.lit) { color: var(--c); }
+  .row.muted .name, .row.muted .kind { opacity: 0.5; }
+  .main.static { flex: 1; cursor: default; align-self: center; padding-left: 0; }
+  .row.master { background: color-mix(in srgb, var(--panel), var(--well) 25%); }
+  .row.lane { position: relative; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 12px; background: color-mix(in srgb, var(--panel), var(--well) 30%); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
   /* Under 40 px (LANE_MIN_H is 32) the two header lines close up so they still fit. */
   .row.lane.compact { gap: 0; }
   .row.lane.compact .lrow, .row.lane.compact .add, .row.lane.compact .x, .row.lane.compact .en { height: 15px; line-height: 15px; }
   /* bottom: -1px: over the row's bottom border too, so the strip ends at the row's edge. */
   .resize { position: absolute; left: 0; right: 0; bottom: -1px; height: 5px; z-index: 1; cursor: row-resize; touch-action: none; outline: none; }
-  .resize:hover, .resize:active { box-shadow: inset 0 -2px 0 #f0a23a88; }
-  .resize:focus-visible { box-shadow: inset 0 -2px 0 #f0a23a; }
+  .resize:hover, .resize:active { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  .resize:focus-visible { box-shadow: inset 0 -2px 0 var(--accent); }
   .lrow { display: flex; align-items: center; gap: 4px; min-width: 0; height: 18px; }
-  .target { flex: 1; min-width: 0; font-size: 10px; color: #c9cbd3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .target.none { color: #7d808c; }
-  .row.lane .x { opacity: 0.6; height: 18px; }
+  .target { flex: 1; min-width: 0; font-size: var(--fs-lbl); font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .target.none { color: var(--text-2); font-weight: 400; }
+  .row.lane .x { opacity: 0.7; height: 18px; }
   .en { width: 16px; height: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--c); font-size: 11px; line-height: 16px; cursor: pointer; }
-  .en:not(.on) { color: #6d707c; }
-  .en:focus-visible, .add:focus-visible { outline: 2px solid #f0a23a; outline-offset: 0; }
-  .add { max-width: 84px; height: 18px; font: inherit; font-size: 10px; padding: 0 2px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; }
-  .add:disabled { color: #6d707c; cursor: not-allowed; }
-  .cap { font-size: 9px; color: #ff8a92; white-space: nowrap; }
-  .pat { font-size: 9px; color: #ffd98a; white-space: nowrap; }
-  .empty { color: #7d808c; margin: 0; padding: 6px 8px; }
+  .en:not(.on) { color: var(--text-2); opacity: 0.6; }
+  .en:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  /* The skinned select (theme.css), squeezed into the 18 px line. */
+  .add { max-width: 92px; height: 18px; padding: 0 4px 0 6px; border-radius: var(--r-sm); font-size: var(--fs-lbl); }
+  .cap { font-size: 9px; color: var(--rec); white-space: nowrap; }
+  .pat { font-size: 9px; color: var(--accent); white-space: nowrap; }
+  .empty { color: var(--text-2); margin: 0; padding: 6px 8px; }
 </style>

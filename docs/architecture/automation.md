@@ -353,10 +353,12 @@ changes nothing and sends nothing.
   audio clips' cross-lane moves, drops, and the header column, which
   renders the same rows. There is no uniform lane height any more.
 - **Rows.** `AutoLane.svelte` draws one lane on its own canvas (editing a
-  lane never redraws the clips): the curve in the owner's colour (Master
-  row: `MASTER_GREY`) at knob position (so a linear segment is a straight
-  line, exp params included), hold points square, the selection white, a
-  disabled lane dimmed, a suspended one grey (`laneView.suspended`, set by
+  lane never redraws the clips): a filled curve (plan 20), the 2 px line
+  in the owner's colour (Master row: `MASTER_GREY`, the theme's
+  `--text-dim`) over a 22 % fill, at knob position (so a linear segment is
+  a straight line, exp params included), points as dots ringed in
+  `--well`, hold points square, the selection white, a
+  disabled lane dimmed, a suspended one grey (`--raised`) (`laneView.suspended`, set by
   Task 4), an empty lane's base value dashed. Point hit tests:
   `tlMath.pointHit` / `pointBox`.
 - **Only lanes in view draw** (plan 10 Task 5). Every lane redraws on each

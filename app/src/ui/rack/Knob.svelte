@@ -543,7 +543,8 @@
      fill in --c plus the gloss, and the handle recipe. 32 px in all. The
      horizontal padding keeps the handle inside the control at both ends. */
   /* grid-column: a full row of the module's param grid (no effect outside a grid). */
-  .slider { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 112px; min-height: 28px; padding-top: 2px; border-radius: var(--r-sm); user-select: none; outline: none; grid-column: 1 / -1; }
+  /* --slider-min-w: a caller with less room (the top bar's Master) lowers the 112 px minimum. */
+  .slider { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: var(--slider-min-w, 112px); min-height: 28px; padding-top: 2px; border-radius: var(--r-sm); user-select: none; outline: none; grid-column: 1 / -1; }
   .slider .row { display: flex; align-items: baseline; gap: 4px; padding: 0 2px; }
   .slider .label { flex: 0 1 auto; max-width: none; }
   .slider .readout { margin-left: auto; min-width: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; text-align: right; font-size: var(--fs-ctl); }

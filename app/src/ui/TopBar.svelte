@@ -29,20 +29,23 @@
   // dialog inside the click, then renders in a Worker; its progress and
   // Cancel are a banner in the bottom panel. Undo take and the offset keep
   // the menu open (they are often used twice in a row); the rest close it,
-  // and so do Escape and a press outside. The offset persists in
+  // and so do Escape (anywhere, while open) and a press outside. Closing by
+  // a command or Escape puts the focus back on the opener: the name button,
+  // the ⋯, or what had the focus before ⌘O. An Escape a field inside used
+  // itself (the offset reverting its typed text) does not close it. It is a
+  // plain group of buttons and a labelled field, not an ARIA menu (it holds
+  // a number field and the discard question). The offset persists in
   // localStorage (state/recorder.ts).
   //
   // UNDO / REDO (↶ ↷): the history's newest entries, named in the tooltips
   // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
   //
-  // SONG TRANSPORT (44 px; spec §4): Play (`play`) toggles the song like
-  // Space outside the bottom panel: it sets Song mode and plays, stopping the
-  // pattern transport first. While the SONG plays it glows brighter and its
-  // name is "Stop" (what a click does; the icon stays ▶, so the bar never
-  // shows two ■ side by side). It
-  // goes through the App (onToggleSong) so the recorder's stop tick is
-  // handled in one place. Stop (`song-stop`) stops whichever transport runs
-  // (onStop), so it is also the one-click "stop everything". Loop
+  // SONG TRANSPORT (44 px; spec §4): Play (`play`, "Play song") is a toggle
+  // button (aria-pressed while the SONG plays, and it glows): like Space
+  // outside the bottom panel, it sets Song mode and plays, stopping the
+  // pattern transport first, and a second press stops. It goes through the
+  // App (onToggleSong) so the recorder's stop tick is handled in one place.
+  // "Stop all" (`song-stop`) stops whichever transport runs (onStop). Loop
   // (`loop-toggle`) belongs to the song transport, whichever ran last. The
   // pattern transport, with Rec and Count-in, is in the bottom panel's
   // header (PatternTransport.svelte).
@@ -88,7 +91,7 @@
   // state at 1280 px (playing, unsaved, 123 dropouts) leaves ~40 px.
   // overflow-x: clip is the last guard: it never becomes a scroll container,
   // so the popovers can drop below.
-  import { onMount, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
@@ -185,6 +188,9 @@
   let menu = $state<HTMLDetailsElement | null>(null);
   let projEl = $state<HTMLElement | null>(null);
   let menuOpen = $state(false);
+  let nameBtn = $state<HTMLElement | null>(null);
+  /** What opened the menu (the name button, the ⋯, or what had the focus before ⌘O): the focus goes back there. */
+  let opener: HTMLElement | null = null;
   /** New/Open waiting for "Discard and …" (only asked when something would be lost). */
   let confirming = $state<'new' | 'open' | null>(null);
   const warning = $derived(discardWarning(p, restoreOffer));
@@ -194,12 +200,18 @@
     confirming = null;
     if (menu) menu.open = false;
   }
+  /** Close and give the focus back to the opener (after a command, Escape), never to <body>. */
+  function closeToOpener() {
+    const back = opener;
+    closeMenu();
+    (back?.isConnected ? back : nameBtn)?.focus();
+  }
   function run(cmd: 'new' | 'open' | 'save' | 'saveAs' | 'export') {
     if ((cmd === 'new' || cmd === 'open') && discardWarning(p, restoreOffer) !== null && confirming !== cmd) {
       confirming = cmd;
       return;
     }
-    closeMenu();
+    closeToOpener();
     if (cmd === 'new') void session.newProject();
     else if (cmd === 'open') void session.open();
     else if (cmd === 'save') void session.save();
@@ -210,21 +222,41 @@
     menuOpen = !!menu?.open;
     if (!menuOpen) confirming = null;
   }
-  function menuKey(e: KeyboardEvent) {
-    if (e.key !== 'Escape' || !menu?.open) return;
-    e.stopPropagation(); // not also "cancel learn" etc.
-    closeMenu();
-    menu.querySelector('summary')?.focus();
-  }
-  // A press outside the name and the menu closes it.
-  $effect(() => {
-    if (!menuOpen) return;
+  // While open: a press outside the name and the menu closes it; Escape
+  // anywhere closes it and puts the focus back on the opener. An Escape a
+  // control inside already used (NumberField reverting a typed offset:
+  // preventDefault) is left alone, so the menu stays open. The listeners
+  // stay attached and read `menu.open` itself: the `toggle` event comes a
+  // task later, and an Escape pressed right after opening must still close.
+  onMount(() => {
     const outside = (e: PointerEvent) => {
-      if (!projEl?.contains(e.target as Node)) closeMenu();
+      if (menu?.open && !projEl?.contains(e.target as Node)) closeMenu();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || !menu?.open) return;
+      e.stopPropagation(); // not also "cancel learn" etc.
+      e.preventDefault();
+      closeToOpener();
     };
     window.addEventListener('pointerdown', outside, true);
-    return () => window.removeEventListener('pointerdown', outside, true);
+    window.addEventListener('keydown', key);
+    return () => {
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('keydown', key);
+    };
   });
+  /** The name button: toggles the menu, as the ⋯ does. */
+  function toggleFromName() {
+    if (!menu) return;
+    opener = nameBtn;
+    menu.open = !menu.open;
+  }
+  /** Cancel on the discard question: back to the list, the focus on its first item. */
+  async function cancelDiscard() {
+    confirming = null;
+    await tick();
+    menu?.querySelector<HTMLElement>('[data-testid="project-new"]')?.focus();
+  }
 
   /**
    * ⌘O / Ctrl+O (App's shortcut): the same as the menu item, so it asks the
@@ -233,6 +265,8 @@
    * inside the key press, as the picker needs a user gesture).
    */
   export function request(cmd: 'new' | 'open') {
+    const active = document.activeElement;
+    opener = active instanceof HTMLElement && active !== document.body ? active : nameBtn;
     if (discardWarning(p, restoreOffer) !== null && menu) menu.open = true;
     run(cmd);
   }
@@ -330,44 +364,45 @@
   <div class="proj" bind:this={projEl}>
     <div class="id">
       <button
-        class="name" data-testid="project-menu" title="Project: New, Open, Save, Export" aria-haspopup="menu" aria-expanded={menuOpen}
-        onclick={() => menu && (menu.open = !menu.open)}
+        class="name" data-testid="project-menu" title="Project: New, Open, Save, Export" aria-expanded={menuOpen} aria-controls="topbar-more-panel"
+        bind:this={nameBtn} onclick={toggleFromName}
       ><span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">●<span class="sr-only">{' '}unsaved</span></span>{/if}</span></button>
       <span class="hint" data-testid="hint-line" aria-hidden="true">{hint}</span>
     </div>
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <details class="more" bind:this={menu} ontoggle={menuToggled} onkeydown={menuKey}>
-      <summary class="ib" data-testid="topbar-more" aria-label="More: open, save, export, takes" title="New, Open, Save, Export WAV, Undo take, Rec offset">
+    <details class="more" bind:this={menu} ontoggle={menuToggled}>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <summary class="ib" onclick={(e) => (opener = e.currentTarget)} data-testid="topbar-more" aria-label="More: open, save, export, takes" title="New, Open, Save, Export WAV, Undo take, Rec offset">
         <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5" fill="currentColor" /><circle cx="8" cy="8" r="1.5" fill="currentColor" /><circle cx="12.5" cy="8" r="1.5" fill="currentColor" /></svg>
       </summary>
-      <div class="panel menu" role="menu">
+      <!-- A plain group of buttons and a labelled field (no menu role: it holds a number field and a question). -->
+      <div class="panel menu" id="topbar-more-panel" role="group" aria-label="Project and recording">
         {#if confirming}
           <p class="discard" data-testid="project-discard-warning">{warning}</p>
           <div class="row">
             <button class="btn danger" data-testid="project-discard" onclick={() => run(confirming!)}>
               Discard and {confirming === 'new' ? 'start new' : 'open…'}
             </button>
-            <button class="btn" data-testid="project-discard-cancel" onclick={() => (confirming = null)}>Cancel</button>
+            <button class="btn" data-testid="project-discard-cancel" onclick={() => void cancelDiscard()}>Cancel</button>
           </div>
         {:else}
-          <button role="menuitem" data-testid="project-new" onclick={() => run('new')}>New</button>
-          <button role="menuitem" data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
-          <button role="menuitem" data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
-          <button role="menuitem" data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
+          <button data-testid="project-new" onclick={() => run('new')}>New</button>
+          <button data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
+          <button data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
+          <button data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
           <button
-            role="menuitem" data-testid="project-export" disabled={banners.exporting !== null || p.loading}
+            data-testid="project-export" disabled={banners.exporting !== null || p.loading}
             title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
             onclick={() => run('export')}
           >Export WAV…</button>
           <hr />
           <button
-            role="menuitem" data-testid="undo-take" disabled={!rec.canUndoTake}
+            data-testid="undo-take" disabled={!rec.canUndoTake}
             title={undoTakeTitle(rec.takeEdits)} onclick={() => recorder.undoLastTake()}
           >Undo take</button>
           <div class="offset">
-            <span class="olbl">Rec offset</span>
+            <span class="olbl" aria-hidden="true">Rec offset</span>
             <NumberField
-              testid="rec-offset" ariaLabel="Recording offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
+              testid="rec-offset" ariaLabel="Rec offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
               value={offsetMs} onchange={setOffset}
             />
           </div>
@@ -390,10 +425,10 @@
   <span class="sep" aria-hidden="true"></span>
 
   <span class="grp" role="group" aria-label="Song transport">
-    <button class="tp play" class:on={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
-      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor" /></svg><span class="sr-only">{songPlaying ? 'Stop' : 'Play'}</span>
+    <button class="tp play" class:on={songPlaying} aria-pressed={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor" /></svg><span class="sr-only">Play song</span>
     </button>
-    <button class="tp" data-testid="song-stop" aria-label="Stop" title="Stop (the song or the pattern)" disabled={!p.playing} onclick={onStop}>
+    <button class="tp" data-testid="song-stop" aria-label="Stop all" title="Stop all (the song or the pattern)" disabled={!p.playing} onclick={onStop}>
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
     </button>
     <button
@@ -454,7 +489,7 @@
       <span class="midiwrap">
         <button class="pill midi" data-testid="midi-status" class:ok={midi.state === 'connected'} class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
           aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => (midiOpen = !midiOpen)}
-        >{#if midi.state === 'connected'}<span class="led"></span>{/if}MIDI: {midiLabel}</button>
+        >{#if midi.state === 'connected'}<span class="led"></span>{/if}<span class="ell">MIDI: {midiLabel}</span></button>
         {#if midiOpen}
           <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
         {/if}
@@ -545,10 +580,10 @@
 
   /* NumberField's LCD is sized for 3 digits + label; 58 px holds "124.5" at 18 px. */
   .tempo { display: flex; }
-  .tempo :global(input) { width: 58px; }
+  .tempo { --nf-lcd-w: 58px; }
   /* Knob's slider has a 112 px minimum (the rack's grid); the bar has less room. */
   .master { width: 104px; }
-  .master :global(.slider) { min-width: 0; }
+  .master { --slider-min-w: 0px; }
 
   .mini { display: flex; align-items: center; justify-content: center; width: 66px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
   .mini:hover { filter: brightness(1.15); }
@@ -567,7 +602,8 @@
   button.pill:hover, summary.pill:hover { filter: brightness(1.08); }
   .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .pill.keys { display: block; line-height: 26px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
-  .pill.midi { display: block; line-height: 22px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  .pill.midi { max-width: 120px; }
+  .pill.midi .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .pill.bad { color: var(--rec); font-weight: 700; }
   .pill.midi.ok { background-color: color-mix(in srgb, var(--play) 30%, var(--raised)); }
   .led { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--play); vertical-align: 1px; }
@@ -594,22 +630,24 @@
     /* With dropouts the red pill drops its "CPU " and "drop" words: "1% · 123" (tooltip unchanged). */
     .pill.bad .cpuw, .pill.bad .dropw { display: none; }
   }
-  /* Short windows (< 760 px tall): a 40 px bar, so the piano roll keeps
+  /* Short windows (< 740 px tall): a 40 px bar, so the piano roll keeps
      C2..C5 at 9 px rows at 1280×720 (pianoroll.spec.ts): 36 px transport
      buttons, tempo LCD and timer (BigTimer.svelte), shorter pills. The
-     approved 64 px look from 760 px up. */
-  @media (max-height: 759px) {
+     approved 64 px look from 740 px up. */
+  @media (max-height: 739px) {
     .bar { min-height: 40px; padding-block: 2px; }
     .tp { width: 36px; height: 36px; border-radius: var(--r-md); }
     .sep { height: 28px; }
-    .tempo :global(.nf.lcd) { height: 36px; }
-    .tempo :global(.nf.lcd input) { padding-top: 9px; }
+    .tempo { --nf-lcd-h: 36px; --nf-lcd-pad: 9px; }
     .mini { height: 32px; }
     .io { gap: 2px; }
     .pill { height: 17px; font-size: 11px; }
     .small .pill { height: 17px; }
     .pill.keys { line-height: 17px; }
-    .pill.midi { line-height: 17px; }
+    /* Hit areas of at least 24 px around the short pills (their look stays 17 px). */
+    button.pill, summary.pill { position: relative; }
+    button.pill::after, summary.pill::after { content: ''; position: absolute; inset: -4px -2px; }
+    button.oct::before { inset: -4px -3px; }
   }
   .fatal { padding: 4px 10px; border-radius: var(--r-sm); background: var(--rec); color: var(--on-color); font-weight: 700; }
   .fatal button { padding: 1px 8px; border: 0; border-radius: var(--r-sm); background: var(--text); color: var(--on-color); font: inherit; cursor: pointer; }

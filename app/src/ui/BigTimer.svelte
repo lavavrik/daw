@@ -53,16 +53,18 @@
 
 <style>
   /* An --lcd well, 48 px tall (spec §4 / the canvas). The position is
-     right-aligned in a box wide enough for a 2-digit bar, so the label never
-     moves while the song plays (a 3-digit bar grows it by one digit). */
+     right-aligned in a box wide enough for the longest one, "999:04:959"
+     (MAX_SONG_TICKS: 999 bars): 7 digits at 32 px and 3 at 22 px, each
+     0.6em minus the 0.02em letter-spacing. So nothing moves while the song
+     plays, also past bar 99. */
   .timer {
     flex: none; display: flex; align-items: center; gap: 8px; height: 48px; box-sizing: border-box; padding: 0 10px;
     border-radius: var(--r-lg); background: var(--lcd); box-shadow: var(--well-shadow); cursor: default;
   }
-  /* Short windows (< 760 px tall): the top bar is 40 px (TopBar.svelte). */
-  @media (max-height: 759px) { .timer { height: 36px; border-radius: var(--r-md); } }
+  /* Short windows (< 740 px tall): the top bar is 40 px (TopBar.svelte). */
+  @media (max-height: 739px) { .timer { height: 36px; border-radius: var(--r-md); } }
   .pos {
-    min-width: 7.9ch; text-align: right; white-space: nowrap;
+    min-width: calc(7 * 0.58 * 32px + 3 * 0.58 * 22px); text-align: right; white-space: nowrap;
     font: 700 32px/1 var(--font-mono); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--text);
   }
   .pos i { font-style: normal; color: var(--accent); }

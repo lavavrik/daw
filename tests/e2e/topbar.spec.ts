@@ -8,8 +8,8 @@ import { closeMore, openMore } from './topbar';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-async function start(page: Page, width = 1280) {
-  await page.setViewportSize({ width, height: 800 });
+async function start(page: Page, height = 800) {
+  await page.setViewportSize({ width: 1280, height });
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByTestId('play')).toBeVisible();
@@ -34,7 +34,7 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   await page.route(/\.(woff2?|ttf)(\?.*)?$/, (r) => r.abort());
   await start(page);
   await page.getByTestId('play').click();
-  await expect(page.getByTestId('play')).toHaveText('Stop');
+  await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
   await page.evaluate(() => {
     (window as Any).__daw.engine.dropouts = () => 123; // the widest CPU pill
   });
@@ -46,6 +46,42 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   for (const id of ['project-menu', 'topbar-more', 'undo', 'play', 'song-stop', 'loop-toggle', 'timer', 'master-volume', 'topbar-spectrum', 'keys-target', 'cpu', 'settings-button']) {
     await expect(page.getByTestId(id)).toBeInViewport();
   }
+  // The timer's box already fits bar 999: a 3-digit bar moves nothing.
+  const timerW = async () => (await page.getByTestId('timer').boundingBox())!.width;
+  const w1 = await timerW();
+  await page.getByTestId('song-stop').click();
+  await page.evaluate(() => (window as Any).__daw.actions.seek(998 * 3840 + 3 * 960 + 959));
+  await expect(page.getByTestId('timer-pos')).toHaveText('999:04:959');
+  expect(await timerW()).toBe(w1);
+  expect((await measure(page)).rows).toBe(1);
+});
+
+test('short windows (1280×720): the compact 40 px bar, still one row', async ({ page }) => {
+  await start(page, 720);
+  await page.getByTestId('play').click();
+  const out = await measure(page);
+  expect(out.rows).toBe(1);
+  expect(out.height).toBeLessThanOrEqual(41);
+  expect(out.docWidth).toBeLessThanOrEqual(1280);
+  // The short pills keep a 24 px hit area: a click 3 px above the ⚙ pill still opens Settings.
+  const gear = (await page.getByTestId('settings-button').boundingBox())!;
+  expect(gear.height).toBeLessThan(24);
+  await page.mouse.click(gear.x + gear.width / 2, gear.y - 3);
+  await expect(page.getByTestId('settings')).toBeVisible();
+});
+
+test('names: "Play song" is a toggle, "Stop all" stops either transport', async ({ page }) => {
+  await start(page);
+  const play = page.getByRole('button', { name: 'Play song' });
+  await expect(play).toHaveAttribute('aria-pressed', 'false');
+  await play.click();
+  await expect(play).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Stop all' }).click();
+  await expect(play).toHaveAttribute('aria-pressed', 'false');
+  await page.getByTestId('pattern-play').click();
+  await expect(play).toHaveAttribute('aria-pressed', 'false'); // the pattern runs, not the song
+  await page.getByRole('button', { name: 'Stop all' }).click();
+  await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.playing)).toBe(false);
 });
 
 test('the timer: 1:01:000 stopped at 0, advances while the song plays, the song position while the pattern plays', async ({ page }) => {
@@ -146,14 +182,46 @@ test('⋯ menu: the moved controls keep their test ids; Escape and a press outsi
   await page.getByTestId('rec-offset').fill('25');
   await page.getByTestId('rec-offset').press('Enter');
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.recorder.offsetMs)).toBe(25);
+  // Escape inside the offset only reverts the typed text: the menu stays open.
+  await page.getByTestId('rec-offset').fill('40');
+  await page.getByTestId('rec-offset').press('Escape');
+  await expect(page.getByTestId('project-new')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as Any).__daw.recorder.offsetMs)).toBe(25);
+  // Escape again (focus now outside any field) closes it; the focus goes back to the ⋯.
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('project-new')).toBeHidden();
-  // The project name opens the same menu; a press outside closes it.
+  await expect(page.getByTestId('topbar-more')).toBeFocused();
+  // The project name opens the same menu; Escape returns the focus to it.
   await page.getByTestId('project-menu').click();
   await expect(page.getByTestId('project-new')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-new')).toBeHidden();
+  await expect(page.getByTestId('project-menu')).toBeFocused();
+  // A press outside closes it.
+  await page.getByTestId('project-menu').click();
   await page.getByTestId('timer').click();
   await expect(page.getByTestId('project-new')).toBeHidden();
   await closeMore(page); // no-op: already closed
+  // A command closes it and gives the focus back to the opener (clean project: New runs at once).
+  await page.getByTestId('project-menu').click();
+  await page.getByTestId('project-new').click();
+  await expect(page.getByTestId('project-new')).toBeHidden();
+  await expect(page.getByTestId('project-menu')).toBeFocused();
+});
+
+test('⌘O on a dirty project opens the menu on the question; Escape closes it', async ({ page }) => {
+  await start(page);
+  await page.evaluate(() => (window as Any).__daw.actions.addSynthTrack('Lead'));
+  await expect(page.getByTestId('project-name')).toContainText('unsaved');
+  await page.keyboard.press('ControlOrMeta+O');
+  await expect(page.getByTestId('project-discard')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-discard')).toBeHidden();
+  await expect(page.getByTestId('project-new')).toBeHidden();
+  // Cancel on the question goes back to the list, focused on its first item.
+  await page.keyboard.press('ControlOrMeta+O');
+  await page.getByTestId('project-discard-cancel').click();
+  await expect(page.getByTestId('project-new')).toBeFocused();
 });
 
 test('hint line: the hovered control, a flashed hint first', async ({ page }) => {

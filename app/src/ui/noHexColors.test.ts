@@ -8,15 +8,14 @@
 // (plan 20 task 1). LATER TASKS: when you move a file onto tokens, delete it
 // from this list in the same commit. The last test fails if a listed file is
 // already clean, so the list only ever shrinks.
+// Plan 20 Task 5 emptied it: every component is on tokens now.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const SRC = join(__dirname, '..');
 
-const ALLOWED: string[] = [
-  'App.svelte',
-];
+const ALLOWED: string[] = [];
 
 function svelteFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((n: string) => {

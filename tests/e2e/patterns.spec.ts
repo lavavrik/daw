@@ -130,12 +130,12 @@ test('song and pattern transports: starting either stops the other; the readout 
   await expect.poll(state).toBe('pattern:playing');
   await expect(patPlay).toHaveAttribute('aria-pressed', 'true');
   await expect(pos).toHaveText(/^1\.[1-4] \/ 1$/);
-  await expect(song).toHaveText('Play'); // the song transport is not the one running
+  await expect(song).toHaveAttribute('aria-pressed', 'false'); // the song transport is not the one running
 
   // Song Play stops the pattern, sets Song mode and plays.
   await song.click();
   await expect.poll(state).toBe('song:playing');
-  await expect(song).toHaveText('Stop');
+  await expect(song).toHaveAttribute('aria-pressed', 'true');
   await expect(patPlay).toHaveAttribute('aria-pressed', 'false');
   await expect(pos).toHaveText('– / 1');
   // While the song plays Rec can't arm (Song mode never records); R says why.
@@ -147,7 +147,7 @@ test('song and pattern transports: starting either stops the other; the readout 
   // Pattern Play stops the song.
   await patPlay.click();
   await expect.poll(state).toBe('pattern:playing');
-  await expect(song).toHaveText('Play');
+  await expect(song).toHaveAttribute('aria-pressed', 'false');
   await page.getByTestId('pattern-stop').click();
   await expect.poll(state).toBe('pattern:stopped');
   await expect(page.getByTestId('pattern-stop')).toBeDisabled();

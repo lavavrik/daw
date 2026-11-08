@@ -111,7 +111,7 @@ test('export produces a non-silent WAV of the right length', async ({ page }) =>
   expect(r.length).toBe(r.want);
   expect(r.peak).toBeGreaterThan(0.05);
   // The live engine was never touched: the transport is still stopped and alive.
-  await expect(page.getByTestId('play')).toHaveText('Play');
+  await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('engine-error')).toHaveCount(0);
 });
 

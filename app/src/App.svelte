@@ -929,10 +929,11 @@
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
   .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
-  .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
+  /* Banners (plan 20: tokens): the restore offer is an --accent-tinted --panel, the autosave note a quiet --panel line. */
+  .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel)); }
   .restore span { flex: 1; }
-  .autosave-off { margin: 3px 3px 0; padding: 3px 8px; border-radius: 3px; background: #23242a; color: #9a9da8; border: 1px solid #33353d; }
-  .restore button { font: inherit; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
-  .restore .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
-  .loading { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: #16171b99; color: #e4e5ea; font-size: 14px; cursor: progress; }
+  .autosave-off { margin: 3px 3px 0; padding: 3px 8px; border-radius: var(--r-sm); background: var(--panel); color: var(--text-2); border: 1px solid var(--line); }
+  .restore button { font: inherit; border: 1px solid currentColor; border-radius: var(--r-sm); padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
+  .restore .ok { background: var(--accent) var(--gloss); color: var(--on-color); border-color: var(--accent); font-weight: 600; }
+  .loading { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: color-mix(in srgb, var(--lcd) 60%, transparent); color: var(--text); font-size: 14px; cursor: progress; }
 </style>

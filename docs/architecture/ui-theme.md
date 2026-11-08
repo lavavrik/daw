@@ -234,9 +234,9 @@ one 64 px `--top` row. The header comment has the details; in short:
 | Part | What | Test id |
 |---|---|---|
 | Name + hint line | project name, `●` when unsaved; under it the flashed hint (`banners.hint`), else the title / aria-label of the control last pointed at anywhere in the app (one `mouseover` listener on the document, `bigTimer.ts` `hintText`), else a static tip | `project-menu`, `project-name`, `hint-line` |
-| ⋯ menu | New, Open…, Save, Save As…, Export WAV…, Undo take, Rec offset (moved here so the bar fits 1280 px; the name opens it too) | `topbar-more` (+ the old ids) |
+| ⋯ menu | New, Open…, Save, Save As…, Export WAV…, Undo take, Rec offset (moved here so the bar fits 1280 px; the name opens it too). A plain group (no ARIA menu); Escape or a command closes it and returns the focus to the opener | `topbar-more` (+ the old ids) |
 | ↶ ↷ | 32 px raised icon buttons | `undo`, `redo` |
-| Song transport | Play (toggles, like Space; glows and is named "Stop" while the song plays), Stop (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
+| Song transport | "Play song" (an aria-pressed toggle, like Space; pressed and glowing while the song plays), "Stop all" (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
 | Tempo | `NumberField variant="lcd"`, aria-label "BPM", 0.1 BPM steps with Shift | `tempo` |
 | Big timer | `ui/BigTimer.svelte`: bar:beat:tick (32 px mono) + seconds; the heard song position per frame while the song plays, else the parked song position | `timer`, `timer-pos`, `timer-seconds` |
 | Metronome | 32 px icon toggle (`--accent` when on) | — |
@@ -247,8 +247,12 @@ one 64 px `--top` row. The header comment has the details; in short:
 Fit: one row at ≥ 1280 px in the widest state (playing, unsaved, 123
 dropouts) with ~40 px to spare, also with the web fonts blocked
 (`tests/e2e/topbar.spec.ts`, `layout.spec.ts`). Text that changes has a
-fixed box (name, hint, timer digits up to 2-digit bars, the master
+fixed box (name, hint, timer digits up to bar 999, the master
 readout) or ellipsizes (Keys, MIDI). Below 1280 px the bar may wrap.
-Windows under 760 px tall get a 40 px bar (36 px transport, tempo and
-timer): the piano roll must still show C2..C5 at 9 px rows at 1280×720
-(`pianoroll.spec.ts`).
+Windows under 740 px tall get a 40 px bar (36 px transport, tempo and
+timer; the short pills keep 24 px hit areas): the piano roll must still
+show C2..C5 at 9 px rows at 1280×720 (`pianoroll.spec.ts`).
+
+Sizing hooks for other components (custom properties, not `:global`):
+NumberField's LCD takes `--nf-lcd-h`, `--nf-lcd-w`, `--nf-lcd-pad`; Knob's
+slider takes `--slider-min-w` (default 112 px).

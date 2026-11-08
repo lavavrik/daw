@@ -286,13 +286,16 @@
   .step:disabled, .arrow:disabled { cursor: default; }
 
   /* lcd: label above a big mono number, stacked arrows on the right */
-  .lcd { background: var(--lcd); box-shadow: var(--well-shadow); border-radius: var(--r-md); height: 44px; }
+  /* A caller can size the LCD with --nf-lcd-h (height), --nf-lcd-w (the
+     number's width) and --nf-lcd-pad (its top padding, under the label): the
+     top bar's tempo is narrower, and shorter in short windows. */
+  .lcd { background: var(--lcd); box-shadow: var(--well-shadow); border-radius: var(--r-md); height: var(--nf-lcd-h, 44px); }
   .lcd .area { flex-direction: column; justify-content: center; padding: 0 6px 0 12px; }
   .lcd .lbl {
     position: absolute; top: 4px; left: 12px; pointer-events: none;
     color: var(--text-dim); font: 600 9px var(--font-ui); letter-spacing: 0.08em; text-transform: uppercase;
   }
-  .lcd input { width: 78px; padding: 12px 0 0; text-align: left; font: 700 18px var(--font-mono); color: var(--text); }
+  .lcd input { width: var(--nf-lcd-w, 78px); padding: var(--nf-lcd-pad, 12px) 0 0; text-align: left; font: 700 18px var(--font-mono); color: var(--text); }
   .lcd .unit { position: absolute; right: 8px; bottom: 6px; color: var(--text-dim); font: 500 var(--fs-lbl) var(--font-mono); pointer-events: none; }
   .stack { display: flex; flex-direction: column; border-left: 1px solid var(--work); }
   .arrow { flex: 1; width: 22px; border: 0; padding: 0; background: transparent; color: var(--text-2); cursor: pointer; }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { keyToNote, loadOctave, saveOctave } from './qwertyPiano';
+import { keyToNote, loadOctave, saveOctave, wheelOctaveSteps } from './qwertyPiano';
 
 describe('keyToNote', () => {
   it('maps KeyA at octave 4 to middle C (60)', () => expect(keyToNote('KeyA', 4)).toBe(60));
@@ -34,4 +34,16 @@ describe('loadOctave / saveOctave', () => {
     expect(loadOctave()).toBe(4);
     expect(() => saveOctave(5)).not.toThrow();
   });
+});
+
+describe('wheelOctaveSteps', () => {
+  it('ignores deltaY 0', () => expect(wheelOctaveSteps(30, 0)).toEqual({ steps: 0, acc: 30 }));
+  it('accumulates small trackpad deltas, one step per 100 px, up = raise', () => {
+    let acc = 0, total = 0;
+    for (let i = 0; i < 25; i++) { const r = wheelOctaveSteps(acc, -10); acc = r.acc; total += r.steps; }
+    expect(total).toBe(2); // 250 px
+    expect(acc).toBe(-50);
+    expect(wheelOctaveSteps(0, 120)).toEqual({ steps: -1, acc: 20 });
+  });
+  it('a line-mode notch is one step', () => expect(wheelOctaveSteps(0, -3, 1).steps).toBe(1));
 });

@@ -42,3 +42,17 @@ export function saveOctave(o: number): void {
     /* not remembered; the session still works */
   }
 }
+
+/**
+ * Wheel over the octave pill -> octave steps. Trackpads fire dozens of small
+ * events per flick, so deltaY is accumulated and one step is taken per 100 px
+ * (a line-mode wheel notch, deltaMode 1, counts as a whole step). Scrolling up
+ * (negative deltaY) raises the octave. deltaY 0 (horizontal scroll) is ignored.
+ * `acc` is the carried remainder; keep it between calls.
+ */
+export function wheelOctaveSteps(acc: number, deltaY: number, deltaMode = 0): { steps: number; acc: number } {
+  if (!deltaY) return { steps: 0, acc };
+  const total = acc + (deltaMode === 1 ? Math.sign(deltaY) * 100 : deltaY);
+  const steps = Math.trunc(-total / 100);
+  return { steps, acc: total + steps * 100 };
+}

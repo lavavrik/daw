@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void } = {}, project: object = { playing: false }) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number } = {}, project: object = { playing: false }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -151,9 +151,10 @@ describe('shortcut handlers', () => {
     const { octs, h } = mk();
     h.setOctave(6);
     h.onKeyDown(key('KeyX'));
-    h.onKeyDown(key('KeyZ', {})); h.onKeyDown(key('KeyZ'));
+    h.onKeyDown(key('KeyZ'));
+    h.onKeyDown(key('KeyZ'));
     expect(octs).toEqual([7, 6, 5]);
-    const b = mk({ initialOctave: 2 } as any);
+    const b = mk({ initialOctave: 2 });
     b.h.onKeyDown(key('KeyA'));
     expect(b.sent).toEqual([[Op.NOTE_ON, 36, 100]]);
   });

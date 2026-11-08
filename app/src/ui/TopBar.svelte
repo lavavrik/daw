@@ -47,13 +47,22 @@
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
-  import { DEFAULT_OCTAVE } from '../input/qwertyPiano';
+  import { DEFAULT_OCTAVE, wheelOctaveSteps } from '../input/qwertyPiano';
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings, undoTakeTitle } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
   import { discardWarning } from '../project/discard';
   import { runExport } from '../export/exportFlow';
   import { banners } from '../state/banners.svelte';
+
+  // Wheel over the octave pill: accumulated (see wheelOctaveSteps). Svelte's
+  // onwheel is passive, so this can't stop page scroll (the bar doesn't scroll).
+  let wheelAcc = 0;
+  function onOctaveWheel(e: WheelEvent) {
+    const r = wheelOctaveSteps(wheelAcc, e.deltaY, e.deltaMode);
+    wheelAcc = r.acc;
+    if (r.steps) onOctave(Math.min(8, Math.max(0, octave + r.steps)));
+  }
 
   let {
     p,
@@ -353,12 +362,12 @@
     {/if}
   </span>
   <!-- The buttons blur after a click so Space keeps meaning play/stop (not "click the focused button"). -->
-  <span class="octave" onwheel={(e) => { onOctave(Math.min(8, Math.max(0, octave + (e.deltaY < 0 ? 1 : -1)))); }}>
+  <span class="octave" onwheel={onOctaveWheel}>
     <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
-      onclick={(e) => { onOctave(octave - 1); e.currentTarget.blur(); }}>−</button>
+      onclick={(e) => { onOctave(octave - 1); if (e.detail > 0) e.currentTarget.blur(); }}>−</button>
     <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
     <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
-      onclick={(e) => { onOctave(octave + 1); e.currentTarget.blur(); }}>+</button>
+      onclick={(e) => { onOctave(octave + 1); if (e.detail > 0) e.currentTarget.blur(); }}>+</button>
   </span>
   <span class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
   <span class="spacer"></span>
@@ -472,7 +481,9 @@
   /* Compact: the bar has to stay on one row at 1280 px (layout.spec). */
   .octave { display: inline-flex; align-items: center; flex: none; }
   .octave .pill { padding: 4px 1px; }
-  button.oct { padding: 2px; line-height: 1; border-color: transparent; }
+  button.oct { padding: 2px; line-height: 1; border-color: transparent; position: relative; }
+  /* Bigger hit area (~24 px) without changing the layout width. */
+  button.oct::before { content: ''; position: absolute; inset: -6px -4px; }
   .pill.bad { color: #ff6b6b; font-weight: 600; }
   .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 3px; vertical-align: -1px; }
   .pill.keys { color: #c9cbd3; }

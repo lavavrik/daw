@@ -95,6 +95,7 @@
   import { ADD_ITEMS, addBlocked, addTrack } from './addTrack';
   import type { AddKind } from './addTrack';
   import { laneView } from './song/laneView.svelte';
+  import { noteNames, setNoteNames } from './noteNames.svelte';
   import NumberField from './NumberField.svelte';
   import ShortcutsSheet from './ShortcutsSheet.svelte';
   import Icon from './Icon.svelte';
@@ -655,6 +656,10 @@
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
             Keys play: <b>{keysTrack?.name ?? '(no track)'}</b>
           </p>
+          <div role="radiogroup" aria-label="Note names">
+            <button class="it" role="radio" aria-checked={noteNames.style === 'letters'} data-testid="menu-notenames-letters" title="C D E" onclick={() => setNoteNames('letters')}><span class="l">Note names: C D E</span>{#if noteNames.style === 'letters'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
+            <button class="it" role="radio" aria-checked={noteNames.style === 'solfege'} data-testid="menu-notenames-solfege" title="Do Re Mi" onclick={() => setNoteNames('solfege')}><span class="l">Note names: Do Re Mi</span>{#if noteNames.style === 'solfege'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
+          </div>
           <hr />
           <button class="it" data-testid="menu-midi" onclick={openMidi}><Icon icon={Plugs} /><span class="l">MIDI…</span></button>
           <button class="it" data-testid="menu-audio-settings" onclick={openSettings}><Icon icon={Gear} /><span class="l">Audio settings…</span></button>

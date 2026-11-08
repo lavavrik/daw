@@ -17,6 +17,9 @@
   //   hint is allowed: a new context also picks up a changed default output
   //   device.
   //
+  // Also here: Note names (letters / solfège; ui/noteNames.svelte.ts). It is
+  // a UI preference and applies at once; Apply is only for the audio hint.
+  //
   // Look (plan 20 Task 5): tokens only; it sits in the top bar's --panel
   // popover. The select and the buffer field are the theme's skins.
   import { onMount, untrack } from 'svelte';
@@ -27,6 +30,8 @@
   import { releaseSelect, selectKey } from './selectKey';
   import GearSix from 'phosphor-svelte/lib/GearSix';
   import Icon from './Icon.svelte';
+  import { noteNames, setNoteNames } from './noteNames.svelte';
+  import type { NoteNameStyle } from './noteNames.svelte';
 
   let {
     engine,
@@ -98,6 +103,13 @@
       </span>
     </div>
   {/if}
+  <label class="field">
+    <span>Notes</span>
+    <select data-testid="note-names" value={noteNames.style} onkeydown={selectKey} onchange={(e) => { setNoteNames(e.currentTarget.value as NoteNameStyle); releaseSelect(e.currentTarget); }}>
+      <option value="letters">Letters (C D E)</option>
+      <option value="solfege">Solfège (Do Re Mi)</option>
+    </select>
+  </label>
   <dl class="readout" title="What the browser chose for the running audio ({hintLabel(hint)})">
     <dt>Sample rate</dt><dd data-testid="settings-rate">{info ? `${info.sampleRate / 1000} kHz` : '—'}</dd>
     <dt>Base latency</dt><dd data-testid="settings-base">{info ? ms(info.baseMs) : '—'}</dd>

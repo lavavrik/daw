@@ -55,7 +55,7 @@
   import { currentPattern } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { patternPosAt } from '../../state/song-actions';
-  import { NOTE_NAMES, noteName } from '../noteName';
+  import { noteName, pitchClassName } from '../noteName';
   import { releaseSelect, selectKey } from '../selectKey';
   import Shuffle from 'phosphor-svelte/lib/Shuffle';
   import Sparkle from 'phosphor-svelte/lib/Sparkle';
@@ -335,7 +335,7 @@
     </label>
     <label>Root
       <select data-testid="acid-root" bind:value={root} onkeydown={selectKey} onchange={(e) => releaseSelect(e.currentTarget)}>
-        {#each NOTE_NAMES as n, k (k)}<option value={k}>{n}</option>{/each}
+        {#each { length: 12 } as _, k (k)}<option value={k}>{pitchClassName(k)}</option>{/each}
       </select>
     </label>
     <label>Scale
@@ -344,7 +344,7 @@
       </select>
     </label>
     <span class="grp">
-      <button data-testid="acid-randomize" disabled={!view.ok} title="New random steps in {NOTE_NAMES[root]} {scale}"
+      <button data-testid="acid-randomize" disabled={!view.ok} title="New random steps in {pitchClassName(root)} {scale}"
         onclick={() => write(randomize(steps.length, root, scale, Math.random), 'Randomize steps')}><Icon icon={Shuffle} /> Randomize</button>
       <button data-testid="acid-mutate" disabled={!view.ok} title="Re-roll a few steps"
         onclick={() => write(mutate(steps, root, scale, Math.random), 'Mutate steps')}><Icon icon={Sparkle} /> Mutate</button>
@@ -389,7 +389,7 @@
               aria-label={stepLabel(i, s)}
               onclick={() => pick(i)}
             >
-              <span class="nm">{s.kind === 'note' ? NOTE_NAMES[s.key] : s.kind === 'tie' ? '~' : '—'}</span>
+              <span class="nm">{s.kind === 'note' ? pitchClassName(s.key) : s.kind === 'tie' ? '~' : '—'}</span>
               {#if s.kind === 'note' && s.oct !== 0}<span class="oct">{s.oct > 0 ? '▲' : '▼'}</span>{/if}
               <span class="badges">
                 {#if s.accent}<span class="acc">A</span>{/if}
@@ -403,7 +403,7 @@
 
     <div class="edit" class:off={sel === null}>
       <div class="keys" role="group" aria-label="Step pitch">
-        {#each NOTE_NAMES as n, k (k)}
+        {#each { length: 12 } as _, k (k)}
           <button
             class="key" class:black={BLACK.has(k)} class:on={cur?.kind === 'note' && cur.key === k}
             data-testid="acid-key-{k}" disabled={sel === null}
@@ -411,7 +411,7 @@
             title={noteName(base + k)} onclick={() => setKey(k)}
             onpointerdown={(e) => { if (e.button === 0) auditionKey(k); }}
             onpointerup={auditionStop} onpointercancel={auditionStop}
-          >{n}</button>
+          >{pitchClassName(k)}</button>
         {/each}
       </div>
       <div class="toggles">

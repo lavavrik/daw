@@ -262,11 +262,19 @@ export function formatValue(d: KnobDef, v: number): string {
 export const isNoteParam = (d: KnobDef) => d.name === 'root' && d.integer && d.unit === '' && d.min >= 0 && d.max <= 127;
 
 const NOTE_STEPS: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
-/** "E4" → 64, "c#3" → 49, "Db4" → 61, "C-1" → 0 (C4 = 60, as noteName); null if it isn't one. */
+// Solfège syllables → letter steps ("sol" and "so" both read as G).
+const SOLFEGE_STEPS: Record<string, number> = { do: 0, re: 2, mi: 4, fa: 5, sol: 7, so: 7, la: 9, si: 11, ti: 11 };
+/**
+ * "E4" → 64, "c#3" → 49, "Db4" → 61, "C-1" → 0 (C4 = 60, as noteName); also the
+ * solfège form whatever the display setting: "Mi4", "do♯3", "Sol4", "Reb2".
+ * null if it isn't one.
+ */
 export function parseNoteName(text: string): number | null {
-  const m = /^([a-g])([#b]?) ?(-?\d+)$/.exec(text.trim().toLowerCase().replace(/[−–]/g, '-').replace('♯', '#').replace('♭', 'b'));
+  const t = text.trim().toLowerCase().replace(/[−–]/g, '-').replace('♯', '#').replace('♭', 'b');
+  const m = /^(do|re|mi|fa|sol|so|la|si|ti|[a-g])([#b]?) ?(-?\d+)$/.exec(t);
   if (!m) return null;
-  return NOTE_STEPS[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (Number(m[3]) + 1) * 12;
+  const step = m[1].length === 1 ? NOTE_STEPS[m[1]] : SOLFEGE_STEPS[m[1]];
+  return step + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (Number(m[3]) + 1) * 12;
 }
 
 /**
@@ -280,7 +288,7 @@ export function parseNoteName(text: string): number | null {
  *   dB / st / oct / ct / :1 — the number, unit optional; "−" or "-" alike
  *   0..1 "45%" or "45" (percent); a decimal ≤ 1 ("0.3") is the raw value
  *   pan  "C", "L30", "R 100"; minimum labels ("−∞", "-inf", "Off")
- *   note "E4", "c#3", "Db4" (or the MIDI number) for a note param (root)
+ *   note "E4", "c#3", "Db4", "Mi4", "sol3" (or the MIDI number) for a note param (root)
  * A bare number is read in the unit the readout currently shows (`shown`):
  * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
  */

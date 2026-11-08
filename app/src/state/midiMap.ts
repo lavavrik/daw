@@ -30,6 +30,7 @@
 //     not this module's.
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
+import { faderDb } from '../ui/mixer/mixMath';
 import { fromPos } from '../ui/rack/knobMath';
 import type { KnobDef } from '../ui/rack/knobMath';
 import type { CommandSink } from './actions';
@@ -179,7 +180,8 @@ export function applyCc(
   if (!m) return false;
   const def = mappingDef(p, m.owner, m.target);
   if (!def) return false;
-  const value = ccValue(def, v);
+  // The fader is not a linear/exp knob: CC travel follows its own law (FADER_LAW), as a drag does.
+  const value = m.target.kind === 'mix' && m.target.param === 'fader' ? faderDb(v / 127) : ccValue(def, v);
   const opts = { coalesce, label: `Set ${def.label} (MIDI)` };
   if (m.target.kind === 'rack') {
     const t = p.tracks.find((x) => x.id === m.owner);

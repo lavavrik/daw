@@ -43,7 +43,8 @@
   // drag's own overrides still hold until the next point: the engine has no
   // "un-override"). Right-click, the ContextMenu key or Shift+F10 opens the
   // "Automate" / "Show automation" menu (AutoMenu.svelte) on continuous
-  // params; integer ones don't register and don't offer it.
+  // params; integer ones don't register and don't offer *Automate* (they
+  // do offer MIDI learn, below).
   //
   // MIDI learn (plan 14 Task 3; ui/midiLearn.svelte.ts): the same menu also
   // offers "MIDI learn" / "Forget MIDI (CC 74)" on continuous AND integer
@@ -292,6 +293,7 @@
     if (dragging) {
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation(); // App's Esc-cancels-learn must not also fire
         cancel();
       }
       return;

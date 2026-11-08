@@ -731,7 +731,8 @@
     window.addEventListener('pointerdown', wake, true);
     window.addEventListener('keydown', wake, true);
     // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
-    // (an open menu, a typed knob value) is that widget's.
+    // (stopPropagation: an open menu, a typed knob value, a mid-drag cancel)
+    // is that widget's and leaves learn mode on.
     const escLearn = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && learning()) cancelLearn();
     };

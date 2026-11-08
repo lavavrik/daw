@@ -117,7 +117,7 @@
     e.stopPropagation(); // not the QWERTY piano / transport while the menu is open
     if (e.key === 'Escape') {
       e.preventDefault();
-      close();
+      close(); // (stopped above: App's Esc-cancels-learn never sees it)
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const all = [...(el?.querySelectorAll<HTMLElement>('button') ?? [])];

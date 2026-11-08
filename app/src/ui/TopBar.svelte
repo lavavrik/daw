@@ -377,7 +377,7 @@
   </span>
   <span class="midiwrap">
     <button class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
-      aria-haspopup="dialog" aria-expanded={midiOpen} onclick={() => (midiOpen = !midiOpen)}>MIDI: {midiLabel}</button>
+      aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => (midiOpen = !midiOpen)}>MIDI: {midiLabel}</button>
     {#if midiOpen}
       <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
     {/if}

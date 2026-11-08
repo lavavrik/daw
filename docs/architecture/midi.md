@@ -135,7 +135,10 @@ module the FX pool dropped. Slots become the new track ids in
   (`applyCc` with `touch` = `autoBus.touch`): in Song mode a CC on an
   automated target overrides its lane (AUTO_OVERRIDE) exactly like a drag;
   in Pattern mode only the base moves. Unmapped CCs cost no frame. A value
-  still queued for a CC when that CC is re-learned is dropped.
+  still queued for a CC when that CC is re-learned is dropped. Moves ride
+  `requestAnimationFrame`, so in a hidden tab they wait and apply when it
+  becomes visible. While a project load / audio restart runs (`p.loading`)
+  the router ignores CCs (learn mode stays on).
 - **The badge.** A mapped control shows a small "CC" tag
   (`data-testid="<testid>-cc"`; the fader's is `fader-cc`) and its title
   (its accessible description) ends "— MIDI CC 74". Knob / Fader read

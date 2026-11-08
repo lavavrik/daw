@@ -120,10 +120,9 @@ describe('MIDI learn', () => {
   });
 
   it('router batches three ccs in one frame into one applyCc with the last value', async () => {
-    const { p, synth, sink, router, sent, frame, frames } = await rig();
+    const { p, synth, router, sent, frame, frames } = await rig();
     learnMidi(p, 74, synth.id, cutoff);
     learnMidi(p, 7, synth.id, fader);
-    void sink;
     router.onCc(74, 0);
     router.onCc(74, 64);
     router.onCc(74, 127);

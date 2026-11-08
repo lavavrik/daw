@@ -19,7 +19,7 @@ export type MidiEvent =
   | { t: 'sustain'; on: boolean }
   /** CC120 All Sound Off / CC123 All Notes Off (keyboards' panic button). */
   | { t: 'panic' }
-  /** Any learnable CC (0..119, incl. 1 and 64), value 0..127. */
+  /** Any CC except 120/123 (the router filters with LEARNABLE_CC), value 0..127. */
   | { t: 'cc'; cc: number; v: number };
 
 export interface MidiStatus {

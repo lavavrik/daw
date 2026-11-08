@@ -203,6 +203,7 @@
     if (dragging) {
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation(); // App's Esc-cancels-learn must not also fire
         cancel();
       }
       return;

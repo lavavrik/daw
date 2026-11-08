@@ -37,13 +37,19 @@ export const banners = $state<{
   download: null,
 });
 
+/** A hint that must come back when a flash that replaced it expires (MIDI learn registers its own). */
+let keep: ((hint: string) => boolean) | undefined;
+export const keepHint = (fn: (hint: string) => boolean) => { keep = fn; };
+
 let hintTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Show `message` in the header status line for `ms` (a newer one replaces it). */
 export function flashHint(message: string, ms = 2500) {
   clearTimeout(hintTimer);
+  const prev = banners.hint;
   banners.hint = message;
   hintTimer = setTimeout(() => {
-    if (banners.hint === message) banners.hint = null;
+    // Restore what it replaced when that is still wanted (the learn hint while learning).
+    if (banners.hint === message) banners.hint = prev !== null && keep?.(prev) ? prev : null;
   }, ms);
 }

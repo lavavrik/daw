@@ -8,8 +8,8 @@
 // flash "MIDI CC <n> → <label>". That CC only binds: it does not also move
 // the control, so the learn entry stays a pure learn. A non-learnable CC
 // (120..127; parseMidi never even emits 120/123) is ignored and learning
-// goes on. Esc (App), a second "MIDI learn" (it replaces the target: one
-// learn target at a time) or LEARN_TIMEOUT_MS without a learnable CC
+// goes on. Esc (App), a second "MIDI learn" on the same control (toggle) or
+// on another (it replaces the target: one learn target at a time) or LEARN_TIMEOUT_MS without a learnable CC
 // cancels. If the control vanished meanwhile (its track was removed), the
 // CC binds nothing and learn mode just ends.
 //
@@ -28,7 +28,7 @@
 // rAF callback) may merge into one entry (accepted). A learn happens in the
 // MIDI message's task and a move only ever in a later rAF, so a learn and a
 // move never merge.
-import { banners, flashHint } from '../state/banners.svelte';
+import { banners, flashHint, keepHint } from '../state/banners.svelte';
 import type { CommandSink } from '../state/actions';
 import { sameTarget } from '../state/automation';
 import { LEARNABLE_CC, applyCc, learnMidi, learnableDef, mappingDef, mappingForCc } from '../state/midiMap';
@@ -37,6 +37,7 @@ import type { AutoTarget, Project } from '../state/project.svelte';
 
 /** The hint shown while learning (spec text, verbatim). */
 export const LEARN_HINT = 'Move a knob on your MIDI controller (Esc cancels)';
+keepHint((h) => h === LEARN_HINT && state.learn !== null);
 /** Learn mode ends after this long without a learnable CC. */
 export const LEARN_TIMEOUT_MS = 10_000;
 /** A CC this long after the previous one on its number starts a new sweep (a new undo entry). */
@@ -61,6 +62,8 @@ export const isLearning = (owner: MixChannelTarget, target: AutoTarget): boolean
 
 /** Enter learn mode for this control (replacing any other learn target) and restart the timeout. */
 export function startLearn(owner: MixChannelTarget, target: AutoTarget, label: string) {
+  // "MIDI learn" again on the control being learned toggles learn off (spec §2.1).
+  if (isLearning(owner, target)) return cancelLearn();
   clearTimeout(timer);
   state.learn = { owner, target, label };
   banners.hint = LEARN_HINT;
@@ -113,6 +116,8 @@ export function createCcRouter(d: CcRouterDeps): { onCc(cc: number, v: number): 
 
   return {
     onCc(cc, v) {
+      // A project load / audio restart is replacing the model: ignore the CC (learn mode stays on).
+      if (d.p.loading) return;
       const l = state.learn;
       if (l) {
         if (!LEARNABLE_CC(cc)) return; // not learnable: keep learning

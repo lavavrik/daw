@@ -117,11 +117,20 @@
 </div>
 
 <style>
-  .ic { position: fixed; z-index: 50; max-width: 280px; box-sizing: border-box; padding: 8px 10px; background: #2a2d37; border: 1px solid #f0a23a; border-radius: 6px; box-shadow: 0 6px 20px #000a; color: #e6e7ec; font-size: 12px; }
-  p { margin: 0 0 8px; line-height: 1.35; }
+  /* A small --panel card with the lift (spec §2 depth recipes), pointing at
+     the control that asked; the confirm button is the destructive one, in --rec. */
+  .ic {
+    position: fixed; z-index: 50; max-width: 280px; box-sizing: border-box; padding: 10px 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift);
+    color: var(--text); font: var(--fs-ctl) var(--font-ui);
+  }
+  p { margin: 0 0 10px; line-height: 1.35; }
   .btns { display: flex; gap: 6px; justify-content: flex-end; }
-  button { font: inherit; padding: 3px 10px; border: 1px solid #4a4f63; border-radius: 4px; background: #343846; color: inherit; cursor: pointer; }
-  button:hover { background: #3f4456; }
-  .ok { border-color: #a8454d; color: #ffb3b8; }
-  button:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
+  button {
+    font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 4px 12px; border: 0; border-radius: var(--r-sm);
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  .ok { background-color: var(--rec); color: var(--on-color); font-weight: 700; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>

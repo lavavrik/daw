@@ -168,8 +168,19 @@
 {/if}
 
 <style>
-  .menu { position: fixed; z-index: 60; min-width: 140px; padding: 4px; background: #24262c; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; }
-  .ttl { font-size: 10px; color: #8d90a0; padding: 2px 6px 4px; white-space: nowrap; }
-  button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: 3px; background: transparent; color: #e4e5ea; cursor: pointer; }
-  button:hover, button:focus-visible { background: #343846; outline: none; }
+  /* A light menu like the open <select> picker (theme.css): --text surface,
+     dark text, the menu radius and the lift; hover/focus is --text-2. */
+  .menu {
+    position: fixed; z-index: 60; min-width: 140px; padding: 4px; display: flex; flex-direction: column;
+    background: var(--text); color: var(--on-color); border-radius: var(--r-menu); box-shadow: var(--lift);
+  }
+  .ttl {
+    padding: 4px 10px; white-space: nowrap; font: 600 var(--fs-lbl) var(--font-ui);
+    letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.7;
+  }
+  button {
+    min-height: 28px; padding: 0 10px; border: 0; border-radius: var(--r-sm); text-align: left;
+    background: transparent; color: inherit; font: 500 var(--fs-ctl) var(--font-ui); cursor: pointer;
+  }
+  button:hover, button:focus-visible { background: var(--text-2); outline: none; }
 </style>

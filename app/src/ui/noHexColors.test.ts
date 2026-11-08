@@ -16,13 +16,6 @@ const SRC = join(__dirname, '..');
 
 const ALLOWED: string[] = [
   'App.svelte',
-  'ui/AutoMenu.svelte',
-  'ui/BottomPanel.svelte',
-  'ui/ClipPanel.svelte',
-  'ui/InlineConfirm.svelte',
-  'ui/StartOverlay.svelte',
-  'ui/acid/AcidSteps.svelte',
-  'ui/pianoroll/PianoRoll.svelte',
 ];
 
 function svelteFiles(dir: string): string[] {

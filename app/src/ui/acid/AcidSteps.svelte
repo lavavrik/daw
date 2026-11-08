@@ -423,48 +423,63 @@
 </div>
 
 <style>
-  .acid { display: flex; flex-direction: column; gap: 6px; outline: none; color: #c9cbd3; }
-  .acid:focus-visible { box-shadow: inset 0 0 0 1px #3a3d47; }
-  button { font: inherit; font-size: 11px; padding: 2px 8px; border: 0; border-radius: 3px; background: #2a2c33; color: #c9cbd3; cursor: pointer; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.on { background: #f0a23a; color: #111; }
-  button:focus-visible { outline: 2px solid #f0a23a; outline-offset: -2px; }
-  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: #9a9ca8; }
-  .bar label { display: flex; align-items: center; gap: 4px; }
-  .bar select { font: inherit; font-size: 11px; background: #24262c; color: #c9cbd3; border: 1px solid #2a2c33; border-radius: 3px; }
+  /* Tokens only (spec §2; ui-theme.md). Off cells are recessed --well (beats
+     a shade lighter), notes are the track colour (--c) with the gloss and
+     dark text, ties a 30 % tint; the selection is an accent ring outside the
+     cell, the playhead a white ring inside it with a dark inner edge so it
+     reads on pale track colours too. */
+  .acid { display: flex; flex-direction: column; gap: 8px; outline: none; color: var(--text-2); }
+  .acid:focus-visible { box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-sm); }
+  button {
+    font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 3px 9px; border: 0; border-radius: var(--r-sm);
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); cursor: pointer;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.on { background-color: var(--accent); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .bar label { display: flex; align-items: center; gap: 6px; }
   .grp { display: flex; align-items: center; gap: 2px; }
-  .base { min-width: 26px; text-align: center; color: #e4e5ea; font-weight: 600; }
-  .hint { color: #9aa6c4; font-size: 11px; }
-  .notice { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
-  .notice button { background: #f0a23a; color: #111; font-weight: 600; }
+  .base { min-width: 30px; text-align: center; color: var(--text); font: 600 var(--fs-ctl) var(--font-mono); }
+  .hint { color: var(--text-2); font-size: var(--fs-ctl); }
+  .notice {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r-md);
+    background: var(--well); box-shadow: var(--well-shadow); color: var(--accent);
+  }
+  .notice button { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
   .rows { display: flex; flex-direction: column; gap: 3px; user-select: none; }
-  .row { display: flex; gap: 2px; }
+  .row { display: flex; gap: 3px; }
   .cell {
     flex: 1 1 0; min-width: 22px; max-width: 52px; height: 34px; padding: 1px 2px; position: relative;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0;
-    background: #2a2c33; color: #e4e5ea; line-height: 1.1;
+    background: var(--well); box-shadow: var(--well-shadow); color: var(--text); line-height: 1.1;
   }
-  .cell.beat { background: #34363f; }
-  .cell.group { margin-right: 6px; }
-  .cell.note { background: color-mix(in srgb, var(--c) 45%, #2a2c33); }
-  .cell.tie { background: color-mix(in srgb, var(--c) 22%, #2a2c33); color: #c9cbd3; }
-  .cell.rest { color: #6a6d79; }
-  .cell.sel { box-shadow: inset 0 0 0 2px #f0a23a; }
-  .cell.playhead { box-shadow: inset 0 0 0 2px #fff; }
+  .cell.beat { background: color-mix(in srgb, var(--well), var(--work)); }
+  .cell.group { margin-right: 9px; }
+  .cell.note { background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); }
+  .cell.tie { background: color-mix(in srgb, var(--c) 30%, var(--well)); color: var(--text); }
+  .cell.rest { color: var(--text-dim); }
+  .cell.sel { box-shadow: 0 0 0 2px var(--accent), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .cell.playhead { box-shadow: inset 0 0 0 2px var(--text), inset 0 0 0 3px color-mix(in srgb, var(--on-color) 70%, transparent); }
   /* Selected under the playhead: the selection ring stays, the playhead inside it. */
-  .cell.sel.playhead { box-shadow: inset 0 0 0 2px #f0a23a, inset 0 0 0 4px #fff; }
-  .cell.playhead.rest { background: #4a4d59; }
-  .nm { font-size: 11px; font-weight: 600; }
-  .oct { position: absolute; top: 1px; right: 3px; font-size: 7px; color: #ffd98a; }
-  .badges { display: flex; gap: 3px; height: 11px; font-size: 9px; }
-  .acc { color: #f0a23a; font-weight: 700; }
-  .sld { color: #9fe0b8; }
+  .cell.sel.playhead {
+    box-shadow: 0 0 0 2px var(--accent), inset 0 0 0 2px var(--text), inset 0 0 0 3px color-mix(in srgb, var(--on-color) 70%, transparent);
+  }
+  .cell.playhead.rest { background: color-mix(in srgb, var(--well), var(--raised)); }
+  .nm { font: 600 var(--fs-ctl) var(--font-ui); }
+  .oct { position: absolute; top: 1px; right: 3px; font-size: var(--fs-tag); opacity: 0.8; }
+  .badges { display: flex; gap: 3px; height: 11px; font-size: var(--fs-xs); }
+  .acc { font-weight: 700; }
+  /* On a rest or tie (no colour behind it) the badges take the accent / play colours. */
+  .cell:not(.note) .acc { color: var(--accent); }
+  .cell:not(.note) .sld { color: var(--play); }
   .edit { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-  .edit.off .tip { color: #6a6d79; }
+  .edit.off .tip { opacity: 0.6; }
   .keys { display: flex; gap: 2px; }
-  .key { width: 30px; padding: 4px 0; background: #d8d9de; color: #111; }
-  .key.black { background: #15161a; color: #c9cbd3; }
-  .key.on { background: #f0a23a; color: #111; }
+  .key { width: 30px; padding: 4px 0; background: var(--text) var(--gloss); color: var(--on-color); }
+  .key.black { background: var(--lcd) var(--gloss); color: var(--text-2); }
+  .key.on { background-color: var(--accent); color: var(--on-color); }
   .toggles { display: flex; align-items: center; gap: 3px; }
-  .tip { margin-left: 8px; font-size: 11px; color: #9a9ca8; }
+  .tip { margin-left: 8px; font-size: var(--fs-ctl); color: var(--text-2); }
 </style>

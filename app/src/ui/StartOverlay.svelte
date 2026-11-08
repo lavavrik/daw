@@ -39,6 +39,7 @@
 {/if}
 
 <style>
+  /* The work surface, near-opaque, with the prompt as a primary (accent) pill. */
   .overlay {
     position: fixed;
     inset: 0;
@@ -47,26 +48,31 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 0.75rem;
+    gap: 12px;
     border: 0;
-    background: rgb(12 12 14 / 0.92);
-    color: #eee;
-    font: inherit;
+    background: color-mix(in srgb, var(--work) 94%, transparent);
+    color: var(--text);
+    font: var(--fs-body) var(--font-ui);
     cursor: pointer;
   }
   .label {
-    font-size: 1.5rem;
-    letter-spacing: 0.02em;
+    padding: 12px 24px;
+    border-radius: var(--r-lg);
+    background: var(--accent) var(--gloss);
+    box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--on-color);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
   }
-  .hint {
-    opacity: 0.6;
-  }
+  .overlay:focus-visible { outline: none; }
+  .overlay:focus-visible .label { outline: 2px solid var(--text); outline-offset: 3px; }
+  .hint,
   .note {
-    opacity: 0.6;
-    font-size: 0.9rem;
+    color: var(--text-2);
   }
   .error {
-    color: #ff7a7a;
+    color: var(--rec);
     max-width: 40rem;
   }
 </style>

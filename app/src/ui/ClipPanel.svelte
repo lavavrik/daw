@@ -58,6 +58,8 @@
   import { banners } from '../state/banners.svelte';
   import { pendingSampleIds, sampleFailed } from '../state/sampleLoads';
   import NumberField from './NumberField.svelte';
+  import { THEME } from './theme';
+  import { rangeFill } from './rangeFill';
 
   let { p, engine, clock = null, track }: {
     p: Project;
@@ -111,13 +113,16 @@
     const step = beatF / o.view.framesPerPx >= 4 ? 1 : (4 * beatF) / o.view.framesPerPx >= 4 ? 4 : 0;
     if (step) {
       for (let k = Math.ceil(f0 / beatF / step) * step; k * beatF <= f1; k += step) {
-        ctx.fillStyle = k % 4 === 0 ? '#ffffff2e' : '#ffffff12';
+        ctx.fillStyle = THEME.text;
+        ctx.globalAlpha = k % 4 === 0 ? 0.18 : 0.07;
         ctx.fillRect(Math.round(o.x(k * beatF)), 0, 1, o.height);
       }
+      ctx.globalAlpha = 1;
     }
     ctx.save();
     ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = '#c9cbd3a0';
+    ctx.strokeStyle = THEME.text2;
+    ctx.globalAlpha = 0.63;
     ctx.lineWidth = 1;
     for (const f of seamFrames(w.map, f0, f1)) {
       const x = Math.round(o.x(f)) + 0.5;
@@ -130,7 +135,7 @@
     // The envelope: lane edge = 1 (0 dB); louder gains sit at the edge.
     const env = clipEnvelope(c);
     const laneH = o.height / o.lanes;
-    ctx.strokeStyle = '#ffd98a';
+    ctx.strokeStyle = THEME.accent;
     ctx.lineWidth = 1.5;
     for (let l = 0; l < o.lanes; l++) {
       const mid = l * laneH + laneH / 2;
@@ -324,6 +329,7 @@
         <input
           type="range" id={gainId} data-testid="cliptab-gain" aria-label="Clip gain (dB)" aria-valuetext={gainText(c.gain)}
           min={CLIP_GAIN_MIN_DB} max={CLIP_GAIN_MAX_DB} step="0.1" value={c.gain}
+          style:--fill={rangeFill((c.gain - CLIP_GAIN_MIN_DB) / (CLIP_GAIN_MAX_DB - CLIP_GAIN_MIN_DB)).fill}
           title="Clip gain: −∞ to +12 dB (double-click: 0 dB)"
           oninput={setGain}
           ondblclick={() => setAudioClip(p, engine, c.id, { gain: 0 })}
@@ -359,22 +365,23 @@
 </div>
 
 <style>
+  /* Tokens only (spec §2; ui-theme.md); --c is the track colour (data). The
+     waveform overlay (drawOverlay) draws theme.ts tokens at low alpha. */
   .cp { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
-  .empty { color: #8d90a0; margin: 4px 0; }
-  .info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: #9a9da8; }
-  .info b { color: var(--c); font-size: 13px; }
-  .info b.missing, .bad { color: #ff8a92; }
-  .tag { font-size: 10px; border: 1px solid #3a3d48; border-radius: 3px; padding: 0 4px; color: #c9cbd3; }
+  .empty { color: var(--text-2); margin: 4px 0; }
+  .info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; color: var(--text-2); }
+  .info b { color: var(--c); font-size: var(--fs-body); }
+  .info b.missing, .bad { color: var(--rec); }
+  .tag { font-size: var(--fs-lbl); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 0 4px; color: var(--text-2); }
   .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; }
-  label, .fld { display: flex; align-items: center; gap: 6px; color: #c9cbd3; }
-  .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #7d808c; }
-  .gain input { width: 180px; accent-color: var(--c); }
-  output { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 58px; }
-  .loop input { accent-color: var(--c); }
+  label, .fld { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+  .gain input { width: 180px; }
+  output { font: 500 var(--fs-ctl)/1.4 var(--font-mono); color: var(--text); min-width: 64px; }
   .handle { position: absolute; touch-action: none; cursor: ew-resize; box-sizing: border-box; }
-  .handle:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
-  .handle.fadeIn, .handle.fadeOut { top: 0; width: 9px; height: 12px; background: #ffd98a; }
-  .handle.fadeIn { border-radius: 0 3px 3px 0; }
-  .handle.fadeOut { border-radius: 3px 0 0 3px; }
-  .handle.trim { top: 14px; bottom: 0; width: 7px; background: #8ab4ffcc; border-radius: 0 3px 3px 0; }
+  .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Fade flags in the envelope's accent; the trim handle in white. */
+  .handle.fadeIn, .handle.fadeOut { top: 0; width: 9px; height: 12px; background: var(--accent); box-shadow: var(--handle-shadow); }
+  .handle.fadeIn { border-radius: 0 var(--r-xs) var(--r-xs) 0; }
+  .handle.fadeOut { border-radius: var(--r-xs) 0 0 var(--r-xs); }
+  .handle.trim { top: 14px; bottom: 0; width: 7px; background: color-mix(in srgb, var(--text) 80%, transparent); border-radius: 0 var(--r-xs) var(--r-xs) 0; }
 </style>

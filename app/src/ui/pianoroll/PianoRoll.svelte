@@ -55,6 +55,7 @@
   import type { NoteInput } from '../../input/noteInput';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
+  import { THEME } from '../theme';
   import { MAX_PATTERNS } from '../../audio/protocol';
   import { TRACKS_FULL_TEXT } from '../../state/actions';
   import { addExamplePattern, addExampleTrack } from '../../state/example-actions';
@@ -185,12 +186,24 @@
   /** Heard playhead tick inside the pattern, or null (stopped / count-in). Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
 
+  // The canvas palette: theme tokens (ui/theme.ts mirrors theme.css), the
+  // same roles as the playlist (song/clipDraw.ts). Faint shades are a token
+  // drawn at a low globalAlpha (the `*A` numbers), never a new literal.
   const C = {
-    bg: '#17181c', rowWhite: '#1f2026', rowBlack: '#1a1b20', octave: '#3a3d47', gridLine: '#25272e',
-    beatLine: '#33363f', barLine: '#555966', ruler: '#202227', rulerText: '#c9cbd3', dimText: '#7d808c',
-    past: 'rgba(0,0,0,0.38)', end: '#f0a23a', keyWhite: '#d9dbe2', keyBlack: '#25262c', keyText: '#2a2c33',
-    accent: '#f0a23a', vel: '#15161a', playhead: '#ffffff',
+    bg: THEME.work, rowBlack: THEME.well, rowBlackA: 0.45, octave: THEME.line,
+    gridLine: THEME.grid, beatLine: THEME.line, barLine: THEME.raised, ruler: THEME.panel,
+    rulerText: THEME.text2, dimText: THEME.text2, dimA: 0.6, past: THEME.lcd, pastA: 0.45, end: THEME.accent,
+    keyWhite: THEME.text, keyBlack: THEME.lcd, keyText: THEME.onColor, keySeam: THEME.textDim,
+    accent: THEME.accent, vel: THEME.lcd, velSep: THEME.line, playhead: THEME.text, dark: THEME.onColor,
+    fontUi: THEME.fontUi, fontMono: THEME.fontMono,
   };
+  /** Fill a rect in `style` at `alpha` (then back to opaque). */
+  function fillA(ctx: CanvasRenderingContext2D, style: string, alpha: number, x: number, y: number, w: number, h: number) {
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = style;
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha = 1;
+  }
 
   /** Reads every reactive input, so the $effect below redraws on any change. */
   function draw() {
@@ -224,12 +237,8 @@
     ctx.clip();
     for (let pt = v.topPitch; pt >= lowPitch; pt--) {
       const y = top + pitchToY(pt, v);
-      ctx.fillStyle = isBlack(pt) ? C.rowBlack : C.rowWhite;
-      ctx.fillRect(KEYS_W, y, W - KEYS_W, v.rowH);
-      if (pt === hoverPitch || pt === auditionPitch) {
-        ctx.fillStyle = 'rgba(240,162,58,0.08)';
-        ctx.fillRect(KEYS_W, y, W - KEYS_W, v.rowH);
-      }
+      if (isBlack(pt)) fillA(ctx, C.rowBlack, C.rowBlackA, KEYS_W, y, W - KEYS_W, v.rowH);
+      if (pt === hoverPitch || pt === auditionPitch) fillA(ctx, C.accent, 0.08, KEYS_W, y, W - KEYS_W, v.rowH);
       if (pt % 12 === 0) { // octave line under every C
         ctx.fillStyle = C.octave;
         ctx.fillRect(KEYS_W, y + v.rowH - 1, W - KEYS_W, 1);
@@ -244,14 +253,13 @@
     if (BEAT / v.ticksPerPx >= 4) for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) vline(t, C.beatLine);
     for (let t = snapFloor(t0, BAR); t <= t1; t += BAR) vline(t, C.barLine);
     if (xEnd < W) {
-      ctx.fillStyle = C.past;
-      ctx.fillRect(Math.max(KEYS_W, xEnd), top, W - Math.max(KEYS_W, xEnd), noteH);
+      fillA(ctx, C.past, C.pastA, Math.max(KEYS_W, xEnd), top, W - Math.max(KEYS_W, xEnd), noteH);
       vline(total, C.end, 2);
     }
 
     // notes: unselected first so the selection is drawn on top
     const order = drawOrder;
-    ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = `9px ${C.fontMono}`;
     ctx.textBaseline = 'middle';
     for (const n of order) {
       const x0 = tickToX(n.start, v);
@@ -270,7 +278,8 @@
         ctx.beginPath();
         ctx.rect(x0 + 0.5, y + 1, w, v.rowH - 2);
         ctx.clip();
-        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.strokeStyle = C.dark;
+        ctx.globalAlpha = 0.6;
         ctx.lineWidth = 1;
         ctx.beginPath();
         for (let k = x0 - v.rowH; k < x1; k += 5) {
@@ -278,27 +287,30 @@
           ctx.lineTo(k + v.rowH, y);
         }
         ctx.stroke();
-        ctx.restore();
+        ctx.restore(); // also restores globalAlpha
       }
       ctx.lineWidth = sel ? 1.5 : 1;
-      ctx.strokeStyle = sel ? '#ffffff' : 'rgba(0,0,0,0.55)';
+      ctx.strokeStyle = sel ? C.playhead : C.dark;
+      ctx.globalAlpha = sel ? 1 : 0.55;
       ctx.strokeRect(x0 + 1, y + 1.5, Math.max(1, w - 1), v.rowH - 3);
+      ctx.globalAlpha = 1;
       if (sel && w > 10) { // resize grip
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = C.playhead;
         ctx.fillRect(x0 + w - 3, y + 3, 1.5, v.rowH - 6);
       }
       if (w > 22 && v.rowH >= MIN_ROW_H) { // room for "D#3" at 9 px
-        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillStyle = C.dark;
+        ctx.globalAlpha = 0.8;
         ctx.fillText(noteName(n.pitch), Math.max(x0, KEYS_W) + 3, y + v.rowH / 2 + 0.5);
+        ctx.globalAlpha = 1;
       }
     }
     if (box) {
-      ctx.fillStyle = 'rgba(240,162,58,0.12)';
       ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1;
       const bx = Math.min(box.x0, box.x1);
       const by = Math.min(box.y0, box.y1);
-      ctx.fillRect(bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
+      fillA(ctx, C.accent, 0.12, bx, by, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
       ctx.strokeRect(bx + 0.5, by + 0.5, Math.abs(box.x1 - box.x0), Math.abs(box.y1 - box.y0));
     }
     ctx.restore();
@@ -310,10 +322,7 @@
     ctx.beginPath();
     ctx.rect(KEYS_W, 0, W - KEYS_W, RULER_H);
     ctx.clip();
-    if (xEnd < W) {
-      ctx.fillStyle = C.past;
-      ctx.fillRect(Math.max(KEYS_W, xEnd), 0, W, RULER_H);
-    }
+    if (xEnd < W) fillA(ctx, C.past, C.pastA, Math.max(KEYS_W, xEnd), 0, W, RULER_H);
     ctx.textBaseline = 'middle';
     const beatPx = BEAT / v.ticksPerPx;
     for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) {
@@ -322,13 +331,17 @@
       ctx.fillStyle = isBar ? C.barLine : C.beatLine;
       ctx.fillRect(x - 0.5, isBar ? 0 : RULER_H - 6, 1, isBar ? RULER_H : 6);
       if (isBar) {
-        ctx.font = 'bold 11px ui-sans-serif, system-ui, sans-serif';
+        ctx.font = `bold 11px ${C.fontUi}`;
         ctx.fillStyle = t >= total ? C.dimText : C.rulerText;
+        ctx.globalAlpha = t >= total ? C.dimA : 1;
         ctx.fillText(String(t / BAR + 1), x + 4, RULER_H / 2);
+        ctx.globalAlpha = 1;
       } else if (beatPx >= 34) {
-        ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+        ctx.font = `9px ${C.fontUi}`;
         ctx.fillStyle = C.dimText;
+        ctx.globalAlpha = C.dimA;
         ctx.fillText(`${Math.floor(t / BAR) + 1}.${((t % BAR) / BEAT) + 1}`, x + 3, RULER_H / 2 + 1);
+        ctx.globalAlpha = 1;
       }
     }
     if (xEnd < W && xEnd >= KEYS_W) { // pattern end marker
@@ -344,7 +357,7 @@
     // corner: the grid size, always visible
     ctx.fillStyle = C.ruler;
     ctx.fillRect(0, 0, KEYS_W, RULER_H);
-    ctx.font = 'bold 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = `bold 10px ${C.fontMono}`;
     ctx.fillStyle = C.accent;
     ctx.textAlign = 'center';
     ctx.fillText(gridKey, KEYS_W / 2, RULER_H / 2 + 1);
@@ -355,7 +368,7 @@
     ctx.beginPath();
     ctx.rect(0, top, KEYS_W, noteH);
     ctx.clip();
-    ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+    ctx.font = `9px ${C.fontUi}`;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
     for (let pt = v.topPitch; pt >= lowPitch; pt--) {
@@ -368,7 +381,7 @@
         ctx.fillRect(0, y, KEYS_W * 0.62, v.rowH);
       }
       if (pt % 12 === 0 || pt % 12 === 5) { // B|C and E|F seams
-        ctx.fillStyle = '#9a9ca8';
+        ctx.fillStyle = C.keySeam;
         ctx.fillRect(0, y + v.rowH - 1, KEYS_W, 1);
       }
       const hot = pt === auditionPitch || pt === hoverPitch;
@@ -379,8 +392,8 @@
         ctx.globalAlpha = 1;
       }
       if (pt % 12 === 0 || hot) {
-        ctx.fillStyle = hot ? '#111' : C.keyText;
-        ctx.font = `${pt % 12 === 0 ? 'bold ' : ''}9px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = hot ? C.dark : C.keyText;
+        ctx.font = `${pt % 12 === 0 ? 'bold ' : ''}9px ${C.fontUi}`;
         ctx.fillText(noteName(pt), KEYS_W - 3, y + v.rowH / 2 + 0.5);
       }
     }
@@ -390,10 +403,10 @@
     // ---- velocity lane ----
     ctx.fillStyle = C.vel;
     ctx.fillRect(0, velTop, W, VEL_H);
-    ctx.fillStyle = '#2a2c33';
+    ctx.fillStyle = C.velSep;
     ctx.fillRect(0, velTop - SEP / 2 - 0.5, W, 1);
-    ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
-    ctx.fillStyle = C.dimText;
+    ctx.font = `10px ${C.fontUi}`;
+    ctx.fillStyle = THEME.textDim; // on the --lcd lane
     ctx.fillText('Vel', 6, velTop + 12);
     ctx.save();
     ctx.beginPath();
@@ -405,7 +418,7 @@
       const hgt = (n.vel / 127) * (VEL_H - 8);
       const sel = selected.has(n.id);
       ctx.globalAlpha = n.start >= total ? 0.3 : sel ? 1 : 0.6;
-      ctx.strokeStyle = sel ? '#ffffff' : color;
+      ctx.strokeStyle = sel ? C.playhead : color;
       ctx.fillStyle = color;
       ctx.lineWidth = sel ? 2 : 1.5;
       ctx.beginPath();
@@ -994,25 +1007,42 @@
 </div>
 
 <style>
+  /* Tokens only (spec §2; ui-theme.md). The canvas reads the same tokens
+     through theme.ts (the C palette above). Buttons are the raised recipe at
+     the bar's dense size (20 px, like the skinned selects beside them). */
   .roll { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; }
-  .bar { display: flex; align-items: center; gap: 10px; color: #9a9ca8; flex-wrap: wrap; }
-  .bar label { display: flex; align-items: center; gap: 5px; }
-  .bar select, .bar button { font: inherit; background: #24262c; color: #c9cbd3; border: 1px solid #2a2c33; border-radius: 3px; padding: 2px 6px; }
-  .bar button { cursor: pointer; }
-  .bar button:hover:not(:disabled) { border-color: #4a4d59; color: #fff; }
-  .bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .bar { display: flex; align-items: center; gap: 10px; color: var(--text-2); flex-wrap: wrap; }
+  .bar label { display: flex; align-items: center; gap: 6px; }
+  .bar button {
+    font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 2px 10px; border: 0; border-radius: var(--r-sm);
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); cursor: pointer;
+  }
+  .bar button:hover:not(:disabled) { filter: brightness(1.08); }
+  .bar button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .exwrap { position: relative; }
-  .exmenu { box-sizing: border-box; position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: flex; flex-direction: column; gap: 1px; min-width: 230px; max-height: 60vh; overflow-y: auto; padding: 6px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; }
-  .exmenu .gh { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #8d90a0; border-bottom: 1px solid #3a3d48; margin: 6px 0 3px; padding-bottom: 1px; }
+  /* The examples popover: a --panel card with the lift, like the Rack's add menu. */
+  .exmenu {
+    box-sizing: border-box; position: absolute; z-index: 10; top: calc(100% + 6px); left: 0;
+    display: flex; flex-direction: column; gap: 1px; min-width: 230px; max-height: 60vh; overflow-y: auto; padding: 8px;
+    background: var(--panel); border-radius: var(--r-menu); box-shadow: var(--lift);
+  }
+  .exmenu .gh {
+    margin: 8px 0 3px; padding-bottom: 2px; border-bottom: 1px solid var(--line);
+    font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2);
+  }
   .exmenu .gh:first-of-type { margin-top: 0; }
   .exrow { display: flex; align-items: center; gap: 4px; }
-  .bar .exrow button { flex: 1; text-align: left; border: 0; background: transparent; color: #d7d9e0; white-space: nowrap; }
-  .bar .exrow button.plus { flex: none; font-size: 10px; color: #8fb8ff; border: 1px solid #3a3d48; }
-  .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: #2e313a; color: #fff; outline: none; }
-  .exmenu .full { margin: 0 0 4px; color: #ffd98a; font-size: 11px; white-space: nowrap; }
-  .readout { margin-left: auto; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e4e5ea; background: #15161a; border: 1px solid #2a2c33; border-radius: 3px; padding: 2px 8px; white-space: nowrap; }
-  .readout.hint { color: #ffd98a; }
-  .stage { position: relative; flex: 1; min-height: 180px; border: 1px solid #2a2c33; border-radius: 3px; outline: none; overflow: hidden; }
-  .stage:focus-visible, .stage:focus { border-color: color-mix(in srgb, var(--c) 60%, #2a2c33); }
+  .bar .exrow button { flex: 1; text-align: left; background: transparent; box-shadow: none; white-space: nowrap; }
+  .bar .exrow button.plus { flex: none; font-size: var(--fs-lbl); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
+  .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: var(--raised); color: var(--text); filter: none; outline: none; }
+  .exmenu .full { margin: 0 0 4px; color: var(--accent); font-size: var(--fs-ctl); white-space: nowrap; }
+  .readout {
+    margin-left: auto; padding: 2px 8px; border-radius: var(--r-sm); white-space: nowrap;
+    background: var(--lcd); box-shadow: var(--well-shadow); color: var(--text); font: 500 var(--fs-ctl)/16px var(--font-mono);
+  }
+  .readout.hint { color: var(--accent); }
+  .stage { position: relative; flex: 1; min-height: 180px; border: 1px solid var(--line); border-radius: var(--r-sm); outline: none; overflow: hidden; }
+  .stage:focus-visible, .stage:focus { border-color: color-mix(in srgb, var(--c) 70%, var(--line)); }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 </style>

@@ -223,45 +223,59 @@
 </section>
 
 <style>
-  .pane { background: #1b1c21; border: 1px solid #2a2c33; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  /* Look (spec §4 "Bottom panel"; Main board): --panel under a --well rule;
+     the header carries the track chip and name, the pattern transport and
+     picker, and the tabs on a --work tray (theme.css .tabs). Tokens only. */
+  .pane { background: var(--panel); border-top: 2px solid var(--well); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   /* One row from 1280 px (the title ellipsizes first); narrower, the tabs wrap
      onto a second row instead of running off the panel (layout.spec at 1024). */
-  .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
+  .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
   .head > * { flex: none; }
-  .head > b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .head > b { font: 700 var(--fs-body) var(--font-ui); color: var(--text); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   @media (max-width: 1279px) { .head { flex-wrap: wrap; row-gap: 4px; } }
-  .swatch { width: 12px; height: 12px; border-radius: 3px; }
-  .none { color: #7d808c; }
-  .tabs { display: flex; gap: 2px; margin-left: auto; }
+  .swatch { width: 12px; height: 12px; border-radius: var(--r-xs); box-shadow: var(--raised-shadow); }
+  .none { color: var(--text-2); }
+  .tabs { margin-left: auto; padding: 2px; border-radius: var(--r-menu); background: var(--work); }
   /* Takes the free space between the picker and the tabs; children are
      absolutely placed, so their text never changes the header's size. */
   .songhint {
     position: absolute; top: calc(100% + 4px); right: 8px; z-index: 2;
     max-width: calc(100% - 16px); padding: 2px 8px; border-radius: var(--r-sm);
     background: color-mix(in srgb, var(--well) 85%, transparent); color: var(--text-dim);
-    font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+    font-size: var(--fs-ctl); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
   }
   .songhint.off { visibility: hidden; }
   .flash {
     position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
     max-width: calc(100% - 16px); padding: 3px 10px; border-radius: var(--r-sm);
     background: var(--well); box-shadow: var(--lift); color: var(--accent);
-    font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+    font-size: var(--fs-ctl); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
   }
-  .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
-  .tab.active { background: #f0a23a; color: #111; }
-  .tab:disabled { opacity: 0.45; cursor: not-allowed; }
+  /* The tabs are theme.css .tabs (selected = light, dark text), denser than
+     the board's 30 px so the header stays one row under 40 px at 1280 px
+     (layout.spec) beside the pattern transport. */
+  .tab { padding: 2px 9px; }
+  .tab:disabled { cursor: not-allowed; }
   .synth { display: flex; flex: 1; min-height: 0; min-width: 0; }
   .editor { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .body { padding: 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
-  .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }
+  /* Banners: a recessed --well strip with a coloured edge: --rec for errors,
+     --accent for notes and questions. The text stays --text (readable on the
+     well); the edge and the primary button carry the colour. */
+  .banner {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; margin-bottom: 6px;
+    border-radius: var(--r-md); background: var(--well); box-shadow: var(--well-shadow), inset 3px 0 0 var(--bc); color: var(--text);
+  }
+  .banner button { font: inherit; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; font-size: 14px; }
+  .banner button:hover { color: var(--text); }
   .banner[data-testid='ask'] span { flex: 1; }
-  .banner[data-testid='ask'] button { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; }
-  .banner progress { flex: 1; height: 8px; accent-color: #f0a23a; }
-  .banner .cancel { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; }
-  .banner a { color: inherit; font-weight: 600; }
-  .banner .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
-  .err { background: #4a2024; color: #ffb3b8; border: 1px solid #7a3037; }
-  .note { background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
+  .banner[data-testid='ask'] button, .banner .cancel {
+    font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 2px 10px; border-radius: var(--r-sm);
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text);
+  }
+  .banner progress { flex: 1; height: 8px; accent-color: var(--accent); }
+  .banner a { color: var(--accent); font-weight: 600; }
+  .banner[data-testid='ask'] .ok { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
+  .err { --bc: var(--rec); }
+  .note { --bc: var(--accent); }
 </style>

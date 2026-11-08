@@ -5,8 +5,11 @@ import { Project } from './project.svelte';
 import { addDrumTrack, liveInputTrack, removeTrack, selectTrack } from './actions';
 import {
   addModule, addSynthTrack, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule,
-  rollbackRefusedAdd, setParam,
+  rollbackRefusedAdd, setParam, setParams,
 } from './rack-actions';
+import { createHistory } from '../history/history';
+import { diffApply } from '../history/diffApply';
+import { serialize } from '../project/serialize';
 import { STARTER_PATCHES } from './patches';
 
 function fake() {
@@ -144,6 +147,24 @@ describe('rack actions', () => {
     setParam(p, sink, t.id, f, 1, 1e9);
     expect(sent).toEqual([[Op.RACK_SET_PARAM, t.slot, f, 1, 20000]]);
     expect(t.modules[0].params[1]).toBe(20000);
+  });
+
+  it('setParams: several params of one module in one undo entry (the Sample Player strip\'s End push)', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const t = addSynthTrack(p, sink, 'S', { name: 'e', modules: [], cables: [] })!;
+    const sp = addModule(p, sink, t.id, 'sample_player')!;
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    const d = moduleDef('sample_player');
+    const [end, ls] = [paramIndex(d, 'end'), paramIndex(d, 'loopStart')];
+    setParam(p, sink, t.id, sp, ls, 0.5);
+    sent.length = 0;
+    setParams(p, sink, t.id, sp, [[end, 0.4], [ls, 0.3]]);
+    expect(sent).toEqual([[Op.RACK_SET_PARAM, t.slot, sp, end, 0.4], [Op.RACK_SET_PARAM, t.slot, sp, ls, 0.3]]);
+    expect(p.history.labels.undo).toBe('Set End');
+    p.history.undo(); // both at once
+    const m = t.modules.find((x) => x.idx === sp)!;
+    expect([m.params[end], m.params[ls]]).toEqual([1, 0.5]);
   });
 
   it('removeModule removes its cables in state', () => {

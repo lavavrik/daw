@@ -441,8 +441,9 @@
   /**
    * 60 Hz: keeps the recorder's transport state in step with the engine
    * (transportSync: the safety net for starts/stops the UI did not make; 4 Hz
-   * would close notes up to 250 ms late) and the Rec button's status fresh
-   * (count-in -> recording).
+   * would close notes up to 250 ms late; it also writes early drum hits once
+   * their step has been heard, Recorder.onHeard) and the Rec button's status
+   * fresh (count-in -> recording).
    */
   function watchTransport(e: AudioEngine, c: AudioClock, r: Recorder) {
     const sync = transportSync(r);

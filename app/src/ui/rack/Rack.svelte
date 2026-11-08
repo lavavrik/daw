@@ -68,7 +68,7 @@
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import {
-    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam,
+    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam, setParams,
   } from '../../state/rack-actions';
   import { deferSampleAssign } from '../../state/sampleLoads';
   import { importSample } from '../../state/sampleImport';
@@ -392,6 +392,10 @@
   // ---- edits ------------------------------------------------------------------
   function param(idx: number, i: number, v: number) {
     setParam(p, engine, track.id, idx, i, v);
+    edited.add(track.id);
+  }
+  function params(idx: number, values: [number, number][]) {
+    setParams(p, engine, track.id, idx, values);
     edited.add(track.id);
   }
   function remove(idx: number) {
@@ -764,6 +768,7 @@
           title={titles.get(m.idx) ?? ''}
           isConnected={(port) => track.cables.some((c) => c.to.m === m.idx && c.to.port === port)}
           onparam={(i, v) => param(m.idx, i, v)}
+          onparams={(values) => params(m.idx, values)}
           onremove={() => remove(m.idx)}
           onjackdown={(e, dir, port) => jackDown(e, m.idx, dir, port)}
           onjackkey={(e, dir, port) => jackKey(e, m.idx, dir, port)}

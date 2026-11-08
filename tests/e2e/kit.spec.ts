@@ -250,7 +250,8 @@ test('a selected drum track plays its rows from the MIDI keyboard', async ({ pag
   expect(await maxPeak(page, 300)).toBeLessThan(0.01); // stopped, nothing held
   expect(await peakAfter([0x90, 35, 127])).toBeLessThan(0.01); // below row 1: ignored
   expect(await peakAfter([0x90, 36, 127])).toBeGreaterThan(0.05); // C2: the Kick row
-  await peakAfter([0x80, 36, 0], 400); // NoteOff: ignored, the hit rings out
+  await peakAfter([0x80, 36, 0], 400); // NoteOff: nothing to release (one-shots)
+  expect(await peakAfter([0x90, 36, 100])).toBeGreaterThan(0.05); // ... and the row hits again after it
   expect(await maxPeak(page, 300)).toBeLessThan(0.01); // a one-shot: nothing stuck
 });
 

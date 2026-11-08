@@ -6,33 +6,45 @@
   //   End (red)           where it stops (loop off) / the loop's end;
   //   Loop start (yellow) where the sustain loop jumps back to; only while
   //                       Loop is On.
-  // Outside [Start, End) is dimmed; the loop region is tinted while Loop is On.
+  // Outside [Start, End) is dimmed; the loop region is tinted while Loop is On,
+  // hatched when it is shorter than the engine loops (< 20 ms: the region
+  // then plays once; sampleStrip.loopTooShort), with that as its title.
   //
   // The waveform is the peaks pyramid (waveMath.columns over waveBase, the
   // same helpers the Clip tab's WaveformView uses), whole file, no zoom; it
   // is redrawn when the sample's SampleMeta (a new object per load) or the
-  // pixel ratio changes, never per frame. No sample (or one the session
-  // doesn't know): "Drop a sample here" (the panel is the drop target).
+  // pixel ratio changes, never per frame. No sample: "Drop a sample here"
+  // (the panel is the drop target); an assigned id the session does not
+  // know: "Sample not loaded" (sampleStrip.stripEmptyText).
   //
   // Handles: a small flag per marker (Start and End at the top, Start's
   // pointing right and End's left; Loop start at the bottom), so markers at
   // the same x stay grabbable. Each flag is a slider (aria-label "Start",
   // "End", "Loop start"; value = the param, 0..1). Drag: the value moves by
-  // dx / 220 from where it was grabbed, clamped (sampleStrip.clampMarker:
-  // End never left of Start + 1 px ...); every move goes through `onchange`
-  // = ModulePanel's `onparam`, the knobs' path. The press..release is one
-  // undo entry (history/gestures.ts brackets every pointer gesture).
-  // Escape, pointercancel or a lost capture mid-drag puts the grabbed value
-  // back. Keys on a focused flag: ←/↓ −0.01, →/↑ +0.01, Shift a tenth
+  // dx / 220 from where the marker is drawn when grabbed (drawnValue: no
+  // jump on a degenerate region), clamped (sampleStrip.clampMarker: End
+  // never left of Start + 1 px, Loop start at least 20 ms before End ...);
+  // End dragged left past Loop start + 20 ms (Loop On) pushes Loop start
+  // back with it (sampleStrip.markerChanges). Every change goes through
+  // `onchange` = ModulePanel's markerChange -> `onparam` (or `onparams` for
+  // End + Loop start), the knobs' path. The press..release is one undo
+  // entry (history/gestures.ts brackets every pointer gesture). Escape,
+  // pointercancel or a lost capture mid-drag puts the grabbed values back.
+  // Keys on a focused flag (sampleStrip.keyMarker): ←/↓ −0.01, →/↑ +0.01,
+  // Shift a tenth, PageDown/PageUp ∓0.1, Home/End the lowest/highest value
   // (each press its own undo entry, like a knob's).
   import type { SampleMeta } from '../../state/project.svelte';
   import { columns, fileMap, waveBase } from '../vis/waveMath';
-  import { dragMarker, markerXs, stepMarker, STRIP_H, STRIP_W } from './sampleStrip';
+  import {
+    drawnValue, keyMarker, loopMin, loopTooShort, markerChanges, markerXs, stripEmptyText, STRIP_H, STRIP_W,
+  } from './sampleStrip';
   import type { Marker, Region } from './sampleStrip';
 
-  let { idx, meta, sampleRate, region, loop, color, onchange }: {
+  let { idx, sampleId, meta, sampleRate, region, loop, color, onchange }: {
     /** The module's idx (test id `sample-strip-<idx>`). */
     idx: number;
+    /** The `sample` param (-1 = none): with no meta, which empty text to show. */
+    sampleId: number;
     /** The assigned sample's meta (peaks), or null: nothing assigned / unknown. */
     meta: SampleMeta | null;
     /** The engine's rate (waveBase's axis before peaks exist). */
@@ -41,7 +53,8 @@
     loop: boolean;
     /** The waveform colour (the module's category colour). */
     color: string;
-    onchange: (m: Marker, v: number) => void;
+    /** Marker params that change (End may push Loop start along: both at once). */
+    onchange: (changes: Partial<Region>) => void;
   } = $props();
 
   const W = STRIP_W;
@@ -54,6 +67,14 @@
   const xs = $derived(markerXs(region, W));
   const markers = $derived<Marker[]>(loop ? ['start', 'end', 'loopStart'] : ['start', 'end']);
   const seconds = $derived(meta?.seconds ?? 0);
+  /** The shortest loop the engine loops (20 ms + a frame), as a fraction of the file; 0 = unknown. */
+  const minLoop = $derived.by(() => {
+    if (!meta) return 0;
+    const base = waveBase(meta, sampleRate);
+    return loopMin(base.frames, sampleRate);
+  });
+  const tooShort = $derived(loop && loopTooShort(region, minLoop));
+  const emptyText = $derived(stripEmptyText(sampleId, meta));
 
   // ---- waveform ------------------------------------------------------------
   let canvas: HTMLCanvasElement;
@@ -104,7 +125,8 @@
   }
 
   // ---- handles ---------------------------------------------------------------
-  let drag: { m: Marker; from: number; x0: number; last: number; id: number } | null = null;
+  /** `from`: the drawn value at the grab; `orig`: the params then (restored by a cancel); `moved`: params changed. */
+  let drag: { m: Marker; from: number; x0: number; orig: Region; moved: Set<Marker>; id: number } | null = null;
 
   function down(e: PointerEvent, m: Marker) {
     if (e.button !== 0) return;
@@ -112,25 +134,30 @@
     const el = e.currentTarget as HTMLElement;
     el.focus();
     el.setPointerCapture(e.pointerId);
-    drag = { m, from: region[m], x0: e.clientX, last: region[m], id: e.pointerId };
+    drag = { m, from: drawnValue(m, region, W), x0: e.clientX, orig: { ...region }, moved: new Set(), id: e.pointerId };
   }
   function move(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.id) return;
-    const v = dragMarker(drag.m, drag.from, e.clientX - drag.x0, region, W);
-    if (v !== drag.last) {
-      drag.last = v;
-      onchange(drag.m, v);
-    }
+    const dx = e.clientX - drag.x0;
+    // No movement yet: nothing (the drawn value may differ from the param).
+    if (dx === 0 && drag.moved.size === 0) return;
+    const ch = markerChanges(drag.m, drag.from + dx / W, region, W, minLoop, loop);
+    const keys = Object.keys(ch) as Marker[];
+    if (!keys.length) return;
+    for (const k of keys) drag.moved.add(k);
+    onchange(ch);
   }
   function up(e: PointerEvent) {
     if (drag && e.pointerId === drag.id) drag = null;
   }
-  /** Abort the drag: the grabbed value back (nothing if nothing moved). */
+  /** Abort the drag: the grabbed values back (nothing if nothing moved). */
   function cancel() {
     if (!drag) return;
     const d = drag;
     drag = null;
-    if (d.last !== d.from) onchange(d.m, d.from);
+    const back: Partial<Region> = {};
+    for (const k of d.moved) if (region[k] !== d.orig[k]) back[k] = d.orig[k];
+    if (Object.keys(back).length) onchange(back);
   }
   function key(e: KeyboardEvent, m: Marker) {
     if (drag) {
@@ -141,13 +168,11 @@
       }
       return;
     }
-    let dir: 1 | -1 | 0 = 0;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') dir = 1;
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') dir = -1;
-    if (!dir) return;
-    e.preventDefault(); // don't scroll the rail
-    const v = stepMarker(m, region, dir, e.shiftKey, W);
-    if (v !== region[m]) onchange(m, v);
+    const v = keyMarker(m, region, e.key, e.shiftKey, W, minLoop);
+    if (v === null) return;
+    e.preventDefault(); // don't scroll the rail / page
+    const ch = markerChanges(m, v, region, W, minLoop, loop);
+    if (Object.keys(ch).length) onchange(ch);
   }
 
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
@@ -164,10 +189,14 @@
   <div class="dim" style:left="0" style:width={`${xs.start}px`}></div>
   <div class="dim" style:left={`${xs.end}px`} style:width={`${W - xs.end}px`}></div>
   {#if loop}
-    <div class="loop" style:left={`${xs.loopStart}px`} style:width={`${Math.max(0, xs.end - xs.loopStart)}px`}></div>
+    <div
+      class="loop" class:short={tooShort} data-testid={`sample-strip-${idx}-loop`} data-short={tooShort ? '1' : null}
+      title={tooShort ? 'Loop too short (< 20 ms): plays once' : null}
+      style:left={`${xs.loopStart}px`} style:width={`${Math.max(0, xs.end - xs.loopStart)}px`}
+    ></div>
   {/if}
-  {#if !meta}
-    <span class="empty">Drop a sample here</span>
+  {#if emptyText}
+    <span class="empty">{emptyText}</span>
   {/if}
   {#each markers as m (m)}
     <div class="line" style:left={`${lineLeft(m, xs[m])}px`} style:background={COLORS[m]}></div>
@@ -178,7 +207,7 @@
       aria-valuemin={0} aria-valuemax={1}
       aria-valuenow={Number(region[m].toFixed(4))}
       aria-valuetext={valueText(region[m])}
-      title={`${LABELS[m]}: ${valueText(region[m])} — drag, or ←/→ (Shift = fine)`}
+      title={`${LABELS[m]}: ${valueText(region[m])} — drag, or ←/→ (Shift = fine), PgUp/PgDn, Home/End`}
       data-testid={`sample-strip-${idx}-${m}`}
       style:left={`${flagLeft(m, xs[m])}px`}
       style:width={`${FLAG_W}px`} style:height={`${FLAG_H}px`}
@@ -198,6 +227,8 @@
   canvas { position: absolute; inset: 0; display: block; }
   .dim { position: absolute; top: 0; bottom: 0; background: #000a; pointer-events: none; }
   .loop { position: absolute; top: 0; bottom: 0; background: #f5d1421c; pointer-events: none; }
+  /* Too short to loop: hatched, and hoverable for its title (the flags sit above it). */
+  .loop.short { background: repeating-linear-gradient(135deg, #f5d14240 0 2px, transparent 2px 5px); pointer-events: auto; }
   .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #6f7280; pointer-events: none; }
   .line { position: absolute; top: 0; bottom: 0; width: 1px; pointer-events: none; }
   .flag { position: absolute; top: 0; box-sizing: border-box; cursor: ew-resize; touch-action: none; clip-path: polygon(0 0, 100% 0, 100% 60%, 0 100%); }

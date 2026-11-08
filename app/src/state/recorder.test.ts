@@ -483,7 +483,8 @@ describe('Recorder: drum hits (plan 15)', () => {
     s.rec.onTransport(true, 0);
     s.rec.noteOn(36, 90, 0); // step 0
     s.rec.noteOn(36, 100, 250); // 250 / 240 = 1.04 -> step 1
-    s.rec.noteOn(37, 110, 470); // 1.96 -> step 2, row 2 (C#2)
+    s.rec.noteOn(37, 110, 470); // 1.96 -> step 2, row 2 (C#2): early, written once heard (ruling J)
+    s.rec.onHeard(480);
     expect(s.hits.map(([r, st, v]) => [r, st, v])).toEqual([['r0', 0, 90], ['r0', 1, 100], ['r1', 2, 110]]);
   });
 
@@ -491,13 +492,14 @@ describe('Recorder: drum hits (plan 15)', () => {
     const s = drumSetup(4, 16);
     s.rec.toggleArm();
     s.rec.onTransport(true, 0);
-    s.rec.noteOn(36, 100, 15.6 * 240); // last step + 0.6 step
-    s.rec.noteOn(36, 100, 15.4 * 240); // still the last step
-    s.rec.noteOn(38, 100, 3 * 16 * 240 + 250); // fourth loop, step 1
-    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r0', 0], ['r0', 15], ['r2', 1]]);
+    s.rec.noteOn(36, 100, 15.6 * 240); // last step + 0.6 step: next loop's step 0, ahead (held)
+    s.rec.noteOn(36, 100, 15.4 * 240); // still the last step (already sounded: written now)
+    s.rec.noteOn(38, 100, 3 * 16 * 240 + 250); // fourth loop, step 1; the held hit is due first
+    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r0', 15], ['r0', 0], ['r2', 1]]);
     // The step count is read at each hit (a 32-step pattern does not wrap at 16).
     s.drum.patterns[0].stepCount = 32;
     s.rec.noteOn(36, 100, 15.6 * 240);
+    s.rec.onHeard(16 * 240);
     expect(s.hits.at(-1)!.slice(0, 2)).toEqual(['r0', 16]);
   });
 
@@ -516,6 +518,7 @@ describe('Recorder: drum hits (plan 15)', () => {
     // Swing 0: the plain grid (370 -> 2).
     s.drum.patterns[0].swing = 0;
     s.rec.noteOn(36, 100, 370);
+    s.rec.onTransport(false, 400); // stop flushes the held hit
     expect(s.hits.at(-1)![1]).toBe(2);
   });
 
@@ -571,9 +574,100 @@ describe('Recorder: drum hits (plan 15)', () => {
     expect(passes[0]).toBe(passes[1]);
     expect(passes[2]).toBe(passes[0] + 1);
   });
+
+  // Ruling J: a hit a little before its step must not flam. Written at once,
+  // the engine would also play the new step a moment later (the user just
+  // heard their own live hit), so it is held until the heard clock passes
+  // the step's (swung, unwrapped) tick.
+  it('an early hit is held until the heard tick reaches its step; a late one is written at once', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 230); // step 1 (240) is 10 ticks ahead
+    expect(s.hits).toEqual([]);
+    s.rec.onHeard(200);
+    s.rec.onHeard(239);
+    expect(s.hits).toEqual([]);
+    s.rec.onHeard(240);
+    expect(s.hits.map(([r, st, v]) => [r, st, v])).toEqual([['r0', 1, 100]]);
+    s.rec.onHeard(300); // written once
+    expect(s.hits).toHaveLength(1);
+    s.rec.noteOn(37, 90, 490); // step 2 (480) has sounded: at once
+    expect(s.hits.at(-1)!.slice(0, 3)).toEqual(['r1', 2, 90]);
+  });
+
+  it('the swung tick decides: an odd step is held until its late tick', () => {
+    const s = drumSetup();
+    s.drum.patterns[0].swing = 0.5; // step 1 at 300
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 280);
+    s.rec.onHeard(299);
+    expect(s.hits).toEqual([]);
+    s.rec.onHeard(300);
+    expect(s.hits.map(([, st]) => st)).toEqual([1]);
+  });
+
+  it('held hits are flushed at Stop, disarm and a retarget, in the same pass (one undo entry)', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 0); // written now
+    s.rec.noteOn(37, 100, 470); // held (step 2 at 480)
+    s.rec.onTransport(false, 475); // Stop before the heard clock got there
+    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r0', 0], ['r1', 2]]);
+    expect(s.hits[1][3]).toBe(s.hits[0][3]); // same pass
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(38, 100, 230);
+    s.rec.toggleArm(); // disarm
+    expect(s.hits.at(-1)!.slice(0, 2)).toEqual(['r2', 1]);
+    expect(s.hits.at(-1)![3]).toBe(s.hits[0][3] + 1);
+    s.rec.toggleArm();
+    s.rec.noteOn(39, 100, 1000); // step 4 at 960: late, now
+    s.rec.noteOn(39, 100, 1190); // step 5 at 1200: held
+    s.rec.onPatternChanging('d', 1195); // flushed before the switch (old pattern)
+    expect(s.hits.at(-1)!.slice(0, 2)).toEqual(['r3', 5]);
+    expect(s.hits.at(-1)![3]).toBe(s.hits.at(-2)![3]);
+  });
+
+  it('Undo take writes held hits first, so it undoes them with the pass', () => {
+    const s = drumSetup();
+    let undone = 0;
+    const rec = new Recorder({
+      clock: s.clock,
+      target: () => s.drum,
+      addNote: () => null,
+      setStep: (_t, _p, rowId, step, vel, pass) => {
+        s.hits.push([rowId, step, vel, pass]);
+        return true;
+      },
+      undoPass: () => {
+        undone = s.hits.length;
+        return true;
+      },
+    });
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    rec.noteOn(36, 100, 230);
+    rec.undoLastTake();
+    expect(undone).toBe(1);
+  });
 });
 
 describe('transportSync (App\'s per-frame telemetry watcher)', () => {
+  it('each playing frame releases held drum hits whose step the heard clock reached', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    const sync = transportSync(s.rec);
+    s.rec.onTransport(true, 0);
+    sync(true, true, () => 100);
+    s.rec.noteOn(36, 100, 230);
+    sync(true, true, () => 235);
+    expect(s.hits).toEqual([]);
+    sync(true, true, () => 241);
+    expect(s.hits.map(([, st]) => st)).toEqual([1]);
+  });
+
   it('UI Play starts the pass at once; frames before the engine confirms do not end it', () => {
     const s = setup(4);
     s.rec.toggleArm();
@@ -746,6 +840,7 @@ describe('recorderFor (real project + actions)', () => {
     rec.noteOn(39, 127, 32 * 240 + 470); // row 4, second loop, step 2
     rec.noteOn(40, 100, 0); // row 5: the track has 4 rows, ignored
     rec.noteOff(36, 900);
+    rec.onHeard(8160); // the second hit was early: written once heard
     const pat = currentPattern(d);
     expect(pat.steps[0][1]).toBe(90);
     expect(pat.steps[3][2]).toBe(127);

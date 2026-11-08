@@ -364,7 +364,7 @@
     {#if keysTrack}
       <span class="sw" style:background={keysTrack.color}></span>{keysTrack.name}
     {:else}
-      (no synth track)
+      (no track)
     {/if}
   </span>
   <!-- mousedown is cancelled so a click never moves focus onto the button: Space keeps meaning play/stop (not "click the focused button") and the piano roll keeps its keyboard focus. -->
@@ -439,7 +439,7 @@
     .small, .seg button:not(.hist button) { padding: 4px 6px; }
     input { padding: 4px 6px; }
     .metro { padding: 4px 7px; }
-    /* Room for the octave -/+ buttons ("(no synth track)" is ~100 px). */
+    /* Room for the octave -/+ buttons; a long track name ellipsizes. */
     .pill.keys { max-width: 125px; }
   }
   @media (max-width: 1399px) {

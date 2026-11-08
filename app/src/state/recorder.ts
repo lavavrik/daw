@@ -63,10 +63,25 @@
 //   late by swing * 0.5 * STEP_TICKS; of k-1, k, k+1 (k = round(tick /
 //   STEP_TICKS)) the one sounding nearest the hit wins, then wraps mod
 //   stepCount. Step count and swing are read from the track's current
-//   pattern at each hit. There is nothing to hold, so note-offs, the pedal
-//   and closing do nothing; other pitches are ignored. Same gates (armed,
-//   playing, Pattern mode, count-in, grace window) and the same pass / undo
-//   entry as notes.
+//   pattern at each hit. There is no note to hold, so note-offs and the
+//   pedal do nothing; other pitches are ignored. Same gates (armed, playing,
+//   Pattern mode, count-in, grace window) and the same pass / undo entry as
+//   notes.
+// - Early drum hits (ruling J): a hit a little *before* its step (the
+//   step's swung, unwrapped tick is ahead of the hit's heard tick: at most
+//   half a step) is held, not written: written at once, the engine would
+//   also play the new step a moment later, a flam with the live hit the
+//   user just heard. It is written (same pass, same undo entry) once the
+//   heard clock reaches that tick: onHeard(heardTicks), which App's
+//   per-frame transportSync calls while the engine plays (so up to one
+//   frame, ~17 ms, after the step: by then the engine's playhead, ahead of
+//   the heard clock by the output latency, is past it). Every later event
+//   first writes the held hits due by its own tick (so the order of writes
+//   stays the order of the steps). Held hits are all written, due or not,
+//   when the pass ends or retargets (Stop, disarm, Undo take, an input or
+//   pattern switch: before the switch, into the old pattern), like open
+//   notes are closed. A late hit (its step already sounded) is written at
+//   once.
 import { BAR_TICKS, DRUM_BASE_NOTE, MAX_NOTES, STEP_TICKS } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
 import { liveInputTrack, setStep } from './actions';
@@ -147,6 +162,18 @@ export interface RecStatus {
 export const sameStatus = (a: RecStatus, b: RecStatus) =>
   a.armed === b.armed && a.state === b.state && a.canUndoTake === b.canUndoTake && a.takeEdits === b.takeEdits;
 
+/** A drum hit held until its step has sounded (ruling J): the deps.setStep args plus when. */
+interface HeldHit {
+  trackId: string;
+  patternId: string;
+  rowId: string;
+  step: number;
+  vel: number;
+  pass: number;
+  /** The step's swung, unwrapped tick: written once the heard clock reaches it. */
+  due: number;
+}
+
 interface Open {
   pitch: number;
   vel: number;
@@ -194,6 +221,8 @@ export class Recorder implements NoteListener {
   #open = new Map<string, Open>();
   /** Sources whose sustain pedal is down (tracked even when not recording). */
   #pedal = new Set<string>();
+  /** Early drum hits waiting for their step to sound (ruling J). */
+  #held: HeldHit[] = [];
 
   private deps: RecorderDeps;
   constructor(deps: RecorderDeps) {
@@ -322,8 +351,17 @@ export class Recorder implements NoteListener {
     }
   }
 
+  /**
+   * The heard clock is at `heardTicks` (App's per-frame transportSync, while
+   * the engine plays): write the held drum hits whose step has sounded.
+   */
+  onHeard(heardTicks: number) {
+    this.#writeHeld(heardTicks);
+  }
+
   /** "Undo take": undo the last recording pass through the history (if it is the newest entry). */
   undoLastTake() {
+    this.#writeHeld(Infinity); // held hits belong to the take: undone with it
     this.deps.undoPass?.();
     this.deps.endPass?.(); // notes played after it start a new entry (held again)
   }
@@ -343,17 +381,36 @@ export class Recorder implements NoteListener {
     return { armed: this.armed, state, canUndoTake, takeEdits: canUndoTake ? (this.deps.passEdits?.() ?? 0) : 0 };
   }
 
-  /** A drum hit at heard tick `tick` (>= 0): written now, nothing stays open. */
+  /** A drum hit at heard tick `tick` (>= 0): written now if its step has sounded, else held. */
   #hit(t: DrumTrack, pitch: number, vel: number, tick: number) {
     const r = pitch - DRUM_BASE_NOTE;
     if (!Number.isInteger(r) || r < 0 || r >= t.rows.length || !(vel > 0)) return;
+    this.#writeHeld(tick); // anything due by now goes first
     // Live, not the cached #pattern: a step-count or swing edit mid-pass applies.
     const pat = currentPattern(t);
-    const step = mod(nearestSwungStep(tick, pat.swing), pat.stepCount);
-    this.deps.setStep?.(t.id, pat.id, t.rows[r].id, step, vel, this.#pass);
+    const j = nearestSwungStep(tick, pat.swing);
+    const h: HeldHit = {
+      trackId: t.id, patternId: pat.id, rowId: t.rows[r].id, step: mod(j, pat.stepCount), vel, pass: this.#pass,
+      due: swungTick(j, pat.swing),
+    };
+    if (h.due > tick) this.#held.push(h); // early: wait for the step (ruling J)
+    else this.#write(h);
+  }
+
+  /** Write the held hits due by `tick` (Infinity: all of them), earliest step first. */
+  #writeHeld(tick: number) {
+    if (!this.#held.some((h) => h.due <= tick)) return;
+    const due = this.#held.filter((h) => h.due <= tick).sort((a, b) => a.due - b.due);
+    this.#held = this.#held.filter((h) => h.due > tick);
+    for (const h of due) this.#write(h);
+  }
+
+  #write(h: HeldHit) {
+    this.deps.setStep?.(h.trackId, h.patternId, h.rowId, h.step, h.vel, h.pass);
   }
 
   #beginPass() {
+    this.#writeHeld(Infinity); // normally none: every pass end writes them
     this.deps.endPass?.();
     this.#pass++;
     this.#open.clear();
@@ -367,7 +424,9 @@ export class Recorder implements NoteListener {
     this.#fullReported = false;
   }
 
+  /** Pass end or retarget: close open notes at `endTick` and write every held drum hit. */
   #closeAll(endTick: number) {
+    this.#writeHeld(Infinity);
     for (const key of [...this.#open.keys()]) this.#close(key, endTick);
   }
 
@@ -408,6 +467,8 @@ export class Recorder implements NoteListener {
  * with the direct calls.
  * - Start: taken when the engine plays and the UI agrees (`uiPlaying` guards
  *   the frames between a UI Stop and the engine applying it).
+ * - Each playing frame: held early drum hits whose step the heard clock
+ *   reached are written (Recorder.onHeard, ruling J).
  * - Stop: closes held notes at the last heard tick seen while playing (STOP
  *   resets the playhead to 0). Only once the engine has confirmed this pass:
  *   right after a UI Play the engine may not have applied PLAY yet, and that
@@ -421,6 +482,8 @@ export function transportSync(r: Recorder) {
     if (enginePlaying && uiPlaying && !r.playing) r.onTransport(true, lastHeard);
     else if (!enginePlaying && r.playing && (confirmed || !uiPlaying)) r.onTransport(false, lastHeard);
     confirmed = r.playing && (confirmed || enginePlaying);
+    // Early drum hits are written once their step has been heard (ruling J).
+    if (enginePlaying && r.playing) r.onHeard(lastHeard);
   };
 }
 

@@ -7,7 +7,7 @@
 // factor instead of adding Hz.
 import { clampParam } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
-import { noteName } from '../pianoroll/prMath';
+import { noteName } from '../noteName';
 
 /**
  * What a knob needs to know about a param: rack params (catalog ParamDef) and

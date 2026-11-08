@@ -259,3 +259,17 @@ export function setParam(
     sink.send(Op.RACK_SET_PARAM, t.slot, idx, paramIdx, m.params[paramIdx]);
   }, opts?.coalesce !== undefined ? { coalesce: opts.coalesce } : undefined);
 }
+
+/**
+ * Several params of module `idx` as one undo entry, labelled after the first
+ * (the Sample Player strip: End dragged or stepped past Loop start pushes
+ * Loop start too, SampleStrip.svelte). Each is set like setParam.
+ */
+export function setParams(
+  p: Project, sink: CommandSink, trackId: string, idx: number, values: [paramIdx: number, value: number][],
+) {
+  if (!values.length) return;
+  edit(p, paramLabel(p, trackId, idx, values[0][0]), () => {
+    for (const [i, v] of values) setParam(p, sink, trackId, idx, i, v);
+  });
+}

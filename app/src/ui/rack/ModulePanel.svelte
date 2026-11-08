@@ -11,7 +11,8 @@
   // sample; Rack.svelte imports it and assigns it).
   // Under the dropdown, SampleStrip.svelte (plan 15 Task 5) shows the sample
   // (`sampleMeta`'s peaks) with draggable Start / End / Loop start markers;
-  // they edit through `onparam` like the knobs. Its Root knob reads as a
+  // they edit through `onparam` like the knobs (`onparams` when End pushes
+  // Loop start along: one undo entry). Its Root knob reads as a
   // note name (knobMath.formatValue), and "Root ← last note" sets Root to
   // `lastNote` (the last live note, input/lastNote.svelte.ts; disabled until
   // one has arrived since load).
@@ -41,7 +42,7 @@
   import ShapePreview from './ShapePreview.svelte';
 
   let {
-    module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
+    module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onparams, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
     sampleMeta = null, sampleRate = 48000, lastNote = null,
   }: {
     module: RackModule;
@@ -52,6 +53,8 @@
     title: string;
     isConnected: (inputPort: number) => boolean;
     onparam: (paramIdx: number, v: number) => void;
+    /** Several params as one undo entry (the Sample Player strip's End push); absent: one onparam each. */
+    onparams?: (values: [paramIdx: number, v: number][]) => void;
     onremove: () => void;
     onjackdown: (e: PointerEvent, dir: 'in' | 'out', port: number) => void;
     /** Keyboard patching (see Jack.svelte); `isPicked`: the jack a cable was picked up from. */
@@ -111,7 +114,17 @@
     const v = (i: number) => module.params[i];
     return { at, region: { start: v(at.start), end: v(at.end), loopStart: v(at.loopStart) }, loop: v(at.loop) >= 0.5 };
   });
-  const markerChange = (m: Marker, v: number) => { if (strip) onparam(strip.at[m], v); };
+  /** The strip's marker changes: one param through onparam, two (End pushing Loop start) as one entry. */
+  function markerChange(changes: Partial<Record<Marker, number>>) {
+    if (!strip) return;
+    const at = strip.at;
+    const values = (Object.entries(changes) as [Marker, number][]).map(([m, v]) => [at[m], v] as [number, number]);
+    if (values.length === 1) onparam(values[0][0], values[0][1]);
+    else if (values.length > 1) {
+      if (onparams) onparams(values);
+      else for (const [i, v] of values) onparam(i, v);
+    }
+  }
 
   /** Extra line under a control: the Delay division clamped to 2 s (shared
    * with the mixer delay: same table, same rule). */
@@ -150,7 +163,7 @@
       </select>
     </label>
     {#if strip}
-      <SampleStrip idx={module.idx} meta={sampleMeta} {sampleRate} region={strip.region} loop={strip.loop} {color} onchange={markerChange} />
+      <SampleStrip idx={module.idx} sampleId={sampleValue} meta={sampleMeta} {sampleRate} region={strip.region} loop={strip.loop} {color} onchange={markerChange} />
     {/if}
   {/if}
   {#if scope}

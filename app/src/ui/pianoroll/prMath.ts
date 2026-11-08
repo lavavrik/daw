@@ -7,6 +7,7 @@
 //   `topPitch`, each row is `rowH` px, higher pitches are higher up.
 // The component subtracts the ruler height from pointer y before calling these.
 import { GRID_TICKS } from '../../state/pattern-actions';
+import { NOTE_NAMES, noteName } from '../noteName';
 
 export interface View {
   /** Horizontal zoom: ticks per CSS pixel (960 PPQ). */
@@ -77,12 +78,11 @@ export function hitTest(notes: readonly NoteBox[], x: number, y: number, v: View
 
 // ---- labels ------------------------------------------------------------------
 
-const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// noteName lives in ui/noteName.ts (shared with the knobs); re-exported here
+// for the piano roll's existing callers.
+export { noteName };
 
-/** "C4" for 60 (C4 = middle C = 60), "A#3" for 58, "C-1" for 0. */
-export const noteName = (p: number) => `${NAMES[((p % 12) + 12) % 12]}${Math.floor(p / 12) - 1}`;
-
-export const isBlack = (p: number) => NAMES[((p % 12) + 12) % 12].length > 1;
+export const isBlack = (p: number) => NOTE_NAMES[((p % 12) + 12) % 12].length > 1;
 
 /** "bar.beat.sixteenth", 1-based; off-grid ticks appended: "1.1.1 +96t". */
 export function formatPos(t: number): string {

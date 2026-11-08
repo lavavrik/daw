@@ -9,6 +9,14 @@
   // shortcuts are off (shortcuts.isTyping).
   // Delete is disabled with a tooltip when a clip uses the pattern or when it
   // is the track's last one (deletePattern refuses both anyway).
+  //
+  // The pattern library (plan 21 Task 4; state/pattern-library.ts): Save
+  // (floppy disk) turns the picker into a name field like Rename (default
+  // "<track> · <pattern>"; Enter saves a copy, Esc or leaving it cancels);
+  // Load (open folder) opens a popover with the library (LibraryList: load,
+  // rename, delete). The popover closes on a load, Esc (focus back on
+  // Load), a press outside it, or another track / pattern being selected.
+  // Keys typed in it stay there (no song start, no notes).
   import { tick } from 'svelte';
   import { releaseSelect, selectKey } from './selectKey';
   import { MAX_PATTERNS } from '../audio/protocol';
@@ -20,6 +28,11 @@
   import PencilSimple from 'phosphor-svelte/lib/PencilSimple';
   import Trash from 'phosphor-svelte/lib/Trash';
   import Icon from './Icon.svelte';
+  import FloppyDisk from 'phosphor-svelte/lib/FloppyDisk';
+  import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
+  import LibraryList from './LibraryList.svelte';
+  import { flashHint } from '../state/banners.svelte';
+  import { LIBRARY_NAME_MAX, defaultLibraryName, savePatternToLibrary } from '../state/pattern-library';
   import {
     PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
   } from '../state/pattern-actions';
@@ -62,16 +75,78 @@
   // Leaving the input without Enter cancels (no surprise rename).
   const cancel = () => (renaming = false);
 
-  // A different track/pattern selected elsewhere ends an open rename.
+  // ---- the library ----
+  let saving = $state(false);
+  let saveInput = $state<HTMLInputElement | null>(null);
+  async function startSave() {
+    draft = defaultLibraryName(track, cur.name);
+    saving = true;
+    await tick();
+    saveInput?.focus();
+    saveInput?.select();
+  }
+  function saveKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const entry = savePatternToLibrary(p, track.id, cur.id, draft);
+      if (!entry) return void saveInput?.focus(); // empty: rejected, keep editing
+      saving = false;
+      flashHint(`Saved “${entry.name}” to the pattern library`);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      saving = false;
+    }
+  }
+
+  let libOpen = $state(false);
+  let loadBtn = $state<HTMLButtonElement | null>(null);
+  let pop = $state<HTMLElement | null>(null);
+  async function toggleLib() {
+    libOpen = !libOpen;
+    if (!libOpen) return;
+    await tick();
+    pop?.querySelector<HTMLElement>('button:not([aria-disabled="true"])')?.focus();
+  }
+  function closeLib(refocus: boolean) {
+    libOpen = false;
+    if (refocus) loadBtn?.focus();
+  }
+  function popKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      if (e.defaultPrevented) return; // the rename field ended its rename
+      e.preventDefault();
+      closeLib(true);
+    }
+    // Keys stay in the popover (Space presses a button, letters play nothing); Cmd / Ctrl chords pass.
+    if (!e.metaKey && !e.ctrlKey) e.stopPropagation();
+  }
+  // A press outside the popover (and its Load button) closes it.
+  $effect(() => {
+    if (!libOpen) return;
+    const outside = (e: PointerEvent) => {
+      const n = e.target as Node;
+      if (!pop?.contains(n) && !loadBtn?.contains(n)) closeLib(false);
+    };
+    window.addEventListener('pointerdown', outside, true);
+    return () => window.removeEventListener('pointerdown', outside, true);
+  });
+
+  // A different track/pattern selected elsewhere ends an open rename / save / library.
   $effect(() => {
     void track.id;
     void track.currentPatternId;
     renaming = false;
+    saving = false;
+    libOpen = false;
   });
 </script>
 
 <span class="picker">
-  {#if renaming}
+  {#if saving}
+    <input class="name" bind:this={saveInput} bind:value={draft} maxlength={LIBRARY_NAME_MAX} data-testid="pattern-save-input"
+      aria-label="Library name for this pattern" title="Enter saves a copy to the pattern library, Esc cancels"
+      onkeydown={saveKey} onblur={() => (saving = false)} />
+  {:else if renaming}
     <input class="name" bind:this={input} bind:value={draft} maxlength="40" data-testid="pattern-rename-input"
       aria-label="Pattern name" onkeydown={onKey} onblur={cancel} />
   {:else}
@@ -84,12 +159,24 @@
   {/if}
   <button class="btn" data-testid="pattern-new" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'New empty pattern'}
     onclick={() => newPattern(p, engine, track.id)}><Icon icon={Plus} /> New</button>
-  <button class="btn" data-testid="pattern-dup" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
-    onclick={() => duplicatePattern(p, engine, track.id)}><Icon icon={Copy} /> Duplicate</button>
+  <button class="btn" data-testid="pattern-dup" aria-label="Duplicate" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
+    onclick={() => duplicatePattern(p, engine, track.id)}><Icon icon={Copy} /><span class="t"> Duplicate</span></button>
   <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}><Icon icon={PencilSimple} /> Rename</button>
   <button class="btn" data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
     onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /> Delete</button>
-  <!-- Task 4: the pattern Save / Load buttons (FloppyDisk / FolderOpen) go here. -->
+  <button class="btn ic" data-testid="pattern-save" aria-label="Save to library" title="Save a copy of this pattern to the project's pattern library"
+    onmousedown={(e) => e.preventDefault()} onclick={startSave}><Icon icon={FloppyDisk} /></button>
+  <span class="lib">
+    <button class="btn ic" data-testid="pattern-load" bind:this={loadBtn} aria-label="Load from library" aria-expanded={libOpen}
+      aria-controls="pattern-library-pop" title="Load a pattern from the project's library as a new pattern" onclick={toggleLib}><Icon icon={FolderOpen} /></button>
+    {#if libOpen}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="pop" id="pattern-library-pop" data-testid="pattern-library-pop" bind:this={pop} onkeydown={popKey}>
+        <p class="sec">Pattern library</p>
+        <LibraryList {p} {engine} {track} testid="pattern-library" onloaded={() => closeLib(true)} />
+      </div>
+    {/if}
+  </span>
 </span>
 
 <style>
@@ -100,4 +187,19 @@
   .btn { padding: 2px 6px; font-size: 11px; }
   select { padding: 2px 4px 2px 6px; font-size: 11px; white-space: nowrap; }
   .name { width: 130px; box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
+  .ic { display: inline-flex; align-items: center; padding: 2px 4px; }
+  /* Room for Save / Load in the one-row header at 1280 px (layout.spec.ts):
+     Duplicate, the longest label, is icon-only below 1440 px (its name
+     stays: aria-label, and the tooltip says what it does). */
+  @media (max-width: 1439px) { .t { display: none; } }
+  /* The library popover: a --panel card with the lift (as the menus), under its button. */
+  .lib { position: relative; display: inline-flex; }
+  .pop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: max-content; min-width: 240px; max-width: 320px;
+    max-height: min(360px, 50vh); overflow-y: auto; padding: 6px;
+    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
+  }
+  .sec {
+    margin: 2px 8px 4px; font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2);
+  }
 </style>

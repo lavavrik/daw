@@ -10,7 +10,7 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 4
+  project.json            schemaVersion 5
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -19,11 +19,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 4)
+## project.json (schemaVersion 5)
 
 ```jsonc
 {
-  "schemaVersion": 4, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 5, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -67,7 +67,12 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   "midiMap": [                             // plan 14: MIDI CC mappings, learning order
     { "cc": 74, "track": 1, "target": { "rack": [4, "cutoff"] } },  // a track by slot
     { "cc": 7, "track": 0, "target": { "mix": "fader" } },
-    { "cc": 10, "channel": "reverb", "target": { "mix": "rev_size" } } ]  // Master row channel by name
+    { "cc": 10, "channel": "reverb", "target": { "mix": "rev_size" } } ],  // Master row channel by name
+  "patternLibrary": [                      // plan 21: saved patterns, by value, saving order
+    { "kind": "drum", "name": "Groove", "stepCount": 16, "swing": 0,
+      "rows": [{ "name": "Kick", "sampleName": "kick.wav", "steps": [100, 0, 0, 0, ...] }] },  // 64 velocities
+    { "kind": "synth", "name": "Bassline", "bars": 2,
+      "notes": [{ "pitch": 36, "vel": 100, "start": 0, "len": 480 }] } ]
 }
 ```
 
@@ -117,6 +122,13 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   an integer param may be mapped. One mapping per CC and per control. A
   load turns the slots into the new track ids (`commands.ts`
   `midiMapState`); no engine command (the engine knows nothing of MIDI CC).
+- **Pattern library** (plan 21; sequencer.md "Pattern library"): top-level
+  `patternLibrary`, copies of patterns BY VALUE, so nothing in it refers to
+  a track, an engine slot or a session sample id: a drum entry names its
+  rows' samples by **file name** (`sampleName`) and lists each row's 64
+  velocities; a synth entry its bars and notes (no idx). A load turns it
+  into the live list with fresh UI ids (`state/pattern-library.ts`
+  `libraryState`); no engine command until an entry is loaded into a track.
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
@@ -139,16 +151,19 @@ folder's sample list all get it). It is pure (the input is not changed).
 | 1 → 2 | 9 | Audio tracks. A v1 project has none, so only the version moves: lossless. |
 | 2 → 3 | 10 | Automation. A v2 project has none: every track object and the mixer object get an empty `automation`; nothing else changes, so it is lossless. |
 | 3 → 4 | 14 | MIDI CC mappings. A v3 project has none: a top-level `midiMap: []` is added; nothing else changes, so it is lossless. |
+| 4 → 5 | 21 | The pattern library. A v4 project has none: a top-level `patternLibrary: []` is added; nothing else changes, so it is lossless. |
 
 A version newer than the build knows stays an error ("saved by a newer
 version of the app"); a save always writes the current version.
-`migrate.test.ts` pins v1 → v4 (through v2, v3) on a frozen genuine v1 save
+`migrate.test.ts` pins v1 → v5 (through v2, v3, v4) on a frozen genuine v1 save
 (`project/testdata/v1-fixture.json`) and minimal v1 files, v2 → v4 on a
 frozen genuine v2 save with Audio tracks (`project/testdata/v2-fixture.json`,
 the plan-9 save of `buildFixture` + `addAudioFixture`), and v3 → v4 on a
 frozen genuine v3 save with lanes (`project/testdata/v3-fixture.json`, the
-plan-13 save of `buildFixture` + `addAudioFixture` + `addAutomationFixture`);
-`load.test.ts` `a v2 project loads and saves as v4` opens the v2 one and
+plan-13 save of `buildFixture` + `addAudioFixture` + `addAutomationFixture`),
+and v4 → v5 on `project/testdata/v4-fixture.json` (the v3 fixture as schema
+4 saves it: plus three MIDI mappings; v3 → v4 adds nothing else);
+`load.test.ts` `a v2 project loads and saves as v5` opens the v2 one and
 checks the save.
 
 ## Sample memory (spec addendum §3.3)
@@ -233,7 +248,7 @@ its load, so the kit never retries into the gap between them.
 
 Never throws, never lets an out-of-range value through. Unknown fields are
 ignored. The file is migrated first (see above). A missing/non-integer
-`schemaVersion` or one greater than the current one (4) is an
+`schemaVersion` or one greater than the current one (5) is an
 **error** (nothing changes). Everything else becomes a **warning**, shown in a
 notice banner after the load (all of them in the console):
 
@@ -277,6 +292,15 @@ notice banner after the load (all of them in the console):
   `learnableDef`), its CC is already mapped, or its control already has a CC (the first entry
   wins either way). `projectCommands`' normalize also drops one whose module
   the FX pool dropped.
+- a pattern-library entry (plan 21) is dropped when it is not an object, its
+  `kind` is not drum / synth, its `name` is not text, or it has no `rows` /
+  `notes` list. In a kept one: a step count that is not 16/32/64 → 16; swing
+  0..1, velocities 0..127 (whole), bars 1..16 and the note fields clamped as
+  a pattern's; at most 16 rows, 64 steps a row (shorter lists padded with 0)
+  and 1024 notes kept; a malformed row becomes an empty "Row N" (rows are
+  positional: a load falls back to the index); a `sampleName` that is not
+  text → none; a malformed note dropped. A `patternLibrary` that is not a
+  list is emptied.
 
 ## Load order (`loadProject`)
 

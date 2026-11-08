@@ -140,7 +140,7 @@ test('save then load reproduces the beat', async ({ page }) => {
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
-  expect(listing).toMatchObject({ version: 4, tmp: false }); // plan 14: schema v4
+  expect(listing).toMatchObject({ version: 5, tmp: false }); // plan 21: schema v5
   // The kick plus the default kit's other seven rows (plan 8 Task 4: the kit is in the project).
   expect(listing.names).toHaveLength(8);
   expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-kick\.wav$/)); // <id>-<content hash>-<name>
@@ -450,12 +450,12 @@ test('a second tab neither autosaves nor offers the first tab\'s session', async
 });
 
 
-// Plan 9: schema v2; plan 10: v3; plan 14: v4. The frozen genuine v1 save
-// (app/src/project/testdata, also pinned by migrate.test.ts) opens with no
-// warnings, and saving it writes a v4 project.json that carries every v1
-// field over unchanged (plus the empty automation lanes v3 adds and the
-// empty MIDI mapping list v4 adds).
-test('v1 project opens in v4', async ({ page }) => {
+// Plan 9: schema v2; plan 10: v3; plan 14: v4; plan 21: v5. The frozen
+// genuine v1 save (app/src/project/testdata, also pinned by migrate.test.ts)
+// opens with no warnings, and saving it writes a v5 project.json that carries
+// every v1 field over unchanged (plus the empty automation lanes v3 adds, the
+// empty MIDI mapping list v4 adds and the empty pattern library v5 adds).
+test('v1 project opens in v5', async ({ page }) => {
   test.setTimeout(30_000);
   const v1 = JSON.parse(readFileSync(new URL('../../app/src/project/testdata/v1-fixture.json', import.meta.url), 'utf8'));
   expect(v1.schemaVersion).toBe(1);
@@ -493,12 +493,13 @@ test('v1 project opens in v4', async ({ page }) => {
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
     return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
   }, dst);
-  expect(out.schemaVersion).toBe(4);
+  expect(out.schemaVersion).toBe(5);
   // Everything but the version, the sample file names (they carry the content
-  // hash), the empty lanes (v2 -> v3) and mappings (v3 -> v4) is as saved in v1.
+  // hash), the empty lanes (v2 -> v3), mappings (v3 -> v4) and pattern library
+  // (v4 -> v5) is as saved in v1.
   const strip = (j: { schemaVersion: number; samples: { file: string }[] }) => ({ ...j, schemaVersion: 0, samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })) });
   // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
-  const v4 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v1.mixer, automation: [] }, midiMap: [] };
+  const v4 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v1.mixer, automation: [] }, midiMap: [], patternLibrary: [] };
   expect(strip(out)).toEqual(strip(v4));
 
   await page.evaluate(async (names) => {
@@ -508,10 +509,10 @@ test('v1 project opens in v4', async ({ page }) => {
 });
 
 // Plan 10 Task 5: the checked-in plan-9 save (schema 2, with Audio tracks)
-// opens with no warnings, plays its Audio tracks, and saves as v4 (plan 14)
-// with every v2 field unchanged: the only additions are the empty lanes and
-// the empty MIDI mapping list.
-test('v2 project opens in v4', async ({ page }) => {
+// opens with no warnings, plays its Audio tracks, and saves as v5 (plan 21)
+// with every v2 field unchanged: the only additions are the empty lanes, the
+// empty MIDI mapping list and the empty pattern library.
+test('v2 project opens in v5', async ({ page }) => {
   test.setTimeout(30_000);
   const v2 = JSON.parse(readFileSync(new URL('../../app/src/project/testdata/v2-fixture.json', import.meta.url), 'utf8'));
   expect(v2.schemaVersion).toBe(2);
@@ -563,9 +564,10 @@ test('v2 project opens in v4', async ({ page }) => {
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
     return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
   }, dst);
-  expect(out.schemaVersion).toBe(4);
+  expect(out.schemaVersion).toBe(5);
   // Everything but the version, the sample file names (they carry the content
-  // hash), the mode (Song, switched above to listen), the empty lanes and mappings is as saved in v2.
+  // hash), the mode (Song, switched above to listen), the empty lanes, mappings
+  // and pattern library is as saved in v2.
   const strip = (j: { schemaVersion: number; mode: string; samples: { file: string }[] }) => ({
     ...j,
     schemaVersion: 0,
@@ -573,7 +575,7 @@ test('v2 project opens in v4', async ({ page }) => {
     samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })),
   });
   // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
-  const v4 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v2.mixer, automation: [] }, midiMap: [] };
+  const v4 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v2.mixer, automation: [] }, midiMap: [], patternLibrary: [] };
   expect(out.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips)).toEqual(
     v2.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips),
   );

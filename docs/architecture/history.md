@@ -290,7 +290,12 @@ Order:
 4. **Transport** (tempo, metronome, loop; not the mode), selection, and
    `SET_INPUT_TRACK` only if the live input changed; while the pattern
    transport plays, `SET_PATTERN_FOCUS` for the restored selection
-   (`syncPatternFocus`, plan 20 task 12; not an edit).
+   (`syncPatternFocus`, plan 20 task 12; not an edit). Then the UI-only
+   project data, which sends no command: the MIDI mappings (by slot) and
+   the **pattern library** (plan 21 Task 4: replaced from `to` when it
+   differs; an entry equal to a live one keeps that one's UI id,
+   `state/pattern-library.ts` `libraryState`, so an open library list keeps
+   its rows and focus).
 
 **No stuck notes:** the engine releases a note that is removed or changed
 (`NOTE_REMOVE`/`NOTE_SET`), a clip that is removed or changed, a pattern

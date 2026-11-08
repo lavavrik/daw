@@ -152,6 +152,44 @@ The app (`state/actions.ts`):
   and step 3 its keys. Anything else (an add or removal at the end, several
   rows at once) falls back to rows by index, which is exact too.
 
+## Pattern library (plan 21 Task 4)
+Patterns can be saved into the project and loaded into any track of their
+kind (spec 2026-11-15-redesign-round-2 §5). Code: `state/pattern-library.ts`
+(actions, mapping, the saved form), `ui/LibraryList.svelte` (the list),
+Patterns ▸ *Save to project library…* / *Load from library ▸* (a submenu,
+`ui/MenuBar.svelte`) and the pattern header's Save (floppy disk) / Load
+(open folder) icon buttons (a popover, `ui/PatternPicker.svelte`).
+
+- **An entry is a copy by value** (`Project.patternLibrary`,
+  `LibraryPattern`): drum — step count, swing, and per row its name, its
+  sample's **file name** (`sampleName`, absent when the row had none) and
+  its 64 velocities; synth — bars and the notes `{pitch, vel, start, len}`.
+  It does not refer to the track it came from, so it survives that track's
+  removal or a sample swap. Saved as `patternLibrary` (projects.md, schema 5).
+- **Save** stores the current pattern under a name (default
+  "*track* · *pattern*"); a name already in the library is numbered
+  ("Groove 2"). No engine command: `markEdited` marks the change.
+- **Load never overwrites.** It makes a **new** pattern in the selected track
+  (`newPattern`: lowest free engine slot, selected), names it after the
+  entry (unique in the track: `freeName`), then sends the entry's length,
+  swing and steps (`SET_STEP` on the fresh, empty current pattern) or bars
+  and notes (`NOTE_SET`, engine idx 0..n-1; notes past the end are kept, as
+  a copy keeps them). A full track (16 patterns) or another kind is refused
+  (`loadBlocked`: the list shows that entry greyed, with "drum pattern" /
+  "synth pattern", inert with the reason).
+- **Drum row mapping** (`mapLibraryRows`): an entry row with steps goes to
+  the first free target row whose sample has the **same file name**, else to
+  the target row with the **same index** if that one is still free, else
+  nowhere: its steps are dropped and the UI flashes "*N* rows not in this
+  kit". A row without steps maps by name only (it never takes an index
+  another row needs). Row names are not compared: they are labels the user
+  may change; the sample is what plays. So a kit with reordered, deleted or
+  added rows gets every step on the same sound, and a kit of other sounds
+  gets them by position.
+- **Undo:** save, load, rename and delete are one entry each (`edit`). The
+  library is in the snapshot (serialize), so diffApply restores it
+  (history.md, step 4).
+
 ## Acid tab (step view of a note pattern)
 Plan 17 (spec addendum §2). The **Acid** tab (`ui/acid/AcidSteps.svelte`,
 the third bottom-panel tab, Alt+3, no F-key) shows a synth track's current

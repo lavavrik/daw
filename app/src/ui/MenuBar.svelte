@@ -18,7 +18,14 @@
   //             current pattern (state/pattern-actions.ts, as PatternPicker);
   //             inert with the reason (see below) when the selected track
   //             has no patterns. Rename… turns the list into a name field
-  //             (Enter renames, Esc goes back to the list).
+  //             (Enter renames, Esc goes back to the list). The pattern
+  //             library (plan 21 Task 4, state/pattern-library.ts): Save to
+  //             project library… asks for a name the same way (default
+  //             "<track> · <pattern>"); Load from library ▸ opens a submenu
+  //             beside it (ui/LibraryList.svelte: load, rename, delete).
+  //             → or Enter / Space on it opens the submenu on its first
+  //             entry; ← or Esc in the submenu goes back to it (Esc closes
+  //             only that layer).
   //   View      Mixer (a toggle), the editor tabs (BottomPanel.pickTab through
   //             `onTab`; a tab the selected track can't show is inert with
   //             shortcuts.ts tabFor's hint), Reset lane heights
@@ -80,7 +87,8 @@
   import type { ProjectSession } from '../project/session';
   import { discardWarning } from '../project/discard';
   import { runExport } from '../export/exportFlow';
-  import { banners } from '../state/banners.svelte';
+  import { banners, flashHint } from '../state/banners.svelte';
+  import { LIBRARY_NAME_MAX, defaultLibraryName, savePatternToLibrary } from '../state/pattern-library';
   import { tabFor } from '../input/shortcuts';
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
@@ -90,6 +98,8 @@
   import NumberField from './NumberField.svelte';
   import ShortcutsSheet from './ShortcutsSheet.svelte';
   import Icon from './Icon.svelte';
+  import LibraryList from './LibraryList.svelte';
+  import CaretRight from 'phosphor-svelte/lib/CaretRight';
   import { blockInert, inertItem } from './inertItem';
   import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
   import ArrowCounterClockwise from 'phosphor-svelte/lib/ArrowCounterClockwise';
@@ -181,12 +191,16 @@
   function show(m: MenuName, from: HTMLElement | null = btns[m] ?? null) {
     confirming = null;
     renaming = false;
+    saving = false;
+    libOpen = false;
     opener = from;
     open = m;
   }
   function close() {
     confirming = null;
     renaming = false;
+    saving = false;
+    libOpen = false;
     open = null;
   }
   /** Close and give the focus back to the opener (after a command, Escape), never to <body>. */
@@ -223,7 +237,7 @@
 
   // ---- keyboard ------------------------------------------------------------
   const itemsOf = () =>
-    panel() ? [...panel()!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter((el) => el.tabIndex >= 0) : [];
+    panel() ? [...panel()!.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter((el) => el.tabIndex >= 0 && !el.closest('.sub')) : []; // the library submenu has its own (subKey)
   async function focusItem(which: 'first' | 'last') {
     await tick();
     const items = itemsOf();
@@ -341,6 +355,8 @@
       // Ask (again: a second ⌘O re-asks, it never confirms the discard).
       open = 'File';
       renaming = false;
+      saving = false;
+      libOpen = false;
       confirming = null;
     }
     run(cmd);
@@ -395,6 +411,69 @@
       renaming = false;
       void tick().then(() => panel()?.querySelector<HTMLElement>('[data-testid="menu-pattern-rename"]')?.focus());
     }
+  }
+  // The library: Save asks for a name (as Rename); Load is a submenu.
+  let saving = $state(false);
+  let saveInput = $state<HTMLInputElement | null>(null);
+  let libOpen = $state(false);
+  let libBtn = $state<HTMLButtonElement | null>(null);
+  let libSub = $state<HTMLElement | null>(null);
+  async function startSave() {
+    if (!ptrack || !cur) return;
+    draft = defaultLibraryName(ptrack, cur.name);
+    saving = true;
+    await tick();
+    saveInput?.focus();
+    saveInput?.select();
+  }
+  function saveKey(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const entry = ptrack && cur ? savePatternToLibrary(p, ptrack.id, cur.id, draft) : null;
+      if (!entry) return; // an empty name: the field stays
+      closeToOpener();
+      flashHint(`Saved “${entry.name}” to the pattern library`);
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); // back to the list, the menu stays open
+      saving = false;
+      void tick().then(() => panel()?.querySelector<HTMLElement>('[data-testid="menu-pattern-save"]')?.focus());
+    }
+  }
+  const subItems = () => (libSub ? [...libSub.querySelectorAll<HTMLElement>('button, input')] : []);
+  async function openLib(focusFirst: boolean) {
+    libOpen = true;
+    await tick();
+    if (focusFirst) (subItems()[0] ?? libSub?.querySelector<HTMLElement>('[tabindex]'))?.focus();
+  }
+  function closeLib() {
+    libOpen = false;
+    libBtn?.focus();
+  }
+  function libBtnKey(e: KeyboardEvent) {
+    if (e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    e.stopPropagation(); // not panelKey's "next menu"
+    void openLib(true);
+  }
+  /** Keys in the submenu: ↑ ↓ Home End move inside it; ← and Esc go back to Load from library. */
+  function subKey(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.target instanceof HTMLInputElement) return; // the rename field's own keys
+    const items = subItems();
+    const i = items.indexOf(document.activeElement as HTMLElement);
+    let next: HTMLElement | undefined;
+    if (e.key === 'ArrowDown') next = items[(i + 1) % items.length];
+    else if (e.key === 'ArrowUp') next = items[i <= 0 ? items.length - 1 : i - 1];
+    else if (e.key === 'Home') next = items[0];
+    else if (e.key === 'End') next = items[items.length - 1];
+    else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
+      e.preventDefault(); // Esc: the document listener leaves the menu open (topmost layer only)
+      e.stopPropagation();
+      closeLib();
+      return;
+    } else return;
+    e.preventDefault();
+    e.stopPropagation();
+    next?.focus();
   }
   function patternCmd(fn: (trackId: string, patternId: string) => unknown) {
     if (!ptrack || !cur) return;
@@ -510,6 +589,13 @@
               data-testid="menu-pattern-rename-input" onkeydown={renameKey}
             />
             <p class="note">Enter to rename, Esc to go back</p>
+          {:else if saving}
+            <label class="field" for="menu-pattern-save-input">Save “{cur?.name}” to the library as</label>
+            <input
+              id="menu-pattern-save-input" class="name" bind:this={saveInput} bind:value={draft} maxlength={LIBRARY_NAME_MAX}
+              data-testid="menu-pattern-save-input" onkeydown={saveKey}
+            />
+            <p class="note">Enter to save, Esc to go back</p>
           {:else}
             <p class="sec" title={ptrack ? undefined : NO_PATTERNS}>{ptrack && cur ? `${ptrack.name} · ${cur.name}` : 'No pattern track selected'}</p>
             <button class="it" data-testid="menu-pattern-new" use:inertItem={fullWhy} title={fullWhy ?? 'New empty pattern'} onclick={() => patternCmd((t) => newPattern(p, engine, t))}>
@@ -524,9 +610,23 @@
             <button class="it" data-testid="menu-pattern-delete" use:inertItem={deleteWhy} title={deleteWhy ?? 'Delete this pattern'} onclick={() => patternCmd((t, pid) => deletePattern(p, engine, t, pid))}>
               <Icon icon={Trash} /><span class="l">Delete</span>
             </button>
-            <!-- Task 4 (pattern library) adds here:
-                   <hr /> Save to project library…  ·  Load from library ▸
-                 (hidden until then). -->
+            <hr />
+            <button class="it" data-testid="menu-pattern-save" use:inertItem={ptrack ? null : NO_PATTERNS} title={ptrack ? 'Store a copy of this pattern in the project' : NO_PATTERNS} onclick={() => void startSave()}>
+              <Icon icon={FloppyDisk} /><span class="l">Save to project library…</span>
+            </button>
+            <div class="subwrap">
+              <button
+                class="it" data-testid="menu-pattern-load" bind:this={libBtn} aria-expanded={libOpen} aria-controls="menu-pattern-library"
+                title="Copy a saved pattern into the selected track as a new pattern"
+                onclick={(e) => (libOpen ? closeLib() : void openLib(e.detail === 0))} onkeydown={libBtnKey}
+              ><Icon icon={FolderOpen} /><span class="l">Load from library</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+              {#if libOpen}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="sub" id="menu-pattern-library" bind:this={libSub} onkeydown={subKey}>
+                  <LibraryList {p} {engine} track={ptrack} testid="menu-library" onloaded={closeToOpener} />
+                </div>
+              {/if}
+            </div>
           {/if}
         {:else if m === 'View'}
           <button class="it" data-testid="menu-view-mixer" aria-pressed={p.mixerOpen} title="All tracks, the returns and the Master" onclick={() => view(() => (p.mixerOpen = !p.mixerOpen))}>
@@ -648,4 +748,12 @@
     color: var(--text); font: inherit;
   }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  /* Load from library ▸: the submenu flies out to the right of its item. */
+  .subwrap { position: relative; display: flex; flex-direction: column; }
+  .chev { display: inline-flex; }
+  .sub {
+    position: absolute; left: calc(100% + 6px); top: -6px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
+    max-height: min(360px, 60vh); overflow-y: auto; padding: 6px;
+    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift);
+  }
 </style>

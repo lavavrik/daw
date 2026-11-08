@@ -13,6 +13,9 @@
 //   v3 -> v4 (plan 14): MIDI CC mappings. A v3 project has none: the step
 //                      adds a top-level `midiMap: []` (replacing anything a
 //                      v3 file had under that name, which v3 never wrote).
+//   v4 -> v5 (plan 21): the pattern library. A v4 project has none: the step
+//                      adds a top-level `patternLibrary: []` (replacing
+//                      anything under that name, which v4 never wrote).
 //
 // Anything that is not a v1..current project object (no or a bad
 // schemaVersion, a NEWER version than this build knows) is returned as is
@@ -32,6 +35,7 @@ const STEPS = new Map<unknown, (json: Json) => Json>([
     ...(isObj(json.mixer) ? { mixer: { ...json.mixer, automation: [] } } : {}),
   })],
   [3, (json) => ({ ...json, schemaVersion: 4, midiMap: [] })],
+  [4, (json) => ({ ...json, schemaVersion: 5, patternLibrary: [] })],
 ]);
 
 /** `json` brought up to the current schema version (see above). */

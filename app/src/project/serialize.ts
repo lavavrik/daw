@@ -11,6 +11,7 @@ import type { AudioTrack, AutomationLane, ChannelState, DrumTrack, PatternTrack,
 import { SCHEMA_VERSION } from './schema';
 import type { AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MidiMapJson, MixParamsJson, PointJson, ProjectJson, SynthTrackJson, TrackJson } from './schema';
 import { isMasterChannel, pointTuple } from '../state/automation';
+import { libraryJson } from '../state/pattern-library';
 
 /** Characters that are unsafe in a file name on some OS. */
 const UNSAFE = /[\\/:*?"<>|\u0000-\u001f]/g;
@@ -151,6 +152,7 @@ export function serialize(p: Project): ProjectJson {
       if (slot === null) return []; // cannot happen: a track's removal drops its mappings
       return [{ cc: m.cc, track: slot, target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] } }];
     }),
+    patternLibrary: p.patternLibrary.map(libraryJson),
   };
 }
 

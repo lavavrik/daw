@@ -109,6 +109,36 @@ export interface AutomationLane {
   points: AutoPoint[];
 }
 
+/**
+ * One step row of a library drum pattern (plan 21: state/pattern-library.ts).
+ * By value: the row's name, the file name of its sample (what a load maps
+ * rows by), and its MAX_STEPS velocities (0 = off).
+ */
+export interface LibraryDrumRow {
+  name: string;
+  /** The row's sample file name ("kick.wav"); absent when the row had none. */
+  sampleName?: string;
+  steps: number[];
+}
+
+/** One note of a library synth pattern (no engine idx: a load numbers them 0..n-1). */
+export interface LibraryNote {
+  pitch: number;
+  vel: number;
+  start: number;
+  len: number;
+}
+
+/**
+ * A pattern saved in the project's pattern library (plan 21 Task 4; edit
+ * only through state/pattern-library.ts). A copy BY VALUE, not a reference:
+ * it outlives the track it came from, and loading it makes a new pattern.
+ * `id` is a UI id (not saved; a load makes fresh ones).
+ */
+export type LibraryPattern =
+  | { id: string; name: string; kind: 'drum'; stepCount: 16 | 32 | 64; swing: number; rows: LibraryDrumRow[] }
+  | { id: string; name: string; kind: 'synth'; bars: number; notes: LibraryNote[] };
+
 /** The mixer channels a Master row lane can target. */
 export type MasterChannel = 'reverb' | 'delay' | 'master';
 
@@ -382,6 +412,12 @@ export class Project {
    * track/module/patch removals call). At most one per CC and per control.
    */
   midiMap = $state<MidiMapping[]>([]);
+  /**
+   * The project's pattern library (plan 21 Task 4): saved patterns of both
+   * kinds, in saving order. Saved with the project and undone like any
+   * edit; edited only through state/pattern-library.ts.
+   */
+  patternLibrary = $state<LibraryPattern[]>([]);
   /** 'pattern': the shown track loops its current pattern (pattern focus); 'song': clips play on the timeline. */
   mode = $state<'pattern' | 'song'>('pattern');
   /**

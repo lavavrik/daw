@@ -55,6 +55,7 @@ import { serialize } from './serialize';
 import { validate } from './schema';
 import type { MixParamsJson, ProjectJson } from './schema';
 import { fineSamples } from '../audio/fineSamples';
+import { libraryState } from '../state/pattern-library';
 
 export type { SampleDecoder };
 
@@ -389,6 +390,7 @@ export function blankState(p: Project) {
   p.lastSynthTrackId = null;
   p.mixer = newMixer();
   p.midiMap = [];
+  p.patternLibrary = [];
   p.mode = 'pattern';
   p.loop = { on: false, start: 0, end: DEFAULT_LOOP_END };
   p.songPosition = 0;
@@ -440,6 +442,7 @@ export function projectState(p: Project, proj: ProjectJson) {
   const master = lanesState(proj.mixer.automation);
   p.mixer.automation = proj.mixer.automation.map((mj, i) => ({ channel: mj.channel, lane: master[i] }));
   p.midiMap = midiMapState(proj.midiMap, (slot) => bySlot.get(slot)?.id);
+  p.patternLibrary = libraryState(proj.patternLibrary);
   p.tempo = proj.tempo;
   p.metronome = proj.metronome;
   p.mode = proj.mode;

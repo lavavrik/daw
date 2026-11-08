@@ -11,6 +11,7 @@ import { createHistory } from '../history/history';
 import { setTempo } from '../state/actions';
 import { sampleFile } from '../state/sampleFiles';
 import { serialize } from './serialize';
+import { libraryJson, libraryState, savePatternToLibrary } from '../state/pattern-library';
 import { addAudioFixture, addAutomationFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
 import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
@@ -409,7 +410,7 @@ describe('loadProject', () => {
     expect(p.tracks[2].automation.map((l) => l.lane)).toEqual([6]);
   });
 
-  it('a v2 project loads and saves as v4', async () => {
+  it('a v2 project loads and saves as v5', async () => {
     const v2 = JSON.parse(readFileSync(new URL('./testdata/v2-fixture.json', import.meta.url), 'utf8'));
     const { p: src } = await buildFixture();
     const { ids } = await addAudioFixture(src);
@@ -421,15 +422,28 @@ describe('loadProject', () => {
     expect(await loadProject(p, e, v2, files, fakeDecoder)).toEqual([]);
     expect(checkLog(e.log).errors).toEqual([]);
     const out = serialize(p);
-    expect(out.schemaVersion).toBe(4);
+    expect(out.schemaVersion).toBe(5);
     // Params appended to the catalog since are written with their defaults.
     expect(out).toEqual({
       ...v2,
-      schemaVersion: 4,
+      schemaVersion: 5,
       tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
       mixer: { ...v2.mixer, automation: [] },
       midiMap: [],
+      patternLibrary: [],
     });
+  });
+
+  it('the pattern library survives a save and reopen; a load replaces the old session\'s', async () => {
+    const { p: src, drums, synth } = await buildFixture();
+    savePatternToLibrary(src, drums.id, drums.currentPatternId, 'Groove');
+    savePatternToLibrary(src, synth.id, synth.currentPatternId, 'Bass');
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    p.patternLibrary = libraryState([{ kind: 'synth', name: 'Old', bars: 1, notes: [] }]);
+    expect(await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    expect(p.patternLibrary.map(libraryJson)).toEqual(src.patternLibrary.map(libraryJson));
+    expect(roundJson(serialize(p)).patternLibrary).toEqual(json.patternLibrary);
   });
 
   it('MIDI mappings survive a save and reopen (by slot, onto the new track ids)', async () => {

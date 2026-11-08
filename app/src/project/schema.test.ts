@@ -105,10 +105,10 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 5 };
+    const json = { ...serialize(new Project()), schemaVersion: 6 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
-    expect('error' in r && r.error).toMatch(/schema 5; this one reads up to 4/);
+    expect('error' in r && r.error).toMatch(/schema 6; this one reads up to 5/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
@@ -236,7 +236,7 @@ describe('project schema', () => {
     const json = serialize(p);
     const sj = json.tracks.find((t) => t.slot === synth.slot)!;
     expect(sj.automation[0].points).toEqual([[0, -24, 0, -0.75], [3840, 0, 1], [5760, -60, 0]]);
-    expect(json.schemaVersion).toBe(SCHEMA_VERSION); // still 4
+    expect(json.schemaVersion).toBe(SCHEMA_VERSION); // no bump of its own
     // Round trip: unchanged, no warnings.
     expect(ok(validate(roundJson(json)))).toEqual({ project: roundJson(json), warnings: [] });
     // Bad curves: clamped to -1..1 (0 written as no curve); a non-number makes the point malformed.
@@ -369,5 +369,57 @@ describe('project schema', () => {
     const r2 = ok(validate({ ...roundJson(serialize(p)), midiMap: { cc: 1 } }));
     expect(r2.project.midiMap).toEqual([]);
     expect(r2.warnings.join('\n')).toMatch(/MIDI/);
+  });
+
+  it('validates the pattern library (plan 21): malformed entries dropped, values clamped, with warnings', () => {
+    const steps = (on: number[], v = 100) => Array.from({ length: 64 }, (_, i) => (on.includes(i) ? v : 0));
+    const good = [
+      { kind: 'drum', name: 'Groove', stepCount: 32, swing: 0.5, rows: [{ name: 'Kick', sampleName: 'kick.wav', steps: steps([0, 8]) }, { name: 'Row 2', steps: steps([]) }] },
+      { kind: 'synth', name: 'Bass', bars: 2, notes: [{ pitch: 36, vel: 100, start: 0, len: 480 }] },
+    ];
+    const base = roundJson(serialize(new Project()));
+    // Well-formed: kept as is, no warnings.
+    const r0 = ok(validate({ ...base, patternLibrary: good }));
+    expect(r0.warnings).toEqual([]);
+    expect(r0.project.patternLibrary).toEqual(good);
+
+    const r = ok(validate({
+      ...base,
+      patternLibrary: [
+        ...good,
+        'junk',
+        { kind: 'drum', name: 'No rows' },
+        { kind: 'audio', name: 'Wrong kind', rows: [] },
+        { kind: 'synth', notes: [] }, // no name
+        {
+          kind: 'drum', name: 'Odd', stepCount: 12, swing: 3,
+          rows: ['junk', { name: 'Hat', sampleName: 5, steps: [127, 300, -1, 'x', 2.6] }, { name: 'Long', steps: [...steps([]), 100] }],
+        },
+        { kind: 'synth', name: 'Wild', bars: 99, notes: [{ pitch: 200, vel: 0, start: -5, len: 0 }, 'junk'] },
+      ],
+    }));
+    const lib = r.project.patternLibrary;
+    expect(lib.map((e) => e.name)).toEqual(['Groove', 'Bass', 'Odd', 'Wild']);
+    const odd = lib[2];
+    if (odd.kind !== 'drum') throw new Error('kind');
+    expect(odd.stepCount).toBe(16);
+    expect(odd.swing).toBe(1);
+    expect(odd.rows[0]).toEqual({ name: 'Row 1', steps: steps([]) });
+    expect(odd.rows[1].sampleName).toBeUndefined();
+    expect(odd.rows[1].steps.slice(0, 5)).toEqual([127, 127, 0, 0, 3]);
+    expect(odd.rows[1].steps).toHaveLength(64);
+    expect(odd.rows[2].steps).toEqual(steps([]));
+    const wild = lib[3];
+    if (wild.kind !== 'synth') throw new Error('kind');
+    expect(wild.bars).toBe(16);
+    expect(wild.notes).toEqual([{ pitch: 127, vel: 1, start: 0, len: 1 }]);
+    const w = r.warnings.join('\n');
+    for (const re of [/malformed library pattern\b/, /malformed library pattern "No rows"/, /"Wrong kind"/, /step count 12/, /swing/, /row 1: malformed/, /sample name/, /first 64 steps/, /velocity/, /bars/, /dropped a malformed note/]) {
+      expect(w).toMatch(re);
+    }
+    // Not a list: empty, with a warning.
+    const r2 = ok(validate({ ...base, patternLibrary: { kind: 'drum' } }));
+    expect(r2.project.patternLibrary).toEqual([]);
+    expect(r2.warnings.join('\n')).toMatch(/Pattern library/);
   });
 });

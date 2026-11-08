@@ -41,7 +41,9 @@
 //      mode (plan 20: which transport ran last is never undone, so an undo
 //      never switches what is playing; history.ts sameUndoState ignores it);
 //      the MIDI mappings (UI state only, no command: rebuilt from `to` by
-//      slot, so a track rebuilt in step 2 under a fresh id keeps them).
+//      slot, so a track rebuilt in step 2 under a fresh id keeps them); the
+//      pattern library (plan 21: project data, no command; an entry that
+//      did not change keeps its UI id, state/pattern-library.ts libraryState).
 // The project name is not restored (a Save As names the project, not an edit).
 import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
@@ -68,6 +70,7 @@ import type {
   AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, PatternTrackJson, ProjectJson, SynthTrackJson,
 } from '../project/schema';
 import { laneJson } from '../project/serialize';
+import { libraryJson, libraryState } from '../state/pattern-library';
 
 // Snapshots share unchanged subtrees (history.ts), so identity settles most compares.
 const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
@@ -168,6 +171,7 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   p.lastSynthTrackId = sel?.kind === 'synth' ? sel.id : (synth?.id ?? null);
   const midiMap = midiMapState(to.midiMap, (slot) => bySlot.get(slot)?.id);
   if (!same(p.midiMap, midiMap)) p.midiMap = midiMap;
+  if (!same(p.patternLibrary.map(libraryJson), to.patternLibrary)) p.patternLibrary = libraryState(to.patternLibrary, p.patternLibrary);
   const input = liveInputTrack(p)?.slot ?? -1;
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
   syncPatternFocus(p, sink); // the pattern transport (if it runs) follows the restored selection

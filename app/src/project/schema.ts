@@ -1,8 +1,9 @@
-// project.json: the saved form of a Project (schemaVersion 4) and its
+// project.json: the saved form of a Project (schemaVersion 5) and its
 // validator. See docs/architecture/projects.md. An older file is migrated
 // first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had; v2 -> v3
 // adds automation lanes, which v2 never had; v3 -> v4 adds the MIDI CC
-// mappings, which v3 never had).
+// mappings, which v3 never had; v4 -> v5 adds the pattern library, which v4
+// never had).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
@@ -38,8 +39,11 @@ import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEP
 import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
 
-/** Plan 9: 2 (Audio tracks); plan 10: 3 (automation); plan 14: 4 (MIDI mappings). Older files are migrated (migrate.ts). */
-export const SCHEMA_VERSION = 4;
+/**
+ * Plan 9: 2 (Audio tracks); plan 10: 3 (automation); plan 14: 4 (MIDI
+ * mappings); plan 21: 5 (the pattern library). Older files are migrated (migrate.ts).
+ */
+export const SCHEMA_VERSION = 5;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -62,7 +66,19 @@ export interface ProjectJson {
   selection: { track: number | null; synth: number | null };
   /** MIDI CC mappings (plan 14, state/midiMap.ts), in learning order. */
   midiMap: MidiMapJson[];
+  /** The pattern library (plan 21, state/pattern-library.ts), in saving order. */
+  patternLibrary: LibraryPatternJson[];
 }
+
+/**
+ * A library pattern (state/project.svelte.ts LibraryPattern minus its UI
+ * id): a copy by value. Drum: `rows[i].steps` holds MAX_STEPS velocities
+ * (0 = off) and `sampleName` the row's sample file name (absent: none);
+ * synth: the notes as {pitch, vel, start, len} (no engine idx).
+ */
+export type LibraryPatternJson =
+  | { kind: 'drum'; name: string; stepCount: 16 | 32 | 64; swing: number; rows: { name: string; sampleName?: string; steps: number[] }[] }
+  | { kind: 'synth'; name: string; bars: number; notes: { pitch: number; vel: number; start: number; len: number }[] };
 
 /**
  * One MIDI CC mapping: CC `cc` (0..119, unique) moves a param of track
@@ -371,13 +387,14 @@ export function validate(input: unknown): Validated {
 
   const mixer = readMixer(r, json.mixer, tracks, lanes);
   const midiMap = readMidiMap(r, json.midiMap, tracks);
+  const patternLibrary = readLibrary(r, json.patternLibrary);
   const sel = isObj(json.selection) ? json.selection : {};
   const slotOf = (v: unknown, synthOnly: boolean) =>
     tracks.find((t) => t.slot === v && (!synthOnly || t.kind === 'synth'))?.slot ?? null;
   const selection = { track: slotOf(sel.track, false), synth: slotOf(sel.synth, true) };
 
   return {
-    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection, midiMap },
+    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection, midiMap, patternLibrary },
     warnings: r.warnings,
   };
 }
@@ -497,6 +514,72 @@ function readNotePattern(r: Reader, x: Record<string, unknown>, w: string): Omit
     bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true),
     notes,
   };
+}
+
+/**
+ * The pattern library (plan 21). An entry that is not an object, has an
+ * unknown kind, no text name, or no `rows` / `notes` list is dropped with a
+ * warning; inside a kept entry the usual rules apply (wrong type ->
+ * default, out of range -> clamped, a malformed note dropped). Drum rows
+ * are positional (a load falls back to the row index), so a malformed row
+ * becomes an empty one, as in readRows.
+ */
+function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) {
+    r.warn('Pattern library: not a list (emptied)');
+    return [];
+  }
+  const out: LibraryPatternJson[] = [];
+  for (const x of v) {
+    const kind = isObj(x) ? x.kind : undefined;
+    const list = isObj(x) ? (kind === 'drum' ? x.rows : x.notes) : undefined;
+    if (!isObj(x) || (kind !== 'drum' && kind !== 'synth') || typeof x.name !== 'string' || !Array.isArray(list)) {
+      r.warn(`Dropped a malformed library pattern${isObj(x) && typeof x.name === 'string' ? ` "${x.name}"` : ''}`);
+      continue;
+    }
+    const w = `Library pattern "${x.name}"`;
+    if (kind === 'drum') {
+      let stepCount: 16 | 32 | 64 = 16;
+      if (x.stepCount === 16 || x.stepCount === 32 || x.stepCount === 64) stepCount = x.stepCount;
+      else if (x.stepCount !== undefined) r.warn(`${w}: step count ${String(x.stepCount)} is not 16/32/64 (using 16)`);
+      if (list.length > MAX_ROWS) r.warn(`${w}: only the first ${MAX_ROWS} rows were kept`);
+      const rows = list.slice(0, MAX_ROWS).map((row, i) => {
+        const rw = `${w} row ${i + 1}`;
+        if (!isObj(row)) {
+          r.warn(`${rw}: malformed (emptied)`);
+          return { name: `Row ${i + 1}`, steps: new Array<number>(MAX_STEPS).fill(0) };
+        }
+        const raw = row.steps === undefined ? [] : arr(row.steps);
+        if (row.steps !== undefined && !Array.isArray(row.steps)) r.warn(`${rw}: steps are not a list (emptied)`);
+        if (raw.slice(MAX_STEPS).some((s) => s !== 0)) r.warn(`${rw}: only the first ${MAX_STEPS} steps were kept`);
+        const steps = Array.from({ length: MAX_STEPS }, (_, s) => r.num(raw[s], 0, 0, 127, `${rw} step ${s + 1} velocity`, true));
+        let sampleName: string | undefined;
+        if (typeof row.sampleName === 'string' && row.sampleName !== '') sampleName = row.sampleName;
+        else if (row.sampleName !== undefined) r.warn(`${rw}: sample name is not text (none)`);
+        const name = r.str(row.name, `Row ${i + 1}`, `${rw} name`);
+        return sampleName === undefined ? { name, steps } : { name, sampleName, steps };
+      });
+      out.push({ kind, name: x.name, stepCount, swing: r.num(x.swing, 0, 0, 1, `${w} swing`), rows });
+    } else {
+      if (list.length > MAX_NOTES) r.warn(`${w}: only the first ${MAX_NOTES} notes were kept`);
+      const notes: { pitch: number; vel: number; start: number; len: number }[] = [];
+      for (const n of list.slice(0, MAX_NOTES)) {
+        if (!isObj(n)) {
+          r.warn(`${w}: dropped a malformed note`);
+          continue;
+        }
+        notes.push({
+          pitch: r.num(n.pitch, 60, 0, 127, `${w} note pitch`, true),
+          vel: r.num(n.vel, 100, 1, 127, `${w} note velocity`, true),
+          start: r.num(n.start, 0, 0, MAX_OFFSET, `${w} note start`, true),
+          len: r.num(n.len, 240, 1, MAX_NOTE_LEN, `${w} note length`, true),
+        });
+      }
+      out.push({ kind, name: x.name, bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true), notes });
+    }
+  }
+  return out;
 }
 
 function readAudioClips(r: Reader, v: unknown, sampleIds: Set<number>, at: string): AudioClipJson[] {

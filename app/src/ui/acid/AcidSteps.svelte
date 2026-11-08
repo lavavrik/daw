@@ -475,7 +475,8 @@
   .cell:not(.note) .acc { color: var(--accent); }
   .cell:not(.note) .sld { color: var(--play); }
   .edit { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-  .edit.off .tip { opacity: 0.6; }
+  /* No step selected: the hint reads as a hint (italic), at full --text-2 contrast. */
+  .edit.off .tip { font-style: italic; }
   .keys { display: flex; gap: 2px; }
   .key { width: 30px; padding: 4px 0; background: var(--text) var(--gloss); color: var(--on-color); }
   .key.black { background: var(--lcd) var(--gloss); color: var(--text-2); }

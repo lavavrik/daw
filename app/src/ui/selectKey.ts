@@ -18,13 +18,21 @@ export function selectKey(e: KeyboardEvent): void {
   if (isTypeAheadKey(e)) e.preventDefault();
 }
 
+/** How long after a pick a returning focus is taken away again (the picker's close). */
+export const RELEASE_WINDOW_MS = 200;
+
 /**
  * Give the keys back to the piano after a pick: blur the select. With
  * `appearance: base-select` (theme.css) the picker hands focus back to its
- * select as it closes, which happens after the change event, so the blur is
- * repeated on the next frame (when the select still has focus then).
+ * select as it closes, after the change event, so a plain blur() is undone.
+ * For RELEASE_WINDOW_MS a focus coming back is blurred again (one-shot
+ * listener), and on the next frame the select is checked once more in case
+ * focus never left while the picker was open (no focus event to catch).
  */
 export function releaseSelect(sel: HTMLSelectElement): void {
+  const again = () => sel.blur();
+  sel.addEventListener('focus', again);
+  setTimeout(() => sel.removeEventListener('focus', again), RELEASE_WINDOW_MS);
   sel.blur();
   requestAnimationFrame(() => {
     if (document.activeElement === sel) sel.blur();

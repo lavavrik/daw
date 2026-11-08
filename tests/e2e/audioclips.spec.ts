@@ -490,6 +490,10 @@ test('Clip tab number field: scrub, steppers, click types; one undo each', async
   await page.mouse.down();
   await page.mouse.move(x + 12, y - 5, { steps: 6 });
   await page.mouse.up();
+  // The native selection happened. A number input has no selectionStart /
+  // selectionEnd (both null), but Chrome reports its selected text through
+  // the document selection.
+  expect(await page.evaluate(() => String(getSelection()).length)).toBeGreaterThan(0);
   await expect(field).toBeFocused();
   await expect(field).toHaveValue('0.025');
   expect((await c0()).fadeIn).toBe(Math.round(0.025 * BEAT));

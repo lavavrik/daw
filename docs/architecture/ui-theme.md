@@ -149,9 +149,10 @@ second, so its moving parts change only paint-time properties, never layout:
 Letters are the QWERTY piano, so every `<select>` takes
 `onkeydown={selectKey}` (`ui/selectKey.ts`): no type-ahead on printable keys
 (Cmd/Ctrl/Alt chords and the navigation keys pass). After a pick with the
-pointer, `releaseSelect(sel)` gives the keys back (a blur, repeated on the
-next frame, because base-select's picker hands focus back to its select as it
-closes, after the change event). `ChoiceParam` releases only after pointer
+pointer, `releaseSelect(sel)` gives the keys back: base-select's picker hands
+focus back to its select as it closes, after the change event, so besides the
+blur a one-shot `focus` listener blurs it again for 200 ms, plus a check on
+the next frame. `ChoiceParam` releases only after pointer
 picks: a keyboard pick (arrows, Enter) keeps focus.
 
 ## Shared classes
@@ -202,8 +203,9 @@ palette, the clip tab's waveform overlay) and draws faint shades with
 on the playlist) and:
 - saves the song view, rack, mixer (Delay section open) and piano roll at
   1440×900 to `test-results/look-<view>.png`, for a person to compare with
-  the design boards (Playwright empties `test-results/` at the start of a
-  run, so they are this run's);
+  the design boards. They are for human review only: nothing compares them
+  to a baseline, so a look change never fails the test. Playwright empties
+  `test-results/` at the start of a run, so they are this run's;
 - asserts the layout invariants, not pixels: no horizontal page scroll at
   1280×800 in any of the four views, and the top bar is one row there (no
   part of it starts below the bottom of the shortest, and it is under
@@ -217,7 +219,9 @@ on the playlist) and:
 `ui/NumberField.svelte` replaces bare `<input type="number">` (spec §3). It keeps a real number input (with the `id` / `data-testid`, so `fill` works) and adds steppers and a vertical scrub. `variant="plain"` is a `--well` field with − and +; `variant="lcd"` is the tempo readout (label above, stacked ▲▼). The maths lives in `ui/numberField.ts`.
 
 - A scrub starts after 3 px of vertical travel (a click still focuses the input), moves 1 step per 4 px, Shift = step / 10. Only the display moves; `onchange` fires once on release, so a scrub is one undo entry. Esc or Cmd/Ctrl+Z mid-scrub drops it (`registerDragCancel`).
-- In a field that already has focus a press is usually a text selection: it scrubs only after 6 px of vertical travel, and a press that goes sideways first (3 px, more sideways than vertical) is a selection and never scrubs (`numberField.ts` `pressIntent`).
+- In a field that already has focus a press is usually a text selection (`numberField.ts` `pressIntent`):
+  - the **select** rule: if the pointer's first clear move is sideways (3 px or more, at least as far sideways as vertical), the press is a text selection: the scrub is dropped for the rest of that press and the browser's own selection carries on;
+  - otherwise it scrubs only after 6 px of vertical travel (3 px when the field was not focused).
 - Shift+arrow / Shift+button steps by step / 10, but at least the smallest unit the field keeps (`fineStep`: 1 on an integer field, where step / 10 would round back to nothing).
 - Arrows step; the wheel steps only while the field is focused (so scrolling a panel never edits a field under the cursor). Enter/blur commits, Esc reverts. `oninput` reports the raw text for live validation (Settings' buffer field).
 - Do not wrap a NumberField in a `<label>`: a click on label text would forward to the first button (the − step). Use a `div`.

@@ -191,8 +191,10 @@
   // drawn at a low globalAlpha (the `*A` numbers), never a new literal.
   const C = {
     bg: THEME.work, rowBlack: THEME.well, rowBlackA: 0.45, octave: THEME.line,
-    gridLine: THEME.grid, beatLine: THEME.line, barLine: THEME.raised, ruler: THEME.panel,
-    rulerText: THEME.text2, dimText: THEME.text2, dimA: 0.6, past: THEME.lcd, pastA: 0.45, end: THEME.accent,
+    // Line contrast against --work (at least the old palette's): bar lines
+    // --text-dim at 65 % (~2.5:1), beat lines --line (~1.7:1), the grid a hint.
+    gridLine: THEME.grid, beatLine: THEME.line, barLine: THEME.textDim, barA: 0.65, ruler: THEME.panel,
+    rulerText: THEME.text2, dimText: THEME.text2, dimA: 0.8, past: THEME.lcd, pastA: 0.45, end: THEME.accent,
     keyWhite: THEME.text, keyBlack: THEME.lcd, keyText: THEME.onColor, keySeam: THEME.textDim,
     accent: THEME.accent, vel: THEME.lcd, velSep: THEME.line, playhead: THEME.text, dark: THEME.onColor,
     fontUi: THEME.fontUi, fontMono: THEME.fontMono,
@@ -244,14 +246,13 @@
         ctx.fillRect(KEYS_W, y + v.rowH - 1, W - KEYS_W, 1);
       }
     }
-    const vline = (t: number, style: string, w = 1) => {
+    const vline = (t: number, style: string, w = 1, alpha = 1) => {
       const x = Math.round(tickToX(t, v)) + 0.5;
-      ctx.fillStyle = style;
-      ctx.fillRect(x - w / 2, top, w, noteH);
+      fillA(ctx, style, alpha, x - w / 2, top, w, noteH);
     };
     if (grid / v.ticksPerPx >= 4) for (let t = snapFloor(t0, grid); t <= t1; t += grid) vline(t, C.gridLine);
     if (BEAT / v.ticksPerPx >= 4) for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) vline(t, C.beatLine);
-    for (let t = snapFloor(t0, BAR); t <= t1; t += BAR) vline(t, C.barLine);
+    for (let t = snapFloor(t0, BAR); t <= t1; t += BAR) vline(t, C.barLine, 1, C.barA);
     if (xEnd < W) {
       fillA(ctx, C.past, C.pastA, Math.max(KEYS_W, xEnd), top, W - Math.max(KEYS_W, xEnd), noteH);
       vline(total, C.end, 2);
@@ -328,8 +329,8 @@
     for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) {
       const x = Math.round(tickToX(t, v)) + 0.5;
       const isBar = t % BAR === 0;
-      ctx.fillStyle = isBar ? C.barLine : C.beatLine;
-      ctx.fillRect(x - 0.5, isBar ? 0 : RULER_H - 6, 1, isBar ? RULER_H : 6);
+      if (isBar) fillA(ctx, C.barLine, C.barA, x - 0.5, 0, 1, RULER_H);
+      else fillA(ctx, C.beatLine, 1, x - 0.5, RULER_H - 6, 1, 6);
       if (isBar) {
         ctx.font = `bold 11px ${C.fontUi}`;
         ctx.fillStyle = t >= total ? C.dimText : C.rulerText;
@@ -337,11 +338,9 @@
         ctx.fillText(String(t / BAR + 1), x + 4, RULER_H / 2);
         ctx.globalAlpha = 1;
       } else if (beatPx >= 34) {
-        ctx.font = `9px ${C.fontUi}`;
-        ctx.fillStyle = C.dimText;
-        ctx.globalAlpha = C.dimA;
+        ctx.font = `9px ${C.fontUi}`; // beat numbers: smaller, full --text-2 (>= 4.5:1 on --panel)
+        ctx.fillStyle = C.rulerText;
         ctx.fillText(`${Math.floor(t / BAR) + 1}.${((t % BAR) / BEAT) + 1}`, x + 3, RULER_H / 2 + 1);
-        ctx.globalAlpha = 1;
       }
     }
     if (xEnd < W && xEnd >= KEYS_W) { // pattern end marker

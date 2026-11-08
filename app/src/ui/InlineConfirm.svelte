@@ -117,8 +117,8 @@
 </div>
 
 <style>
-  /* A small --panel card with the lift (spec §2 depth recipes), pointing at
-     the control that asked; the confirm button is the destructive one, in --rec. */
+  /* A small --panel card with the lift (spec §2 depth recipes), placed next
+     to the control that asked; the confirm button is the destructive one, in --rec. */
   .ic {
     position: fixed; z-index: 50; max-width: 280px; box-sizing: border-box; padding: 10px 12px;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift);

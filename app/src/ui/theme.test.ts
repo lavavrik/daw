@@ -64,7 +64,7 @@ describe('theme tokens', () => {
     expect(THEME.accent).toBe('#ffb347');
     expect(THEME.onColor).toBe('#1d242b');
     expect(TRACK_COLORS).toEqual(['#ff7a6b', '#ffc145', '#a6e06a', '#4fd6c4', '#5cc8ff', '#9b8cff', '#f47cc3', '#e0d45a']);
-    expect(RADII).toMatchObject({ sm: 6, md: 8, lg: 12 });
+    expect(RADII).toEqual({ xs: 3, sm: 6, md: 8, lg: 12, menu: 10 }); // spec §2's 6/8/12, plus xs and menu (ui-theme.md)
   });
 
   it('state and ui share one track palette', () => {

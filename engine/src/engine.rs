@@ -131,9 +131,11 @@
 //! that slot's current pattern: the pattern transport plays the track the
 //! bottom panel shows, nothing else. Every other track schedules no steps or
 //! notes (`Timeline::pattern_plays`); a new focus sends `Off` for every note
-//! another track's pattern holds, so nothing sticks. Drum hits already
-//! ringing, live input (`NOTE_ON`, the input track), the metronome and the
-//! count-in are unaffected, and Song mode (and so export) ignores the focus.
+//! another track's pattern holds, so nothing sticks, and fades every other
+//! drum track's ringing hits over 2 ms (`Drums::fade_all_except`; owner:
+//! "nothing else should be playing"). Live input (`NOTE_ON`, the input
+//! track), the metronome and the count-in are unaffected, and Song mode (and
+//! so export) ignores the focus.
 //! It is transport state, not an edit: `RESET_ALL` puts it back to none
 //! (`Transport::new`), the engine default, which is the old every-track
 //! behaviour.
@@ -1068,13 +1070,15 @@ impl Engine {
                 self.vis.tap_ch = self.mixer.tap() as f32;
             }
             // See "Pattern focus" in the module docs. A new focus releases
-            // what every other track's pattern holds (no stuck notes); the
-            // same focus again changes nothing.
+            // what every other track's pattern holds (no stuck notes) and
+            // fades every other drum track's ringing hits (2 ms); the same
+            // focus again changes nothing.
             Command::SetPatternFocus { slot } => {
                 if slot != self.transport.focus {
                     self.transport.focus = slot;
                     if let Some(keep) = slot {
                         self.synths.release_patterns_except(keep);
+                        self.drums.fade_all_except(keep);
                     }
                 }
             }

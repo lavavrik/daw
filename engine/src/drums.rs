@@ -475,6 +475,18 @@ impl Drums {
         }
     }
 
+    /// Every sounding voice of every track but `keep` starts its 2 ms
+    /// fade-out (a new pattern focus: the other tracks' ringing hits go, so
+    /// only the focused track is heard). Allocation-free.
+    pub fn fade_all_except(&mut self, keep: usize) {
+        let fade = self.fade;
+        for (slot, t) in self.tracks.iter_mut().enumerate() {
+            if slot != keep {
+                t.fade_all(fade);
+            }
+        }
+    }
+
     /// Engine reset (`OP_RESET_ALL`): every track inactive with default rows
     /// and empty patterns, and every voice silenced at once (no fade: the
     /// engine fades its master output instead). In place, allocation-free.

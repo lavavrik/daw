@@ -134,6 +134,37 @@ fn moving_the_focus_releases_the_old_tracks_notes() {
 }
 
 #[test]
+fn moving_the_focus_fades_the_old_drum_tracks_ringing_hit() {
+    // Slot 1's beat-1 hit (a 100 ms sample) is still ringing when the focus
+    // moves to slot 0: it fades out (2 ms) instead of ringing on.
+    let mut e = eng();
+    drums(&mut e, 0);
+    drums(&mut e, 1);
+    ok(focus(&mut e, 1.0));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let m = loudness(&mut e, 1024); // ~21 ms: the hit rings for 100 ms
+    assert!(m[1] > 0.1, "slot 1 rings ({})", m[1]);
+    ok(focus(&mut e, 0.0));
+    loudness(&mut e, 256); // the 2 ms (96-sample) fade
+    let m = loudness(&mut e, 1024);
+    assert_eq!(m[1], 0.0, "slot 1's hit faded with the focus change");
+    // Slot 0 has no hit before beat 2: nothing of it was faded or started.
+    assert_eq!(m[0], 0.0);
+}
+
+#[test]
+fn the_same_focus_again_keeps_the_ringing_hit() {
+    let mut e = eng();
+    drums(&mut e, 1);
+    ok(focus(&mut e, 1.0));
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    loudness(&mut e, 1024);
+    ok(focus(&mut e, 1.0));
+    let m = loudness(&mut e, 1024);
+    assert!(m[1] > 0.1, "re-sending the focus leaves the hit ringing ({})", m[1]);
+}
+
+#[test]
 fn the_same_focus_again_keeps_the_held_note() {
     let mut e = eng();
     synth(&mut e, 2);

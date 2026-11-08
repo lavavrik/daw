@@ -816,6 +816,21 @@ impl Engine {
                 self.drum_slot(slot)?;
                 self.drums.set_row_mute(slot, row, mute)
             }
+            // Plan 21: delete / restore a drum row in one command. The rows,
+            // their steps in every pattern, their voices and the sidechain
+            // keys on them all shift together, so nothing plays a
+            // half-shifted state. No automation lane or MIDI mapping can
+            // target a row (row gain/pan are not params), so none moves.
+            Command::RemoveRow { slot, row } => {
+                self.drum_slot(slot)?;
+                self.drums.remove_row(slot, row);
+                self.mixer.row_removed(slot, row);
+            }
+            Command::InsertRow { slot, row } => {
+                self.drum_slot(slot)?;
+                self.drums.insert_row(slot, row);
+                self.mixer.row_inserted(slot, row);
+            }
             // Steps, step count and swing belong to the current pattern.
             Command::SetStep { slot, row, step, velocity } => {
                 self.drum_slot(slot)?;
@@ -1677,6 +1692,88 @@ mod tests {
         let (l, r) = render2(&mut e, 256);
         assert!((l[0] - 0.8).abs() < 1e-4);
         assert!(r.iter().all(|&x| x.abs() < 1e-6));
+    }
+
+    /// Plan 21: REMOVE_ROW moves every later row up one (settings and steps
+    /// in every pattern), empties the last row; INSERT_ROW is its inverse.
+    #[test]
+    fn remove_and_insert_row_shift_rows_and_every_pattern() {
+        use crate::protocol::{OP_INSERT_ROW, OP_REMOVE_ROW, OP_SET_CURRENT_PATTERN};
+        let mut e = drum_engine();
+        assert_eq!(e.command(OP_ADD_DRUM_TRACK, 2.0, 0.0, 0.0, 0.0), 0);
+        for r in 0..4 {
+            let rf = r as f64;
+            assert_eq!(e.command(OP_SET_ROW_GAIN, 2.0, rf, 0.1 * (rf + 1.0), 0.0), 0);
+            for pat in [0.0, 3.0] {
+                assert_eq!(e.command(OP_SET_CURRENT_PATTERN, 2.0, pat, 0.0, 0.0), 0);
+                assert_eq!(e.command(OP_SET_STEP, 2.0, rf, rf + pat, 100.0 + rf), 0);
+            }
+        }
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 2.0, 15.0, 0.0, 0.0), 0); // a used last row moves up too
+        let before = (e.drums.tracks[2].rows, e.drums.tracks[2].patterns[0].steps, e.drums.tracks[2].patterns[3].steps);
+
+        assert_eq!(e.command(OP_REMOVE_ROW, 2.0, 1.0, 0.0, 0.0), 0);
+        let t = &e.drums.tracks[2];
+        let gains: Vec<f32> = t.rows[..4].iter().map(|r| r.gain).collect();
+        assert_eq!(gains, vec![0.1, 0.3, 0.4, 1.0]);
+        assert_eq!(t.rows[14].sample, Some(0));
+        assert_eq!(t.rows[15].sample, None);
+        for (pat, off) in [(0usize, 0usize), (3, 3)] {
+            let s = &t.patterns[pat].steps;
+            assert_eq!(s[0][off], 100, "pattern {pat}");
+            assert_eq!(s[1][2 + off], 102, "pattern {pat}: old row 2 is row 1");
+            assert_eq!(s[2][3 + off], 103, "pattern {pat}: old row 3 is row 2");
+            assert!(s[1][1 + off] == 0 && s[3].iter().all(|&v| v == 0) && s[15].iter().all(|&v| v == 0));
+        }
+        assert_eq!(t.current, 3, "the current pattern is untouched");
+
+        // Insert at 1 and put the old row 1 back: everything as before.
+        assert_eq!(e.command(OP_INSERT_ROW, 2.0, 1.0, 0.0, 0.0), 0);
+        assert_eq!(e.drums.tracks[2].rows[1].gain, 1.0, "the inserted row is empty");
+        assert!(e.drums.tracks[2].patterns.iter().all(|p| p.steps[1].iter().all(|&v| v == 0)));
+        assert_eq!(e.command(OP_SET_ROW_GAIN, 2.0, 1.0, 0.2, 0.0), 0);
+        for pat in [0.0, 3.0] {
+            assert_eq!(e.command(OP_SET_CURRENT_PATTERN, 2.0, pat, 0.0, 0.0), 0);
+            assert_eq!(e.command(OP_SET_STEP, 2.0, 1.0, 1.0 + pat, 101.0), 0);
+        }
+        let t = &e.drums.tracks[2];
+        let gains = |rows: &[crate::drums::DrumRow]| rows.iter().map(|r| (r.gain, r.sample)).collect::<Vec<_>>();
+        assert_eq!(gains(&t.rows), gains(&before.0));
+        assert_eq!((t.patterns[0].steps, t.patterns[3].steps), (before.1, before.2));
+
+        // Synth / audio slots refuse it; an empty slot stores (like the row setters).
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, 4.0, 0.0, 0.0, 0.0), 0);
+        assert_eq!(e.command(OP_REMOVE_ROW, 4.0, 0.0, 0.0, 0.0), crate::protocol::ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_INSERT_ROW, 4.0, 0.0, 0.0, 0.0), crate::protocol::ERR_BAD_INDEX);
+        assert_eq!(e.command(OP_REMOVE_ROW, 9.0, 0.0, 0.0, 0.0), 0);
+    }
+
+    /// Plan 21: a removed row stops playing (its ringing hit fades, never
+    /// hard-cut) and the row below it plays in its place.
+    #[test]
+    fn removed_row_stops_playing() {
+        use crate::protocol::OP_REMOVE_ROW;
+        let mut e = test_engine();
+        e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0);
+        load_const(&mut e, 0, 48000, 1.0); // a long hit: still ringing at the removal
+        load_const(&mut e, 1, 10, 0.5);
+        drum_setup(&mut e, 0.0, 0.0, &[0.0]);
+        assert_eq!(e.command(OP_SET_ROW_SAMPLE, 0.0, 1.0, 1.0, 0.0), 0);
+        assert_eq!(e.command(OP_SET_STEP, 0.0, 1.0, 4.0, 127.0), 0);
+        e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0);
+        let (l, _) = render2(&mut e, 1280);
+        assert!(l[1279] > 0.5, "row 0 rings");
+        assert_eq!(e.command(OP_REMOVE_ROW, 0.0, 0.0, 0.0, 0.0), 0);
+        let (l, _) = render2(&mut e, 96000 - 1280);
+        // The ringing hit fades over 2 ms (96 samples), never jumping.
+        for w in l[..200].windows(2) {
+            assert!((w[0] - w[1]).abs() < 0.02, "declicked: {} -> {}", w[0], w[1]);
+        }
+        assert!(l[200..24000 - 1280].iter().all(|&x| x == 0.0), "the removed row is silent");
+        // The old row 1 (sample 1, step 4) is row 0 now and still plays.
+        let at = 24000 - 1280;
+        assert_eq!(first_nz(&l, 200), Some(at));
+        assert!(e.drums.tracks[0].rows[0].sample == Some(1) && e.drums.tracks[0].rows[1].sample.is_none());
     }
 
     #[test]

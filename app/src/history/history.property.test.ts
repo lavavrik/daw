@@ -19,7 +19,7 @@
 // before/after (one undo applying the wrong state, masked at the ends) fails.
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../audio/catalog';
-import { addDrumTrack, removeTrack, selectTrack, setTempo, toggleStep } from '../state/actions';
+import { addDrumTrack, addRow, removeDrumRow, removeTrack, selectTrack, setRowGain, setTempo, toggleStep } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
 import { addNote, deleteNotes, newPattern, selectPattern, updateNotes } from '../state/pattern-actions';
 import { addSynthTrack, loadPatch, removeModule, setParam } from '../state/rack-actions';
@@ -144,7 +144,17 @@ async function sequence(seed: number, ops: number) {
   const menu: ((log: string[]) => void)[] = [
     (log) => {
       const d = r.pick(drums());
-      if (d) (log.push('toggleStep'), toggleStep(p, sink, d.id, d.rows[r.int(d.rows.length)].id, r.int(16)));
+      const row = d && r.pick(d.rows);
+      if (d && row) (log.push('toggleStep'), toggleStep(p, sink, d.id, row.id, r.int(16)));
+    },
+    // Plan 21: delete a drum row (undo: INSERT_ROW + its data) or add one,
+    // so rows in the middle come and go between the other edits.
+    (log) => {
+      const d = r.pick(drums());
+      const row = d && r.pick(d.rows);
+      if (d && row && r.int(3) > 0) (log.push('removeDrumRow'), removeDrumRow(p, sink, d.id, row.id));
+      else if (d && row) (log.push('rowGain'), setRowGain(p, sink, d.id, row.id, r.int(200) / 100));
+      else if (d) (log.push('addRow'), addRow(p, sink, d.id));
     },
     (log) => {
       const t = r.pick(p.tracks);

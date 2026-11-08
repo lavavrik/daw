@@ -88,6 +88,11 @@ fn playback_does_not_allocate() {
             200 => { assert_eq!(e.command(OP_SET_STEP_COUNT, 0., 32., 0., 0.), 0) }
             250 => { assert_eq!(e.command(OP_SET_ROW_MUTE, 1., 2., 1., 0.), 0) }
             300 => { assert_eq!(e.command(OP_SET_STEP_COUNT, 0., 16., 0., 0.), 0) }
+            // Plan 21: deleting and restoring a drum row (rows, every pattern's
+            // steps, voices and keys shift in place) while it sounds.
+            320 => { assert_eq!(e.command(OP_MIX_SET_KEY, 0., 32. + 4., 0., 0.), 0) } // key: track 1 row 3
+            330 => { assert_eq!(e.command(OP_REMOVE_ROW, 1., 1., 0., 0.), 0) }
+            340 => { assert_eq!(e.command(OP_INSERT_ROW, 1., 1., 0., 0.), 0) }
             400 => { assert_eq!(e.command(OP_STOP, 0., 0., 0., 0.), 0) }
             420 => { assert_eq!(e.command(OP_PLAY, 0., 0., 0., 0.), 0) }
             _ => {}

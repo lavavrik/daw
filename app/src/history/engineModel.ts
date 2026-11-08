@@ -203,6 +203,38 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
         t.rows[b][key] = cc;
         break;
       }
+      // Plan 21: rows, every pattern's steps and the row keys shift together
+      // (engine.rs RemoveRow / InsertRow, mixer row_removed / row_inserted).
+      case Op.REMOVE_ROW: case Op.INSERT_ROW: {
+        const t = slotOf(a, 'drum');
+        if (!t) break;
+        const ins = op === Op.INSERT_ROW;
+        /** Where row r goes (null: gone). */
+        const move = (r: number) => (r === b ? (ins ? b + 1 : null) : r < b ? r : ins ? r + 1 : r - 1);
+        const empty = { sample: -1, gain: 1, pan: 0, mute: 0 };
+        const rows = Array.from({ length: MAX_ROWS }, () => ({ ...empty }));
+        t.rows.forEach((row, r) => {
+          const to = move(r);
+          if (to !== null && to < MAX_ROWS) rows[to] = row;
+        });
+        t.rows = rows;
+        for (const x of t.patterns) {
+          const steps: Record<string, number> = {};
+          for (const [k, v] of Object.entries(x.steps)) {
+            const [r, s] = k.split(':').map(Number);
+            const to = move(r);
+            if (to !== null && to < MAX_ROWS) steps[`${to}:${s}`] = v;
+          }
+          x.steps = steps;
+        }
+        for (let i = 0; i < MAX_TRACKS; i++) {
+          const k = m.keys[i];
+          if (k < 0 || Math.floor(k / 32) !== a || k % 32 === 0) continue;
+          const to = move((k % 32) - 1);
+          m.keys[i] = to === null || to >= MAX_ROWS ? -1 : a * 32 + to + 1;
+        }
+        break;
+      }
       case Op.SET_STEP: {
         const t = slotOf(a, 'drum');
         if (!t) break;

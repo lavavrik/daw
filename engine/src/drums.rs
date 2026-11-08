@@ -556,6 +556,61 @@ impl Drums {
         }
     }
 
+    /// Remove row `row` of track `slot` (`OP_REMOVE_ROW`, plan 21): every
+    /// later row moves up one, with its settings, its steps in **every**
+    /// pattern, its voices and its queued live hit; the last row becomes
+    /// empty (default settings, no steps). The removed row's voices go to
+    /// that last slot and fade out over 2 ms (it has no sample, so nothing
+    /// retriggers them), so a ringing hit is never hard-cut. In place
+    /// (`copy_within` on fixed arrays), allocation-free; an out-of-range
+    /// slot or row is ignored.
+    pub fn remove_row(&mut self, slot: usize, row: usize) {
+        let fade = self.fade;
+        let Some(t) = self.tracks.get_mut(slot) else { return };
+        if row >= MAX_ROWS {
+            return;
+        }
+        let last = MAX_ROWS - 1;
+        let gone = t.voices[row];
+        t.rows.copy_within(row + 1.., row);
+        t.rows[last] = DrumRow::new();
+        t.voices.copy_within(row + 1.., row);
+        t.voices[last] = gone;
+        t.voices[last].fade_out(fade);
+        t.live.copy_within(row + 1.., row);
+        t.live[last] = 0;
+        for p in t.patterns.iter_mut() {
+            p.steps.copy_within(row + 1.., row);
+            p.steps[last] = [0; MAX_STEPS];
+        }
+    }
+
+    /// Insert an empty row at `row` of track `slot` (`OP_INSERT_ROW`, the
+    /// inverse of `remove_row`; undo uses it): `row` and every later row move
+    /// down one, the last row is dropped (the app only inserts while it is
+    /// unused, so it is empty). Its voices move to the new row's slot and
+    /// fade out. In place, allocation-free; out of range is ignored.
+    pub fn insert_row(&mut self, slot: usize, row: usize) {
+        let fade = self.fade;
+        let Some(t) = self.tracks.get_mut(slot) else { return };
+        if row >= MAX_ROWS {
+            return;
+        }
+        let last = MAX_ROWS - 1;
+        let dropped = t.voices[last];
+        t.rows.copy_within(row..last, row + 1);
+        t.rows[row] = DrumRow::new();
+        t.voices.copy_within(row..last, row + 1);
+        t.voices[row] = dropped;
+        t.voices[row].fade_out(fade);
+        t.live.copy_within(row..last, row + 1);
+        t.live[row] = 0;
+        for p in t.patterns.iter_mut() {
+            p.steps.copy_within(row..last, row + 1);
+            p.steps[row] = [0; MAX_STEPS];
+        }
+    }
+
     pub fn row_mut(&mut self, slot: usize, row: usize) -> Option<&mut DrumRow> {
         self.tracks.get_mut(slot)?.rows.get_mut(row)
     }

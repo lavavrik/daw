@@ -102,6 +102,55 @@ and custom properties, and its CSS draws them with theme tokens.
   (`panFill` → `--fill` and `--fill-pos`, see `ui-theme.md`).
 - The mute LED is lit (`--play`, with a glow) while the row plays and grey
   when muted; `aria-pressed` = muted, as before.
+- **Delete row** (plan 21): a trash icon button at the row's end
+  (`row-delete-<i>`, aria-label and tooltip "Delete row <name>"), faded in
+  on row hover and while focus is in the row; opacity only, so it is always
+  in the tab order. After a delete, focus moves to the delete button now at
+  that index (else the previous row's, else "+ Add row"). Rows have no
+  context menu (right-click on a cell clears it), so there is no menu entry.
+
+### Deleting a row (plan 21 task 7)
+Engine rows are **slot-indexed** (`DrumTrack::rows[MAX_ROWS]`, and every
+pattern's `steps[row][step]`), so deleting a row in the middle means every
+later row moves up one, in every pattern. *Choice: an engine op, not the
+existing row/step setters.* Re-sending the shifted rows through
+`SET_ROW_*` / `SET_STEP` would need a `SET_CURRENT_PATTERN` round trip per
+pattern (steps only address the current pattern) and up to 16 x 64 x 16
+commands: not atomic for the audio thread (the backlog can spread it over
+blocks, so a few ms of another pattern or half-shifted rows could play) and
+not cheap. So:
+
+| Op | # | Fields |
+|---|---|---|
+| `OP_REMOVE_ROW` | 58 | `a = slot`, `b = row`: later rows move up one; the last row is empty |
+| `OP_INSERT_ROW` | 59 | `a = slot`, `b = row`: an empty row there, rows from it move down one; the last row is dropped |
+
+- Both shift, in place (`copy_within` on fixed arrays, allocation-free; in
+  `no_alloc.rs`): the row settings, the steps of **all 16 patterns**, the row
+  voices and queued live hits (`Drums::remove_row` / `insert_row`), and the
+  sidechain keys on that track's rows (`Mixer::row_removed` /
+  `row_inserted`, mixer.md). The removed row's voice moves to the empty
+  last slot and fades over 2 ms, so a ringing hit is never hard-cut.
+- A drum or empty slot (like the row setters); a synth or audio slot is
+  `BAD_INDEX`. They are edits (not in `NON_EDIT_OPS`).
+- No automation lane or MIDI mapping can point at a row (row gain / pan are
+  native ranges, not params), so none moves or is dropped.
+
+The app (`state/actions.ts`):
+- `removeDrumRow(p, sink, trackId, rowId)`: one undo entry "Delete row":
+  `REMOVE_ROW`, then `rowRemovedState` mirrors it (the row object out, each
+  pattern's step row spliced out and an empty one appended, keys on the row
+  to none and on later rows up one). The last row can be deleted: the track
+  is then just empty, with "+ Add row".
+- **Undo** goes through the normal snapshot path. `diffApply`'s `diffDrum`
+  spots one row more or fewer with every other row the same, in order
+  (`shiftedRow`: name and settings): it sends `INSERT_ROW` (undo) or
+  `REMOVE_ROW` (redo) and shifts the state the same way
+  (`rowInsertedState` / `rowRemovedState`), so the kept rows keep their UI
+  ids; then the ordinary by-index row and pattern diff sends only the
+  restored row's sample, settings and cells (each pattern selected in turn),
+  and step 3 its keys. Anything else (an add or removal at the end, several
+  rows at once) falls back to rows by index, which is exact too.
 
 ## Acid tab (step view of a note pattern)
 Plan 17 (spec addendum §2). The **Acid** tab (`ui/acid/AcidSteps.svelte`,

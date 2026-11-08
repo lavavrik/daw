@@ -76,7 +76,11 @@ slot's extra buffer. A 9th distinct row is refused (`BAD_VALUE`;
 `rowKeyAllowed` in mixer-actions.ts mirrors it so the UI greys the choice out
 with "max 8 keys"). Whole-track keys cost nothing and are unlimited. When a
 key's source track is removed or retyped, the key reverts to none and the
-compressor's reduction ramps to unity over 2 ms.
+compressor's reduction ramps to unity over 2 ms. Row keys follow their row
+when a drum row is deleted or restored (`REMOVE_ROW` / `INSERT_ROW`,
+`Mixer::row_removed` / `row_inserted`; sequencer.md "Deleting a row"): a key
+on a later row moves with it, a key on the deleted row reverts to none (the
+same 2 ms ramp). A delete never needs a new key slot, so the cap holds.
 
 ## Mute / solo
 

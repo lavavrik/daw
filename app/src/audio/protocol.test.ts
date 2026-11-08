@@ -22,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(63); // + SET_PATTERN_FOCUS (plan 20 task 12)
+    expect(Object.keys(rust).length).toBe(65); // + REMOVE_ROW, INSERT_ROW (plan 21); + SET_PATTERN_FOCUS (plan 20 task 12)
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -45,6 +45,11 @@ describe('protocol parity with engine/src/protocol.rs', () => {
     expect(Op.SET_PATTERN_FOCUS).toBe(57);
     expect(PATTERN_FOCUS_NONE).toBe(255);
     expect(src).toMatch(/OP_SET_PATTERN_FOCUS: u32 = 57; \/\/ a=slot 0\.\.MAX_TRACKS-1 .* or 255 = none/);
+  });
+  it('REMOVE_ROW is 58 and INSERT_ROW 59, both a=slot b=row (plan 21)', () => {
+    expect([Op.REMOVE_ROW, Op.INSERT_ROW]).toEqual([58, 59]);
+    expect(src).toMatch(/OP_REMOVE_ROW: u32 = 58; \/\/ a=slot b=row/);
+    expect(src).toMatch(/OP_INSERT_ROW: u32 = 59; \/\/ a=slot b=row/);
   });
 });
 

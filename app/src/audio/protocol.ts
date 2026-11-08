@@ -161,6 +161,17 @@ export const Op = {
    *  syncPatternFocus), the song transport 255. Not an edit (NON_EDIT_OPS);
    *  RESET_ALL puts it back to 255, the engine default (plan 20 task 12). */
   SET_PATTERN_FOCUS: 57,
+  /** a=slot b=row 0..MAX_ROWS-1 (a drum or empty slot; synth/audio is
+   *  BAD_INDEX): delete that drum row. Every later row moves up one with its
+   *  settings, its steps in EVERY pattern, its voices and the sidechain keys
+   *  on it; keys on the removed row go to none; the last row is left empty.
+   *  One atomic command (plan 21, docs/architecture/sequencer.md "Deleting a
+   *  row"): state/actions.ts removeDrumRow, and diffApply on redo. */
+  REMOVE_ROW: 58,
+  /** a=slot b=row: the inverse, an empty row at `row` (the rows from it and
+   *  their keys move down one; the last row is dropped, so only insert while
+   *  it is unused). diffApply sends it when an undo brings a row back. */
+  INSERT_ROW: 59,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 

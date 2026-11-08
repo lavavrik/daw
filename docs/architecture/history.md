@@ -241,7 +241,10 @@ Order:
      builders (`project/commands.ts` `trackState` + `trackCommands`: the
      same command order as a load);
    - otherwise (skipped when its JSON is unchanged): name/colour; drum rows
-     (a removed row is reset in the engine); **patterns** — new ones, then the
+     (one row deleted or brought back in the middle: `REMOVE_ROW` /
+     `INSERT_ROW` first, with the state shifted the same way, sequencer.md
+     "Deleting a row"; otherwise by index, a removed row at the end reset in
+     the engine); **patterns** — new ones, then the
      data of changed ones (the engine edits its *current* pattern, so each
      is selected in turn; `p.beforePatternSwitch` first if the current
      pattern changes), then the current pattern, then **clips**, then
@@ -321,8 +324,9 @@ removed notes`).
   ops add lanes (any owner, any automatable target), remove, enable and
   disable them, add points (several in one gesture), move, reshape, delete
   and draw them, and remove rack modules and load patches (their lanes go
-  with them). A redo onto an empty undo stack resets the expected bottom
-  state.
+  with them). Drum rows (plan 21): ops delete a random row (anywhere, the
+  last one included), add one, or change a row's gain. A redo onto an
+  empty undo stack resets the expected bottom state.
 - `state/recorder.test.ts`: `undo take undoes edits made during it` (the
   tooltip count is 1; Stop and Undo take end the hold).
 - `ui/inlineConfirms.test.ts`: `undo cancels an open inline confirm`.
@@ -352,6 +356,12 @@ removed notes`).
   point ids` and `undo keeps each point's UI id on its own point`. The engine model validates lane targets (existing,
   automatable, one lane each), point ranges and unique ticks, and clears
   lanes with their track, module or rack like the engine.
+  Plan 21: `delete a drum row: undo restores …` (one `REMOVE_ROW`; undo
+  sends `INSERT_ROW` and then only the restored row's data; sample,
+  settings, cells in both patterns, keys on that row and a later one, kept
+  rows' UI ids; lanes and mappings untouched), the first / last / every row,
+  and a full 16-row track. The engine model shifts rows, steps and keys
+  like the engine.
 - `state/automation.test.ts` `pointCommands: random lane diffs never hit a
   taken tick`: random lane states (moves that swap or overlap ticks,
   removals, inserts) applied to the engine model: nothing refused, the

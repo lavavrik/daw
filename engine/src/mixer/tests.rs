@@ -334,6 +334,39 @@ fn sidechain_source_removed_falls_back() {
     assert_eq!(e.command(OP_MIX_SET_KEY, 1.0, 1.0, 0.0, 0.0), ERR_BAD_INDEX);
 }
 
+/// Plan 21: REMOVE_ROW / INSERT_ROW carry the drum-row keys with the rows.
+#[test]
+fn row_keys_follow_removed_and_inserted_rows() {
+    let mut e = Engine::new(SR);
+    ok(e.command(OP_ADD_DRUM_TRACK, 1.0, 0.0, 0.0, 0.0));
+    ok(e.command(OP_ADD_DRUM_TRACK, 5.0, 0.0, 0.0, 0.0));
+    let key = |e: &mut Engine, ch: f64, slot: f64, row: f64| ok(e.command(OP_MIX_SET_KEY, ch, slot * 32.0 + row + 1.0, 0.0, 0.0));
+    key(&mut e, 2.0, 1.0, 0.0);
+    key(&mut e, 3.0, 1.0, 2.0);
+    key(&mut e, 4.0, 1.0, 1.0);
+    key(&mut e, 6.0, 5.0, 2.0); // another track's row 2: untouched
+    ok(e.command(OP_REMOVE_ROW, 1.0, 1.0, 0.0, 0.0));
+    assert_eq!(e.mixer().key(2), Key::Row(1, 0), "an earlier row stays");
+    assert_eq!(e.mixer().key(3), Key::Row(1, 1), "a later row follows it up");
+    assert_eq!(e.mixer().key(4), Key::None, "the removed row's key reverts to none");
+    assert_eq!(e.mixer().key(6), Key::Row(5, 2));
+    let slots = |e: &Engine| e.mixer().row_keys()[1].iter().filter(|&&k| k != super::NO_KEY).count();
+    assert_eq!(slots(&e), 2, "key slots rebuilt for rows 0 and 1");
+    assert_ne!(e.mixer().row_keys()[1][1], super::NO_KEY);
+
+    ok(e.command(OP_INSERT_ROW, 1.0, 1.0, 0.0, 0.0));
+    assert_eq!(e.mixer().key(2), Key::Row(1, 0));
+    assert_eq!(e.mixer().key(3), Key::Row(1, 2), "back down");
+    assert_eq!(e.mixer().row_keys()[1][1], super::NO_KEY);
+    assert_ne!(e.mixer().row_keys()[1][2], super::NO_KEY);
+    // A key on the last row is dropped by an insert (the app never inserts then).
+    key(&mut e, 4.0, 1.0, 15.0);
+    ok(e.command(OP_INSERT_ROW, 1.0, 0.0, 0.0, 0.0));
+    assert_eq!(e.mixer().key(4), Key::None);
+    assert_eq!(e.mixer().key(2), Key::Row(1, 1));
+    assert!(render(&mut e, 1280).0.iter().all(|x| x.is_finite()));
+}
+
 #[test]
 fn retyping_a_key_source_also_falls_back() {
     let mut e = pump(0.05, 1.0);

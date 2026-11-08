@@ -869,6 +869,44 @@ impl Mixer {
         self.reset_channel(slot);
     }
 
+    /// Drum row `row` of track `slot` was removed (`OP_REMOVE_ROW`): keys
+    /// listening to it revert to none (that compressor ramps to unity over
+    /// 2 ms, like a removed track), keys on a later row of that track follow
+    /// it up one. The number of distinct keyed rows can only shrink, so
+    /// `MAX_KEYS` still holds. Allocation-free.
+    pub fn row_removed(&mut self, slot: usize, row: usize) {
+        let fade = self.gate_len;
+        for s in self.strips.iter_mut().take(MAX_TRACKS) {
+            if let Key::Row(ks, kr) = s.key {
+                if ks == slot && kr == row {
+                    s.key = Key::None;
+                    s.comp.release_to_unity(fade);
+                } else if ks == slot && kr > row {
+                    s.key = Key::Row(ks, kr - 1);
+                }
+            }
+        }
+        self.rebuild_keys();
+    }
+
+    /// An empty drum row was inserted at `row` of track `slot`
+    /// (`OP_INSERT_ROW`): keys on that row or a later one follow it down
+    /// one (a key on the last row, which is dropped, reverts to none).
+    pub fn row_inserted(&mut self, slot: usize, row: usize) {
+        let fade = self.gate_len;
+        for s in self.strips.iter_mut().take(MAX_TRACKS) {
+            if let Key::Row(ks, kr) = s.key {
+                if ks == slot && kr + 1 >= MAX_ROWS {
+                    s.key = Key::None;
+                    s.comp.release_to_unity(fade);
+                } else if ks == slot && kr >= row {
+                    s.key = Key::Row(ks, kr + 1);
+                }
+            }
+        }
+        self.rebuild_keys();
+    }
+
     /// Reassign the key slots: one per distinct keyed drum row.
     fn rebuild_keys(&mut self) {
         for rk in self.row_keys.iter_mut() {

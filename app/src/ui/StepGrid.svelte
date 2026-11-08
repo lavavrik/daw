@@ -19,13 +19,21 @@
   // range inputs (skinned by theme.css): they are not rack params, so they
   // have no MIDI-learn or automation for the Knob slider variant to keep, and
   // a native drag is already one undo entry (history/gestures.ts).
-  import { onDestroy, onMount } from 'svelte';
+  //
+  // Delete row (plan 21 task 7): a trash button at the end of each row,
+  // faded in on row hover and while focus is inside the row, but always in
+  // the tab order (opacity only, never display/visibility). One undo entry
+  // (actions.ts removeDrumRow). The rows have no context menu (right-click
+  // on a cell clears it), so the button is the only way in.
+  import { onDestroy, onMount, tick } from 'svelte';
+  import Trash from 'phosphor-svelte/lib/Trash';
+  import Icon from './Icon.svelte';
   import { registerDragCancel } from '../history/gestures';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { droppedFiles } from '../library/drag';
   import {
-    addRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
+    addRow, removeDrumRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
   } from '../state/actions';
   import { mod } from '../audio/audioClock';
   import type { AudioClock } from '../audio/audioClock';
@@ -221,9 +229,22 @@
     return n === 0 ? 'C' : `${v < 0 ? 'L' : 'R'} ${n}`;
   }
   const vol = (e: Event) => (e.currentTarget as HTMLInputElement).valueAsNumber;
+
+  // ---- delete row -----------------------------------------------------
+  let gridEl: HTMLDivElement;
+  /** Delete row `r`, then keep keyboard focus nearby: the delete button now
+   *  at that index (the next row), else the previous row's, else "+ Add row". */
+  async function deleteRow(r: number, rowId: string) {
+    if (!removeDrumRow(p, engine, track.id, rowId)) return;
+    await tick();
+    const next = gridEl?.querySelector<HTMLElement>(`[data-testid="row-delete-${r}"]`)
+      ?? gridEl?.querySelector<HTMLElement>(`[data-testid="row-delete-${r - 1}"]`)
+      ?? gridEl?.querySelector<HTMLElement>('[data-testid="add-row"]');
+    next?.focus({ preventScroll: true });
+  }
 </script>
 
-<div class="grid">
+<div class="grid" bind:this={gridEl}>
   <div class="hdr" aria-hidden="true">
     <span class="lbl tag-h"></span><span class="lbl name-h">Sample</span><span class="wave-h"></span>
     <span class="lbl mute-h">Mute</span><span class="lbl gain-h">Gain</span><span class="lbl pan-h">Pan</span>
@@ -309,6 +330,11 @@
           </div>
         {/each}
       </div>
+      <button
+        type="button" class="del" data-testid="row-delete-{r}"
+        title="Delete row {row.name}" aria-label="Delete row {row.name}"
+        onclick={() => void deleteRow(r, row.id)}
+      ><Icon icon={Trash} /></button>
     </div>
   {/each}
 
@@ -450,6 +476,17 @@
   }
   .cell.playhead .fill { filter: brightness(1.25); }
   .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Delete row: an icon button at the row's end, faint until the row is
+     hovered or holds focus (opacity only: it stays focusable). */
+  .del {
+    width: 24px; height: 24px; flex: none; padding: 0; border: 0; border-radius: var(--r-sm);
+    display: grid; place-items: center; background: transparent; color: var(--text-2); cursor: pointer;
+    opacity: 0; transition: opacity 0.12s;
+  }
+  .row:hover .del, .row:focus-within .del { opacity: 1; }
+  .del:hover { color: var(--rec); background: var(--raised); }
+  .del:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
 
   .strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
   .strip-name { width: 133px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }

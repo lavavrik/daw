@@ -99,6 +99,10 @@ pub const OP_AUTO_POINT_CURVE: u32 = 56; // a=lane*512+idx b=curve -1..1 of the 
 pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=33 (tracks, returns) or -1 = off; the master is BAD_VALUE
 // Pattern transport focus (plan 20 task 12). Not an edit.
 pub const OP_SET_PATTERN_FOCUS: u32 = 57; // a=slot 0..MAX_TRACKS-1 (only it plays in Pattern mode) or 255 = none (every track)
+// Drum rows (plan 21 task 7): remove / insert a row, shifting the later rows
+// (settings, steps in every pattern, voices, sidechain keys) in one command.
+pub const OP_REMOVE_ROW: u32 = 58; // a=slot b=row: rows below move up one, the last row is empty
+pub const OP_INSERT_ROW: u32 = 59; // a=slot b=row: an empty row there, rows from it move down one (the last one is dropped)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -205,6 +209,12 @@ pub enum Command {
     /// Pattern mode plays only `slot`'s pattern; `None` (wire 255): every
     /// track's (see "Pattern focus" in the engine docs).
     SetPatternFocus { slot: Option<usize> },
+    /// Remove drum row `row`: every later row moves up one (see
+    /// `Drums::remove_row` and `Mixer::row_removed`).
+    RemoveRow { slot: usize, row: usize },
+    /// Insert an empty drum row at `row`, moving it and every later row down
+    /// one (the inverse of `RemoveRow`; `Drums::insert_row`).
+    InsertRow { slot: usize, row: usize },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -599,6 +609,8 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_SET_PATTERN_FOCUS => {
             Command::SetPatternFocus { slot: if a == 255.0 { None } else { Some(index(a, MAX_TRACKS)?) } }
         }
+        OP_REMOVE_ROW => Command::RemoveRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
+        OP_INSERT_ROW => Command::InsertRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -985,6 +997,18 @@ mod tests {
         assert_eq!(decode(OP_SET_PATTERN_FOCUS, 255., 0., 0., 0.), Ok(Command::SetPatternFocus { slot: None }));
         for bad in [-1., MAX_TRACKS as f64, 254., 256., 0.5, f64::NAN, f64::INFINITY] {
             assert_eq!(decode(OP_SET_PATTERN_FOCUS, bad, 0., 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+        }
+    }
+    #[test]
+    fn decode_remove_and_insert_row() {
+        assert_eq!((OP_REMOVE_ROW, OP_INSERT_ROW), (58, 59));
+        let last = (MAX_ROWS - 1) as f64;
+        assert_eq!(decode(OP_REMOVE_ROW, 3., 2., 0., 0.), Ok(Command::RemoveRow { slot: 3, row: 2 }));
+        assert_eq!(decode(OP_INSERT_ROW, 0., last, 0., 0.), Ok(Command::InsertRow { slot: 0, row: MAX_ROWS - 1 }));
+        for op in [OP_REMOVE_ROW, OP_INSERT_ROW] {
+            for (a, b) in [(-1., 0.), (MAX_TRACKS as f64, 0.), (0., MAX_ROWS as f64), (0., 0.5), (f64::NAN, 0.), (0., -1.)] {
+                assert_eq!(decode(op, a, b, 0., 0.), Err(ERR_BAD_INDEX), "op {op} [{a}, {b}]");
+            }
         }
     }
     #[test]

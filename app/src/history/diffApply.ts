@@ -15,7 +15,8 @@
 //      removals before any add);
 //   2. per track, in `to` order: a track the live project lacks is rebuilt
 //      whole (trackState + trackCommands, the plan-6 load builders);
-//      otherwise name/colour, drum rows, patterns (new ones, then data of
+//      otherwise name/colour, drum rows (one row deleted or brought back:
+//      REMOVE_ROW / INSERT_ROW first, plan 21), patterns (new ones, then data of
 //      changed ones -- the engine edits its current pattern, so each is
 //      selected in turn -- then the current pattern, then clips, then
 //      patterns that are gone: CLEAR_PATTERN_DATA), and the synth rack
@@ -46,7 +47,7 @@ import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort }
 import { moduleDef } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
-import { liveInputTrack, setMetronome, setTempo, syncPatternFocus } from '../state/actions';
+import { liveInputTrack, rowInsertedState, rowRemovedState, setMetronome, setTempo, syncPatternFocus } from '../state/actions';
 import type { CommandSink } from '../state/actions';
 import { markEdited } from '../state/edits';
 import { accepts, setMix, setSidechain } from '../state/mixer-actions';
@@ -57,7 +58,7 @@ import { sendClip, setLoop } from '../state/song-actions';
 import { sendAudioClip } from '../state/audio-actions';
 import { MAX_ROWS, MAX_STEPS, currentPattern, newChannel } from '../state/project.svelte';
 import type {
-  AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
+  AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumRow, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
   Project, SidechainKey, SynthTrack, Track,
 } from '../state/project.svelte';
 import { laneCommands, lanesState, midiMapState, trackCommands, trackState } from '../project/commands';
@@ -297,7 +298,20 @@ function diffAudio(sink: CommandSink, t: AudioTrack, tj: AudioTrackJson, leaving
 
 function diffDrum(p: Project, sink: CommandSink, t: DrumTrack, tj: DrumTrackJson) {
   const slot = t.slot;
-  // Rows: append-only in the UI; a row that goes away is reset in the engine.
+  // A row deleted (redo) or brought back (undo of "Delete row", plan 21):
+  // REMOVE_ROW / INSERT_ROW move the later rows, their steps in every pattern
+  // and their keys in one command, and the state the same way, so the kept
+  // rows keep their UI ids and below only the restored row's own data is
+  // sent (its settings, its cells; step 3 its keys).
+  const shift = shiftedRow(t.rows, tj.rows);
+  if (shift && shift.inserted) {
+    sink.send(Op.INSERT_ROW, slot, shift.at);
+    rowInsertedState(p, t, shift.at, { id: crypto.randomUUID(), name: tj.rows[shift.at].name, sampleId: null, gain: 1, pan: 0, mute: false });
+  } else if (shift) {
+    sink.send(Op.REMOVE_ROW, slot, shift.at);
+    rowRemovedState(p, t, shift.at);
+  }
+  // Otherwise rows by index: a row that goes away at the end is reset in the engine.
   while (t.rows.length > tj.rows.length) {
     const i = t.rows.length - 1;
     const r = t.rows.pop()!;
@@ -341,6 +355,29 @@ function diffDrum(p: Project, sink: CommandSink, t: DrumTrack, tj: DrumTrackJson
       }
       return out;
     });
+}
+
+const sameRow = (r: DrumRow, rj: DrumTrackJson['rows'][number]) =>
+  r.name === rj.name && r.sampleId === rj.sample && r.gain === rj.gain && r.pan === rj.pan && r.mute === rj.mute;
+
+/**
+ * Exactly one row more (`inserted`) or fewer in `want` than in `live`, at
+ * `at`, with every other row the same in order (name and settings; steps are
+ * not compared). Null otherwise, and diffDrum falls back to rows by index,
+ * which is also exact, only chattier. Among identical neighbours the first
+ * mismatch is taken; the pattern diff then fixes any cells that differ.
+ */
+function shiftedRow(live: DrumRow[], want: DrumTrackJson['rows']): { at: number; inserted: boolean } | null {
+  const inserted = want.length === live.length + 1;
+  if (!inserted && want.length !== live.length - 1) return null;
+  const short = Math.min(live.length, want.length);
+  const eq = (i: number, j: number) => (inserted ? sameRow(live[i], want[j]) : sameRow(live[j], want[i]));
+  let at = 0;
+  while (at < short && eq(at, at)) at++;
+  // At the end: the plain by-index path below already does it (push / reset).
+  if (at === short) return null;
+  for (let i = at; i < short; i++) if (!eq(i, i + 1)) return null;
+  return { at, inserted };
 }
 
 function diffSynth(p: Project, sink: CommandSink, t: SynthTrack, tj: SynthTrackJson) {

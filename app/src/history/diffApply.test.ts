@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_CLIPS, MAX_NOTES, Op } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
-import { addDrumTrack, addRow, removeTrack, selectTrack, setMetronome, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setTempo, toggleStep } from '../state/actions';
+import { addDrumTrack, addRow, removeDrumRow, removeTrack, selectTrack, setMetronome, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setTempo, toggleStep } from '../state/actions';
 import { setMix, setSidechain } from '../state/mixer-actions';
 import { addNote, deleteNotes, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern, setPatternBars, updateNotes } from '../state/pattern-actions';
 import { addModule, addSynthTrack, connect, disconnect, loadPatch, removeModule, setParam } from '../state/rack-actions';
 import { deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, setLoop, setMode, splitClips } from '../state/song-actions';
 import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
 import { STARTER_PATCHES } from '../state/patches';
+import { learnMidi } from '../state/midiMap';
 import { Project, currentPattern } from '../state/project.svelte';
 import type { AudioTrack, DrumTrack, SynthTrack } from '../state/project.svelte';
 import { projectCommands } from '../project/commands';
@@ -449,5 +450,84 @@ describe('diffApply', () => {
     r.log.length = 0;
     diffApply(r.p, r.sink, B, A);
     expect(focuses()).toEqual([]);
+  });
+
+  // ---- Deleting a drum row (plan 21 task 7) --------------------------------
+
+  it('delete a drum row: undo restores its sample, settings, steps in every pattern, keys; lanes and mappings stay', async () => {
+    const r = await rig({ auto: true });
+    const { p, sink, drums, synth, synth2 } = r;
+    // Keys on the row that goes (synth2 -> row 1) and on a later row (synth -> row 3);
+    // a MIDI mapping on the drum strip. (No lane or mapping can target a row.)
+    setSidechain(p, sink, synth2.id, { trackId: drums.id, row: 1 });
+    setSidechain(p, sink, synth.id, { trackId: drums.id, row: 3 });
+    expect(learnMidi(p, 20, drums.id, { kind: 'mix', param: 'fader' })).toBe(true);
+    const A = serialize(p);
+    const keptIds = drums.rows.filter((_, i) => i !== 1).map((x) => x.id);
+    const pat2 = drums.patterns[1];
+    expect(pat2.steps[4][31]).toBe(127);
+
+    r.log.length = 0;
+    expect(removeDrumRow(p, sink, drums.id, drums.rows[1].id)).toBe(true); // "snare"
+    expect(r.log).toEqual([[Op.REMOVE_ROW, drums.slot, 1, 0, 0]]); // one command, every pattern shifts in the engine
+    expect(drums.rows.map((x) => x.name)).toEqual(['kick', 'Row 3', 'Row 4', 'Row 5']);
+    expect(drums.rows.map((x) => x.id)).toEqual(keptIds);
+    expect(pat2.steps[3][31]).toBe(127); // a step in the other pattern moved up with its row
+    expect(pat2.steps.length).toBe(16);
+    expect(p.mixer.channels[synth2.id].key).toBeNull(); // keyed by the deleted row: none
+    expect(p.mixer.channels[synth.id].key).toEqual({ trackId: drums.id, row: 2 }); // follows its row
+    const B = serialize(p);
+    expect(B.tracks.find((t) => t.slot === drums.slot)!.automation).toEqual(A.tracks.find((t) => t.slot === drums.slot)!.automation);
+    expect(B.midiMap).toEqual(A.midiMap);
+    expect(r.m.errors).toEqual([]);
+    expect(view(r.m, B)).toEqual(loaded(B));
+
+    // Undo: INSERT_ROW, then only the restored row's data (no other row is re-sent).
+    r.log.length = 0;
+    diffApply(p, sink, B, A);
+    expect(r.m.errors).toEqual([]);
+    expect(serialize(p)).toEqual(A);
+    expect(view(r.m, A)).toEqual(loaded(A));
+    expect(r.log[0]).toEqual([Op.INSERT_ROW, drums.slot, 1, 0, 0]);
+    const rowOps = new Set<number>([Op.SET_ROW_SAMPLE, Op.SET_ROW_GAIN, Op.SET_ROW_PAN, Op.SET_ROW_MUTE, Op.SET_STEP]);
+    expect(r.log.filter((x) => rowOps.has(x[0])).every((x) => x[2] === 1)).toBe(true);
+    const snare = drums.rows[1];
+    expect([snare.name, snare.sampleId, snare.gain, snare.pan]).toEqual(['snare', 1, 0.5, -0.25]);
+    expect(drums.patterns[0].steps[1][4]).toBe(60);
+    expect(pat2.steps[4][31]).toBe(127);
+    expect(drums.rows.filter((_, i) => i !== 1).map((x) => x.id)).toEqual(keptIds); // the kept rows keep their UI ids
+    expect(p.mixer.channels[synth2.id].key).toEqual({ trackId: drums.id, row: 1 });
+    expect(p.mixer.channels[synth.id].key).toEqual({ trackId: drums.id, row: 3 });
+
+    // Redo: REMOVE_ROW again.
+    r.log.length = 0;
+    diffApply(p, sink, A, B);
+    expect(r.log[0]).toEqual([Op.REMOVE_ROW, drums.slot, 1, 0, 0]);
+    expect(r.m.errors).toEqual([]);
+    expect(serialize(p)).toEqual(B);
+    expect(view(r.m, B)).toEqual(loaded(B));
+  });
+
+  it('delete the first, the last and every row: undo and redo are exact', async () => {
+    await roundTrip(({ p, sink, drums }) => removeDrumRow(p, sink, drums.id, drums.rows[0].id)); // the key source row
+    await roundTrip(({ p, sink, drums }) => removeDrumRow(p, sink, drums.id, drums.rows[4].id));
+    await roundTrip(({ p, sink, drums }) => {
+      while (drums.rows.length) removeDrumRow(p, sink, drums.id, drums.rows[0].id);
+      addRow(p, sink, drums.id); // an empty track gets rows again
+    });
+  });
+
+  it('delete a row of a full (16-row) track', async () => {
+    const r = await rig();
+    while (r.drums.rows.length < 16) addRow(r.p, r.sink, r.drums.id);
+    setStep(r.p, r.sink, r.drums.id, r.drums.rows[15].id, 0, 99);
+    const A = serialize(r.p);
+    removeDrumRow(r.p, r.sink, r.drums.id, r.drums.rows[2].id);
+    expect(currentPattern(r.drums).steps[14][0]).toBe(99);
+    const B = serialize(r.p);
+    diffApply(r.p, r.sink, B, A);
+    expect(r.m.errors).toEqual([]);
+    expect(serialize(r.p)).toEqual(A);
+    expect(view(r.m, A)).toEqual(loaded(A));
   });
 });

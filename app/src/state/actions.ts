@@ -92,6 +92,63 @@ export function addRow(p: Project, _sink: CommandSink, trackId: string): DrumRow
   });
 }
 
+// ---- Deleting a row (plan 21 task 7; docs/architecture/sequencer.md "Deleting a row")
+// Engine rows are addressed by index, so a row in the middle can't simply
+// vanish: every later row must move up one, with its steps in EVERY pattern
+// (not just the current one) and the sidechain keys on it. REMOVE_ROW does
+// all of that in one command (atomic for the audio thread, no pattern
+// switching, no flood of SET_STEPs); the two functions below make the state
+// mirror it. No automation lane or MIDI mapping can point at a row (row
+// gain/pan are native ranges, not params), so there are none to drop.
+
+/** The state side of REMOVE_ROW (engine.rs `RemoveRow`): no command. */
+export function rowRemovedState(p: Project, track: DrumTrack, row: number) {
+  track.rows.splice(row, 1);
+  for (const pat of track.patterns) {
+    pat.steps.splice(row, 1);
+    pat.steps.push(new Array(MAX_STEPS).fill(0));
+  }
+  for (const ch of Object.values(p.mixer.channels)) {
+    const k = ch.key;
+    if (k?.trackId !== track.id || k.row === null || k.row < row) continue;
+    ch.key = k.row === row ? null : { trackId: k.trackId, row: k.row - 1 };
+  }
+}
+
+/**
+ * The state side of INSERT_ROW (engine.rs `InsertRow`; diffApply's undo of a
+ * delete): `r` at `row`, empty steps there in every pattern, keys from that
+ * row on move down one. No command.
+ */
+export function rowInsertedState(p: Project, track: DrumTrack, row: number, r: DrumRow) {
+  track.rows.splice(row, 0, r);
+  for (const pat of track.patterns) {
+    pat.steps.splice(row, 0, new Array(MAX_STEPS).fill(0));
+    pat.steps.length = MAX_ROWS; // the dropped last row is unused, so empty
+  }
+  for (const ch of Object.values(p.mixer.channels)) {
+    const k = ch.key;
+    if (k?.trackId !== track.id || k.row === null || k.row < row) continue;
+    ch.key = k.row + 1 < MAX_ROWS ? { trackId: k.trackId, row: k.row + 1 } : null;
+  }
+}
+
+/**
+ * Delete a drum row: one undo entry ("Delete row") that removes its sample,
+ * settings and steps in every pattern; sidechain keys on it go to none.
+ * Undo puts it all back (diffApply: INSERT_ROW, then the row's data). The
+ * last row can go too: the track is then empty, with "+ Add row".
+ */
+export function removeDrumRow(p: Project, sink: CommandSink, trackId: string, rowId: string): boolean {
+  return edit(p, 'Delete row', () => {
+    const f = find(p, trackId, rowId);
+    if (!f) return false;
+    sink.send(Op.REMOVE_ROW, f.track.slot, f.row);
+    rowRemovedState(p, f.track, f.row);
+    return true;
+  });
+}
+
 // Step, step-count and swing edits act on the track's current pattern, which
 // is also the engine's current pattern (only selectPattern changes either).
 

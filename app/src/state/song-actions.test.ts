@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
+import { MAX_CLIPS, MAX_SONG_TICKS, Op, PATTERN_FOCUS_NONE } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { DrumTrack, SynthTrack } from './project.svelte';
-import { addDrumTrack, stop } from './actions';
+import { addDrumTrack, removeTrack, selectTrack, stop } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 import {
@@ -262,9 +262,10 @@ describe('transports', () => {
     const calls: string[] = [];
     const hooks = { beforeStop: () => calls.push(`stop:${p.playing}`), countIn: () => (calls.push(`countIn:${p.mode}`), 3840) };
     expect(playPattern(p, sink, hooks)).toBe(true);
-    expect(sent.map((x) => x[0])).toEqual([Op.STOP, Op.SET_MODE, Op.PLAY]);
+    expect(sent.map((x) => x[0])).toEqual([Op.STOP, Op.SET_MODE, Op.SET_PATTERN_FOCUS, Op.PLAY]);
     expect(sent[1][1]).toBe(0); // Pattern mode
-    expect(sent[2][1]).toBe(3840); // the count-in, asked once the mode is Pattern
+    expect(sent[2][1]).toBe(2); // only the selected track (d2) plays
+    expect(sent[3][1]).toBe(3840); // the count-in, asked once the mode is Pattern
     expect(calls).toEqual(['stop:true', 'countIn:pattern']);
     expect([p.mode, p.playing]).toEqual(['pattern', true]);
   });
@@ -275,14 +276,17 @@ describe('transports', () => {
     seek(p, sink, 3840);
     sent.length = 0;
     expect(playSong(p, sink)).toBe(true);
-    expect(sent).toEqual([[Op.STOP, 0, 0, 0, 0], [Op.SET_MODE, 1, 0, 0, 0], [Op.SEEK, 3840, 0, 0, 0], [Op.PLAY, 0, 0, 0, 0]]);
+    expect(sent).toEqual([
+      [Op.STOP, 0, 0, 0, 0], [Op.SET_MODE, 1, 0, 0, 0], [Op.SEEK, 3840, 0, 0, 0],
+      [Op.SET_PATTERN_FOCUS, PATTERN_FOCUS_NONE, 0, 0, 0], [Op.PLAY, 0, 0, 0, 0],
+    ]);
     expect([p.mode, p.playing]).toEqual(['song', true]);
   });
 
   it('starting the transport that already runs sends nothing; from stopped there is no STOP', () => {
     const { p, sink, sent } = setup();
-    playPattern(p, sink); // mode already Pattern: just PLAY
-    expect(sent).toEqual([[Op.PLAY, 0, 0, 0, 0]]);
+    playPattern(p, sink); // mode already Pattern: the focus, PLAY
+    expect(sent).toEqual([[Op.SET_PATTERN_FOCUS, 2, 0, 0, 0], [Op.PLAY, 0, 0, 0, 0]]);
     sent.length = 0;
     let stops = 0;
     expect(playPattern(p, sink, { beforeStop: () => stops++ })).toBe(true);
@@ -310,6 +314,58 @@ describe('transports', () => {
     let stops = 0;
     stopTransport(p, sink, { beforeStop: () => stops++ });
     expect([sent, stops]).toEqual([[], 0]);
+  });
+});
+
+describe('pattern focus (plan 20 task 12): the pattern transport plays only the shown track', () => {
+  const focuses = (sent: number[][]) => sent.filter((x) => x[0] === Op.SET_PATTERN_FOCUS).map((x) => x[1]);
+
+  it('selecting another pattern track while the pattern plays moves the focus', () => {
+    const { p, sink, sent, d0, s1 } = setup();
+    playPattern(p, sink);
+    expect(focuses(sent)).toEqual([2]);
+    sent.length = 0;
+    selectTrack(p, sink, s1.id);
+    selectTrack(p, sink, d0.id);
+    expect(focuses(sent)).toEqual([1, 0]);
+  });
+
+  it('an Audio track (no pattern) keeps the last focus', () => {
+    const { p, sink, sent, d0 } = setup();
+    const a = addAudioTrack(p, sink)!; // selects it (stopped: no focus)
+    selectTrack(p, sink, d0.id);
+    expect(focuses(sent)).toEqual([]);
+    playPattern(p, sink);
+    sent.length = 0;
+    selectTrack(p, sink, a.id);
+    expect(focuses(sent)).toEqual([]);
+  });
+
+  it('no pattern track selected at Play: every track plays (255)', () => {
+    const { p, sink, sent } = setup();
+    addAudioTrack(p, sink); // selected
+    sent.length = 0;
+    playPattern(p, sink);
+    expect(focuses(sent)).toEqual([PATTERN_FOCUS_NONE]);
+  });
+
+  it('stopped, or the song playing: selecting sends no focus', () => {
+    const { p, sink, sent, d0, s1 } = setup();
+    selectTrack(p, sink, s1.id);
+    playSong(p, sink);
+    sent.length = 0;
+    selectTrack(p, sink, d0.id);
+    expect(focuses(sent)).toEqual([]);
+  });
+
+  it('removing the focused track while the pattern plays moves the focus with the selection', () => {
+    const { p, sink, sent, s1 } = setup();
+    selectTrack(p, sink, s1.id);
+    playPattern(p, sink);
+    sent.length = 0;
+    removeTrack(p, sink, s1.id); // the selection moves to d2 (slot 2)
+    expect(p.selectedTrackId).toBe(p.tracks[1].id);
+    expect(focuses(sent)).toEqual([2]);
   });
 });
 

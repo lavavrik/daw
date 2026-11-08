@@ -450,7 +450,7 @@ impl AudioTracks {
     ) -> u32 {
         let win = match timeline {
             Timeline::Song(_) => window.filter(|&(_, _, spt)| spt > 0.0 && spt.is_finite()),
-            Timeline::Pattern => None,
+            Timeline::Pattern { .. } => None,
         };
         let (fade, ramp) = (self.fade, self.ramp);
         let mut sounding = 0u32;

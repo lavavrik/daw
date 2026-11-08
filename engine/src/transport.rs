@@ -47,7 +47,8 @@ pub struct Piece {
 /// What the transport plays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Every track loops its current pattern.
+    /// Every track loops its current pattern (only the focus's, with a
+    /// pattern focus: [`Transport::focus`]).
     Pattern,
     /// The arrangement (clips) plays on the song timeline.
     Song,
@@ -68,6 +69,9 @@ pub struct Transport {
     /// Song mode: where playback last started (or the last seek); Stop
     /// returns here when the loop is off.
     pub song_start: f64,
+    /// Pattern mode: the only slot whose pattern plays (`SET_PATTERN_FOCUS`),
+    /// or `None` for every slot. Song mode ignores it.
+    pub focus: Option<usize>,
     /// `(tick, frames, spt)`: `ticks == tick + frames / spt` since the last
     /// jump or tempo change (see the module docs).
     anchor: (f64, f64, f64),
@@ -83,6 +87,7 @@ impl Transport {
             loop_start: 0.0,
             loop_end: 0.0,
             song_start: 0.0,
+            focus: None,
             anchor: (0.0, 0.0, 0.0),
         }
     }

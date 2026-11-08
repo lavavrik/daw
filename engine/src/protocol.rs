@@ -97,6 +97,8 @@ pub const OP_AUTO_OVERRIDE: u32 = 54; // a=lane: suspend until the next breakpoi
 pub const OP_AUTO_POINT_CURVE: u32 = 56; // a=lane*512+idx b=curve -1..1 of the segment it starts (0 linear); AUTO_POINT_SET resets it to 0
 // Visual data path (plan 12, docs/architecture/visuals.md). Not an edit.
 pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=33 (tracks, returns) or -1 = off; the master is BAD_VALUE
+// Pattern transport focus (plan 20 task 12). Not an edit.
+pub const OP_SET_PATTERN_FOCUS: u32 = 57; // a=slot 0..MAX_TRACKS-1 (only it plays in Pattern mode) or 255 = none (every track)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -200,6 +202,9 @@ pub enum Command {
     AutoOverride { lane: usize },
     /// The strip tap: mixer channel `0..=MIX_DELAY`, or −1 (off).
     VisTap { ch: i32 },
+    /// Pattern mode plays only `slot`'s pattern; `None` (wire 255): every
+    /// track's (see "Pattern focus" in the engine docs).
+    SetPatternFocus { slot: Option<usize> },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -591,6 +596,9 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         // −1 (off) or a track / return channel; the master (the worklet taps
         // the output itself) and anything else are BAD_VALUE.
         OP_VIS_TAP => Command::VisTap { ch: if a == -1.0 { -1 } else { int_in(a, 0, MIX_DELAY as u32)? as i32 } },
+        OP_SET_PATTERN_FOCUS => {
+            Command::SetPatternFocus { slot: if a == 255.0 { None } else { Some(index(a, MAX_TRACKS)?) } }
+        }
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -967,6 +975,17 @@ mod tests {
         assert_eq!(decode(OP_AUTO_LANE_ENABLE, lanes, 1., 0., 0.), Err(ERR_BAD_INDEX));
         assert_eq!(decode(OP_AUTO_OVERRIDE, 7., 0., 0., 0.), Ok(Command::AutoOverride { lane: 7 }));
         assert_eq!(decode(OP_AUTO_OVERRIDE, -1., 0., 0., 0.), Err(ERR_BAD_INDEX));
+    }
+    #[test]
+    fn decode_set_pattern_focus() {
+        assert_eq!(OP_SET_PATTERN_FOCUS, 57);
+        assert_eq!(decode(OP_SET_PATTERN_FOCUS, 0., 0., 0., 0.), Ok(Command::SetPatternFocus { slot: Some(0) }));
+        let last = (MAX_TRACKS - 1) as f64;
+        assert_eq!(decode(OP_SET_PATTERN_FOCUS, last, 0., 0., 0.), Ok(Command::SetPatternFocus { slot: Some(MAX_TRACKS - 1) }));
+        assert_eq!(decode(OP_SET_PATTERN_FOCUS, 255., 0., 0., 0.), Ok(Command::SetPatternFocus { slot: None }));
+        for bad in [-1., MAX_TRACKS as f64, 254., 256., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_SET_PATTERN_FOCUS, bad, 0., 0., 0.), Err(ERR_BAD_INDEX), "{bad}");
+        }
     }
     #[test]
     fn decode_value_ranges() {

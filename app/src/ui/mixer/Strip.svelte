@@ -176,7 +176,7 @@
       <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${name}`} title={muted ? `${name} is muted — click to unmute` : `Mute ${name}`} data-testid="mute" onclick={() => toggleMute(p, engine, target)}>M</button>
     {/if}
     {#if kind === 'track'}
-      <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloed ? `${name} is soloed — click to unsolo` : `Solo ${name} (other tracks are muted; returns keep playing)`} data-testid="solo" onclick={() => toggleSolo(p, engine, target)}>S</button>
+      <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloed ? `${name} is soloed — click to unsolo` : `Solo ${name}: play only this track; returns keep playing (⌘/Ctrl/Shift-click: add it to the soloed ones)`} data-testid="solo" onclick={(e) => toggleSolo(p, engine, target, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
     {/if}
     {#if kind !== 'master'}
       <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}>∿</button>

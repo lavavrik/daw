@@ -3,7 +3,7 @@
 // step, nested calls included (docs/architecture/history.md). Same in
 // pattern-, song-, audio-, mixer- and rack-actions.ts.
 import { BAR_TICKS, Op } from '../audio/protocol';
-import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, newChannel } from './project.svelte';
+import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, isPatternTrack, newChannel } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
 import { edit, markEdited } from './edits';
@@ -226,6 +226,31 @@ function syncInput(p: Project, sink: CommandSink, before: SynthTrack | DrumTrack
   if (now?.id !== before?.id) sink.send(Op.SET_INPUT_TRACK, now ? now.slot : -1);
 }
 
+// ---- Pattern focus (plan 20 task 12) ----------------------------------------
+// "When playing the grid/roll, nothing else should be playing": while the
+// pattern transport runs, the engine plays only the track the bottom panel
+// shows (SET_PATTERN_FOCUS; docs/architecture/sequencer.md "Pattern focus").
+// The focus follows the selection; it is transport state, never an edit.
+
+/** The slot the pattern transport plays: the selected drum or synth track's, else null. */
+export function patternFocusSlot(p: Project): number | null {
+  const t = p.tracks.find((x) => x.id === p.selectedTrackId);
+  return t && isPatternTrack(t) ? t.slot : null;
+}
+
+/**
+ * While the pattern transport plays, move the focus to the selected track:
+ * SET_PATTERN_FOCUS(slot) for a drum or synth track. An Audio track or no
+ * selection keeps the last focus (nothing is sent). Stopped or Song mode:
+ * nothing (playPattern sends the focus when it starts). Re-sending the
+ * current slot is harmless (the engine ignores an unchanged focus).
+ */
+export function syncPatternFocus(p: Project, sink: CommandSink) {
+  if (!p.playing || p.mode !== 'pattern') return;
+  const slot = patternFocusSlot(p);
+  if (slot !== null) sink.send(Op.SET_PATTERN_FOCUS, slot);
+}
+
 export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
   const t = p.tracks.find((x) => x.id === trackId);
   if (!t) return;
@@ -234,6 +259,7 @@ export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
   p.selectedTrackId = t.id;
   if (t.kind === 'synth') p.lastSynthTrackId = t.id;
   syncInput(p, sink, before);
+  syncPatternFocus(p, sink);
 }
 
 export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
@@ -261,5 +287,6 @@ export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
       p.lastSynthTrackId = p.tracks.find((t) => t.kind === 'synth')?.id ?? null;
     }
     syncInput(p, sink, before);
+    syncPatternFocus(p, sink); // the pattern transport follows the new selection
   });
 }

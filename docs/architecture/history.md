@@ -283,7 +283,9 @@ Order:
      another idx), then by idx for a point whose old tick is gone (moved in
      place); unchanged owners are not touched.
 4. **Transport** (tempo, metronome, loop; not the mode), selection, and
-   `SET_INPUT_TRACK` only if the live input changed.
+   `SET_INPUT_TRACK` only if the live input changed; while the pattern
+   transport plays, `SET_PATTERN_FOCUS` for the restored selection
+   (`syncPatternFocus`, plan 20 task 12; not an edit).
 
 **No stuck notes:** the engine releases a note that is removed or changed
 (`NOTE_REMOVE`/`NOTE_SET`), a clip that is removed or changed, a pattern

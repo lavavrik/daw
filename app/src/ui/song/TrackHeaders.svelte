@@ -222,7 +222,7 @@
         </div>
         <span class="ms">
           <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
-          <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (and other soloed ones)`} onclick={() => toggleSolo(p, engine, t.id)}>S</button>
+          <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (⌘/Ctrl/Shift-click: add it to the soloed ones)`} onclick={(e) => toggleSolo(p, engine, t.id, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
           <button
             type="button"
             class="a"

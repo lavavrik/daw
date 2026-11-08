@@ -437,6 +437,9 @@ fn song_mode_loops_and_clip_edits_do_not_allocate() {
             170 => ok(e.command(OP_SET_PATTERN_BARS, s, 4., 0., 0.)),
             1500 => ok(e.command(OP_SEEK, 9000., 0., 0., 0.)),
             1700 => ok(e.command(OP_SET_MODE, 0., 0., 0., 0.)), // pattern mode, playing
+            1720 => ok(e.command(OP_SET_PATTERN_FOCUS, s, 0., 0., 0.)), // only the synth
+            1740 => ok(e.command(OP_SET_PATTERN_FOCUS, d, 0., 0., 0.)), // releases its notes
+            1760 => ok(e.command(OP_SET_PATTERN_FOCUS, 255., 0., 0., 0.)), // every track again
             1800 => ok(e.command(OP_SET_MODE, 1., 0., 0., 0.)),
             2000 => ok(e.command(OP_SET_LOOP, 4000., 4001., 0., 0.)), // 1 tick: wraps every ~18 frames
             2100 => ok(e.command(OP_SET_LOOP, 0., 3840., 0., 0.)), // behind the playhead: jumps

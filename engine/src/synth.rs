@@ -423,6 +423,18 @@ impl Synths {
         }
     }
 
+    /// The pattern focus moved to `keep`: `Off` for every note the
+    /// Pattern-mode voicing of any other track holds (clip voicings are
+    /// untouched; they only sound in Song mode, which ignores the focus).
+    pub fn release_patterns_except(&mut self, keep: usize) {
+        for (slot, t) in self.tracks.iter_mut().enumerate() {
+            if slot != keep {
+                let released = t.patterns.iter_mut().fold(0, |m, p| m | p.release_all());
+                release(&mut t.rack, released);
+            }
+        }
+    }
+
     /// A jump of song time (loop wrap, seek): `Off` for every note any clip
     /// of any track is holding.
     pub fn release_song(&mut self) {
@@ -489,7 +501,10 @@ impl Synths {
             events.clear();
             if let (true, Some((t0, t1, spt))) = (active, window) {
                 match timeline {
-                    Timeline::Pattern => {
+                    // Pattern focus: an unfocused track schedules nothing
+                    // (its held notes were released when the focus moved).
+                    Timeline::Pattern { .. } if !timeline.pattern_plays(slot) => {}
+                    Timeline::Pattern { .. } => {
                         if let Some(p) = t.pattern_mut() {
                             p.events(t0, t1, spt, n, events);
                         }

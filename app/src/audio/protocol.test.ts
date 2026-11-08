@@ -5,7 +5,7 @@ import {
   PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
   MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode,
   MAX_ARENA_FLOATS, MAX_CLIP_GAIN, CLIP_FADE_SECONDS, MAX_AUTO_LANES, MAX_AUTO_POINTS, AUTO_KIND, packAutoParam,
-  autoPoint, VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
+  autoPoint, PATTERN_FOCUS_NONE, VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
 } from './protocol';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS } from '../state/project.svelte';
 
@@ -22,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(62); // + AUTO_POINT_CURVE (plan 16)
+    expect(Object.keys(rust).length).toBe(63); // + SET_PATTERN_FOCUS (plan 20 task 12)
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -40,6 +40,11 @@ describe('protocol parity with engine/src/protocol.rs', () => {
     // Plan 16: a segment's curve (55 is VIS_TAP's).
     expect(Op.AUTO_POINT_CURVE).toBe(56);
     expect(src).toMatch(/OP_AUTO_POINT_CURVE: u32 = 56; \/\/ a=lane\*512\+idx b=curve -1\.\.1/);
+  });
+  it('SET_PATTERN_FOCUS is 57 and takes a slot or 255 (none)', () => {
+    expect(Op.SET_PATTERN_FOCUS).toBe(57);
+    expect(PATTERN_FOCUS_NONE).toBe(255);
+    expect(src).toMatch(/OP_SET_PATTERN_FOCUS: u32 = 57; \/\/ a=slot 0\.\.MAX_TRACKS-1 .* or 255 = none/);
   });
 });
 

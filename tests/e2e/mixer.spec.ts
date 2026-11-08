@@ -84,6 +84,19 @@ async function synthHoldingNote(page: Page) {
   await page.keyboard.down('KeyA');
 }
 
+/**
+ * The drums loop under the song transport (one long clip of their pattern),
+ * so they play together with the synth's live note. The pattern transport
+ * would play only the selected track, the synth (plan 20 task 12).
+ */
+async function drumsLoopInSong(page: Page) {
+  await page.evaluate(() => {
+    const d = (window as unknown as { __daw: { project: { tracks: { id: string }[] }; actions: { addClip(id: string, o: object): unknown } } }).__daw;
+    d.actions.addClip(d.project.tracks[0].id, { start: 0, len: 64 * 3840 });
+  });
+  await page.getByTestId('play').click();
+}
+
 test('mixer shows strips for tracks + returns + master', async ({ page }) => {
   await startAudio(page);
   await page.getByTestId('add-synth-track').click();
@@ -171,7 +184,7 @@ test('solo isolates', async ({ page }) => {
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
+  await drumsLoopInSong(page);
   await openMixer(page);
   await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
   await expect.poll(() => meterDb(page, 1), { timeout: 3_000 }).toBeGreaterThan(-40);
@@ -195,7 +208,7 @@ test('track header M and S mute / solo the track, in sync with the mixer strip',
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
+  await drumsLoopInSong(page);
   await openMixer(page);
   await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
 
@@ -224,11 +237,43 @@ test('track header M and S mute / solo the track, in sync with the mixer strip',
   await page.keyboard.up('KeyA');
 });
 
+test('track header S is exclusive: it unsolos the others; Shift-click adds to the solo', async ({ page }) => {
+  // Owner's note (plan 20 task 12). Three tracks: drums (0), synth (1), synth (2).
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await page.getByTestId('add-synth-track').click();
+  const solo = (slot: number) => page.getByTestId(`track-solo-${slot}`);
+  const pressed = async () => Promise.all([0, 1, 2].map(async (s) => (await solo(s).getAttribute('aria-pressed')) === 'true'));
+  await expect(solo(0)).toHaveAttribute('title', /Shift-click: add it to the soloed ones/);
+  await solo(0).click();
+  await solo(1).click({ modifiers: ['Shift'] }); // additive
+  expect(await pressed()).toEqual([true, true, false]);
+  // A plain click on an unsoloed track: only it stays soloed (the mixer strips follow).
+  await solo(2).click();
+  await expect(solo(2)).toHaveAttribute('aria-pressed', 'true');
+  expect(await pressed()).toEqual([false, false, true]);
+  await openMixer(page);
+  await expect(strip(page, 0).getByTestId('solo')).toHaveAttribute('aria-pressed', 'false');
+  await expect(strip(page, 2).getByTestId('solo')).toHaveAttribute('aria-pressed', 'true');
+  // One undo entry brings both back.
+  await page.keyboard.press('Meta+z');
+  await expect(solo(0)).toHaveAttribute('aria-pressed', 'true');
+  expect(await pressed()).toEqual([true, true, false]);
+  // A plain click on a soloed track unsolos just that one.
+  await solo(1).click();
+  await expect(solo(1)).toHaveAttribute('aria-pressed', 'false');
+  expect(await pressed()).toEqual([true, false, false]);
+  // The mixer strip's S is exclusive too.
+  await strip(page, 1).getByTestId('solo').click();
+  await expect(solo(1)).toHaveAttribute('aria-pressed', 'true');
+  expect(await pressed()).toEqual([false, true, false]);
+});
+
 test('sidechain from kick ducks the synth', async ({ page }) => {
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
+  await drumsLoopInSong(page);
   await openMixer(page);
   const synth = strip(page, 1);
   await expect.poll(() => meterDb(page, 1), { timeout: 3_000 }).toBeGreaterThan(-40);

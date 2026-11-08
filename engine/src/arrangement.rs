@@ -81,8 +81,11 @@ impl Clip {
 /// What the tracks play while the transport runs.
 #[derive(Clone, Copy)]
 pub enum Timeline<'a> {
-    /// Pattern mode: every track loops its current pattern from tick 0.
-    Pattern,
+    /// Pattern mode: every track loops its current pattern from tick 0;
+    /// with a `focus` (`SET_PATTERN_FOCUS`) only that slot's pattern
+    /// schedules steps / notes, every other track is silent (tails and live
+    /// input still sound).
+    Pattern { focus: Option<usize> },
     /// Song mode: every track plays its clips, `arrangements[slot]`
     /// (`MAX_TRACKS` entries; a missing entry means no clips).
     Song(&'a [Arrangement]),
@@ -92,8 +95,17 @@ impl Timeline<'_> {
     /// The clips of track `slot` in Song mode (empty otherwise).
     pub fn clips(&self, slot: usize) -> &[Clip] {
         match self {
-            Timeline::Pattern => &[],
+            Timeline::Pattern { .. } => &[],
             Timeline::Song(a) => a.get(slot).map_or(&[], |a| a.clips()),
+        }
+    }
+
+    /// Pattern mode: does track `slot` schedule its current pattern (no
+    /// focus, or the focus is `slot`)? Always false in Song mode.
+    pub fn pattern_plays(&self, slot: usize) -> bool {
+        match self {
+            Timeline::Pattern { focus } => focus.is_none_or(|f| f == slot),
+            Timeline::Song(_) => false,
         }
     }
 }

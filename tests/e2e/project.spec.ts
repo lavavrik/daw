@@ -76,6 +76,26 @@ function stripPeaks(page: Page, slots: number[], ms: number) {
   );
 }
 
+/**
+ * Max meter peak of each track's pattern over `ms` (indexed by slot), track by
+ * track in `order`: the pattern transport plays only the selected track (plan
+ * 20 task 12), so each track header is clicked in turn while it plays (the
+ * focus follows). The synth goes first: a note sounds only from its start (a
+ * track focused mid-note waits for the next one), and the chord starts at
+ * tick 0 of a 4-bar pattern; the drums hit on every beat.
+ */
+async function patternPeaks(page: Page, order: number[], ms: number) {
+  const out: number[] = [];
+  await page.getByTestId(`track-${order[0]}`).click();
+  await page.getByTestId('pattern-play').click();
+  for (const s of order) {
+    await page.getByTestId(`track-${s}`).click();
+    out[s] = (await stripPeaks(page, [s], ms))[0];
+  }
+  await page.getByTestId('pattern-stop').click();
+  return out;
+}
+
 /** A fresh OPFS folder for this test. */
 async function opfsDir(page: Page, name: string) {
   await page.evaluate(async (name) => {
@@ -100,9 +120,7 @@ test('save then load reproduces the beat', async ({ page }) => {
   await startAudio(page);
   await makeBeat(page);
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
-  await page.getByTestId('pattern-play').click(); // the beat is patterns: Pattern mode
-  const before = await stripPeaks(page, [0, 1], 2000);
-  await page.getByTestId('pattern-stop').click();
+  const before = await patternPeaks(page, [1, 0], 2000); // the beat is patterns: Pattern mode
   expect(before[0]).toBeGreaterThan(0.01);
   expect(before[1]).toBeGreaterThan(0.01);
   const want = await summary(page);
@@ -137,9 +155,7 @@ test('save then load reproduces the beat', async ({ page }) => {
   expect(warnings).toEqual([]);
   expect(await summary(page)).toEqual(want);
   await expect(page.getByTestId('project-name')).not.toContainText('unsaved');
-  await page.getByTestId('pattern-play').click();
-  const after = await stripPeaks(page, [0, 1], 2000);
-  await page.getByTestId('pattern-stop').click();
+  const after = await patternPeaks(page, [1, 0], 2000);
   expect(after[0]).toBeGreaterThan(0.01);
   expect(after[1]).toBeGreaterThan(0.01);
   await expect(page.getByTestId('banner')).toBeHidden();
@@ -284,9 +300,7 @@ test('restore banner appears and restores', async ({ page }) => {
   await expect.poll(() => summary(page)).toEqual(want);
   await expect(page.getByTestId('project-name')).toContainText('Night Drive');
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
-  await page.getByTestId('pattern-play').click();
-  const peaks = await stripPeaks(page, [0, 1], 2000);
-  await page.getByTestId('pattern-stop').click();
+  const peaks = await patternPeaks(page, [1, 0], 2000);
   expect(peaks[0]).toBeGreaterThan(0.01); // the kick (its sample came back from OPFS)
   expect(peaks[1]).toBeGreaterThan(0.01);
 

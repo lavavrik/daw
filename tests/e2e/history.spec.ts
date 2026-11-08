@@ -75,6 +75,20 @@ const summary = (page: Page) =>
     );
   });
 
+/**
+ * Every track in `slots` sounds while the pattern transport plays: it plays
+ * only the selected track (plan 20 task 12), so each track header is clicked
+ * in turn (the focus follows the selection). The synth goes first: a track
+ * focused mid-note only sounds from its next note (the pad's chord starts at
+ * tick 0 of a 4-bar pattern); the drums hit on every beat.
+ */
+async function eachSounds(page: Page, slots: number[], timeout: number) {
+  for (const s of slots) {
+    await page.getByTestId(`track-${s}`).click();
+    await expect.poll(async () => (await stripPeaks(page, [s], 600))[0], { timeout }).toBeGreaterThan(0.01);
+  }
+}
+
 const playingTicks = (page: Page) => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.engine!.telemetry()[2]);
 
 test('undo remove track restores everything (sound resumes)', async ({ page }) => {
@@ -94,8 +108,8 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
     a.addClip(synth.id, { start: 0 });
   });
   const want = await summary(page);
-  await page.getByTestId('pattern-play').click(); // Pattern mode: the drums loop (the synth's clip plays in Song mode only)
-  await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await page.getByTestId('pattern-play').click(); // Pattern mode (the synth's clip plays in Song mode only)
+  await eachSounds(page, [1, 0], 5_000);
 
   // Two separate edits (separate tasks): remove the drums (sample, steps, the
   // synth's sidechain source), then the synth (rack, notes, clip, mixer).
@@ -114,7 +128,7 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
   // The transport never stopped, and both tracks play again.
   expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.playing)).toBe(true);
   const t0 = await playingTicks(page);
-  await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 10_000 }).toBeGreaterThan(0.01);
+  await eachSounds(page, [1, 0], 10_000);
   expect(await playingTicks(page)).not.toBe(t0);
   // The sidechain key (the kick row keys the pad) came back with both tracks.
   expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.mixer.channels[(window as unknown as { __daw: Daw }).__daw.project.tracks[1].id].key)).not.toBeNull();

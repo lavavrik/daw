@@ -184,7 +184,7 @@ describe('shortcut handlers', () => {
     const p = { playing: false, mode: 'pattern', songPosition: 0, loop: { on: false, start: 0, end: 3840 }, tracks: [] };
     const { sent, h } = mk({}, p);
     h.onKeyDown(key('Space'));
-    expect(sent.map((x) => x[0])).toEqual([Op.SET_MODE, Op.SEEK, Op.PLAY]);
+    expect(sent.map((x) => x[0])).toEqual([Op.SET_MODE, Op.SEEK, Op.SET_PATTERN_FOCUS, Op.PLAY]); // focus: 255, every track
     expect([p.mode, p.playing]).toEqual(['song', true]);
     h.onKeyDown(key('Space'));
     expect(sent.at(-1)![0]).toBe(Op.STOP);

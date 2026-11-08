@@ -145,9 +145,10 @@ test('restart keeps project and handles', async ({ page }) => {
   const undoTitle = await page.getByTestId('undo').getAttribute('title');
   expect(undoTitle).toMatch(/^Undo /);
 
-  // Playing when Apply is pressed: the restart stops the transport.
+  // Playing when Apply is pressed: the restart stops the transport. (The
+  // pattern transport plays only the selected track, the synth: plan 20 task 12.)
   await page.getByTestId('pattern-play').click();
-  await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await expect.poll(async () => (await stripPeaks(page, [1], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.evaluate(() => ((window as unknown as W).__oldEngine = (window as unknown as W).__daw.engine));
 
   await page.getByTestId('settings-button').click();
@@ -179,10 +180,15 @@ test('restart keeps project and handles', async ({ page }) => {
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
 
-  // Audio plays after the restart: the kick (sample re-uploaded from memory) and the synth.
+  // Audio plays after the restart: the synth, then the kick (sample
+  // re-uploaded from memory) once its track is selected (the pattern focus
+  // follows the selection); then the synth is selected again for the keys.
   await page.getByTestId('pattern-play').click();
-  await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await expect.poll(async () => (await stripPeaks(page, [1], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
+  await page.getByTestId('track-0').click();
+  await expect.poll(async () => (await stripPeaks(page, [0], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.getByTestId('pattern-stop').click();
+  await page.getByTestId('track-1').click();
   // The computer keyboard (bound once per session, through App's forwarding
   // view) plays the synth on the new engine.
   await expect.poll(() => page.evaluate(() => (window as unknown as W).__daw.project.playing)).toBe(false);

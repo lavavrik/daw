@@ -23,6 +23,13 @@ describe('edit tracking (fix 5)', () => {
     expect([p.dirty, p.version]).toEqual([false, 0]);
   });
 
+  it('SET_PATTERN_FOCUS is not an edit', () => {
+    // Which track the pattern transport plays is transport state (plan 20 task 12).
+    const p = new Project();
+    commandEdits(p, Op.SET_PATTERN_FOCUS);
+    expect([p.dirty, p.version]).toEqual([false, 0]);
+  });
+
   it('nothing is marked while a load replaces the session', () => {
     const p = new Project();
     p.loading = true;

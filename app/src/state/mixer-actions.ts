@@ -67,10 +67,26 @@ const flag = (p: Project, target: MixChannelTarget, name: string): number | null
   return r ? r.ch.params[mixParam(name).id] : null;
 };
 
-export function toggleSolo(p: Project, sink: CommandSink, trackId: string) {
-  return edit(p, 'Solo', () => {
-    const cur = flag(p, trackId, 'solo');
-    if (cur !== null) setMix(p, sink, trackId, 'solo', cur ? 0 : 1);
+/**
+ * The S button of a track (track header or mixer strip). Exclusive by default
+ * (owner's note, plan 20 task 12): S on a track that is not soloed solos it
+ * and unsolos every other track; S on a soloed track unsolos just that one
+ * (the others are unchanged). `additive` (Cmd/Ctrl/Shift-click) is the old
+ * toggle of that one track, to build a multi-track solo. One undo entry,
+ * "Solo <name>" / "Unsolo <name>". Only tracks have a solo (the returns and
+ * the master have none).
+ */
+export function toggleSolo(p: Project, sink: CommandSink, trackId: string, o: { additive?: boolean } = {}) {
+  const t = p.tracks.find((x) => x.id === trackId);
+  const cur = flag(p, trackId, 'solo');
+  const label = t ? `${cur ? 'Unsolo' : 'Solo'} ${t.name}` : 'Solo';
+  return edit(p, label, () => {
+    if (!t || cur === null) return;
+    setMix(p, sink, trackId, 'solo', cur ? 0 : 1);
+    if (cur || o.additive) return;
+    for (const other of p.tracks) {
+      if (other.id !== trackId && flag(p, other.id, 'solo')) setMix(p, sink, other.id, 'solo', 0);
+    }
   });
 }
 

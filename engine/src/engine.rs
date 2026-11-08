@@ -126,6 +126,18 @@
 //!   tick 0 when stopped and keeps the playhead while playing (patterns loop
 //!   on `ticks mod period`, like a pattern switch).
 //!
+//! # Pattern focus (plan 20 task 12)
+//! `SET_PATTERN_FOCUS` (a slot, or 255 = none) makes Pattern mode play only
+//! that slot's current pattern: the pattern transport plays the track the
+//! bottom panel shows, nothing else. Every other track schedules no steps or
+//! notes (`Timeline::pattern_plays`); a new focus sends `Off` for every note
+//! another track's pattern holds, so nothing sticks. Drum hits already
+//! ringing, live input (`NOTE_ON`, the input track), the metronome and the
+//! count-in are unaffected, and Song mode (and so export) ignores the focus.
+//! It is transport state, not an edit: `RESET_ALL` puts it back to none
+//! (`Transport::new`), the engine default, which is the old every-track
+//! behaviour.
+//!
 //! # Visual data (plan 12)
 //! The engine fills a preallocated [`VisBlock`] every block for the UI's
 //! visuals (`vis.rs`, docs/architecture/visuals.md): the strip tap
@@ -1055,6 +1067,17 @@ impl Engine {
                 self.mixer.set_tap(ch);
                 self.vis.tap_ch = self.mixer.tap() as f32;
             }
+            // See "Pattern focus" in the module docs. A new focus releases
+            // what every other track's pattern holds (no stuck notes); the
+            // same focus again changes nothing.
+            Command::SetPatternFocus { slot } => {
+                if slot != self.transport.focus {
+                    self.transport.focus = slot;
+                    if let Some(keep) = slot {
+                        self.synths.release_patterns_except(keep);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -1206,7 +1229,7 @@ impl Engine {
             render_metronome(&mut self.metronome, window, l, r);
         }
         let timeline = match self.transport.mode {
-            Mode::Pattern => Timeline::Pattern,
+            Mode::Pattern => Timeline::Pattern { focus: self.transport.focus },
             Mode::Song => Timeline::Song(&self.arrangements),
         };
         // Drums: new hits at their exact sample offsets while playing; tails
@@ -1343,6 +1366,9 @@ mod audio_tests;
 
 #[cfg(test)]
 mod auto_tests;
+
+#[cfg(test)]
+mod focus_tests;
 
 #[cfg(test)]
 mod tests {

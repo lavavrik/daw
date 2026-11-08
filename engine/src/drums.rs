@@ -646,7 +646,8 @@ impl Drums {
             let mut hits = Hits::new();
             let current = if track.current < MAX_PATTERNS { track.current } else { 0 };
             match (track.active, window, timeline) {
-                (true, Some((t0, t1, spt)), Timeline::Pattern) => {
+                // An unfocused track (pattern focus) takes the latch branch below.
+                (true, Some((t0, t1, spt)), Timeline::Pattern { .. }) if timeline.pattern_plays(slot) => {
                     let pat = &mut track.patterns[current];
                     let mut swing = pat.swing;
                     pat.collect(&mut swing, t0, t1, t0, spt, n, current as u8, &mut hits);

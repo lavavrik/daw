@@ -153,8 +153,19 @@ export const Op = {
    *  curve to 0, so a curved point is sent SET, then CURVE (pointCommands).
    *  56: 55 was VIS_TAP's already. */
   AUTO_POINT_CURVE: 56,
+  /** a=slot 0..MAX_TRACKS-1, or PATTERN_FOCUS_NONE (255): Pattern mode plays
+   *  only that slot's current pattern, every other track schedules nothing
+   *  (a new focus releases their held notes). Song mode, live input and the
+   *  metronome ignore it. The pattern transport sends the selected pattern
+   *  track's slot (state/song-actions.ts playPattern, actions.ts
+   *  syncPatternFocus), the song transport 255. Not an edit (NON_EDIT_OPS);
+   *  RESET_ALL puts it back to 255, the engine default (plan 20 task 12). */
+  SET_PATTERN_FOCUS: 57,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
+
+/** SET_PATTERN_FOCUS "no focus": every track's pattern plays. */
+export const PATTERN_FOCUS_NONE = 255;
 
 export const Err = {
   OK: 0,

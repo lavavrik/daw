@@ -84,6 +84,13 @@ compressor's reduction ramps to unity over 2 ms.
   so notes keep playing and unmuting is instant and in time.
 * If any *track* is soloed, every unsoloed track is muted. Returns and master
   are unaffected by solo (returns can be muted; master has neither).
+* **Exclusive solo** (plan 20 task 12, owner's note; `state/mixer-actions.ts
+  toggleSolo`): the S button (track header or mixer strip) on a track that
+  is not soloed solos it **and unsolos every other track**; on a soloed
+  track it unsolos just that one. Cmd/Ctrl/Shift-click is the old additive
+  toggle (`{ additive: true }`), to build a multi-track solo. Either way one
+  undo entry, "Solo <name>" / "Unsolo <name>". The engine is unchanged: it
+  is a batch of `MIX_SET solo` commands.
 * The gate acts on the **sends too**, pre-fader sends included: a muted or
   solo-muted track feeds nothing new into Reverb/Delay. The return tails keep
   ringing out (they are not gated), which is what you want when muting a

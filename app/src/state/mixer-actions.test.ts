@@ -5,6 +5,9 @@ import { Project } from './project.svelte';
 import { addDrumTrack, removeTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
+import { createHistory } from '../history/history';
+import { diffApply } from '../history/diffApply';
+import { serialize } from '../project/serialize';
 
 function fake() {
   const sent: number[][] = [];
@@ -85,6 +88,59 @@ describe('mixer state', () => {
     expect(sent).toEqual([
       [Op.MIX_SET, 0, P('solo'), 1, 0], [Op.MIX_SET, 0, P('solo'), 0, 0], [Op.MIX_SET, 33, P('mute'), 1, 0],
     ]);
+  });
+
+  it('exclusive solo: S solos the track and unsolos every other one, in one undo entry', () => {
+    // Owner's note (plan 20 task 12): clicking S removes solo from the others.
+    const p = new Project();
+    const { sink, sent } = fake();
+    const [a, b, c] = [addDrumTrack(p, sink)!, addSynthTrack(p, sink)!, addDrumTrack(p, sink)!];
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    const solo = (t: { id: string }) => p.mixer.channels[t.id].params[P('solo')];
+    toggleSolo(p, sink, a.id, { additive: true });
+    toggleSolo(p, sink, c.id, { additive: true });
+    expect([solo(a), solo(b), solo(c)]).toEqual([1, 0, 1]);
+    sent.length = 0;
+    toggleSolo(p, sink, b.id);
+    expect([solo(a), solo(b), solo(c)]).toEqual([0, 1, 0]);
+    expect(sent).toEqual([
+      [Op.MIX_SET, b.slot, P('solo'), 1, 0], [Op.MIX_SET, a.slot, P('solo'), 0, 0], [Op.MIX_SET, c.slot, P('solo'), 0, 0],
+    ]);
+    expect(p.history.labels.undo).toBe(`Solo ${b.name}`);
+    p.history.undo(); // one entry: back to a and c soloed
+    expect([solo(a), solo(b), solo(c)]).toEqual([1, 0, 1]);
+    p.history.redo();
+    // S on a soloed track unsolos just it: a (soloed too) is unchanged.
+    toggleSolo(p, sink, a.id, { additive: true });
+    sent.length = 0;
+    toggleSolo(p, sink, b.id);
+    expect([solo(a), solo(b), solo(c)]).toEqual([1, 0, 0]);
+    expect(sent).toEqual([[Op.MIX_SET, b.slot, P('solo'), 0, 0]]);
+    expect(p.history.labels.undo).toBe(`Unsolo ${b.name}`);
+  });
+
+  it('additive solo (Cmd/Ctrl/Shift-click) toggles only that track', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const [a, b] = [addDrumTrack(p, sink)!, addDrumTrack(p, sink)!];
+    sent.length = 0;
+    toggleSolo(p, sink, a.id, { additive: true });
+    toggleSolo(p, sink, b.id, { additive: true });
+    toggleSolo(p, sink, a.id, { additive: true });
+    expect(sent).toEqual([
+      [Op.MIX_SET, a.slot, P('solo'), 1, 0], [Op.MIX_SET, b.slot, P('solo'), 1, 0], [Op.MIX_SET, a.slot, P('solo'), 0, 0],
+    ]);
+  });
+
+  it('exclusive solo on an unknown track changes nothing', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const a = addDrumTrack(p, sink)!;
+    toggleSolo(p, sink, a.id);
+    sent.length = 0;
+    toggleSolo(p, sink, 'missing');
+    expect(sent).toEqual([]);
+    expect(p.mixer.channels[a.id].params[P('solo')]).toBe(1);
   });
 
   it('sidechain encodes slot*32+row+1', () => {

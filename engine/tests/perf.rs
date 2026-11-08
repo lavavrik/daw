@@ -205,7 +205,7 @@ fn four_tracks(extra: &[(usize, usize, f32)]) -> f64 {
 fn render(s: &mut Synths, ctx: &mut Ctx, tpf: f64, bufs: &mut StereoBufs, auto: &AutoFrame) {
     let t1 = ctx.ticks + BLOCK as f64 * tpf;
     bufs.clear(BLOCK);
-    s.render_add(ctx, SampleView::NONE, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern, bufs, (0, BLOCK), auto);
+    s.render_add(ctx, SampleView::NONE, Some((ctx.ticks, t1, 1.0 / tpf)), Timeline::Pattern { focus: None }, bufs, (0, BLOCK), auto);
     ctx.ticks = t1;
 }
 

@@ -46,7 +46,7 @@ import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort }
 import { moduleDef } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
-import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
+import { liveInputTrack, setMetronome, setTempo, syncPatternFocus } from '../state/actions';
 import type { CommandSink } from '../state/actions';
 import { markEdited } from '../state/edits';
 import { accepts, setMix, setSidechain } from '../state/mixer-actions';
@@ -169,6 +169,7 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   if (!same(p.midiMap, midiMap)) p.midiMap = midiMap;
   const input = liveInputTrack(p)?.slot ?? -1;
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
+  syncPatternFocus(p, sink); // the pattern transport (if it runs) follows the restored selection
   markEdited(p); // also when only UI-only fields (names) changed
 }
 

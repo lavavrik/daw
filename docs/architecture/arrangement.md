@@ -39,9 +39,13 @@ The engine has one transport and two modes; the UI has two transports
 is no PAT/SONG switch (and no Shift+L) any more.
 - **Pattern mode** (the **pattern transport**: ▶ / ■ / Rec / Count-in and
   the "beat / bars" readout in the bottom panel's header,
-  `ui/PatternTransport.svelte`; the default): unchanged from plans 1-3. Each
-  track loops its current pattern from tick 0; recording targets the
-  live-input track's pattern.
+  `ui/PatternTransport.svelte`; the default): each track loops its current
+  pattern from tick 0, but only the **focused** track is heard: the one the
+  bottom panel shows (the selected drum / synth track; plan 20 task 12,
+  `SET_PATTERN_FOCUS`, see sequencer.md "Pattern focus"). Selecting another
+  pattern track while it plays moves the focus there; an Audio track keeps
+  the last one. Recording targets the live-input track's pattern (the same
+  track).
 - **Song mode** (the **song transport**: the top bar's Play / Stop): the
   transport plays song time from the seek position (ruler click, default
   0). Recording is disabled; the count-in is ignored.
@@ -50,7 +54,9 @@ is no PAT/SONG switch (and no Shift+L) any more.
   recorded notes at the heard tick), then `setMode` (saved, so it marks the
   project unsaved, but never an undo entry and never restored by undo, like
   the selection: Cmd+Z can't switch what plays), then PLAY (the count-in
-  is asked once the mode is set). `stopTransport` stops either;
+  is asked once the mode is set; `SET_PATTERN_FOCUS` goes right before PLAY:
+  the selected pattern track's slot for the pattern transport, 255 = every
+  track for the song). `stopTransport` stops either;
   `toggleTransport` is the default the shortcuts fall back to without an
   App. The App wraps them with the recorder hooks: `toggleSong` (the top
   bar's Play / Stop), `startTransport('pattern')` / `stopAny` (the panel's

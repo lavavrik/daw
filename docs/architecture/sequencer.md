@@ -202,6 +202,45 @@ Sequenced and live notes share the track's MIDI In voices. Stop releases
 *sequenced* notes only; switching the input track releases only live-held
 pitches. Editing, moving or removing a sounding note releases it.
 
+## Pattern focus (plan 20 task 12)
+Owner's note: "when playing the grid/roll, nothing else should be playing".
+While the **pattern transport** plays, only the track shown in the bottom
+panel (the selected drum or synth track) is heard; every other track's steps
+and notes are silent. The song transport is unchanged.
+
+| Op | # | Fields |
+|---|---|---|
+| `OP_SET_PATTERN_FOCUS` | 57 | `a` = slot `0..MAX_TRACKS-1`, or 255 = none (every track plays) |
+
+**Engine** (`engine.rs` "Pattern focus", `Transport::focus`,
+`Timeline::Pattern { focus }`): in Pattern mode an unfocused track schedules
+nothing (`Timeline::pattern_plays`): a drum track just latches its swing, a
+synth track builds no events. A *new* focus sends `Off` for every note the
+pattern of any other track holds (`Synths::release_patterns_except`), so
+nothing sticks; the same focus again changes nothing. Drum hits already
+ringing ring out. Live input (the input track), the metronome and the
+count-in are unaffected. Song mode ignores the focus, so export (which
+renders the song) does too. The focus is transport state: `RESET_ALL` (project
+load) puts it back to none, the engine default (= the old every-track
+behaviour). No allocation (`no_alloc.rs` switches it while playing).
+
+**App** (`state/song-actions.ts startTransport`, `state/actions.ts
+patternFocusSlot` / `syncPatternFocus`):
+- `playPattern` sends `SET_PATTERN_FOCUS(selected track's slot)` after
+  `SET_MODE` and before `PLAY`; with an Audio track or nothing selected (the
+  pattern transport is disabled then, but Space can still start it) it sends
+  255. `playSong` sends 255.
+- While the pattern transport plays, the focus follows the selection: every
+  path that changes it sends the new slot (`selectTrack`, `removeTrack` when
+  the selection moves, undo/redo restoring it in `diffApply`). Selecting an
+  Audio track (or the selection becoming none) keeps the last focus. Stopped
+  or in Song mode nothing is sent.
+- `SET_PATTERN_FOCUS` is in `NON_EDIT_OPS`: not saved, not undoable, never
+  marks the project dirty, never in `projectCommands`.
+- No chase (see "No note chase" below): a synth focused mid-note is silent
+  until its next On; a long chord that started before the switch waits for
+  the next pattern loop. Drums hit on their next step.
+
 ## Live drum input
 Code: `engine/src/drums.rs` (`Drums::live_hit`, "Live hits"), `engine.rs`
 (`live`), `app/src/state/actions.ts` (`liveInputTrack`),
@@ -347,6 +386,8 @@ wrap's Off and its own On on the wrap frame (a retrigger).
 - Mode switch releases every sequenced note. Pattern -> Song jumps to the song
   start; Song -> Pattern goes to 0 when stopped and keeps the playhead while
   playing (patterns continue at `ticks mod period`).
+- Pattern mode with a pattern focus plays only the focused track (see
+  "Pattern focus" above); Song mode ignores the focus.
 
 ## Count-in
 `OP_PLAY` with `a = 3840` starts the transport at tick -3840. Until tick 0 no

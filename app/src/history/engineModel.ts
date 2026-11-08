@@ -292,7 +292,7 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.RACK_DISCONNECT: { const t = slotOf(a, 'synth'); if (t) delete t.cables[b]; break; }
       case Op.MIX_SET: m.mixer[a][b] = cc; break;
       case Op.MIX_SET_KEY: slotOf(a); m.keys[a] = b; break;
-      case Op.PLAY: case Op.STOP: case Op.SEEK: case Op.NOTE_ON: case Op.NOTE_OFF: break;
+      case Op.PLAY: case Op.STOP: case Op.SEEK: case Op.NOTE_ON: case Op.NOTE_OFF: case Op.SET_PATTERN_FOCUS: break;
       default: bad('unexpected op');
     }
   }

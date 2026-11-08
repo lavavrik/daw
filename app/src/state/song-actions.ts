@@ -13,11 +13,11 @@
 // send an audio clip as SOURCE, GAIN, SET (audio-actions.ts sendAudioClip).
 // Unlike note clips, audio clips may move between Audio lanes (they have no
 // pattern); `offset` is seconds for them.
-import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
+import { MAX_CLIPS, MAX_SONG_TICKS, Op, PATTERN_FOCUS_NONE } from '../audio/protocol';
 import { isPatternTrack, patternLength } from './project.svelte';
 import type { AudioClip, AudioTrack, Clip, PatternTrack, Project } from './project.svelte';
 import type { CommandSink } from './actions';
-import { play, stop } from './actions';
+import { patternFocusSlot, play, stop } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
 import { edit } from './edits';
 import {
@@ -313,13 +313,22 @@ export function stopTransport(p: Project, sink: CommandSink, hooks: TransportHoo
 
 /**
  * Starts transport `mode`: the other one, if running, is stopped first, then
- * SET_MODE, then PLAY. Already running: nothing is sent (true). False when
- * the engine refused PLAY (stopped; see actions.play).
+ * SET_MODE, SET_PATTERN_FOCUS, then PLAY. Already running: nothing is sent
+ * (true). False when the engine refused PLAY (stopped; see actions.play).
+ *
+ * The focus (plan 20 task 12): the pattern transport plays only the selected
+ * drum / synth track (the bottom panel's), or every track when none is
+ * selected (an Audio track or nothing: PATTERN_FOCUS_NONE); while it runs,
+ * selecting another pattern track moves the focus (actions.ts
+ * syncPatternFocus). The song transport sends PATTERN_FOCUS_NONE (Song mode
+ * ignores the focus anyway; this keeps the engine at its default).
  */
 function startTransport(p: Project, sink: CommandSink, mode: 'pattern' | 'song', hooks: TransportHooks): boolean {
   if (transportPlaying(p, mode)) return true;
   stopTransport(p, sink, hooks);
   setMode(p, sink, mode);
+  const focus = mode === 'pattern' ? patternFocusSlot(p) : null;
+  sink.send(Op.SET_PATTERN_FOCUS, focus ?? PATTERN_FOCUS_NONE);
   return play(p, sink, hooks.countIn?.() ?? 0);
 }
 

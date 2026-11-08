@@ -902,7 +902,7 @@
         <div class="bottom" bind:this={bottomEl}>
           <BottomPanel
             bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} capturing={() => !!recorder?.armed && project.playing}
-            {recorder} {rec} onPatternPlay={() => startTransport('pattern')} onPatternStop={stopAny} onToggleArm={toggleArm}
+            {recorder} {rec} onPatternPlay={() => startTransport('pattern')} onPatternStop={() => { if (transportPlaying(project, 'pattern')) stopAny(); }} onToggleArm={toggleArm}
           />
         </div>
       </div>

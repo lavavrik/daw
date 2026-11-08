@@ -109,7 +109,9 @@ stored, so the Slide toggle is disabled there ("Slide needs a next note"); a
 tie after a rest is a rest. When the pattern doesn't read at the tab's base
 but fits one an octave around its lowest note, `readSteps` picks that base
 and the tab adopts it; the base −/+ buttons only offer bases the pattern
-reads at exactly.
+reads at exactly. Every base (−/+, auto-fit, Convert) is a C in 12..96
+(`MIN_BASE`..`MAX_BASE`), so the window stays inside MIDI 0..127; a pattern
+that would need a base above 96 is unshowable (`range`).
 
 **Unshowable patterns** (a start off the grid, two starts on a step, a note
 reaching past the note after next, a pitch outside every candidate window,
@@ -122,10 +124,12 @@ pitches into a window.
 reading with the new steps run by run and touches only what changed: a new
 run adds a canonical note, a run whose note step went away removes its note,
 and a kept run updates only the fields whose inputs changed (pitch ← key/oct;
-vel ← accent; len ← its tie count, its slide, and whether a note follows).
-So piano-roll lengths (240, 480, a 30-tick slide overlap) survive edits that
-don't concern them; turning the step after a slide into a rest shrinks the
-slid note back to its plain length.
+vel ← accent; len ← its tie count, its slide, and, only with a slide,
+whether a note follows). So piano-roll lengths (240, 480, a 30-tick slide
+overlap) survive edits that don't concern them: a held 480-tick note keeps
+its length when a note is entered at the step after it, since without a
+slide a length never reaches the next step. Turning the step after a slide
+into a rest shrinks the slid note back to its plain length.
 
 **Undo.** Every edit is one entry (`edit()`). Single-step edits pass a
 coalesce key `acid:<trackId>:<kind>` (kind pitch / oct / accent / slide /
@@ -140,9 +144,22 @@ disabled).
 `input/lastNote.svelte.ts` counts them in `lastLive.seq`) sets that step:
 key = note mod 12, oct = clamp(floor(note/12) − base/12, −1, 1), accent and
 slide kept, coalesce kind `entry`; then the next step (wrapping) is
-selected. The note still sounds. While the tab has focus and a step is
-selected, the arrows move the selection, A/S/R/T toggle accent / slide /
-rest / tie and Esc deselects; those keys don't reach the QWERTY piano.
+selected. The note still sounds. No step entry while the recorder captures
+(armed and playing): the note is recorded instead. While the tab has focus
+and a step is selected, the arrows move the selection, Shift+A / Shift+S /
+Shift+R / Shift+T toggle accent / slide / rest / tie, Delete or Backspace
+makes the step a rest and Esc deselects; only those keys are kept from
+`input/shortcuts.ts`. Plain letters are QWERTY piano keys (A = C, S = D,
+T = F# …), so they reach the piano and enter notes; the piano ignores Shift,
+which is why the four Shift combos are stopped (Shift+R would also toggle
+record arm). Clicking a key of the key strip sets the step and auditions
+the pitch (a 150 ms note on the live-note bus, ended early by pointerup);
+that note-on enters no step. The selection clears when the track's current
+pattern changes.
+
+**Length.** The toolbar's Length menu (1, 2, 4 bars, plus the current length
+when it is another) sets the pattern's `bars` like the piano roll's, one
+"Pattern length" undo entry; notes past the end are kept, silent.
 
 **Slides depend on the patch:** the tab shows "Slides need a mono patch with
 glide, e.g. Acid Line" unless the track's MIDI In is Mono with glide > 0 and

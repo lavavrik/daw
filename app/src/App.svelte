@@ -18,7 +18,7 @@
   import { addDefaultDrumTrack, appKitDeps, loadDefaultKit } from './state/defaultKit';
   import type { KitDeps } from './state/defaultKit';
   import { library } from './library/library.svelte';
-  import { addNote } from './state/pattern-actions';
+  import { addNote, setPatternBars } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
   import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
   import { BUILTIN_PATCHES } from './state/patches';
@@ -364,6 +364,8 @@
     setStep: (trackId, rowId, step, vel) => engine && setStep(project, engine, trackId, rowId, step, vel),
     setRowGain: (trackId, rowId, gain) => engine && setRowGain(project, engine, trackId, rowId, gain),
     addNote: (trackId, o) => (engine ? addNote(project, engine, trackId, o) : null),
+    // A pattern length the menus don't offer (the Acid e2e's 3 bars).
+    setPatternBars: (trackId, bars) => engine && setPatternBars(project, engine, trackId, bars),
     setMix: (target, param, v) => engine && setMix(project, engine, target, param, v),
     setSidechain: (trackId, key) => (engine ? setSidechain(project, engine, trackId, key) : false),
     loadPatch: (trackId, patch) => (engine ? loadPatch(project, engine, trackId, patch) : []),
@@ -819,7 +821,7 @@
       <Browser {engine} p={project} />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
-        <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} /></div>
+        <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} capturing={() => !!recorder?.armed && project.playing} /></div>
       </div>
     </div>
     <AutoMenu p={project} {engine} bus={autoBus} />

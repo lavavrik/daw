@@ -24,12 +24,14 @@
   import { banners, flashHint } from '../state/banners.svelte';
   import { clearDownload } from '../export/exportFlow';
 
-  let { p, engine, clock, noteInput = null }: {
+  let { p, engine, clock, noteInput = null, capturing = () => false }: {
     p: Project;
     engine: AudioEngine;
     clock: AudioClock | null;
-    /** Played-note bus (the piano roll's keyboard auditions through it). */
+    /** Played-note bus (the piano roll's keyboard and the Acid key strip audition through it). */
     noteInput?: NoteInput | null;
+    /** True while the recorder captures live notes (the Acid tab's step entry pauses). */
+    capturing?: () => boolean;
   } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   /** The selected track when it plays patterns (an Audio track has none). */
@@ -43,8 +45,8 @@
   // timeline's track headers closes it (TrackHeaders.svelte) so the bottom panel
   // shows that track's editor (the remembered Piano roll / Instrument tab, or
   // the Step grid). An Audio track (plan 9) has one editor, the Clip tab
-  // (ClipPanel: the clip the timeline focused); Step grid, Piano roll and
-  // Instrument are disabled for it, with their usual tooltips.
+  // (ClipPanel: the clip the timeline focused); Step grid, Piano roll, Acid
+  // and Instrument are disabled for it, with their usual tooltips.
   let synthTab = $state(lastSynthTab);
   const editorTab = $derived(
     track?.kind === 'synth' ? synthTab : track?.kind === 'drum' ? 'step' : track?.kind === 'audio' ? 'clip' : null,
@@ -176,7 +178,7 @@
     {:else if track && track.kind === 'synth' && active === 'pianoroll'}
       {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}
     {:else if track && track.kind === 'synth' && active === 'acid'}
-      {#key track.id}<AcidSteps {p} {engine} {clock} {track} />{/key}
+      {#key track.id}<AcidSteps {p} {engine} {clock} {track} {noteInput} {capturing} />{/key}
     {:else if track && track.kind === 'synth'}
       {#key track.id}<Rack {p} {engine} {track} onpianoroll={() => pickSynthTab('pianoroll')} />{/key}
     {:else if track && track.kind === 'audio'}

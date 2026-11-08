@@ -15,14 +15,25 @@
   // Step entry: with a step selected, every live note-on (QWERTY piano or
   // MIDI; input/lastNote lastLive.seq) sets that step's pitch and selects the
   // next step. The note still sounds. The tab is only mounted while it is
-  // shown (BottomPanel), so "the tab is visible" needs no extra check.
+  // shown (BottomPanel), so "the tab is visible" needs no extra check. Not
+  // while the recorder captures (armed and playing): the note is recorded,
+  // and entering it as a step too would write it twice.
   //
   // KEYBOARD FOCUS RULE (like the piano roll): while focus is inside the tab
   // and a step is selected, ← → ↑ ↓ move the selection (↑ ↓ by a row),
-  // A accent, S slide, R rest, T tie, Escape deselects; those keys are
-  // stopped here so they don't also play the QWERTY piano (which would enter
-  // a note). Without a selection only the arrows (select step 1) are taken.
-  // Space, Z/X, undo and every other key bubble on to input/shortcuts.ts.
+  // Shift+A accent, Shift+S slide, Shift+R rest, Shift+T tie, Delete or
+  // Backspace rest, Escape deselects; exactly those keys are stopped here.
+  // Plain letters are QWERTY piano keys (A = C, S = D, T = F#…) and must reach
+  // input/shortcuts.ts so step entry works for every piano key. The piano
+  // ignores Shift, so the four Shift combos are stopped (Shift+R would also
+  // toggle record arm there; Shift+L, PAT/SONG, is not one of them). Without
+  // a selection only the arrows (select step 1) are taken. Space, Z/X, R,
+  // undo and every other key bubble on to input/shortcuts.ts.
+  //
+  // Key strip: a click sets the selected step's pitch and auditions it (a
+  // 150 ms note through the same live-note bus as the QWERTY piano, ended
+  // early by pointerup). That note-on is marked as seen, so it doesn't also
+  // enter a step.
   //
   // Undo: each edit is one entry. Keyboard and step-entry edits of one kind
   // merge (coalesce key acid:<track>:<kind>, new entry after 1 s idle). A
@@ -35,26 +46,34 @@
   import { STEP_TICKS } from '../../audio/protocol';
   import { isTyping } from '../../input/shortcuts';
   import { lastLive } from '../../input/lastNote.svelte';
+  import type { NoteInput } from '../../input/noteInput';
   import type { CommandSink } from '../../state/actions';
   import { applyAcidSteps, convertToSteps, transposeAcid, type AcidEditKind } from '../../state/acid-actions';
-  import { DEFAULT_BASE, readSteps, REST, stepPitch, type AcidStep, type Unshowable } from '../../state/acidSteps';
+  import { DEFAULT_BASE, MAX_BASE, MIN_BASE, readSteps, REST, stepPitch, type AcidStep, type Unshowable } from '../../state/acidSteps';
   import { mutate, randomize, SCALES, shift, type ScaleName } from '../../state/acidTools';
+  import { setPatternBars } from '../../state/pattern-actions';
   import { currentPattern } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { patternPosAt } from '../../state/song-actions';
   import { NOTE_NAMES, noteName } from '../noteName';
 
-  let { p, engine, clock, track }: {
+  let { p, engine, clock, track, noteInput = null, capturing = () => false }: {
     p: Project;
     engine: CommandSink;
     clock: AudioClock | null;
     track: SynthTrack;
+    /** Played-note bus: the key strip auditions through it. */
+    noteInput?: NoteInput | null;
+    /** True while the recorder captures live notes (armed and playing). */
+    capturing?: () => boolean;
   } = $props();
 
   const ROW = 16;
-  /** Lowest / highest base: the window base−12 .. base+23 stays inside MIDI 0..127. */
-  const MIN_BASE = 12;
-  const MAX_BASE = 96;
+  /** Length menu (bars); the pattern's current length is added when it isn't one. */
+  const LENGTHS = [1, 2, 4];
+  const AUDITION_VEL = 100;
+  const AUDITION_MS = 150;
+  const AUDITION_SOURCE = 'acid';
   const BLACK = new Set([1, 3, 6, 8, 10]);
   const REASON: Record<Unshowable, string> = {
     offgrid: 'a note starts off the 1/16 grid',
@@ -66,6 +85,7 @@
   const TRANSPOSE: [number, string][] = [[-12, '−12'], [-1, '−1'], [1, '+1'], [12, '+12']];
   const SLIDE_HINT = 'Slides need a mono patch with glide, e.g. Acid Line';
   const NO_NEXT = 'Slide needs a next note';
+  const NO_NOTE = 'Slide: this step has no note';
 
   let base = $state(DEFAULT_BASE);
   let selected = $state<number | null>(null);
@@ -74,6 +94,15 @@
   let el: HTMLDivElement | undefined = $state();
 
   const pat = $derived(currentPattern(track));
+  // Another pattern (picker, undo): the old selection means nothing there.
+  let patId = untrack(() => pat.id);
+  $effect(() => {
+    const id = pat.id;
+    if (id !== patId) {
+      patId = id;
+      selected = null;
+    }
+  });
   const view = $derived(readSteps(pat.notes, pat.bars, base));
   // Adopt an auto-fitted base (the pattern doesn't read at ours).
   $effect(() => {
@@ -153,6 +182,27 @@
     setStep(sel, { kind: 'note', key: k, oct: note ? s.oct : 0, accent: note && s.accent, slide: s.slide }, 'Step pitch', 'pitch');
   }
 
+  // ---- key strip audition ------------------------------------------------------
+  let audition: { pitch: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  /** Sounds the pitch key `k` gives the selected step (pointerdown on the strip). */
+  function auditionKey(k: number) {
+    auditionStop();
+    // While recording, the audition would be recorded as a note.
+    if (!noteInput || sel === null || !view.ok || capturing()) return;
+    const pitch = stepPitch(view.base, { ...REST, key: k, oct: cur!.kind === 'note' ? cur!.oct : 0 });
+    noteInput.on(pitch, AUDITION_VEL, performance.now(), AUDITION_SOURCE);
+    // The click sets the step itself (setKey): this note-on enters nothing.
+    seenSeq = lastLive.seq;
+    audition = { pitch, timer: setTimeout(auditionStop, AUDITION_MS) };
+  }
+  function auditionStop() {
+    if (!audition) return;
+    clearTimeout(audition.timer);
+    noteInput?.off(audition.pitch, performance.now(), AUDITION_SOURCE);
+    audition = null;
+  }
+  $effect(() => auditionStop); // unmount: never leave the note on
+
   // ---- step entry ------------------------------------------------------------
   // The effect's first run (mount) only records the count: notes played
   // before the tab opened enter nothing.
@@ -164,7 +214,7 @@
     untrack(() => enter(lastLive.note));
   });
   function enter(note: number | null) {
-    if (note === null || sel === null || !view.ok) return;
+    if (note === null || sel === null || !view.ok || capturing()) return;
     const i = sel;
     const s = steps[i];
     const oct = Math.max(-1, Math.min(1, Math.floor(note / 12) - view.base / 12)) as -1 | 0 | 1;
@@ -186,6 +236,11 @@
   };
   function convert() {
     base = convertToSteps(p, engine, track.id);
+  }
+  const lengths = $derived(LENGTHS.includes(pat.bars) ? LENGTHS : [...LENGTHS, pat.bars].sort((a, b) => a - b));
+  /** The pattern's length (as the piano roll's Length menu): one 'Pattern length' entry. */
+  function setLength(bars: number) {
+    setPatternBars(p, engine, track.id, bars);
   }
 
   // ---- selection & keys --------------------------------------------------------
@@ -209,15 +264,19 @@
     const arrows: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -ROW, ArrowDown: ROW };
     if (e.code in arrows) {
       move(arrows[e.code]);
-    } else if (sel !== null && !e.shiftKey && ['KeyA', 'KeyS', 'KeyR', 'KeyT', 'Escape'].includes(e.code)) {
-      // Swallowed even when the toggle is unavailable: a piano note would enter the step.
+    } else if (sel !== null && e.shiftKey && ['KeyA', 'KeyS', 'KeyR', 'KeyT'].includes(e.code)) {
+      // Swallowed even when the toggle is unavailable: the piano ignores
+      // Shift, so Shift+A would still play (and enter) a C.
       if (!e.repeat) {
         if (e.code === 'KeyA') toggleAccent();
         else if (e.code === 'KeyS') toggleSlide();
         else if (e.code === 'KeyR') toggleRest();
-        else if (e.code === 'KeyT') toggleTie();
-        else selected = null;
+        else toggleTie();
       }
+    } else if (sel !== null && !e.shiftKey && (e.key === 'Delete' || e.key === 'Backspace')) {
+      if (!e.repeat) setStep(sel, REST, 'Step kind', 'kind');
+    } else if (sel !== null && e.code === 'Escape') {
+      selected = null;
     } else return;
     e.preventDefault();
     e.stopPropagation();
@@ -260,6 +319,11 @@
       <b class="base" data-testid="acid-base">{noteName(base)}</b>
       <button data-testid="acid-base-up" disabled={!canBase(base + 12)} aria-label="Base octave up" onclick={() => (base += 12)}>+</button>
     </span>
+    <label title="Pattern length in bars (notes past the end are kept, silent)">Length
+      <select data-testid="acid-length" value={pat.bars} onchange={(e) => setLength(Number(e.currentTarget.value))}>
+        {#each lengths as b (b)}<option value={b}>{b} {b === 1 ? 'bar' : 'bars'}</option>{/each}
+      </select>
+    </label>
     <label>Root
       <select data-testid="acid-root" bind:value={root}>
         {#each NOTE_NAMES as n, k (k)}<option value={k}>{n}</option>{/each}
@@ -336,6 +400,8 @@
             data-testid="acid-key-{k}" disabled={sel === null}
             aria-pressed={cur?.kind === 'note' && cur.key === k}
             title={noteName(base + k)} onclick={() => setKey(k)}
+            onpointerdown={(e) => { if (e.button === 0) auditionKey(k); }}
+            onpointerup={auditionStop} onpointercancel={auditionStop}
           >{n}</button>
         {/each}
       </div>
@@ -343,13 +409,13 @@
         <button data-testid="acid-oct-down" disabled={cur?.kind !== 'note' || cur.oct === -1} title="Octave down" aria-label="Octave down" onclick={() => setOct(-1)}>▼</button>
         <button data-testid="acid-oct-up" disabled={cur?.kind !== 'note' || cur.oct === 1} title="Octave up" aria-label="Octave up" onclick={() => setOct(1)}>▲</button>
         <button data-testid="acid-accent" class:on={cur?.accent} aria-pressed={!!cur?.accent} disabled={!canAccent}
-          title={canAccent ? 'Accent (A)' : 'Accent needs a note'} onclick={toggleAccent}>Accent</button>
+          title={canAccent ? 'Accent (Shift+A)' : 'Accent needs a note'} onclick={toggleAccent}>Accent</button>
         <button data-testid="acid-slide" class:on={cur?.slide} aria-pressed={!!cur?.slide} disabled={!canSlide}
-          title={canSlide ? 'Slide into the next note (S)' : NO_NEXT} onclick={toggleSlide}>Slide</button>
+          title={canSlide ? 'Slide into the next note (Shift+S)' : cur?.kind === 'rest' ? NO_NOTE : NO_NEXT} onclick={toggleSlide}>Slide</button>
         <button data-testid="acid-rest" class:on={cur?.kind === 'rest'} aria-pressed={cur?.kind === 'rest'} disabled={sel === null}
-          title="Rest (R)" onclick={toggleRest}>Rest</button>
+          title="Rest (Shift+R, Delete)" onclick={toggleRest}>Rest</button>
         <button data-testid="acid-tie" class:on={cur?.kind === 'tie'} aria-pressed={cur?.kind === 'tie'} disabled={!canTie}
-          title={canTie ? 'Tie: hold the note before (T)' : 'Tie needs a note before it'} onclick={toggleTie}>Tie</button>
+          title={canTie ? 'Tie: hold the note before (Shift+T)' : 'Tie needs a note before it'} onclick={toggleTie}>Tie</button>
         <span class="tip">{sel === null ? 'Select a step, then play notes or click a key' : `Step ${sel + 1} · play a note to enter it`}</span>
       </div>
     </div>
@@ -385,6 +451,8 @@
   .cell.rest { color: #6a6d79; }
   .cell.sel { box-shadow: inset 0 0 0 2px #f0a23a; }
   .cell.playhead { box-shadow: inset 0 0 0 2px #fff; }
+  /* Selected under the playhead: the selection ring stays, the playhead inside it. */
+  .cell.sel.playhead { box-shadow: inset 0 0 0 2px #f0a23a, inset 0 0 0 4px #fff; }
   .cell.playhead.rest { background: #4a4d59; }
   .nm { font-size: 11px; font-weight: 600; }
   .oct { position: absolute; top: 1px; right: 3px; font-size: 7px; color: #ffd98a; }

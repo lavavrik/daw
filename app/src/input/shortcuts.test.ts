@@ -260,7 +260,7 @@ describe('shortcut handlers', () => {
     }
   });
 
-  it('Alt+1..5 follow the tab order and F6..F9 keep their tabs (matched on e.code, default prevented)', () => {
+  it('Alt+1..6 follow the tab order and F6..F9 keep their tabs (matched on e.code, default prevented)', () => {
     const tabs: string[] = [];
     const { h } = mk({ onTab: (t) => tabs.push(t) });
     let prevented = 0;

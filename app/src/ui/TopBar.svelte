@@ -285,6 +285,8 @@
   let latency = $state('');
   let latencyMs = $state(0);
   let engineError = $state<string | null>(null); // set from engine.failure (effect below)
+  /** The mini spectrum's measured width (it grows to 3× when the bar has room). */
+  let miniW = $state(66);
 
   function refresh() {
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);
@@ -372,8 +374,10 @@
     <Knob variant="slider" def={MASTER_DEF} value={masterDb} color="var(--accent)" testid="master-volume" auto={MASTER_AUTO} onchange={(v) => setMix(p, engine, 'master', 'fader', v)} />
   </div>
 
-  <button class="mini" data-testid="topbar-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
-    <Spectrum need="mini" width={58} height={30} color={THEME.play} />
+  <!-- 3× the old 66 px (owner), shrinking toward 66 px when the bar is
+       tight (1280 px): it takes the spacer's room first. -->
+  <button class="mini" data-testid="topbar-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)} bind:clientWidth={miniW}>
+    <Spectrum need="mini" width={Math.max(58, miniW - 8)} height={30} color={THEME.play} />
   </button>
 
   <span class="spacer"></span>
@@ -507,7 +511,7 @@
   .master { width: 104px; }
   .master { --slider-min-w: 0px; }
 
-  .mini { display: flex; align-items: center; justify-content: center; width: 66px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
+  .mini { display: flex; align-items: center; justify-content: center; flex: 3 1 66px; min-width: 66px; max-width: 198px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
   .mini:hover { filter: brightness(1.15); }
   .mini:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 

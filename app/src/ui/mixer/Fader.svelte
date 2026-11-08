@@ -98,9 +98,12 @@
   function paint() {
     const v = autoValue ?? (dragging ? local : value);
     const pos = faderPos(v);
-    if (capEl) capEl.style.bottom = `${pos * (height - CAP_H)}px`;
-    // The fill rises from the slot's foot to the cap's centre (the slot is inset CAP_H / 2).
-    if (fillEl) fillEl.style.height = `${pos * (height - CAP_H)}px`;
+    // Transforms only, so an automation tick never re-lays out the mixer.
+    // The cap sits at the bottom and rises by translateY; the fill is the
+    // slot's full height, scaled from its foot: it reaches the cap's centre
+    // (the slot is inset CAP_H / 2, so its height is the cap's travel).
+    if (capEl) capEl.style.transform = `translateY(${-pos * (height - CAP_H)}px)`;
+    if (fillEl) fillEl.style.transform = `scaleY(${pos})`;
     if (el && autoStatus) {
       el.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
       el.dataset.autoValue = autoValue === null ? '' : String(autoValue);
@@ -283,9 +286,9 @@
   .fader { position: relative; width: 26px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: var(--r-sm); }
   .fader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
   .slot { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 6px; margin-left: -3px; background: var(--well); border-radius: 3px; box-shadow: var(--well-shadow); overflow: hidden; }
-  .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--c, var(--accent)) var(--gloss); }
+  .fill { position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0); background: var(--c, var(--accent)) var(--gloss); }
   .cap {
-    position: absolute; left: 1px; right: 1px; border-radius: 4px;
+    position: absolute; left: 1px; right: 1px; bottom: 0; border-radius: 4px;
     /* The handle recipe, with grip grooves (1 px every 4 px) over the middle 8 px band: two lines. */
     background:
       repeating-linear-gradient(to bottom, transparent 0 3px, color-mix(in srgb, var(--well) 40%, transparent) 3px 4px) center / 100% 8px no-repeat,
@@ -295,10 +298,10 @@
   .fader:hover .cap, .fader.dragging .cap { filter: brightness(1.06); }
   /* Automated: the base notch left of the slot, the A badge (grey while the lane plays nothing), a grey cap while suspended. */
   .base { position: absolute; left: 3px; width: 6px; height: 2px; margin-bottom: -1px; background: var(--text); border-radius: 1px; opacity: 0.85; }
-  .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 8px/10px var(--font-ui); width: 10px; text-align: center; border-radius: 2px; background: var(--accent); color: var(--on-color); pointer-events: none; }
+  .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 var(--fs-tag)/10px var(--font-ui); width: 10px; text-align: center; border-radius: var(--r-xs); background: var(--accent); color: var(--on-color); pointer-events: none; }
   .fader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
-  .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 7px/10px var(--font-ui); padding: 0 2px; border-radius: 2px; background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
+  .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 var(--fs-tag)/10px var(--font-ui); padding: 0 2px; border-radius: var(--r-xs); background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
   .fader.learning { outline: 2px solid var(--sig-cv); outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
   @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .fader.learning { animation: none; } }

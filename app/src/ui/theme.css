@@ -38,13 +38,21 @@
   --gloss: linear-gradient(rgba(255,255,255,.3), rgba(255,255,255,0) 60%);
   --well-shadow: inset 0 2px 5px rgba(0,0,0,.5), inset 0 -1px 0 rgba(255,255,255,.06);
   --lift: inset 0 1px 0 rgba(255,255,255,.1), 0 6px 14px rgba(0,0,0,.28), 0 1px 2px rgba(0,0,0,.3);
+  /* A small drop under a raised thing that has no shadow recipe of its own (an on step cell). */
+  --drop: 0 2px 4px rgba(0,0,0,.3);
   --handle: linear-gradient(#fff, #cfd8df);
   --handle-shadow: 0 1px 3px rgba(0,0,0,.5);
 
-  /* Radii: sm cells and small buttons, md buttons and inputs, lg cards and transport. */
+  /* Radii: sm cells and small buttons, md buttons and inputs, lg cards and
+     transport (spec §2). xs is for tags and badges (~10 px tall), menu for
+     menus and popovers (the select picker's 10 px). A radius that is half
+     the element's height (a pill end, a groove, a circle) is geometry, not a
+     token. */
+  --r-xs: 3px;
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
+  --r-menu: 10px;
 
   /* Type. Self-hosted (@fontsource, see main.ts); the stacks end in system
      fonts so a blocked font degrades without breaking the layout. */
@@ -53,6 +61,10 @@
   --fs-body: 13px;
   --fs-ctl: 12px;
   --fs-lbl: 10px;
+  /* Below the spec's three sizes, for dense readouts: xs for captions
+     (jack names, meter scales, step values), tag for badges (A, CC). */
+  --fs-xs: 9px;
+  --fs-tag: 8px;
 
   /* Data colours (state/palette.ts, ui/theme.ts) for CSS that wants them by index or name. */
   --track-0: #ff7a6b;
@@ -120,7 +132,7 @@
 :where(select:open)::picker-icon { rotate: 180deg; }
 :where(select)::picker(select) {
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--r-menu);
   padding: 4px;
   background: var(--text);
   color: var(--on-color);
@@ -160,12 +172,16 @@
 
 /* ----------------------------------------------------------------- range --
    A --well groove, the filled part in --c (the colour of the thing the
-   slider belongs to) up to --fill (0..100%), and the white handle. The
-   component sets both, e.g. style:--fill="{pct}%" style:--c={trackColour};
-   without them the fill is --accent at 50%. A fill that does not start at
-   the left (bipolar: from the centre) also sets --fill-pos, the layer's
-   background-position (a % of the groove left over beside the fill, CSS's
-   rule; ui/stepGrid.ts panFill computes it). */
+   slider belongs to) and the white handle. --fill is the fill layer's
+   width and --fill-pos its background-position; ui/rangeFill.ts computes
+   both so the fill ends under the handle's centre (Chrome moves the centre
+   from 7.5px to 100% - 7.5px, not 0 to 100%):
+     style:--fill={rangeFill(f).fill}                       (from the left)
+     style:--fill={b.fill} style:--fill-pos={b.pos}         (b = rangeFillBipolar(f))
+   Every range in the app sets --fill; unset, the groove is empty (0), never
+   a misleading half. --c defaults to --accent and inherits; set --fill and
+   --fill-pos on the input itself (they inherit too). The thumb is 15px:
+   rangeFill.ts RANGE_HANDLE_PX must match. */
 :where(input[type='range']) {
   appearance: none;
   height: 16px;
@@ -177,14 +193,14 @@
   height: 6px;
   border-radius: 3px;
   background:
-    var(--gloss) var(--fill-pos, 0%) 0 / var(--fill, 50%) 100% no-repeat,
-    linear-gradient(var(--c, var(--accent)), var(--c, var(--accent))) var(--fill-pos, 0%) 0 / var(--fill, 50%) 100% no-repeat,
+    var(--gloss) var(--fill-pos, 0%) 0 / var(--fill, 0%) 100% no-repeat,
+    linear-gradient(var(--c, var(--accent)), var(--c, var(--accent))) var(--fill-pos, 0%) 0 / var(--fill, 0%) 100% no-repeat,
     var(--well);
   box-shadow: var(--well-shadow);
 }
 :where(input[type='range'])::-webkit-slider-thumb {
   appearance: none;
-  width: 15px;
+  width: 15px; /* rangeFill.ts RANGE_HANDLE_PX */
   height: 15px;
   margin-top: -4.5px; /* centre on the 6px track */
   border: 0;

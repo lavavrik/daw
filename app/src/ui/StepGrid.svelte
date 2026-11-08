@@ -38,7 +38,8 @@
   import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
-  import { panFill, rowColor, stepCellStyle } from './stepGrid';
+  import { rowColor, stepCellStyle } from './stepGrid';
+  import { rangeFill, rangeFillBipolar } from './rangeFill';
 
   let { p, engine, clock, track, onerror }: {
     p: Project;
@@ -228,7 +229,8 @@
     <span class="lbl">Steps</span>
   </div>
   {#each track.rows as row, r (row.id)}
-    {@const pan = panFill(row.pan)}
+    {@const gain = rangeFill(row.gain / 2)}
+    {@const pan = rangeFillBipolar((row.pan + 1) / 2)}
     <div
       class="row"
       class:over={dragOver === row.id}
@@ -268,7 +270,7 @@
       ></button>
       <label class="sl gain" title="Gain {row.gain.toFixed(2)}">
         <input
-          type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill="{(row.gain / 2) * 100}%"
+          type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill={gain.fill}
           aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
         />
         <span class="val mono">{row.gain.toFixed(2)}</span>
@@ -276,7 +278,7 @@
       <label class="sl pan" title="Pan {panText(row.pan)}">
         <input
           type="range" min="-1" max="1" step="0.01" value={row.pan}
-          style:--fill="{pan.width}%" style:--fill-pos="{pan.pos}%"
+          style:--fill={pan.fill} style:--fill-pos={pan.pos}
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
         />
         <span class="val mono">{panText(row.pan)}</span>
@@ -343,7 +345,7 @@
     <label><span class="lbl">Swing</span>
       <input
         class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
-        style:--fill="{pat.swing * 100}%"
+        style:--fill={rangeFill(pat.swing).fill}
         data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
@@ -388,7 +390,7 @@
     background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow);
   }
   .name.prev:hover { filter: brightness(1.08); }
-  .name.prev::after { content: '▶'; position: absolute; right: 10px; font-size: 9px; color: var(--text-2); }
+  .name.prev::after { content: '▶'; position: absolute; right: 10px; font-size: var(--fs-xs); color: var(--text-2); }
   .name.prev.on { color: var(--on-color); background-color: var(--play); }
   .name.prev.on::after { content: '■'; color: var(--on-color); }
   .name.prev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -415,7 +417,7 @@
   .sl.gain { width: 104px; }
   .sl.pan { width: 80px; }
   .sl input { width: 100%; }
-  .val { font-size: 9px; line-height: 1; color: var(--text-2); text-align: center; }
+  .val { font-size: var(--fs-xs); line-height: 1; color: var(--text-2); text-align: center; }
 
   /* Steps: groups of 4, 12 px apart. */
   .cells { display: flex; gap: 12px; flex: 1; min-width: 0; user-select: none; }
@@ -427,17 +429,24 @@
     background: var(--work); box-shadow: var(--well-shadow);
   }
   .cell.alt { background: color-mix(in srgb, var(--work), var(--grid)); }
-  /* On: the row colour at 25 %, and a fill as tall as the velocity (inline height). */
-  .cell.on { background: color-mix(in srgb, var(--c) 25%, transparent); box-shadow: none; }
+  /* On: the row colour at 25 %, and a fill as tall as the velocity (inline
+     height). The cell sits up on a small drop shadow (the board's on cell). */
+  .cell.on { background: color-mix(in srgb, var(--c) 25%, transparent); box-shadow: var(--drop); }
   .fill {
     position: absolute; left: 0; right: 0; bottom: 0;
     background: var(--c) var(--gloss); box-shadow: var(--raised-shadow);
   }
-  /* Accent (velocity >= 110): a 2 px ring and a glow. */
-  .cell.accent { box-shadow: 0 0 0 2px var(--c), 0 0 10px color-mix(in srgb, var(--c) 40%, transparent); }
-  /* The playing step: a white outline, and its fill brightens. */
+  /* Accent (velocity >= 110): a 2 px ring and a strong glow (the board's <c>aa, 12 px). */
+  .cell.accent { box-shadow: 0 0 0 2px var(--c), 0 0 12px color-mix(in srgb, var(--c) 67%, transparent), var(--drop); }
+  /* The playing step: a white outline, and its fill brightens. A dark 1 px
+     ring just inside the outline keeps it readable on pale row colours
+     (yellows, the brightened fill); ::after paints over the fill. */
   .cell.playhead { outline: 2px solid color-mix(in srgb, var(--text) 75%, transparent); outline-offset: -2px; }
   .cell.playhead.on { outline-color: var(--text); }
+  .cell.playhead.on::after {
+    content: ''; position: absolute; inset: 2px; border-radius: calc(var(--r-sm) - 2px); pointer-events: none;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-color) 70%, transparent);
+  }
   .cell.playhead .fill { filter: brightness(1.25); }
   .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 

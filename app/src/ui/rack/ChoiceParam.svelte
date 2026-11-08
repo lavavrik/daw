@@ -8,9 +8,12 @@
   // `selectOption` on it). Every change is one `onchange`, so one undo entry.
   //
   // The select: letters would type-ahead through the options, but they are
-  // the QWERTY piano here, so they are swallowed; after a pick it gives the
-  // keys back (blur), like the rack's other selects.
+  // the QWERTY piano here, so they are swallowed (ui/selectKey.ts). After a
+  // pick with the pointer it gives the keys back (blur), like the rack's
+  // other selects; a pick from the keyboard (arrows, Enter) keeps focus, so a
+  // keyboard user can go on stepping through the options or Tab onwards.
   import ChoiceSeg from './ChoiceSeg.svelte';
+  import { releaseSelect, selectKey } from '../selectKey';
   import { SEG_MAX_CHOICES } from './knobMath';
   import type { KnobDef } from './knobMath';
 
@@ -30,14 +33,17 @@
   const name = $derived(`${moduleName} ${def.label}`.trim());
   const picked = $derived(Math.round(value));
 
+  /** Was the last input on the select a pointer press (a pick from the open picker), not a key? */
+  let byPointer = false;
   function pick(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
-    sel.blur();
+    if (byPointer) releaseSelect(sel);
     const i = Number(sel.value);
     if (i !== picked) onchange(i);
   }
-  function selectKey(e: KeyboardEvent) {
-    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
+  function onkey(e: KeyboardEvent) {
+    byPointer = false;
+    selectKey(e);
   }
 </script>
 
@@ -46,7 +52,7 @@
 {:else}
   <div class="choice">
     <span class="label">{def.label}</span>
-    <select data-testid={testid} aria-label={name} value={String(picked)} onchange={pick} onkeydown={selectKey}>
+    <select data-testid={testid} aria-label={name} value={String(picked)} onchange={pick} onkeydown={onkey} onpointerdown={() => (byPointer = true)}>
       {#each def.choices as c, i (i)}
         <option value={String(i)}>{c}</option>
       {/each}

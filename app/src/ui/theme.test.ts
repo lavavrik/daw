@@ -48,6 +48,11 @@ describe('theme tokens', () => {
     expect(mismatched).toEqual([]);
   });
 
+  it('theme.css has exactly one :root block (rootTokens reads only the first)', () => {
+    const noComments = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(noComments.match(/:root\b/g)).toHaveLength(1);
+  });
+
   it('every :root token in theme.css is in theme.ts', () => {
     expect([...css.keys()].filter((k) => !ts.has(k))).toEqual([]);
   });
@@ -59,7 +64,7 @@ describe('theme tokens', () => {
     expect(THEME.accent).toBe('#ffb347');
     expect(THEME.onColor).toBe('#1d242b');
     expect(TRACK_COLORS).toEqual(['#ff7a6b', '#ffc145', '#a6e06a', '#4fd6c4', '#5cc8ff', '#9b8cff', '#f47cc3', '#e0d45a']);
-    expect(RADII).toEqual({ sm: 6, md: 8, lg: 12 });
+    expect(RADII).toMatchObject({ sm: 6, md: 8, lg: 12 });
   });
 
   it('state and ui share one track palette', () => {

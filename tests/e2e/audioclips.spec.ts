@@ -482,6 +482,17 @@ test('Clip tab number field: scrub, steppers, click types; one undo each', async
   await expect.poll(async () => (await c0()).fadeIn).toBe(Math.round(0.275 * BEAT));
   await page.getByRole('button', { name: 'Decrease Fade in' }).click();
   await expect.poll(async () => (await c0()).fadeIn).toBe(Math.round(0.025 * BEAT));
+
+  // In a focused field a sideways drag selects text, even with a few px of
+  // vertical wobble: no scrub (plan 20 Task 11; numberField.ts pressIntent).
+  await field.focus();
+  await page.mouse.move(x - 12, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 12, y - 5, { steps: 6 });
+  await page.mouse.up();
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('0.025');
+  expect((await c0()).fadeIn).toBe(Math.round(0.025 * BEAT));
 });
 
 test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) => {

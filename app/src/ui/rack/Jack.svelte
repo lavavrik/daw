@@ -71,7 +71,7 @@
   .jack { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 28px; padding: 2px 1px; border-radius: var(--r-sm); cursor: grab; touch-action: none; user-select: none; }
   .hole { box-sizing: border-box; width: 15px; height: 15px; border: 3px solid var(--lcd); border-radius: 50%; background: var(--c) var(--gloss); box-shadow: var(--handle-shadow); }
   .jack:hover .hole { box-shadow: var(--handle-shadow), 0 0 0 2px color-mix(in srgb, var(--c) 55%, transparent); }
-  .name { font: 500 9px var(--font-ui); color: var(--text-2); white-space: nowrap; }
+  .name { font: 500 var(--fs-xs) var(--font-ui); color: var(--text-2); white-space: nowrap; }
   .jack:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .picked .hole { border-color: var(--text); box-shadow: 0 0 0 3px var(--accent), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
 </style>

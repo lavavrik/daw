@@ -53,6 +53,7 @@
   import type { RackModule, SampleMeta } from '../../state/project.svelte';
   import { delayClampNote } from '../mixer/mixMath';
   import { moduleColor } from '../theme';
+  import { releaseSelect, selectKey } from '../selectKey';
   import ChoiceParam from './ChoiceParam.svelte';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
@@ -132,12 +133,8 @@
   }
   function pickSample(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
-    sel.blur(); // give the keys back to the piano at once
+    releaseSelect(sel); // give the keys back to the piano at once
     onparam(sampleIdx, Number(sel.value));
-  }
-  /** A focused <select> type-aheads on letters: the piano keys must not change the sample. */
-  function selectKey(e: KeyboardEvent) {
-    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
   }
 
   // Sample Player: the strip's markers and the root button.
@@ -316,6 +313,6 @@
   .ports { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
   .group { display: flex; align-items: center; gap: 2px; padding: 2px 4px; }
   .outs { margin-left: auto; border-radius: var(--r-md); background: var(--work); box-shadow: var(--well-shadow); }
-  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font: 600 9px var(--font-ui); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
+  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font: 600 var(--fs-xs) var(--font-ui); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
   .jacks { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
 </style>

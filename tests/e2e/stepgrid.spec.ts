@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 // Step grid look (plan 20 Task 8, spec §4): velocity fill, accent ring, row
 // colours. The rules themselves are unit-tested in app/src/ui/stepGrid.test.ts;
@@ -57,4 +57,53 @@ test('rows walk the palette from the track slot', async ({ page }) => {
   });
   for (const c of colors) expect(c.got).toBe(c.want);
   expect(new Set(colors.map((c) => c.got)).size).toBe(Math.min(rows, 8));
+});
+
+/**
+ * A range's fill edges in px, from the --fill / --fill-pos custom properties
+ * it carries (ui/rangeFill.ts), resolved by the browser: --fill as a width
+ * in a box as wide as the groove, --fill-pos as a margin in a box as wide as
+ * the room beside the fill (CSS's background-position rule). Also where the
+ * handle's centre is for the input's value (Chrome: 7.5 px to W − 7.5 px).
+ */
+function fillEdges(input: Locator) {
+  return input.evaluate((el: HTMLInputElement) => {
+    const w = el.getBoundingClientRect().width;
+    const resolve = (box: number, prop: 'width' | 'marginLeft', v: string) => {
+      const outer = document.createElement('div');
+      outer.style.cssText = `position:absolute;visibility:hidden;width:${box}px`;
+      const inner = document.createElement('div');
+      inner.style[prop] = v;
+      outer.append(inner);
+      document.body.append(outer);
+      const px = prop === 'width' ? inner.getBoundingClientRect().width : inner.getBoundingClientRect().left - outer.getBoundingClientRect().left;
+      outer.remove();
+      return px;
+    };
+    const cs = getComputedStyle(el);
+    const size = resolve(w, 'width', cs.getPropertyValue('--fill').trim() || '0px');
+    const left = resolve(w - size, 'marginLeft', cs.getPropertyValue('--fill-pos').trim() || '0px');
+    const f = (el.valueAsNumber - Number(el.min)) / (Number(el.max) - Number(el.min));
+    return { left, right: left + size, centre: 7.5 + f * (w - 15), mid: w / 2 };
+  });
+}
+
+test('gain and pan fills end under the handle; pan fills from the centre', async ({ page }) => {
+  await start(page);
+  const pan = page.getByTestId('row-0').getByRole('slider', { name: /^Pan / });
+  for (const v of ['0.6', '-0.35']) {
+    await pan.fill(v);
+    await expect.poll(() => page.evaluate(() => (window as any).__daw.project.tracks[0].rows[0].pan)).toBeCloseTo(Number(v), 5);
+    const e = await fillEdges(pan);
+    // From the groove's centre to the handle's centre, on either side.
+    expect(Math.min(e.left, e.right)).toBeCloseTo(Math.min(e.mid, e.centre), 0);
+    expect(Math.max(e.left, e.right)).toBeCloseTo(Math.max(e.mid, e.centre), 0);
+  }
+  // Gain fills from the left end to the handle's centre.
+  const gain = page.getByTestId('row-0').getByRole('slider', { name: /^Gain / });
+  await gain.fill('1.5');
+  await expect.poll(() => page.evaluate(() => (window as any).__daw.project.tracks[0].rows[0].gain)).toBeCloseTo(1.5, 5);
+  const g = await fillEdges(gain);
+  expect(g.left).toBeCloseTo(0, 0);
+  expect(g.right).toBeCloseTo(g.centre, 0);
 });

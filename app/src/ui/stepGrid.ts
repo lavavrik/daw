@@ -1,7 +1,8 @@
 // Step grid look (spec §4 "Step grid"): the pure maths behind StepGrid.svelte's
-// row colours, step cells and pan slider. No Svelte, no project access; the
-// component turns the results into classes and CSS custom properties, and the
-// CSS (StepGrid.svelte) draws them with theme.css tokens.
+// row colours and step cells (its sliders' fills: ui/rangeFill.ts). No
+// Svelte, no project access; the component turns the results into classes
+// and CSS custom properties, and the CSS (StepGrid.svelte) draws them with
+// theme.css tokens.
 import { ACCENT_MIN_VEL } from '../state/acidSteps';
 import { TRACK_COLORS } from './theme';
 
@@ -51,18 +52,4 @@ export function stepCellStyle(vel: number, step: number, playing: boolean): Step
     alt: Math.floor(step / 4) % 2 === 1,
     fill: on ? (Math.min(127, vel) / 127) * 100 : 0,
   };
-}
-
-/**
- * The pan slider's bipolar fill (spec §3: bipolar params fill from the
- * centre), in percent of the groove: `at` is its left edge, `width` its
- * width, and `pos` the CSS background-position that puts it there (the
- * theme.css range skin's `--fill-pos`: a background-position percentage is
- * of the space left beside the layer, so pos = at / (100 − width)).
- */
-export function panFill(pan: number): { at: number; width: number; pos: number } {
-  const v = Math.max(-1, Math.min(1, pan)) * 50; // -50..50 around the centre
-  const at = Math.min(50, 50 + v);
-  const width = Math.abs(v);
-  return { at, width, pos: width >= 100 ? 0 : (at / (100 - width)) * 100 };
 }

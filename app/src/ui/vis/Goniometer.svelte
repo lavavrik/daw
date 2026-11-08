@@ -143,11 +143,11 @@
   .gon { flex: none; }
   canvas { display: block; }
   .side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
-  .lbl { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-2); }
-  .val { color: var(--text); font: 11px var(--font-mono); }
-  .corr { display: flex; align-items: center; gap: 4px; font: 9px/1 var(--font-mono); color: var(--text-dim); }
-  .track { position: relative; flex: 1; height: 8px; border-radius: 2px; background: linear-gradient(to right, var(--rec), var(--well) 50%, var(--play)); }
+  .lbl { display: flex; justify-content: space-between; font-size: var(--fs-lbl); color: var(--text-2); }
+  .val { color: var(--text); font: var(--fs-lbl) var(--font-mono); }
+  .corr { display: flex; align-items: center; gap: 4px; font: var(--fs-xs)/1 var(--font-mono); color: var(--text-dim); }
+  .track { position: relative; flex: 1; height: 8px; border-radius: var(--r-xs); background: linear-gradient(to right, var(--rec), var(--well) 50%, var(--play)); }
   .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-dim); }
   .marker { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; border-radius: 1px; background: var(--text); }
-  .hint { margin: 0; font-size: 9px; line-height: 1.3; color: var(--text-dim); white-space: normal; }
+  .hint { margin: 0; font-size: var(--fs-xs); line-height: 1.3; color: var(--text-dim); white-space: normal; }
 </style>

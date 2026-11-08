@@ -10,6 +10,7 @@
   // Delete is disabled with a tooltip when a clip uses the pattern or when it
   // is the track's last one (deletePattern refuses both anyway).
   import { tick } from 'svelte';
+  import { releaseSelect } from './selectKey';
   import { MAX_PATTERNS } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { currentPattern } from '../state/project.svelte';
@@ -70,7 +71,7 @@
       aria-label="Pattern name" onkeydown={onKey} onblur={cancel} />
   {:else}
     <select data-testid="pattern-picker" aria-label="Pattern" value={track.currentPatternId}
-      onchange={(e) => { selectPattern(p, engine, track.id, e.currentTarget.value); e.currentTarget.blur(); }}>
+      onchange={(e) => { selectPattern(p, engine, track.id, e.currentTarget.value); releaseSelect(e.currentTarget); }}>
       {#each track.patterns as pat (pat.id)}
         <option value={pat.id}>{pat.name}</option>
       {/each}

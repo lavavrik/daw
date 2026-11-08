@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampValue, decimalsOf, formatValue, roundTo, scrubStarted, scrubValue, stepValue } from './numberField';
+import { clampValue, decimalsOf, fineStep, formatValue, pressIntent, roundTo, scrubValue, stepValue } from './numberField';
 
 const b = { min: 0, max: 10, decimals: 2 };
 
@@ -27,11 +27,30 @@ describe('numberField maths', () => {
     expect(stepValue(0, -1, 1, false, b)).toBe(0);
     expect(stepValue(10, 1, 1, false, b)).toBe(10);
   });
-  it('a scrub starts only after 3 px of travel either way', () => {
-    expect(scrubStarted(2)).toBe(false);
-    expect(scrubStarted(-2.9)).toBe(false);
-    expect(scrubStarted(3)).toBe(true);
-    expect(scrubStarted(-3)).toBe(true);
+  it('fine step on an integer field still moves a whole unit (Shift+arrow)', () => {
+    expect(fineStep(1, 0)).toBe(1);
+    expect(fineStep(10, 0)).toBe(1);
+    expect(fineStep(0.25, 2)).toBe(0.025);
+    expect(fineStep(0.1, 1)).toBe(0.1); // 0.01 would round to nothing at 1 decimal
+    const ints = { min: 0, max: 100, decimals: 0 };
+    expect(stepValue(5, 1, 1, true, ints)).toBe(6);
+    expect(stepValue(5, -1, 1, true, ints)).toBe(4);
+    expect(stepValue(50, 1, 10, true, ints)).toBe(51);
+  });
+  it('an unfocused press scrubs after 3 px of vertical travel either way', () => {
+    expect(pressIntent(0, 2, false)).toBe('wait');
+    expect(pressIntent(0, -2.9, false)).toBe('wait');
+    expect(pressIntent(0, 3, false)).toBe('scrub');
+    expect(pressIntent(0, -3, false)).toBe('scrub');
+    expect(pressIntent(20, 1, false)).toBe('wait'); // sideways never scrubs
+  });
+  it('a press in a focused field selects text unless it is clearly a vertical drag', () => {
+    expect(pressIntent(0, 4, true)).toBe('wait'); // 3 px is not enough once focused
+    expect(pressIntent(0, 6, true)).toBe('scrub');
+    expect(pressIntent(1, -7, true)).toBe('scrub');
+    expect(pressIntent(3, 1, true)).toBe('select'); // sideways first: a text selection
+    expect(pressIntent(5, 5, true)).toBe('select');
+    expect(pressIntent(2, 2, true)).toBe('wait');
   });
   it('scrub: one step per 4 px, up is bigger, in whole steps', () => {
     const s = { min: 0, max: 100, decimals: 0 };

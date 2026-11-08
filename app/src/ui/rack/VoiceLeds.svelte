@@ -43,7 +43,16 @@
   });
 
   let box = $state<HTMLElement | null>(null);
-  const leds: HTMLElement[] = [];
+  // A plain array (frame() reads it 30 times a second; nothing renders from
+  // it), filled by an attachment rather than bind:this, which wants $state
+  // for an indexed target (Svelte's binding_property_non_reactive warning).
+  const leds: (HTMLElement | undefined)[] = [];
+  const led = (k: number) => (el: HTMLElement) => {
+    leds[k] = el;
+    return () => {
+      if (leds[k] === el) leds[k] = undefined;
+    };
+  };
   /** What each LED shows now (brightness, gate), to write only on change. */
   const shown = new Float32Array(MAX_POLY * 2).fill(-1);
 
@@ -97,7 +106,7 @@
   <span class="voices" bind:this={box} data-testid="voice-leds" role="img" aria-live="off">
     <span class="lbl">Voices</span>
     {#each Array.from({ length: count }, (_, k) => k) as k (k)}
-      <i bind:this={leds[k]} data-testid={`voice-led-${k}`} data-on="0" data-gate="0"></i>
+      <i {@attach led(k)} data-testid={`voice-led-${k}`} data-on="0" data-gate="0"></i>
     {/each}
   </span>
 {/if}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ACCENT_MIN_VEL } from '../state/acidSteps';
 import { TRACK_COLORS } from './theme';
-import { panFill, rowColor, stepCellStyle } from './stepGrid';
+import { rowColor, stepCellStyle } from './stepGrid';
 
 describe('stepCellStyle', () => {
   it('off: no fill, no accent, not playing', () => {
@@ -47,25 +47,5 @@ describe('rowColor', () => {
     expect(rowColor(2, 0)).toBe(TRACK_COLORS[2]);
     expect(rowColor(5, 4)).toBe(TRACK_COLORS[1]);
     expect(rowColor(17, 0)).toBe(TRACK_COLORS[1]);
-  });
-});
-
-describe('panFill', () => {
-  it('fills from the centre towards the value', () => {
-    expect(panFill(0)).toMatchObject({ at: 50, width: 0 });
-    expect(panFill(-1)).toMatchObject({ at: 0, width: 50 });
-    expect(panFill(1)).toMatchObject({ at: 50, width: 50 });
-    expect(panFill(0.5)).toMatchObject({ at: 50, width: 25 });
-    expect(panFill(-0.3).at).toBeCloseTo(35);
-    expect(panFill(-0.3).width).toBeCloseTo(15);
-    expect(panFill(-2)).toMatchObject({ at: 0, width: 50 }); // clamped
-  });
-  it('pos is the background-position that puts the fill at `at`', () => {
-    for (const pan of [-1, -0.3, 0, 0.5, 1]) {
-      const { at, width, pos } = panFill(pan);
-      expect((pos / 100) * (100 - width)).toBeCloseTo(at); // CSS: offset = pos% of (groove − layer)
-    }
-    expect(panFill(-1).pos).toBe(0);
-    expect(panFill(1).pos).toBe(100);
   });
 });

@@ -137,6 +137,7 @@
   import type { AutoOwner } from '../../state/automation';
   import { MAX_TRACKS, currentPattern, isPatternTrack, patternLength } from '../../state/project.svelte';
   import { RADII, THEME } from '../theme';
+  import { rangeFill } from '../rangeFill';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
@@ -1415,7 +1416,7 @@
         max={Math.max(0, MAX_SONG_TICKS - width * (view?.ticksPerPx ?? 1))}
         step={BAR / 4}
         value={view?.scrollTick ?? 0}
-        style:--fill="{view ? (100 * view.scrollTick) / Math.max(1, MAX_SONG_TICKS - width * view.ticksPerPx) : 0}%"
+        style:--fill={rangeFill(view ? view.scrollTick / Math.max(1, MAX_SONG_TICKS - width * view.ticksPerPx) : 0).fill}
         oninput={(e) => { if (view) view = clampView({ ...view, scrollTick: Number(e.currentTarget.value) }); }}
       />
       <output class="readout" class:hint={!!hint} data-testid="tl-readout">{readoutText}</output>

@@ -283,3 +283,81 @@ test('timeline track headers switch the bottom panel from the mixer to that trac
   await expect(page.getByTestId('mixer')).toBeHidden();
   await expect(page.getByTestId('pianoroll')).toBeVisible();
 });
+
+// The Delay return's division is a choice with 12 options, so a skinned
+// <select> (ChoiceParam, plan 20 Task 9): a pick sends MIX_SET to the engine
+// and is one undo entry; the select fits inside the strip.
+test('delay division select: a pick reaches the engine, one undo entry, fits the strip', async ({ page }) => {
+  type D = { __daw: { engine: { send: (...a: number[]) => boolean }; Op: Record<string, number>; history: { labels: { undo: string | null } } | null; project: { mixer: { delay: { params: number[] } } } }; __sent?: number[][] };
+  await startAudio(page);
+  await openMixer(page);
+  const delay = strip(page, 'delay');
+  await delay.getByTestId('fx-expand').click(); // the Delay section starts collapsed
+  const sel = delay.getByTestId('knob-delay_time');
+  await expect(sel).toBeVisible();
+  expect(await sel.evaluate((e) => e.tagName)).toBe('SELECT');
+  // Laid out inside the strip card, with room for its options' text.
+  const sb = (await delay.boundingBox())!;
+  const b = (await sel.boundingBox())!;
+  expect(b.x).toBeGreaterThanOrEqual(sb.x - 0.5);
+  expect(b.x + b.width).toBeLessThanOrEqual(sb.x + sb.width + 0.5);
+  expect(await sel.evaluate((e) => e.scrollWidth - e.clientWidth)).toBeLessThanOrEqual(0);
+
+  // Record what reaches the engine.
+  await page.evaluate(() => {
+    const w = window as unknown as D;
+    const e = w.__daw.engine;
+    const send = e.send.bind(e);
+    w.__sent = [];
+    e.send = (...a: number[]) => (w.__sent!.push(a), send(...a));
+  });
+  const value = await sel.inputValue();
+  const before = await page.evaluate(() => (window as unknown as D).__daw.history?.labels.undo ?? null);
+  const pick = value === '3' ? '5' : '3';
+  await sel.selectOption(pick);
+  await expect
+    .poll(() => page.evaluate((v) => {
+      const w = window as unknown as D;
+      return w.__sent!.some((a) => a[0] === w.__daw.Op.MIX_SET && a[3] === v);
+    }, Number(pick)))
+    .toBe(true);
+  await expect(sel).toHaveValue(pick);
+  await expect.poll(() => page.evaluate(() => (window as unknown as D).__daw.history?.labels.undo ?? null)).toMatch(/^Set /);
+
+  // One undo entry: one Cmd/Ctrl+Z puts the old division back (and tells the engine).
+  await sel.evaluate((e) => (e as HTMLElement).blur());
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(sel).toHaveValue(value);
+  await expect
+    .poll(() => page.evaluate((v) => {
+      const w = window as unknown as D;
+      const last = w.__sent!.filter((a) => a[0] === w.__daw.Op.MIX_SET).at(-1);
+      return last?.[3];
+    }, Number(value)))
+    .toBe(Number(value));
+  expect(await page.evaluate(() => (window as unknown as D).__daw.history?.labels.undo ?? null)).toBe(before);
+});
+
+// ChoiceParam's select (plan 20 Task 11): a pick with the pointer gives the
+// keys back to the piano (blur, also after base-select's picker hands focus
+// back on close); a pick from the keyboard keeps focus, so a keyboard user
+// can go on through the options.
+test('a choice select keeps focus after a keyboard pick, releases it after a pointer pick', async ({ page }) => {
+  await startAudio(page);
+  await openMixer(page);
+  const delay = strip(page, 'delay');
+  await delay.getByTestId('fx-expand').click();
+  const sel = delay.getByTestId('knob-delay_time');
+  await sel.focus();
+  const v0 = Number(await sel.inputValue());
+  await page.keyboard.press('ArrowDown'); // opens the picker
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(sel).toHaveValue(String(v0 + 1));
+  await expect(sel).toBeFocused();
+
+  await sel.click(); // open with the pointer
+  await sel.locator('option').nth(2).click();
+  await expect(sel).toHaveValue('2');
+  await expect(sel).not.toBeFocused();
+});

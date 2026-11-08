@@ -36,6 +36,8 @@ export const THEME = {
   gloss: 'linear-gradient(rgba(255,255,255,.3), rgba(255,255,255,0) 60%)',
   wellShadow: 'inset 0 2px 5px rgba(0,0,0,.5), inset 0 -1px 0 rgba(255,255,255,.06)',
   lift: 'inset 0 1px 0 rgba(255,255,255,.1), 0 6px 14px rgba(0,0,0,.28), 0 1px 2px rgba(0,0,0,.3)',
+  /** A small drop under a raised thing with no recipe of its own (an on step cell). */
+  drop: '0 2px 4px rgba(0,0,0,.3)',
   /** Slider handle fill and shadow. */
   handle: 'linear-gradient(#fff, #cfd8df)',
   handleShadow: '0 1px 3px rgba(0,0,0,.5)',
@@ -45,10 +47,16 @@ export const THEME = {
   fsBody: '13px',
   fsCtl: '12px',
   fsLbl: '10px',
+  /** Below the spec's sizes: captions (jack names, scales) and badges (A, CC). */
+  fsXs: '9px',
+  fsTag: '8px',
 } as const;
 
-/** Corner radii in px: sm cells/small buttons, md buttons/inputs, lg cards/transport. */
-export const RADII = { sm: 6, md: 8, lg: 12 } as const;
+/**
+ * Corner radii in px: sm cells/small buttons, md buttons/inputs, lg
+ * cards/transport (spec §2); xs tags and badges, menu menus and popovers.
+ */
+export const RADII = { xs: 3, sm: 6, md: 8, lg: 12, menu: 10 } as const;
 
 /**
  * Rack module header colour per category (spec §2), written verbatim. The

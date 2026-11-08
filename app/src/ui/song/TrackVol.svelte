@@ -34,6 +34,7 @@
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
+  import { rangeFill } from '../rangeFill';
 
   let { p, engine, track }: { p: Project; engine: CommandSink; track: Track } = $props();
 
@@ -68,13 +69,16 @@
   });
   const automated = $derived(autoStatus !== null && autoStatus !== 'none');
 
+  /** The fill up to the thumb's centre (the thumb is restyled to THUMB_PX below). */
+  const THUMB_PX = 10;
+  const fill = (pos: number) => rangeFill(pos, THUMB_PX).fill;
   /** The thumb and fill: at the lane's value while it applies, else at the base; left alone during a press. */
   function paint() {
     const e = el;
     if (!e || press) return;
     const pos = faderPos(autoValue ?? db);
     e.value = String(pos);
-    e.style.setProperty('--fill', `${pos * 100}%`);
+    e.style.setProperty('--fill', fill(pos));
     e.dataset.autoValue = autoValue === null ? '' : String(autoValue);
     aria.push(autoValue);
   }
@@ -116,7 +120,7 @@
       return;
     }
     const pos = e.currentTarget.valueAsNumber;
-    e.currentTarget.style.setProperty('--fill', `${pos * 100}%`);
+    e.currentTarget.style.setProperty('--fill', fill(pos));
     setVol(faderDb(pos));
   }
   /** Abort the press: the value from before it; the rest of the press is ignored. False when none is on. */
@@ -128,7 +132,7 @@
     if (db !== v.db0) setMix(p, engine, track.id, 'fader', v.db0);
     if (el) {
       el.value = String(faderPos(v.db0));
-      el.style.setProperty('--fill', `${faderPos(v.db0) * 100}%`);
+      el.style.setProperty('--fill', fill(faderPos(v.db0)));
     }
     return true;
   }

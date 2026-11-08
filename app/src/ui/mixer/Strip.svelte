@@ -24,6 +24,7 @@
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import Knob from '../rack/Knob.svelte';
   import Fader from './Fader.svelte';
+  import { selectKey } from '../selectKey';
   import Meter from './Meter.svelte';
   import Section from './Section.svelte';
   import { untrack } from 'svelte';
@@ -91,10 +92,6 @@
   function pickKey(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
     if (!setSidechain(p, engine, target, dec(sel.value))) sel.value = enc(ch?.key ?? null); // refused: show the old key
-  }
-  /** A focused <select> type-aheads on letters: the piano keys must not change the key. */
-  function selectKey(e: KeyboardEvent) {
-    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
   }
 
   // ---- gain reduction readouts (comp on tracks, limiter on master) ---------
@@ -291,7 +288,7 @@
   .ms button { width: 26px; height: 20px; font: 700 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); color: var(--text); cursor: pointer; box-shadow: var(--raised-shadow); }
   .ms .m.lit { background: var(--sig-cv) var(--gloss); color: var(--on-color); }
   .ms .s.lit { background: var(--track-7) var(--gloss); color: var(--on-color); }
-  .ms .an { margin-left: auto; font-size: 13px; line-height: 1; }
+  .ms .an { margin-left: auto; font-size: var(--fs-body); line-height: 1; }
   .ms .an.lit { background: var(--play) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--play) 40%, transparent); }
   .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
@@ -303,14 +300,14 @@
   /* A send: its slider, then the pre/post toggle under it, aligned right. */
   .sends { gap: 2px; }
   .send { display: flex; flex-direction: column; align-items: stretch; gap: 1px; }
-  .pre { align-self: flex-end; font: 600 9px var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--text-2); padding: 0 6px; cursor: pointer; }
+  .pre { align-self: flex-end; font: 600 var(--fs-xs) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--text-2); padding: 0 6px; cursor: pointer; }
   .pre.lit { background: var(--sig-vel) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow); }
   .pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .grbox { display: flex; align-items: center; gap: 4px; font-size: var(--fs-lbl); color: var(--text-2); white-space: nowrap; }
   .grv { font: var(--fs-lbl)/1.3 var(--font-mono); color: var(--accent); background: var(--well); border-radius: var(--r-sm); padding: 0 4px; }
   .fm { display: flex; justify-content: center; gap: 3px; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; height: 132px; }
   .scale { position: relative; width: 20px; margin: 9px 0; }
-  .scale span { position: absolute; right: 0; font: 9px/10px var(--font-mono); color: var(--text-2); }
+  .scale span { position: absolute; right: 0; font: var(--fs-xs)/10px var(--font-mono); color: var(--text-2); }
   /* Bottom padding = the fader cap's half height: meter 0 lines up with −∞. */
   .mtr { height: 100%; padding-bottom: 9px; box-sizing: border-box; }
   .readout { margin-top: 4px; align-self: center; font: var(--fs-ctl)/1.4 var(--font-mono); color: var(--text); background: var(--lcd); box-shadow: var(--well-shadow); border-radius: var(--r-sm); padding: 0 6px; min-width: 60px; text-align: center; }

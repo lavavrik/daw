@@ -106,6 +106,7 @@
   import { deferSampleAssign } from '../../state/sampleLoads';
   import { importSample } from '../../state/sampleImport';
   import { catalogCategoryColor, jackColor, moduleColor, SIGNAL_COLORS } from '../theme';
+  import { releaseSelect, selectKey } from '../selectKey';
   import { cableBottom, cablePath } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
@@ -821,7 +822,7 @@
   }
   async function pickPatch(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
-    sel.blur(); // give the keys back to the piano at once
+    releaseSelect(sel); // give the keys back to the piano at once
     if (!(await requestLoad(sel.value, sel))) sel.value = selValue; // declined / failed: show the current patch again
   }
   const revert = (e: MouseEvent) => void requestLoad(selValue, e.currentTarget as HTMLElement);
@@ -932,11 +933,6 @@
       assign(r.id);
       banners.error = null;
     }
-  }
-
-  /** A focused <select> type-aheads on letters: the piano keys must not change the patch. */
-  function selectKey(e: KeyboardEvent) {
-    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
   }
 
   /** What each cable colour carries (the catalog's pitch is a cv, velocity has its own). */
@@ -1204,13 +1200,13 @@
   .addwrap { position: relative; }
   .btn { padding: 4px 10px; }
   .btn[aria-expanded='true'] { filter: brightness(1.1); }
-  .menu { position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; display: flex; gap: 14px; padding: 10px; border-radius: 10px; background: var(--panel); box-shadow: var(--lift); }
+  .menu { position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; display: flex; gap: 14px; padding: 10px; border-radius: var(--r-menu); background: var(--panel); box-shadow: var(--lift); }
   .group { display: flex; flex-direction: column; gap: 1px; min-width: 104px; }
   .gh { margin-bottom: 4px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); font: 700 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; }
   .group button { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer; }
   .group button:hover, .group button:focus-visible { background: var(--raised); outline: none; }
   .group button[aria-disabled='true'] { color: var(--text-2); opacity: 0.6; cursor: not-allowed; }
-  .group button small { flex-basis: 100%; padding-left: 14px; font-size: 9px; color: var(--text-2); }
+  .group button small { flex-basis: 100%; padding-left: 14px; font-size: var(--fs-xs); color: var(--text-2); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
   .full { margin: 0; color: var(--accent); white-space: nowrap; }
   .legend { margin-left: auto; display: flex; gap: 10px; font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); }

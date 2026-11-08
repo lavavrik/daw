@@ -158,10 +158,13 @@
     valEl?.setAttribute('stroke-dasharray', `${(a + 135).toFixed(1)} 360`);
     ptrEl?.setAttribute('transform', `rotate(${a.toFixed(1)} 16 16)`);
     if (fillEl && handleEl) {
+      // Paint-only properties, so an automation tick never re-lays out the
+      // rack: the full-width fill is clipped to its span (clip-path keeps the
+      // 3 px round ends; a scaleX would squash them), and the handle moves by
+      // a transform in the rail's width (cqi: the rail is a size container).
       const [from, to] = fillSpan(def, v);
-      fillEl.style.left = `${(from * 100).toFixed(2)}%`;
-      fillEl.style.width = `${((to - from) * 100).toFixed(2)}%`;
-      handleEl.style.left = `${(pos * 100).toFixed(2)}%`;
+      fillEl.style.clipPath = `inset(0 ${((1 - to) * 100).toFixed(2)}% 0 ${(from * 100).toFixed(2)}% round 3px)`;
+      handleEl.style.transform = `translateX(${(pos * 100).toFixed(2)}cqi)`;
     }
     if (knobEl && autoStatus) {
       knobEl.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
@@ -518,17 +521,17 @@
   .ptr { stroke: var(--text); stroke-width: 2; stroke-linecap: round; }
   /* Automated: the base (own value) tick, the A badge; grey while the lane is idle / suspended. */
   .base { stroke: var(--text); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
-  .badge { position: absolute; top: 1px; right: 4px; width: 10px; font: 700 8px/10px var(--font-ui); text-align: center; border-radius: 3px; background: var(--c); color: var(--on-color); pointer-events: none; }
+  .badge { position: absolute; top: 1px; right: 4px; width: 10px; font: 700 var(--fs-tag)/10px var(--font-ui); text-align: center; border-radius: var(--r-xs); background: var(--c); color: var(--on-color); pointer-events: none; }
   .knob.auto-off .badge, .slider.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline (cv blue: a controller). */
-  .cc { position: absolute; top: 1px; left: 3px; padding: 0 2px; font: 700 7px/10px var(--font-ui); border-radius: 3px; background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
+  .cc { position: absolute; top: 1px; left: 3px; padding: 0 2px; font: 700 var(--fs-tag)/10px var(--font-ui); border-radius: var(--r-xs); background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
   .knob.learning, .slider.learning { outline: 2px solid var(--sig-cv); outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
   @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .knob.learning, .slider.learning { animation: none; } }
   .knob.auto-susp .val { stroke: var(--text-dim); }
   .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
   .note { font-size: var(--fs-lbl); color: var(--accent); white-space: nowrap; }
-  .readout { min-width: 40px; padding: 0 4px; border-radius: 4px; background: var(--well); box-shadow: var(--well-shadow); font: 500 var(--fs-lbl)/14px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); text-align: center; white-space: nowrap; }
+  .readout { min-width: 40px; padding: 0 4px; border-radius: var(--r-xs); background: var(--well); box-shadow: var(--well-shadow); font: 500 var(--fs-lbl)/14px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); text-align: center; white-space: nowrap; }
   .readout.typeable { cursor: text; }
   /* The heard (automated) value: italic in the knob's colour. */
   .readout.auto { font-style: italic; color: var(--c); }
@@ -550,10 +553,12 @@
   .slider .badge, .slider .cc { position: static; align-self: center; }
   .slider .note { padding: 0 2px; }
   .hit { padding: 5px 7px; cursor: ew-resize; touch-action: none; }
-  .rail { position: relative; height: 6px; border-radius: 3px; background: var(--well); box-shadow: var(--well-shadow); }
-  .fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--c) var(--gloss); }
+  .rail { position: relative; height: 6px; border-radius: 3px; background: var(--well); box-shadow: var(--well-shadow); container-type: inline-size; }
+  /* Full width; paint() clips it to the value's span (clip-path). */
+  .fill { position: absolute; inset: 0; background: var(--c) var(--gloss); clip-path: inset(0 100% 0 0); }
   .slider.auto-susp .fill { background-color: var(--text-dim); }
-  .handle { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--handle); box-shadow: var(--handle-shadow); cursor: grab; }
+  /* At the rail's left end; paint() translates it to the value. */
+  .handle { position: absolute; top: 50%; left: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--handle); box-shadow: var(--handle-shadow); cursor: grab; }
   .slider.dragging .handle { cursor: grabbing; }
   .slider:focus-visible .handle { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--handle-shadow); }
   /* Automated: the base (own value) tick across the groove. */

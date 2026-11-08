@@ -12,20 +12,23 @@
   //   - typing: Enter or blur commits (clamped, rounded to `decimals`); Esc
   //     reverts the text. `oninput` (optional) reports the raw text as it is
   //     typed (null when empty or unreadable) for panels that validate live.
-  //   - ArrowUp/Down, the ▲▼/−/+ buttons: one step, Shift = step / 10. The
+  //   - ArrowUp/Down, the ▲▼/−/+ buttons: one step, Shift = step / 10 (at
+  //     least the smallest unit kept: 1 on an integer field). The
   //     wheel steps too, but only while the field is focused, so scrolling a
   //     panel over a field never edits it by accident.
   //   - scrub: press the value and drag vertically. The press only becomes a
   //     scrub after 3 px of travel (a plain click still focuses the input for
-  //     typing); then 1 step per 4 px, Shift = step / 10 (numberField.ts). While
-  //     scrubbing only the display moves; onchange fires ONCE, on release, so
-  //     the whole scrub is one undo entry (history/gestures.ts brackets every
-  //     pointer press anyway). Esc, or Cmd/Ctrl+Z mid-scrub (registerDragCancel),
+  //     typing); in a field that already has focus, after 6 px, and a press
+  //     that goes sideways first is a text selection and never scrubs
+  //     (numberField.ts pressIntent). Then 1 step per 4 px, Shift = step /
+  //     10. While scrubbing only the display moves; onchange fires ONCE, on
+  //     release, so the whole scrub is one undo entry (history/gestures.ts
+  //     brackets every pointer press anyway). Esc, or Cmd/Ctrl+Z mid-scrub (registerDragCancel),
   //     drops the scrub: the value never changed, so there is nothing to undo.
   //   - double-click selects the text.
   import { onDestroy, tick } from 'svelte';
   import { registerDragCancel } from '../history/gestures';
-  import { clampValue, decimalsOf, formatValue, scrubStarted, scrubValue, stepValue } from './numberField';
+  import { clampValue, decimalsOf, formatValue, pressIntent, scrubValue, stepValue } from './numberField';
 
   let {
     value,
@@ -145,12 +148,12 @@
   // ---- scrub ---------------------------------------------------------------
   let areaEl = $state<HTMLElement | null>(null);
   /** A press on the value that has not travelled far enough yet, or is scrubbing. */
-  let press: { pointerId: number; y: number; v0: number; fine: boolean; scrubbing: boolean; wasFocused: boolean } | null = null;
+  let press: { pointerId: number; x: number; y: number; v0: number; fine: boolean; scrubbing: boolean; wasFocused: boolean } | null = null;
   let scrubbing = $state(false);
 
   function onDown(e: PointerEvent) {
     if (disabled || !e.isPrimary || e.button !== 0) return;
-    press = { pointerId: e.pointerId, y: e.clientY, v0: current(), fine: e.shiftKey, scrubbing: false, wasFocused: document.activeElement === inputEl };
+    press = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, v0: current(), fine: e.shiftKey, scrubbing: false, wasFocused: document.activeElement === inputEl };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
@@ -160,7 +163,12 @@
   function onMove(e: PointerEvent) {
     if (!press || e.pointerId !== press.pointerId) return;
     if (!press.scrubbing) {
-      if (!scrubStarted(e.clientY - press.y)) return;
+      const intent = pressIntent(e.clientX - press.x, e.clientY - press.y, press.wasFocused);
+      if (intent === 'select') {
+        endPress(); // the native text selection carries on
+        return;
+      }
+      if (intent === 'wait') return;
       press.scrubbing = true;
       scrubbing = true;
       draft = null;

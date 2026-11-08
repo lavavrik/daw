@@ -183,6 +183,6 @@
   .track i { position: absolute; left: 0; right: 0; display: block; pointer-events: none; }
   .centre { top: 50%; height: 1px; background: var(--line); }
   .fill { background: color-mix(in srgb, var(--c) 40%, transparent) var(--gloss); }
-  .track .thumb { left: 3px; right: 3px; height: 10px; border-radius: 4px; background: var(--c) var(--gloss); box-shadow: var(--handle-shadow), 0 0 8px color-mix(in srgb, var(--c) 50%, transparent); }
+  .track .thumb { left: 3px; right: 3px; height: 10px; border-radius: var(--r-xs); background: var(--c) var(--gloss); box-shadow: var(--handle-shadow), 0 0 8px color-mix(in srgb, var(--c) 50%, transparent); }
   .track.pitch .thumb { background: var(--handle); box-shadow: var(--handle-shadow); }
 </style>

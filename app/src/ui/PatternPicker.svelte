@@ -15,6 +15,11 @@
   import type { AudioEngine } from '../audio/engine';
   import { currentPattern } from '../state/project.svelte';
   import type { PatternTrack, Project } from '../state/project.svelte';
+  import Plus from 'phosphor-svelte/lib/Plus';
+  import Copy from 'phosphor-svelte/lib/Copy';
+  import PencilSimple from 'phosphor-svelte/lib/PencilSimple';
+  import Trash from 'phosphor-svelte/lib/Trash';
+  import Icon from './Icon.svelte';
   import {
     PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
   } from '../state/pattern-actions';
@@ -78,12 +83,13 @@
     </select>
   {/if}
   <button class="btn" data-testid="pattern-new" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'New empty pattern'}
-    onclick={() => newPattern(p, engine, track.id)}>+ New</button>
+    onclick={() => newPattern(p, engine, track.id)}><Icon icon={Plus} /> New</button>
   <button class="btn" data-testid="pattern-dup" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
-    onclick={() => duplicatePattern(p, engine, track.id)}>Duplicate</button>
-  <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}>Rename</button>
+    onclick={() => duplicatePattern(p, engine, track.id)}><Icon icon={Copy} /> Duplicate</button>
+  <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}><Icon icon={PencilSimple} /> Rename</button>
   <button class="btn" data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
-    onclick={() => deletePattern(p, engine, track.id, cur.id)}>Delete</button>
+    onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /> Delete</button>
+  <!-- Task 4: the pattern Save / Load buttons (FloppyDisk / FolderOpen) go here. -->
 </span>
 
 <style>

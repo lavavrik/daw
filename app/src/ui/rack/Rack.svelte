@@ -1,6 +1,12 @@
 <script module lang="ts">
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { createSweepKeys } from '../../history/sweep';
+  import SquaresFour from 'phosphor-svelte/lib/SquaresFour';
+  import FloppyDisk from 'phosphor-svelte/lib/FloppyDisk';
+  import PlusSquare from 'phosphor-svelte/lib/PlusSquare';
+  import BookOpen from 'phosphor-svelte/lib/BookOpen';
+  import X from 'phosphor-svelte/lib/X';
+  import Icon from '../Icon.svelte';
   /**
    * Track ids whose rack was edited since its patch was loaded: drives the
    * "(edited)" marker next to the patch name. UI state only (not saved, not
@@ -1042,22 +1048,23 @@
     {#if example}
       <button class="link" data-testid="rack-example" disabled={patternsFull}
         title={patternsFull ? PATTERNS_FULL_TEXT : `Add "${example.name}" as a new pattern and open it in the Piano roll`}
-        onclick={addExample}>Add example roll</button>
+        onclick={addExample}><Icon icon={BookOpen} size={14} /> Add example roll</button>
     {/if}
     <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
     <VoiceLeds {track} />
     <button class="btn" data-testid="rack-tidy" disabled={!placed}
       title={placed ? 'Remove every module position: back to the wrapping layout' : 'The rack already wraps (drag a module header to place it)'}
-      onclick={tidy}>Tidy</button>
-    <button class="btn" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
+      onclick={tidy}><Icon icon={SquaresFour} /> Tidy</button>
+    <button class="btn" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}><Icon icon={FloppyDisk} /> Save patch</button>
     <div class="addwrap">
       <button
         class="btn"
         bind:this={menuBtn}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
+        aria-label="+ Add module"
         onclick={() => (menuOpen = !menuOpen)}
-      >+ Add module</button>
+      ><Icon icon={PlusSquare} /> Add module</button>
       {#if menuOpen}
         <div class="menu" role="menu" tabindex="-1" data-testid="add-menu" bind:this={menuEl} onkeydown={menuKey}>
           {#if full}
@@ -1119,7 +1126,7 @@
   {/if}
   {#if patchNote}
     <div class="note" data-testid="patch-warnings" role="status">
-      <span>{patchNote}</span><button aria-label="Dismiss" onclick={() => (patchNote = null)}>×</button>
+      <span>{patchNote}</span><button aria-label="Dismiss" onclick={() => (patchNote = null)}><Icon icon={X} size={12} /></button>
     </div>
   {/if}
 
@@ -1193,7 +1200,7 @@
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .patch { display: flex; align-items: center; gap: 6px; }
   .edited { color: var(--accent); font-size: var(--fs-lbl); }
-  .link { padding: 0; border: 0; background: transparent; color: var(--text); font: 500 var(--fs-lbl) var(--font-ui); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; cursor: pointer; }
+  .link { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--text); font: 500 var(--fs-lbl) var(--font-ui); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; cursor: pointer; }
   .link:hover:not(:disabled) { color: var(--accent); }
   .link:disabled { color: var(--text-2); opacity: 0.6; cursor: not-allowed; text-decoration: none; }
   .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1215,7 +1222,7 @@
 
   .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border-radius: var(--r-md); background: var(--well); box-shadow: var(--well-shadow), inset 3px 0 0 var(--accent); color: var(--text); }
   .note > span { flex: 1; min-width: 0; }
-  .note button { padding: 2px 10px; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); cursor: pointer; }
+  .note button { display: inline-flex; align-items: center; padding: 2px 10px; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); cursor: pointer; }
   .note button[aria-label='Dismiss'] { padding: 0 6px; background: transparent; box-shadow: none; }
   .note .ok { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
   .note button:disabled { opacity: 0.45; cursor: default; }

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Plan 12 (docs/architecture/visuals.md): the visuals in the running app.
 // The Scope module, the mixer analyser (spectrum, strip toggle), the top-bar
@@ -32,7 +33,7 @@ async function startAudio(page: Page) {
 /** A new synth track (Deep Bass), selected, on the Instrument tab. Returns its slot. */
 async function addSynth(page: Page): Promise<number> {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('rack')).toBeVisible();
   return page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.find((t) => t.id === (window as unknown as { __daw: Daw }).__daw.project.selectedTrackId)!.slot);
@@ -120,7 +121,7 @@ test('a ninth scope is greyed out', async ({ page }) => {
 
 test('analyser finds the note', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.evaluate(() => {
     const id = (window as unknown as { __daw: Daw }).__daw.project.selectedTrackId!;
     (window as unknown as { __daw: Daw }).__daw.actions.loadPatch(id, {
@@ -156,8 +157,10 @@ test('analyser finds the note', async ({ page }) => {
         return hz === null ? 99 : Math.abs(Math.log2(hz / 880));
       })
       .toBeLessThan(0.17);
-    // Hovering 880 Hz on the log axis (20 Hz..20 kHz over the 320 px plot) names A5.
+    // Hovering 880 Hz on the log axis (20 Hz..20 kHz over the plot) names A5.
     const spec = page.getByTestId('analyser-spectrum');
+    // The wide panel scrolls inside the mixer row: bring the spectrum into view first.
+    await spec.scrollIntoViewIfNeeded();
     const b = (await spec.boundingBox())!;
     const x = (Math.log10(880 / 20) / 3) * b.width;
     await page.mouse.move(b.x + x, b.y + b.height / 2);

@@ -200,6 +200,16 @@
     if (readoutEl) readoutEl.hidden = true;
   }
 
+  // A width change (the mixer panel is fluid): re-fit the backing store and
+  // the grid now, not at the next analysis frame, and force a redraw.
+  $effect(() => {
+    void width;
+    void height;
+    if (!canvas || !fit(canvas)) return;
+    if (need === 'panel') drawGrid();
+    drawn = new Float32Array(0);
+  });
+
   onMount(() => {
     fit(canvas);
     if (need === 'panel') drawGrid();

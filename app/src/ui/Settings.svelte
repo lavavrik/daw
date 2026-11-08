@@ -25,6 +25,8 @@
   import type { LatencyHint } from '../audio/restart';
   import NumberField from './NumberField.svelte';
   import { releaseSelect, selectKey } from './selectKey';
+  import GearSix from 'phosphor-svelte/lib/GearSix';
+  import Icon from './Icon.svelte';
 
   let {
     engine,
@@ -108,7 +110,7 @@
   </p>
   <div class="actions">
     <button class="btn primary" data-testid="settings-apply" disabled={busy || blocked !== null || wanted === null} onclick={() => void apply()}>
-      {busy ? 'Restarting…' : 'Apply'}
+      <Icon icon={GearSix} /> {busy ? 'Restarting…' : 'Apply'}
     </button>
     <span class="note">Restarts audio and stops playback; the project stays as it is.</span>
   </div>

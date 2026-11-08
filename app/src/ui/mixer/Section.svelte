@@ -3,10 +3,13 @@
   // by default; the header always shows the title and, for processors with an
   // on/off switch, an "on" toggle that works without expanding. `summary` is
   // a line that stays visible while collapsed (the Comp's "SC: Drums · kick").
-  import type { Snippet } from 'svelte';
+  import type { Snippet, Component } from 'svelte';
+  import Icon from '../Icon.svelte';
 
-  let { title, on = null, ontoggle, summary, children, testid, name }: {
+  let { title, icon, on = null, ontoggle, summary, children, testid, name }: {
     title: string;
+    /** Phosphor glyph shown before the title (the title text stays). */
+    icon?: Component<any>;
     /** On/off state, or null for sections without a switch. */
     on?: boolean | null;
     ontoggle?: () => void;
@@ -30,7 +33,7 @@
       title={`${open ? 'Hide' : 'Show'} ${title} settings`}
       data-testid={`${testid}-expand`}
       onclick={() => (open = !open)}
-    ><span class="tri">{open ? '▾' : '▸'}</span>{title}</button>
+    ><span class="tri">{open ? '▾' : '▸'}</span>{#if icon}<Icon {icon} size={12} />{/if}{title}</button>
     {#if on !== null}
       <button
         type="button"

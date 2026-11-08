@@ -62,6 +62,8 @@
   import type { Marker } from './sampleStrip';
   import { noteName } from './sampleStrip';
   import ShapePreview from './ShapePreview.svelte';
+  import X from 'phosphor-svelte/lib/X';
+  import Icon from '../Icon.svelte';
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onparams, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
@@ -190,7 +192,7 @@
     aria-label={`${title}: drag to move, or Alt+arrow keys`} onpointerdown={headerDown} onkeydown={onheaderkey}
   >
     <span class="title">{title}</span>
-    <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}>×</button>
+    <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}><Icon icon={X} size={12} /></button>
   </header>
   <!-- No negative margins anywhere in the card: Chrome counts them differently
        for a flow (flex item) and a positioned (width: max-content) panel, and
@@ -293,7 +295,7 @@
   .panel.lifted { z-index: 3; box-shadow: var(--lift), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; font: 700 var(--fs-ctl) var(--font-ui); white-space: nowrap; }
-  .x { padding: 0 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
+  .x { display: inline-flex; align-items: center; padding: 2px 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
   .panel:hover .x, .x:focus-visible { opacity: 0.85; }
   .x:hover { opacity: 1; }
   .x:focus-visible { outline: 2px solid var(--on-color); }

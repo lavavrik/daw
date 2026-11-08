@@ -33,6 +33,10 @@
   import type { MeterBus } from './meterBus';
   import { SCALE_TICKS, delayClampNote, faderPos, formatDb } from './mixMath';
   import { analyserBus } from '../vis/analyserBus';
+  import Equalizer from 'phosphor-svelte/lib/Equalizer';
+  import ArrowsInLineVertical from 'phosphor-svelte/lib/ArrowsInLineVertical';
+  import Waveform from 'phosphor-svelte/lib/Waveform';
+  import Icon from '../Icon.svelte';
 
   let { p, engine, bus, target, kind, channel, name, color = null, subtitle = '', selected = false, onselect }: {
     p: Project;
@@ -181,18 +185,18 @@
       <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloTitle(name, soloed, '; returns keep playing')} data-testid="solo" onclick={(e) => toggleSolo(p, engine, target, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
     {/if}
     {#if kind !== 'master'}
-      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}>∿</button>
+      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}><Icon icon={Waveform} size={12} /></button>
     {/if}
   </div>
 
-  <Section title="EQ" {name} testid="eq" on={val('eq_on') === 1} ontoggle={() => set('eq_on', val('eq_on') ? 0 : 1)}>
+  <Section title="EQ" icon={Equalizer} {name} testid="eq" on={val('eq_on') === 1} ontoggle={() => set('eq_on', val('eq_on') ? 0 : 1)}>
     {#each eqKnobs as d (d.id)}
       <Knob variant="slider" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
     {/each}
   </Section>
 
   {#if kind === 'track'}
-    <Section title="Comp" {name} testid="comp" on={val('comp_on') === 1} ontoggle={() => set('comp_on', val('comp_on') ? 0 : 1)}>
+    <Section title="Comp" icon={ArrowsInLineVertical} {name} testid="comp" on={val('comp_on') === 1} ontoggle={() => set('comp_on', val('comp_on') ? 0 : 1)}>
       {#snippet summary()}
         <span class="sc" data-testid="sc-label" title={`Sidechain (key) source: ${scLabel === 'none' ? 'none — the compressor listens to this track itself' : scLabel}`}>SC: {scLabel}</span>
         <span class="gr" class:dim={val('comp_on') !== 1} title="Compressor gain reduction">GR <span bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span></span>
@@ -290,7 +294,7 @@
   .ms button { width: 26px; height: 20px; font: 700 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); color: var(--text); cursor: pointer; box-shadow: var(--raised-shadow); }
   .ms .m.lit { background: var(--sig-cv) var(--gloss); color: var(--on-color); }
   .ms .s.lit { background: var(--track-7) var(--gloss); color: var(--on-color); }
-  .ms .an { margin-left: auto; font-size: var(--fs-body); line-height: 1; }
+  .ms .an { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-body); line-height: 1; }
   .ms .an.lit { background: var(--play) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--play) 40%, transparent); }
   .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); }

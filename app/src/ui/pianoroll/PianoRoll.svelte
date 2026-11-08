@@ -1,6 +1,10 @@
 <script module lang="ts">
   import type { GridKey } from './prMath';
   import { patternPosAt } from '../../state/song-actions';
+  import MagnetStraight from 'phosphor-svelte/lib/MagnetStraight';
+  import Eraser from 'phosphor-svelte/lib/Eraser';
+  import BookOpen from 'phosphor-svelte/lib/BookOpen';
+  import Icon from '../Icon.svelte';
   /** Grid size survives track switches for the session (the roll remounts per track). */
   let lastGrid: GridKey = '1/16';
 </script>
@@ -939,9 +943,9 @@
       </select>
     </label>
     <button data-testid="pr-quantize" title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
-      Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
+      <Icon icon={MagnetStraight} /> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
     </button>
-    <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}>Clear</button>
+    <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /> Clear</button>
     {#if clearAsk}
       <InlineConfirm
         message={clearPatternText(track, notes.length)}
@@ -953,7 +957,7 @@
     {/if}
     <div class="exwrap">
       <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="true" aria-expanded={exOpen}
-        title="Example rolls for the house patches" onclick={toggleExamples}>Examples ▾</button>
+        title="Example rolls for the house patches" onclick={toggleExamples}><Icon icon={BookOpen} /> Examples ▾</button>
       {#if exOpen}
         <!-- A plain popover (like the Rack add-menu's container, minus role=menu: its
              children are headers and rows, not only menuitems). The container takes
@@ -1014,6 +1018,7 @@
   .bar { display: flex; align-items: center; gap: 10px; color: var(--text-2); flex-wrap: wrap; }
   .bar label { display: flex; align-items: center; gap: 6px; }
   .bar button {
+    display: inline-flex; align-items: center; gap: 4px;
     font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 2px 10px; border: 0; border-radius: var(--r-sm);
     background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); cursor: pointer;
   }

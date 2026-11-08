@@ -57,6 +57,14 @@
   import { patternPosAt } from '../../state/song-actions';
   import { NOTE_NAMES, noteName } from '../noteName';
   import { releaseSelect, selectKey } from '../selectKey';
+  import Shuffle from 'phosphor-svelte/lib/Shuffle';
+  import Sparkle from 'phosphor-svelte/lib/Sparkle';
+  import ArrowLeft from 'phosphor-svelte/lib/ArrowLeft';
+  import ArrowRight from 'phosphor-svelte/lib/ArrowRight';
+  import Eraser from 'phosphor-svelte/lib/Eraser';
+  import CaretDown from 'phosphor-svelte/lib/CaretDown';
+  import CaretUp from 'phosphor-svelte/lib/CaretUp';
+  import Icon from '../Icon.svelte';
 
   let { p, engine, clock, track, noteInput = null, capturing = () => false }: {
     p: Project;
@@ -337,15 +345,15 @@
     </label>
     <span class="grp">
       <button data-testid="acid-randomize" disabled={!view.ok} title="New random steps in {NOTE_NAMES[root]} {scale}"
-        onclick={() => write(randomize(steps.length, root, scale, Math.random), 'Randomize steps')}>Randomize</button>
+        onclick={() => write(randomize(steps.length, root, scale, Math.random), 'Randomize steps')}><Icon icon={Shuffle} /> Randomize</button>
       <button data-testid="acid-mutate" disabled={!view.ok} title="Re-roll a few steps"
-        onclick={() => write(mutate(steps, root, scale, Math.random), 'Mutate steps')}>Mutate</button>
+        onclick={() => write(mutate(steps, root, scale, Math.random), 'Mutate steps')}><Icon icon={Sparkle} /> Mutate</button>
     </span>
     <span class="grp">
       <button data-testid="acid-shift-left" disabled={!view.ok || empty} title="Shift one step earlier" aria-label="Shift left"
-        onclick={() => write(shift(steps, -1), 'Shift steps')}>←</button>
+        onclick={() => write(shift(steps, -1), 'Shift steps')}><Icon icon={ArrowLeft} /></button>
       <button data-testid="acid-shift-right" disabled={!view.ok || empty} title="Shift one step later" aria-label="Shift right"
-        onclick={() => write(shift(steps, 1), 'Shift steps')}>→</button>
+        onclick={() => write(shift(steps, 1), 'Shift steps')}><Icon icon={ArrowRight} /></button>
     </span>
     <span class="grp" title="Transpose every note of the pattern">
       {#each TRANSPOSE as [semis, text] (semis)}
@@ -353,7 +361,7 @@
           onclick={() => transposeAcid(p, engine, track.id, semis)}>{text}</button>
       {/each}
     </span>
-    <button data-testid="acid-clear" disabled={!view.ok || empty} onclick={() => write(steps.map(() => REST), 'Clear steps')}>Clear</button>
+    <button data-testid="acid-clear" disabled={!view.ok || empty} onclick={() => write(steps.map(() => REST), 'Clear steps')}><Icon icon={Eraser} /> Clear</button>
   </div>
 
   {#if slideHint}<div class="hint" data-testid="acid-slide-hint">{SLIDE_HINT}</div>{/if}
@@ -407,8 +415,8 @@
         {/each}
       </div>
       <div class="toggles">
-        <button data-testid="acid-oct-down" disabled={cur?.kind !== 'note' || cur.oct === -1} title="Octave down" aria-label="Octave down" onclick={() => setOct(-1)}>▼</button>
-        <button data-testid="acid-oct-up" disabled={cur?.kind !== 'note' || cur.oct === 1} title="Octave up" aria-label="Octave up" onclick={() => setOct(1)}>▲</button>
+        <button data-testid="acid-oct-down" disabled={cur?.kind !== 'note' || cur.oct === -1} title="Octave down" aria-label="Octave down" onclick={() => setOct(-1)}><Icon icon={CaretDown} /></button>
+        <button data-testid="acid-oct-up" disabled={cur?.kind !== 'note' || cur.oct === 1} title="Octave up" aria-label="Octave up" onclick={() => setOct(1)}><Icon icon={CaretUp} /></button>
         <button data-testid="acid-accent" class:on={cur?.accent} aria-pressed={!!cur?.accent} disabled={!canAccent}
           title={canAccent ? 'Accent (Shift+A)' : 'Accent needs a note'} onclick={toggleAccent}>Accent</button>
         <button data-testid="acid-slide" class:on={cur?.slide} aria-pressed={!!cur?.slide} disabled={!canSlide}
@@ -432,6 +440,7 @@
   .acid { display: flex; flex-direction: column; gap: 8px; outline: none; color: var(--text-2); }
   .acid:focus-visible { box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-sm); }
   button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 4px;
     font: 500 var(--fs-ctl)/16px var(--font-ui); padding: 3px 9px; border: 0; border-radius: var(--r-sm);
     background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); cursor: pointer;
   }

@@ -40,6 +40,20 @@
   import { BROWSER_TABS, folderVisible, hasUnscannedFolder, isFolderOpen, nameMatches, tabSections, type BrowserTab } from '../library/browserFilter';
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
+  import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
+  import Stop from 'phosphor-svelte/lib/Stop';
+  import X from 'phosphor-svelte/lib/X';
+  import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
+  import Folder from 'phosphor-svelte/lib/Folder';
+  import FileAudio from 'phosphor-svelte/lib/FileAudio';
+  import Faders from 'phosphor-svelte/lib/Faders';
+  import Play from 'phosphor-svelte/lib/Play';
+  import ListBullets from 'phosphor-svelte/lib/ListBullets';
+  import Waveform from 'phosphor-svelte/lib/Waveform';
+  import SquaresFour from 'phosphor-svelte/lib/SquaresFour';
+  import Icon from './Icon.svelte';
+  /** Tab glyphs (the label stays beside them). */
+  const TAB_ICON = { all: ListBullets, samples: Waveform, patches: Faders, kits: SquaresFour } as const;
 
   let { engine, p }: { engine: AudioEngine; p: Project } = $props();
 
@@ -140,7 +154,7 @@
     <button
       class="item dir" style:--d={depth} data-testid="lib-folder-{sub.path}" aria-expanded={shownOpen(sub.path)}
       title={sub.path} onclick={() => fold(sub.path)}
-    ><span class="tw">{shownOpen(sub.path) ? '▾' : '▸'}</span><span class="nm">{sub.name}</span></button>
+    ><span class="tw"><Icon icon={shownOpen(sub.path) ? FolderOpen : Folder} size={14} /></span><span class="nm">{sub.name}</span></button>
     {#if shownOpen(sub.path) && lib.listings[sub.path]}{@render folder(sub.path, depth + 1, all || nameMatches(sub.name, q))}{/if}
   {/each}
   {#each visibleSamples(path, all) as s (s.path)}
@@ -150,7 +164,7 @@
       title="{s.path} — click to preview, drag onto a row or a Sample Player"
       onclick={() => void toggle(s)} onkeydown={(e) => key(e, s)}
       ondragstart={(e) => startLibraryDrag(e, s.path)}
-    ><span class="tw dot smp-dot">{previewing === s.path ? '■' : '●'}</span><span class="nm">{s.name}</span></div>
+    ><span class="tw dot smp-dot"><Icon icon={previewing === s.path ? Stop : FileAudio} size={14} /></span><span class="nm">{s.name}</span></div>
   {/each}
   {#if f.more && !q}
     <p class="dim more" style:--d={depth} data-testid="lib-more-{path}">{f.more} more not shown</p>
@@ -165,14 +179,14 @@
     {#if lib.source}
       <span class="name" data-testid="library-name" title={lib.name}>{lib.name}</span>
       {#if lib.status === 'ready'}
-        <button class="icon" data-testid="library-refresh" title="Rescan the folder" aria-label="Rescan the folder" onclick={() => void library.refresh()}>↻</button>
+        <button class="icon" data-testid="library-refresh" title="Rescan the folder" aria-label="Rescan the folder" onclick={() => void library.refresh()}><Icon icon={ArrowClockwise} size={14} /></button>
       {/if}
     {/if}
   </div>
 
   <div class="tabs" role="group" aria-label="Library category">
     {#each BROWSER_TABS as t (t.id)}
-      <button aria-pressed={tab === t.id} data-testid="lib-tab-{t.id}" onclick={() => (tab = t.id)}>{t.label}</button>
+      <button aria-pressed={tab === t.id} data-testid="lib-tab-{t.id}" title={t.label} onclick={() => (tab = t.id)}><Icon icon={TAB_ICON[t.id]} />{t.label}</button>
     {/each}
   </div>
   <input
@@ -184,15 +198,15 @@
        shifts the tree below it. -->
   <div class="pv" class:idle={!previewing} role="status" data-testid="preview-bar">
     {#if previewing}
-      <span title={previewing}>▶ {previewState.label ?? nameOf(previewing)}</span>
+      <span title={previewing}><Icon icon={Play} size={12} weight="fill" /> {previewState.label ?? nameOf(previewing)}</span>
     {:else}
       <span>Click a sample (here or a row's name) to preview</span>
     {/if}
-    <button data-testid="preview-stop" title="Stop the preview" disabled={!previewing} onclick={stopPreview}>■ Stop</button>
+    <button data-testid="preview-stop" title="Stop the preview" disabled={!previewing} onclick={stopPreview}><Icon icon={Stop} size={12} weight="fill" /> Stop</button>
   </div>
   {#if error}
     <div class="err" data-testid="library-error" role="alert">
-      <span>{error}</span><button aria-label="Dismiss" onclick={() => (error = null)}>×</button>
+      <span>{error}</span><button aria-label="Dismiss" onclick={() => (error = null)}><Icon icon={X} size={12} /></button>
     </div>
   {/if}
 
@@ -224,7 +238,7 @@
         <div class="sec">Patches</div>
         {#each visiblePatches as pt (pt.path)}
           <div class="item pat" data-testid="lib-patch-{pt.name}" title="Load it from the Patch menu of a synth track's Instrument tab">
-            <span class="tw dot pat-dot">●</span><span class="nm">{pt.name}</span>
+            <span class="tw dot pat-dot"><Icon icon={Faders} size={14} /></span><span class="nm">{pt.name}</span>
           </div>
         {:else}
           <p class="dim">{q ? `No patches match "${q}".` : 'No patches yet — save one from the Instrument tab.'}</p>
@@ -235,7 +249,7 @@
     {#if sections.kit}
     <section class="kit" data-testid="starter-kit" aria-label="Starter kit">
       <button class="sec fold" data-testid="starter-kit-toggle" aria-expanded={kitOpen} onclick={() => (kitOpen = !kitOpen)}>
-        <span>{kitOpen ? '▾' : '▸'} Starter kit{#if q && !kitOpen && visibleKit.length} — {visibleKit.length} match{visibleKit.length === 1 ? '' : 'es'}{/if}</span>
+        <span><Icon icon={kitOpen ? FolderOpen : Folder} size={14} /> Starter kit{#if q && !kitOpen && visibleKit.length} — {visibleKit.length} match{visibleKit.length === 1 ? '' : 'es'}{/if}</span>
         <span class="ro" title="Built in (CC0): drag a sound into the project; nothing is saved here">read-only</span>
       </button>
       {#if kitOpen}
@@ -247,7 +261,7 @@
               title="{s.name} — built-in starter kit: click to preview, drag onto a row or a Sample Player"
               onclick={() => void toggle(s, true)} onkeydown={(e) => key(e, s, true)}
               ondragstart={(e) => startLibraryDrag(e, s.path, STARTER_SAMPLE_MIME)}
-            ><span class="tw dot kit-dot">{previewing === KIT + s.path ? '■' : '●'}</span><span class="nm">{s.name}</span></div>
+            ><span class="tw dot kit-dot"><Icon icon={previewing === KIT + s.path ? Stop : FileAudio} size={14} /></span><span class="nm">{s.name}</span></div>
           {:else}
             <p class="dim">{q ? `No kit sounds match "${q}".` : 'No kit sounds.'}</p>
           {/each}
@@ -275,19 +289,19 @@
   .ttl { font: 600 var(--fs-lbl) var(--font-ui); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); flex: none; }
   .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .ro { flex: none; font-size: 9px; color: var(--text-dim); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 3px; }
-  .icon { margin-left: auto; flex: none; font: inherit; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; padding: 0 2px; }
+  .icon { margin-left: auto; display: inline-flex; flex: none; font: inherit; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; padding: 0 2px; }
   .icon:hover { color: var(--text); }
   .tabs { display: flex; margin: 0 8px 6px; }
-  .tabs > button { flex: 1; padding: 4px 6px; }
+  .tabs > button { flex: 1; display: inline-flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; font-size: var(--fs-lbl); }
   .search { margin: 0 8px 6px; width: calc(100% - 16px); box-sizing: border-box; font: var(--fs-ctl) var(--font-ui); }
   .pv { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 3px 6px; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--play); }
   .pv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pv.idle { color: var(--text-dim); }
   .pv button:disabled { opacity: 0.4; cursor: default; }
-  .pv button { font: inherit; font-size: var(--fs-ctl); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; padding: 0 6px; }
+  .pv button { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: var(--fs-ctl); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; padding: 0 6px; }
   .err { display: flex; align-items: flex-start; gap: 6px; margin: 0 8px 6px; padding: 4px 6px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--rec) 18%, var(--well)); color: var(--rec); border: 1px solid var(--rec); }
   .err span { flex: 1; }
-  .err button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+  .err button { display: inline-flex; border: 0; background: transparent; color: inherit; cursor: pointer; }
   .body { flex: 1; min-height: 0; overflow: auto; padding: 0 4px; }
   p { color: var(--text-2); margin: 4px 4px 8px; }
   .dim { color: var(--text-dim); }
@@ -313,7 +327,7 @@
   .item.on { background: var(--well); color: var(--play); }
   .smp { cursor: grab; }
   .pat { cursor: default; }
-  .tw { flex: none; width: 10px; color: var(--text-dim); font-size: 10px; text-align: center; }
+  .tw { flex: none; width: 16px; display: inline-flex; justify-content: center; color: var(--text-dim); }
   .dot { font-size: 8px; }
   .smp-dot { color: var(--accent); }
   .kit-dot { color: var(--rec); }

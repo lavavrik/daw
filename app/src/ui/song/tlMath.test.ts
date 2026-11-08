@@ -7,7 +7,7 @@ import {
 import { mixParam } from '../../audio/mixerCatalog';
 import { moduleDef } from '../../audio/catalog';
 import { laneValueAt } from '../../state/automation';
-import { toPos } from '../rack/knobMath';
+import { fromPos, toPos } from '../rack/knobMath';
 import type { TlView } from './tlMath';
 import { MAX_SONG_TICKS } from '../../audio/protocol';
 
@@ -334,13 +334,14 @@ describe('automation rows (plan 10)', () => {
   });
 
   it('pointHit and box select', () => {
-    const def = mixParam('fader'); // -60..6 dB, linear
+    const def = mixParam('fader'); // -60..6 dB on the fader taper
+    const mid = fromPos(def, 0.5); // the lane's vertical middle
     const lane = {
       def,
       points: [
         { id: 'p0', tick: 3840, value: -60 }, // x 0, bottom
         { id: 'p1', tick: 3840 + 960, value: 6 }, // x 24, top
-        { id: 'p2', tick: 3840 + 1920, value: -27 }, // x 48, middle
+        { id: 'p2', tick: 3840 + 1920, value: mid }, // x 48, middle
       ],
     };
     const H = AUTO_H;
@@ -355,7 +356,7 @@ describe('automation rows (plan 10)', () => {
     expect(pointHit(lane, 36, yMid, view, H)).toBeNull(); // between points
     expect(pointHit(lane, 48, posToY(1, H), view, H)).toBeNull(); // right tick, wrong value
     // Two points within reach: the nearer wins.
-    const close = { def, points: [{ id: 'a', tick: 3840, value: -27 }, { id: 'b', tick: 3840 + 160, value: -27 }] }; // 4 px apart
+    const close = { def, points: [{ id: 'a', tick: 3840, value: mid }, { id: 'b', tick: 3840 + 160, value: mid }] }; // 4 px apart
     expect(pointHit(close, 1, yMid, view, H)).toBe('a');
     expect(pointHit(close, 3, yMid, view, H)).toBe('b');
     // Box select: the points inside the rectangle, any corner order.

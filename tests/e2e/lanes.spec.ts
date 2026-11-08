@@ -65,9 +65,10 @@ test('drag a lane taller: header and lane follow, points use the new height, no 
   await expect(strip).toHaveCSS('cursor', 'row-resize');
   expect((await strip.boundingBox())!.height).toBe(5);
 
-  // From here on nothing is an edit: the undo button and the dirty flag stay put.
+  // From here on nothing is an edit: the undo button and the project's edit
+  // counter (version) stay put. (Not `dirty`: the idle dirty check would
+  // rightly set it again, since the project differs from its saved state.)
   const undoTitle = await page.getByTestId('undo').getAttribute('title');
-  await page.evaluate(() => ((window as Any).__daw.project.dirty = false));
 
   // Drag the strip 112 px down: live while the button is down, 160 px after.
   const release = await dragStrip(page, strip, 112);
@@ -134,7 +135,7 @@ test('drag a lane taller: header and lane follow, points use the new height, no 
   }
   await expect.poll(async () => (await savedLane(page)).points.length).toBe(0);
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
-  await page.evaluate(() => ((window as Any).__daw.project.dirty = false));
+  const version = await page.evaluate(() => (window as Any).__daw.project.version);
 
   // Double-click resets to 48.
   await strip.evaluate((el) => el.scrollIntoView({ block: 'center' }));
@@ -172,7 +173,7 @@ test('drag a lane taller: header and lane follow, points use the new height, no 
   expect((await lane.boundingBox())!.height).toBe(33);
   await page.screenshot({ path: 'test-results/lanes-short.png' });
 
-  // None of it was an edit: no undo entry, not dirty.
+  // None of it was an edit: no undo entry, no edit counted.
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
-  expect(await page.evaluate(() => (window as Any).__daw.project.dirty)).toBe(false);
+  expect(await page.evaluate(() => (window as Any).__daw.project.version)).toBe(version);
 });

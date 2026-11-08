@@ -238,9 +238,8 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
     .toBe(true);
   expect(await only()).toEqual(want);
   await page.keyboard.press('Escape'); // close the settings popover
-  await page.keyboard.press('Shift+L');
+  await page.keyboard.press('Space'); // focus is in the top bar: the song transport
   await expect.poll(() => page.evaluate(() => (window as unknown as Win).__daw.project.mode)).toBe('song');
-  await page.keyboard.press('Space');
   const heard = await page.evaluate(
     (slot) =>
       new Promise<number>((resolve) => {
@@ -420,9 +419,8 @@ test('automation round-trips through save, undo, restart and export', async ({ p
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(lanes).toEqual(want);
 
-  /** Song mode from 0: the master peak (telemetry) by song tick over `ms`. */
+  /** Song Play from 0: the master peak (telemetry) by song tick over `ms`. */
   const playSong = async (ms: number) => {
-    await page.getByTestId('mode-song').click();
     await page.evaluate(() => (window as unknown as Win).__daw.actions.seek(0));
     await page.getByTestId('play').click();
     const rec = await page.evaluate(

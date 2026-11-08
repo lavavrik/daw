@@ -369,9 +369,12 @@ recorded again.
 "Undo take" for a pattern that is not current first selects that pattern
 (a visible switch that is never undone), then deletes. A take whose track or
 pattern was removed is dropped, and Undo is disabled. Recording is
-disabled in Song mode: arming is a no-op (R flashes "Recording works in
-Pattern mode (Shift+L)" in the bottom panel's header status line), and
-entering Song mode closes held notes.
+disabled in Song mode: `Recorder.toggleArm` is a no-op there. The UI (plan
+20): while the song plays, R / Rec flash "Recording works with the pattern
+transport: stop the song first" in the bottom panel's header status line;
+stopped in Song mode, they switch to Pattern mode first and then arm.
+Entering Song mode closes held notes. Rec and Count-in are in the pattern
+transport (bottom panel header, `ui/PatternTransport.svelte`).
 A UI Play starts the recording pass at once;
 the 60 Hz telemetry watcher (`transportSync`) only catches transport changes
 the UI did not make.

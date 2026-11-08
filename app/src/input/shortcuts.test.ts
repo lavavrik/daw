@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number; pointerDown?: () => boolean } = {}, project: object = { playing: false, tracks: [] }) => {
+const mk = (opts: { onToggleSong?: () => void; onTogglePattern?: () => void; inBottomPanel?: (t: EventTarget | null) => boolean; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number; pointerDown?: () => boolean } = {}, project: object = { playing: false, tracks: [] }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -27,7 +27,7 @@ const key = (code: string, extra: object = {}) => ({ code, target: null, repeat:
 describe('shortcut handlers', () => {
   it('while a project loads every shortcut is ignored (fix 3)', () => {
     const calls: string[] = [];
-    const { sent, h } = mk({ onTogglePlay: () => calls.push('play'), onSave: () => calls.push('save'), onToggleArm: () => calls.push('arm') }, { playing: false, loading: true });
+    const { sent, h } = mk({ onToggleSong: () => calls.push('play'), onTogglePattern: () => calls.push('pat'), onSave: () => calls.push('save'), onToggleArm: () => calls.push('arm') }, { playing: false, loading: true });
     let prevented = 0;
     h.onKeyDown(key('Space', { preventDefault: () => prevented++ }));
     h.onKeyDown(key('KeyR'));
@@ -135,12 +135,54 @@ describe('shortcut handlers', () => {
     expect(arms).toBe(1);
     expect(sent).toEqual([]); // R is not a piano key
   });
-  it('Space calls onTogglePlay when given (count-in decided by the app)', () => {
-    let toggles = 0;
-    const { sent, h } = mk({ onTogglePlay: () => toggles++ });
-    h.onKeyDown(key('Space'));
-    expect(toggles).toBe(1);
+  it('Space routes by focus: inside the bottom panel the pattern transport, elsewhere the song transport', () => {
+    const calls: string[] = [];
+    const panel = { tagName: 'BUTTON', inPanel: true }; // e.g. a step cell
+    const { sent, h } = mk({
+      onToggleSong: () => calls.push('song'),
+      onTogglePattern: () => calls.push('pattern'),
+      inBottomPanel: (t) => !!(t as { inPanel?: boolean } | null)?.inPanel,
+    });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    h.onKeyDown(key('Space', pd)); // body
+    h.onKeyDown(key('Space', { target: panel, ...pd }));
+    h.onKeyDown(key('Space', { target: { tagName: 'CANVAS' }, ...pd })); // the timeline
+    h.onKeyDown(key('Space', { target: panel, repeat: true, ...pd })); // held: once
+    expect(calls).toEqual(['song', 'pattern', 'song']);
+    expect(prevented).toBe(4); // no page scroll, no focused-button click
     expect(sent).toEqual([]);
+  });
+  it('Space in a text, number or select field (in the panel or not) is left to the field: no transport', () => {
+    const calls: string[] = [];
+    const { h } = mk({ onToggleSong: () => calls.push('song'), onTogglePattern: () => calls.push('pattern'), inBottomPanel: () => true });
+    let prevented = 0;
+    const pd = { preventDefault: () => prevented++ };
+    for (const target of [
+      { tagName: 'INPUT', type: 'text' }, { tagName: 'INPUT', type: 'number' }, { tagName: 'TEXTAREA' },
+      { tagName: 'SELECT' }, { tagName: 'DIV', isContentEditable: true },
+    ]) h.onKeyDown(key('Space', { target, ...pd }));
+    expect(calls).toEqual([]);
+    expect(prevented).toBe(0); // the space is typed / the select opens
+    // A slider or checkbox is no typing target: Space still toggles.
+    h.onKeyDown(key('Space', { target: { tagName: 'INPUT', type: 'range' } }));
+    expect(calls).toEqual(['pattern']);
+  });
+  it('Space without app handlers toggles the song transport (Song mode + PLAY), then STOP', () => {
+    const p = { playing: false, mode: 'pattern', songPosition: 0, loop: { on: false, start: 0, end: 3840 }, tracks: [] };
+    const { sent, h } = mk({}, p);
+    h.onKeyDown(key('Space'));
+    expect(sent.map((x) => x[0])).toEqual([Op.SET_MODE, Op.SEEK, Op.PLAY]);
+    expect([p.mode, p.playing]).toEqual(['song', true]);
+    h.onKeyDown(key('Space'));
+    expect(sent.at(-1)![0]).toBe(Op.STOP);
+  });
+  it('Shift+L is no longer a mode toggle (it plays the L key like plain L)', () => {
+    const p = { playing: false, mode: 'pattern', tracks: [] };
+    const { sent, h } = mk({}, p);
+    h.onKeyDown(key('KeyL', { shiftKey: true }));
+    expect(p.mode).toBe('pattern');
+    expect(sent.map((x) => x[0])).toEqual([Op.NOTE_ON]);
   });
   it('meta key releases held piano notes', () => {
     const { sent, h } = mk();

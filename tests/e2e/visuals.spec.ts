@@ -301,15 +301,15 @@ test('clip tab waveform zooms to samples', async ({ page }) => {
   await page.keyboard.press('0');
   await expect.poll(() => fpp(page, 'cliptab-wave')).toBeCloseTo(fit, 6);
   // The playhead (a DOM element moved by transform) runs while Song mode plays inside the clip.
-  await page.keyboard.press('Shift+L');
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.mode)).toBe('song');
+  // (The wave has focus, inside the bottom panel, where Space means the pattern transport: song Play is the button.)
   const head = wave.locator('.ph');
   await expect(head).toBeHidden();
-  await page.keyboard.press('Space');
+  await page.getByTestId('play').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.mode)).toBe('song');
   await expect(head).toBeVisible();
   const t1 = await head.evaluate((el) => (el as HTMLElement).style.transform);
   await expect.poll(() => head.evaluate((el) => (el as HTMLElement).style.transform)).not.toBe(t1);
-  await page.keyboard.press('Space');
+  await page.getByTestId('play').click();
   await expect(head).toBeHidden();
 });
 

@@ -123,8 +123,8 @@ of these class names keeps its own box when it sets its own padding and font.
   Body text opts into `--fs-body` as each component is restyled.
 - The skinned `<select>` drops base-select's 24 px minimum height
   (`min-block-size: 0`): dense toolbars would otherwise grow.
-- `TopBar.svelte`'s old undo/redo and PAT/SONG groups use the class `.seg`;
-  they reset the theme's well padding until the top-bar task replaces them.
+- `TopBar.svelte`'s old undo/redo group uses the class `.seg`;
+  it resets the theme's well padding until the top-bar task replaces it.
 
 ## The hex guard
 `noHexColors.test.ts` fails when a `.svelte` file outside its `ALLOWED` list

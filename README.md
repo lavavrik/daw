@@ -65,7 +65,9 @@ the last session or opening a project does not add it.
    also toggles with **Enter**. For
    four-on-the-floor, put the kick on steps 1, 5, 9 and 13 and the hat on 3,
    7, 11 and 15.
-4. Press **Space** to play. The outlined column is the playhead. Change the
+4. Press **Space** (a clicked cell keeps the focus in the bottom panel, so
+   Space plays the pattern) or the **▶** in the bottom panel's header. The
+   outlined column is the playhead. Change the
    tempo in **BPM** (type a value, then Enter) and try **Metro** (the
    metronome).
 
@@ -165,9 +167,11 @@ a **Glide mode** (Always, or Legato for slides on overlapping notes only).
 ## Recording
 
 1. Select a synth or drum track (its name shows after **Keys →**).
-2. Arm with **R** or **● Rec** (it turns red). **Count-in** gives one bar of
-   clicks before recording starts.
-3. Press **Space**. What you play is recorded into the track's current
+2. Arm with **R** or **● Rec** (it turns red). **1-2** (Count-in) gives one
+   bar of clicks before recording starts. Both are in the bottom panel's
+   header, in the pattern transport.
+3. Press the pattern transport's **▶** (or **Space** while the bottom panel
+   has focus). What you play is recorded into the track's current
    pattern, which loops; each loop overdubs. A note with the same pitch and
    start as one already in the pattern is not written again, so playing a
    part twice never stacks hidden duplicates. The sustain pedal works.
@@ -176,7 +180,9 @@ a **Glide mode** (Always, or Legato for slides on overlapping notes only).
    pattern's end lands on step 1.
 4. **↶ Take** undoes the last recording pass (one pass is one undo step).
 
-Recording works in **PAT** mode only. Switching the Keys track or the pattern
+Recording works with the pattern transport only (Pattern mode): while the
+song plays, Rec can't arm; stopped, arming switches back to Pattern mode.
+Switching the Keys track or the pattern
 mid-pass ends held notes there and records on into the new target.
 
 Recording places notes where you *heard* the beat, using the browser's output
@@ -247,8 +253,11 @@ Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.m
   has **+ New**, **Duplicate**, **Rename** and **Delete** (a pattern used by
   clips, or a track's last one, can't be deleted). The selected one is the
   track's *current* pattern.
-- **PAT / SONG** (top bar, or **Shift+L**): PAT loops each track's current
-  pattern; SONG plays the timeline.
+- **Two transports.** The top bar's **▶ Play** plays the song (the
+  timeline). The **pattern transport** in the bottom panel's header (▶, ■,
+  Rec, Count-in and the position "beat / bars", e.g. "1.3 / 2") loops each
+  track's current pattern. Starting one stops the other. **Space** plays /
+  stops the pattern while the bottom panel has focus, the song otherwise.
 - **Clips.** Click an empty spot in a track's lane to place its current
   pattern there. Drag a clip's body to move it (beat snap, **Alt** = free),
   its right edge to repeat or cut it (dashed lines mark repeats), its left
@@ -265,10 +274,10 @@ Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.m
   selects. Wheel scrolls tracks, Shift+wheel scrolls time, Cmd/Ctrl+wheel
   zooms; the slider under the lanes scrolls time too.
 - **Ruler.** Click it to set the song position. Drag on it to set a loop of
-  whole bars (it turns **Loop** on); **Loop** toggles it in SONG mode. While
+  whole bars (it turns **Loop** on); the top bar's **Loop** toggles it. While
   playing, the new loop takes effect when you release. Stop returns to the
   loop start, else to where you started.
-- After the last clip, SONG keeps playing (silence) until you stop.
+- After the last clip, the song keeps playing (silence) until you stop.
 - Each track's **×** (on hover) removes it after an inline confirmation.
 
 Limits: 16 patterns and 256 clips per track, 999 bars.
@@ -276,7 +285,7 @@ Limits: 16 patterns and 256 clips per track, 999 bars.
 ## Audio tracks
 
 Vocals, loops, breaks, whole stems: audio files play on **audio tracks**, in
-SONG mode, at their recorded speed.
+Song mode (the song transport), at their recorded speed.
 
 - **Drop audio on the timeline.** Drag files from Finder, a library sample
   or a starter-kit sound onto the timeline. Below the last lane (where it
@@ -309,7 +318,7 @@ SONG mode, at their recorded speed.
   samples (up to 256 MB decoded, the same limit as a sample: ~11 min of
   48 kHz stereo).
   An audio track has no Step grid, Piano roll or Instrument.
-- Audio tracks are silent in PAT mode. Each has its own mixer strip (fader,
+- Audio tracks are silent in Pattern mode (the pattern transport). Each has its own mixer strip (fader,
   sends, inserts, sidechain key).
 - **Sample memory** is 1 GB (about 46 minutes of stereo at 48 kHz); the
   Browser footer shows what is used ("Samples 412 MB / 1 GB"). One file can
@@ -349,17 +358,17 @@ and drops. Design notes:
     **Cmd/Ctrl+A** selects all, **←/→** nudge a 1/16 (**Shift**: a beat),
     **Esc** cancels a drag or clears the selection.
   - Each gesture (a click, a drag, a stroke) is one undo step.
-- **Song mode only.** Lanes play in SONG mode (playing, or stopped at the
-  song position). In PAT mode you can still edit them (the header says
+- **Song mode only.** Lanes play in Song mode (the song playing, or stopped
+  at the song position after it ran). In Pattern mode you can still edit them (the header says
   "SONG only"), but the knobs keep their own values.
-- **Knobs and faders follow.** In SONG mode an automated knob's ring (a
+- **Knobs and faders follow.** In Song mode an automated knob's ring (a
   fader's cap) moves with its lane; a small tick shows the knob's own value
   and an **A** badge marks it. Grab it to take over: your move is heard at
   once and holds until the lane's next point (the knob and its lane turn
   grey meanwhile), and it changes the knob's own value (undoable). While the
   lane plays, the value readout shows what you hear in *italics*; the
-  knob's own value is in its tooltip. Arrow keys step from what you hear. In PAT
-  mode a move is just a move.
+  knob's own value is in its tooltip. Arrow keys step from what you hear. In
+  Pattern mode a move is just a move.
 - **Automate.** Right-click a knob or fader (or press the menu key /
   **Shift+F10** on it) for **Automate** (adds its lane) or **Show
   automation**: the lane opens on the timeline (the Master row for
@@ -485,7 +494,7 @@ time you save.
   a second one says "Autosave is off — this project is open in another tab".
 - There is no Cmd/Ctrl+N (Chrome keeps it): use Project ▸ **New**.
 
-**Export WAV…** renders the song (SONG mode, from the start to the end of the
+**Export WAV…** renders the song (Song mode, from the start to the end of the
 last clip plus a 2 s tail) to a 24-bit stereo WAV at the project's sample
 rate, named `<project name> <YYYY-MM-DD>.wav`. Chrome asks where to save; a
 banner shows progress with **Cancel**. The metronome is never in the export
@@ -540,11 +549,10 @@ still work there).
 
 | Key | Action |
 |---|---|
-| **Space** | Play / Stop |
+| **Space** | Play / Stop: the pattern while focus is in the bottom panel (a step cell, the piano roll, a panel button…), the song otherwise. In a text field or a select, Space types / opens it |
 | **A S D F G H J K L** / **W E T Y U O** | Keyboard piano: white / black keys |
 | **Z** / **X** | Octave down / up (also the top bar's **−** / **+** or the wheel over **Oct**; remembered) |
 | **R** | Record arm |
-| **Shift+L** | PAT / SONG |
 | **Alt+1** … **Alt+6**, **F6** … **F9** | Bottom-panel tab: Alt+1..6 Step grid / Piano roll / Acid / Instrument / Mixer / Clip; F6..F9 Step grid / Piano roll / Instrument / Mixer (Acid and Clip have no F-key; F10 is the browser's menu key). A tab that doesn't fit the selected track shows a hint instead |
 | **Cmd/Ctrl+Z** | Undo |
 | **Shift+Cmd/Ctrl+Z**, **Ctrl+Y** | Redo |

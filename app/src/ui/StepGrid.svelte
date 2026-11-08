@@ -102,6 +102,9 @@
     }
     if (e.button !== 0) return;
     e.preventDefault(); // no text selection while dragging
+    // ...which also keeps the click from focusing the cell: focus it, so Space
+    // then means the pattern transport (focus is inside the bottom panel).
+    (e.currentTarget as HTMLElement).focus({ preventScroll: true });
     paintVel = cur > 0 ? 0 : e.altKey ? GHOST : FULL;
     setStep(p, engine, track.id, rowId, step, paintVel);
   }

@@ -99,9 +99,9 @@ test('save then load reproduces the beat', async ({ page }) => {
   await startAudio(page);
   await makeBeat(page);
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click(); // the beat is patterns: Pattern mode
   const before = await stripPeaks(page, [0, 1], 2000);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   expect(before[0]).toBeGreaterThan(0.01);
   expect(before[1]).toBeGreaterThan(0.01);
   const want = await summary(page);
@@ -136,9 +136,9 @@ test('save then load reproduces the beat', async ({ page }) => {
   expect(warnings).toEqual([]);
   expect(await summary(page)).toEqual(want);
   await expect(page.getByTestId('project-name')).not.toContainText('unsaved');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   const after = await stripPeaks(page, [0, 1], 2000);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   expect(after[0]).toBeGreaterThan(0.01);
   expect(after[1]).toBeGreaterThan(0.01);
   await expect(page.getByTestId('banner')).toBeHidden();
@@ -154,7 +154,7 @@ test('load while playing stops cleanly (no stuck notes)', async ({ page }) => {
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
   }, dirName);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   expect((await stripPeaks(page, [1], 1000))[0]).toBeGreaterThan(0.01); // the chord is sounding
   const result = await page.evaluate(async (n) => {
     const d = (window as unknown as { __daw: Daw }).__daw;
@@ -236,8 +236,8 @@ test('closing the tab with unsaved edits to a saved project asks first (P9)', as
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
   }, dirName);
-  await page.getByTestId('play').click(); // a real gesture (the prompt needs one) …
-  await page.getByTestId('play').click(); // … that leaves the transport stopped
+  await page.getByTestId('pattern-play').click(); // a real gesture (the prompt needs one) …
+  await page.getByTestId('pattern-stop').click(); // … that leaves the transport stopped
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
   await expect(page.getByTestId('project-name')).toContainText('● unsaved');
   const dialog = page.waitForEvent('dialog');
@@ -283,9 +283,9 @@ test('restore banner appears and restores', async ({ page }) => {
   await expect.poll(() => summary(page)).toEqual(want);
   await expect(page.getByTestId('project-name')).toContainText('Night Drive');
   await expect(page.getByTestId('project-name')).toContainText('unsaved');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   const peaks = await stripPeaks(page, [0, 1], 2000);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   expect(peaks[0]).toBeGreaterThan(0.01); // the kick (its sample came back from OPFS)
   expect(peaks[1]).toBeGreaterThan(0.01);
 
@@ -515,9 +515,8 @@ test('v2 project opens in v4', async ({ page }) => {
   // The opened project has no lanes, and its Audio tracks are heard in Song mode.
   await expect(page.locator('[data-testid^="auto-lane-"]')).toHaveCount(0);
   const audioSlots = tracks.filter((t) => t.kind === 'audio').map((t) => t.slot);
-  await page.getByTestId('mode-song').click();
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.seek(0));
-  await page.getByTestId('play').click();
+  await page.getByTestId('play').click(); // song Play
   await expect.poll(async () => Math.min(...(await stripPeaks(page, audioSlots, 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.getByTestId('play').click();
 

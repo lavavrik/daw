@@ -17,6 +17,7 @@ import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
 import { isPatternTrack, patternLength } from './project.svelte';
 import type { AudioClip, AudioTrack, Clip, PatternTrack, Project } from './project.svelte';
 import type { CommandSink } from './actions';
+import { play, stop } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
 import { edit } from './edits';
 import {
@@ -264,7 +265,14 @@ export function makeUnique(p: Project, sink: CommandSink, trackId: string, clipI
   });
 }
 
-/** SET_MODE; entering Song mode also sends SEEK to the parked song position. */
+/**
+ * SET_MODE; entering Song mode also sends SEEK to the parked song position.
+ * The UI no longer has a mode switch (plan 20): the two transports below set
+ * the mode, and undo/redo (history/diffApply.ts) and load paths use this.
+ * It is an edit like before: `project.mode` is saved (it records which
+ * transport ran last), so a transport that changes it is one undo entry
+ * ("Song mode" / "Pattern mode") and marks the project unsaved.
+ */
 export function setMode(p: Project, sink: CommandSink, mode: 'pattern' | 'song') {
   return edit(p, mode === 'song' ? 'Song mode' : 'Pattern mode', () => {
     if (p.mode === mode || (mode !== 'pattern' && mode !== 'song')) return;
@@ -272,6 +280,58 @@ export function setMode(p: Project, sink: CommandSink, mode: 'pattern' | 'song')
     sink.send(Op.SET_MODE, mode === 'song' ? 1 : 0);
     if (mode === 'song') sink.send(Op.SEEK, p.songPosition);
   });
+}
+
+// ---- Transports (plan 20) ---------------------------------------------------
+// Two transports share the engine's one PLAY/STOP: the **song transport** (top
+// bar) plays Song mode, the **pattern transport** (bottom panel header) plays
+// Pattern mode. Starting either stops the other first, then sets the mode and
+// plays. "Which transport is running" is `p.playing` plus `p.mode`.
+
+/** App hooks around a transport change (the recorder's pass bookkeeping). */
+export interface TransportHooks {
+  /** Right before a running transport stops (App: the recorder closes held notes at the heard tick). */
+  beforeStop?: () => void;
+  /** Count-in ticks for PLAY, asked once the mode is set (App: recorder.countInTicks(), 0 in Song mode). */
+  countIn?: () => number;
+}
+
+/** True while transport `mode` is the one running. */
+export const transportPlaying = (p: Project, mode: 'pattern' | 'song') => p.playing && p.mode === mode;
+
+/** Stops whichever transport is running (no-op when stopped). */
+export function stopTransport(p: Project, sink: CommandSink, hooks: TransportHooks = {}) {
+  if (!p.playing) return;
+  hooks.beforeStop?.();
+  stop(p, sink);
+}
+
+/**
+ * Starts transport `mode`: the other one, if running, is stopped first, then
+ * SET_MODE, then PLAY. Already running: nothing is sent (true). False when
+ * the engine refused PLAY (stopped; see actions.play).
+ */
+function startTransport(p: Project, sink: CommandSink, mode: 'pattern' | 'song', hooks: TransportHooks): boolean {
+  if (transportPlaying(p, mode)) return true;
+  stopTransport(p, sink, hooks);
+  setMode(p, sink, mode);
+  return play(p, sink, hooks.countIn?.() ?? 0);
+}
+
+/** Song Play: stops the pattern transport if it runs, sets Song mode, plays from the song position. */
+export function playSong(p: Project, sink: CommandSink, hooks: TransportHooks = {}): boolean {
+  return startTransport(p, sink, 'song', hooks);
+}
+
+/** Pattern Play: stops the song if it plays, sets Pattern mode, plays (with the count-in hook). */
+export function playPattern(p: Project, sink: CommandSink, hooks: TransportHooks = {}): boolean {
+  return startTransport(p, sink, 'pattern', hooks);
+}
+
+/** Space / the top bar's Play-Stop: stop transport `mode` if it runs, else start it. */
+export function toggleTransport(p: Project, sink: CommandSink, mode: 'pattern' | 'song', hooks: TransportHooks = {}) {
+  if (transportPlaying(p, mode)) stopTransport(p, sink, hooks);
+  else startTransport(p, sink, mode, hooks);
 }
 
 /**

@@ -94,7 +94,7 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
     a.addClip(synth.id, { start: 0 });
   });
   const want = await summary(page);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click(); // Pattern mode: the drums loop (the synth's clip plays in Song mode only)
   await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
 
   // Two separate edits (separate tasks): remove the drums (sample, steps, the
@@ -118,7 +118,7 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
   expect(await playingTicks(page)).not.toBe(t0);
   // The sidechain key (the kick row keys the pad) came back with both tracks.
   expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.mixer.channels[(window as unknown as { __daw: Daw }).__daw.project.tracks[1].id].key)).not.toBeNull();
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
 });
 
 test('undo while playing releases removed notes', async ({ page }) => {
@@ -133,7 +133,7 @@ test('undo while playing releases removed notes', async ({ page }) => {
     (window as unknown as { __daw: Daw }).__daw.actions.addNote(s.id, { pitch: 60, start: 0, len: 15359, vel: 110 }); // held for the whole 4-bar loop
   });
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add note/);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(async () => (await stripPeaks(page, [slot], 300))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
 
   // Undo while the note sounds: released at once, nothing left hanging.
@@ -146,7 +146,7 @@ test('undo while playing releases removed notes', async ({ page }) => {
   // And undo again: silent again.
   await page.keyboard.press('ControlOrMeta+z');
   await expectSilent(page, [slot]);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
 });
 
 test('a fader drag is one undo step', async ({ page }) => {

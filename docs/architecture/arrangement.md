@@ -34,13 +34,34 @@ in one place: what the user can build and what the engine guarantees.
   pattern shared with other clips.
 
 ## Song mode, loop and seek
-- **PAT** (default): unchanged from plans 1-3. Each track loops its current
-  pattern from tick 0; recording targets the live-input track's pattern.
-- **SONG** (Shift+L, top bar): the transport plays song time from the seek
-  position (ruler click, default 0). Recording is disabled; the count-in is
-  ignored.
-- **Loop** (ruler drag sets whole bars and turns it on; the Loop button
-  toggles; Song mode only): with `start < end`, playback wraps from end to
+The engine has one transport and two modes; the UI has two transports
+(plan 20), and the mode is whichever ran last (`project.mode`, saved). There
+is no PAT/SONG switch (and no Shift+L) any more.
+- **Pattern mode** (the **pattern transport**: ▶ / ■ / Rec / Count-in and
+  the "beat / bars" readout in the bottom panel's header,
+  `ui/PatternTransport.svelte`; the default): unchanged from plans 1-3. Each
+  track loops its current pattern from tick 0; recording targets the
+  live-input track's pattern.
+- **Song mode** (the **song transport**: the top bar's Play / Stop): the
+  transport plays song time from the seek position (ruler click, default
+  0). Recording is disabled; the count-in is ignored.
+- `state/song-actions.ts` `playSong` / `playPattern` start one: the other
+  one, if running, is stopped first (the App's `beforeStop` hook closes held
+  recorded notes at the heard tick), then `setMode` (an undo entry, "Song
+  mode" / "Pattern mode", only when the mode changes), then PLAY (the count-in
+  is asked once the mode is set). `toggleTransport` is Space and the top
+  bar's Play / Stop; `stopTransport` stops either.
+- **Space** (`input/shortcuts.ts`) toggles the pattern transport when the key's
+  target or `document.activeElement` is inside the bottom panel (App's
+  `inBottomPanel`: the panel's wrapper element contains it), else the song
+  transport. Text fields, contenteditable and `<select>` keep Space. A step
+  cell cancels its pointerdown (no text selection while painting), so the
+  grid focuses the cell itself: a clicked step puts the focus in the panel.
+- **Rec** while the song plays is refused with a hint; stopped in Song mode
+  (the song ran last), arming switches to Pattern mode first (an undo entry),
+  so the next pattern Play records and counts in.
+- **Loop** (ruler drag sets whole bars and turns it on; the top bar's Loop
+  button toggles it, whatever ran last; it plays in Song mode only): with `start < end`, playback wraps from end to
   start exactly. The block is split at the wrap, so nothing double-fires or
   skips, and synced LFOs stay phase-continuous (they follow song ticks).
   Setting a loop behind the playing playhead jumps to its start at once.

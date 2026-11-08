@@ -146,7 +146,7 @@ test('restart keeps project and handles', async ({ page }) => {
   expect(undoTitle).toMatch(/^Undo /);
 
   // Playing when Apply is pressed: the restart stops the transport.
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.evaluate(() => ((window as unknown as W).__oldEngine = (window as unknown as W).__daw.engine));
 
@@ -180,9 +180,9 @@ test('restart keeps project and handles', async ({ page }) => {
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
 
   // Audio plays after the restart: the kick (sample re-uploaded from memory) and the synth.
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(async () => Math.min(...(await stripPeaks(page, [0, 1], 600))), { timeout: 5_000 }).toBeGreaterThan(0.01);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   // The computer keyboard (bound once per session, through App's forwarding
   // view) plays the synth on the new engine.
   await expect.poll(() => page.evaluate(() => (window as unknown as W).__daw.project.playing)).toBe(false);
@@ -275,9 +275,9 @@ test('a refused restart keeps the running audio; an empty custom buffer cannot b
   });
   expect(kept).toEqual({ same: true, state: 'running', hint: null });
   expect(await snapshot(page)).toBe(before);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(async () => (await stripPeaks(page, [0], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
 });
 
 /** Max master peak (telemetry peakL / peakR) over `ms`. */
@@ -311,7 +311,7 @@ test('undo audible after restart', async ({ page }) => {
     const d = project.tracks[0];
     for (const s of [0, 4, 8, 12]) a.setStep(d.id, d.rows![0].id, s, 120);
   });
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(() => masterPeak(page, 300), { timeout: 5_000 }).toBeGreaterThan(0.05);
 
   // The Kick row's gain to 0 (its own undo step), then Stop.
@@ -321,7 +321,7 @@ test('undo audible after restart', async ({ page }) => {
     a.setRowGain(d.id, d.rows![0].id, 0);
   });
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Row gain/);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   await expect.poll(() => page.evaluate(() => (window as unknown as W).__daw.project.playing)).toBe(false);
 
   // Another latency hint: an audio restart.
@@ -338,8 +338,8 @@ test('undo audible after restart', async ({ page }) => {
   // ⌘Z (the row gain comes back) and Play: heard within a second.
   await page.keyboard.press('ControlOrMeta+z');
   await expect(page.getByTestId('redo')).toHaveAttribute('title', /^Redo Row gain/);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(() => masterPeak(page, 100), { timeout: 1_000, intervals: [0] }).toBeGreaterThan(0.05);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
 });

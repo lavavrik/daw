@@ -138,9 +138,16 @@ function record(page: Page, ms: number) {
 const peakIn = (rec: { t: number; peak: number }[], from: number, to: number) =>
   Math.max(0, ...rec.filter((r) => r.t >= from && r.t < to).map((r) => r.peak));
 
-/** Song mode, from tick 0: play and record `ms`, then stop. */
+/** Song mode, stopped (the song transport ran last): song Play, then Stop. */
+async function songMode(page: Page) {
+  await page.getByTestId('play').click();
+  await expect(page.getByTestId('play')).toHaveText('■ Stop');
+  await page.getByTestId('play').click();
+  await expect(page.getByTestId('play')).toHaveText('▶ Play');
+}
+
+/** Song mode, from tick 0: play (song Play) and record `ms`, then stop. */
 async function playSong(page: Page, ms: number) {
-  await page.getByTestId('mode-song').click();
   await page.evaluate(() => (window as Any).__daw.actions.seek(0));
   await page.getByTestId('play').click();
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.engine.telemetry()[1])).toBe(1);
@@ -373,7 +380,7 @@ test('lane keys: select all, nudge, delete; enable and remove from the header', 
   await page.keyboard.press('ArrowRight'); // 1/16
   await page.keyboard.press('Shift+ArrowLeft'); // a beat
   expect((await savedLanes(page, t.slot))[0].points.map((x: number[]) => x[0])).toEqual([BAR - 720, 2 * BAR - 720]);
-  // Other keys bubble: Space still starts the transport.
+  // Other keys bubble: Space still starts the (song) transport.
   await page.keyboard.press('Space');
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.playing)).toBe(true);
   await page.keyboard.press('Space');
@@ -403,7 +410,6 @@ test('the play-follow page flip waits for a lane gesture to end', async ({ page 
   const v0 = await view(page);
   expect(v0.scrollTick).toBe(0);
   const visibleTicks = box.width * v0.ticksPerPx;
-  await page.getByTestId('mode-song').click();
   await page.evaluate(() => (window as Any).__daw.actions.seek(0));
   await page.getByTestId('play').click();
   // A freehand stroke held while the playhead passes the right edge.
@@ -493,7 +499,7 @@ test('knob ring follows a cutoff lane while playing', async ({ page }) => {
   await expect(knob.getByTestId('auto-badge')).toBeVisible();
   await expect(knob).toHaveAttribute('title', /Automated — dragging overrides until the next point/);
   // Song mode, stopped at 0: the ring is at the first point.
-  await page.getByTestId('mode-song').click();
+  await songMode(page);
   await page.evaluate(() => (window as Any).__daw.actions.seek(0));
   await expect(knob).toHaveAttribute('data-auto', 'on');
   await page.getByTestId('module-4').screenshot({ path: 'test-results/automation-knob.png' });
@@ -542,7 +548,7 @@ test('manual move overrides until the next breakpoint', async ({ page }) => {
   const strip = page.getByTestId(`strip-${slot}`);
   const fader = strip.getByTestId('fader');
   await expect(fader).toHaveAttribute('data-auto', 'idle');
-  await page.getByTestId('mode-song').click();
+  await songMode(page);
   await page.evaluate(() => (window as Any).__daw.actions.seek(0));
   await expect(fader).toHaveAttribute('data-auto', 'on');
   await page.getByTestId('play').click();
@@ -630,7 +636,7 @@ test('automated readouts and arrow keys follow the heard value', async ({ page }
   const readout = strip.getByTestId('fader-readout');
   const db = (s: string | null) => Number(s!.replace('−', '-').replace(' dB', ''));
   await expect(readout).toHaveText('0.0 dB'); // Pattern mode: the base
-  await page.getByTestId('mode-song').click();
+  await songMode(page);
   await page.evaluate((tick) => (window as Any).__daw.actions.seek(tick), BAR / 2);
   await expect(fader).toHaveAttribute('data-auto', 'on');
   const v = Number(await fader.getAttribute('data-auto-value'));

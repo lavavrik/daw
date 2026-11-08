@@ -1,7 +1,8 @@
 <script lang="ts">
   import { flushSync, onDestroy, onMount, untrack } from 'svelte';
   import StartOverlay from './ui/StartOverlay.svelte';
-  import { addClip, seek } from './state/song-actions';
+  import { addClip, playPattern, playSong, seek, setMode, stopTransport, transportPlaying } from './state/song-actions';
+  import type { TransportHooks } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
@@ -12,8 +13,8 @@
   import { AudioEngine } from './audio/engine';
   import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
   import type { LatencyHint } from './audio/restart';
-  import { Project } from './state/project.svelte';
-  import { addDrumTrack, addRow, liveInputTrack, play, removeTrack, setRowGain, setRowSample, setStep, stop } from './state/actions';
+  import { Project, isPatternTrack } from './state/project.svelte';
+  import { addDrumTrack, addRow, liveInputTrack, removeTrack, setRowGain, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
   import { addDefaultDrumTrack, appKitDeps, loadDefaultKit } from './state/defaultKit';
   import type { KitDeps } from './state/defaultKit';
@@ -390,25 +391,52 @@
   };
 
   /**
-   * Play / Stop for the button and Space. Play while armed with Count-in on
-   * sends PLAY 3840, and starts the recording pass at once (not a telemetry
-   * frame later, which could miss a note played right on Play). Stop first
-   * closes held recorded notes at the heard tick *now*: once STOP lands the
-   * engine resets its playhead to 0, so the clock can no longer tell where
-   * the user stopped.
+   * The two transports (plan 20; state/song-actions.ts): the top bar's Play /
+   * Stop and Space outside the bottom panel drive the song transport, the
+   * bottom panel's pattern transport and Space inside it drive Pattern mode.
+   * Starting one stops the other. The recorder hooks: a stop first closes
+   * held recorded notes at the heard tick *now* (once STOP lands the engine
+   * resets its playhead, so the clock can no longer tell where the user
+   * stopped); Pattern Play while armed with Count-in on sends PLAY 3840 (the
+   * count-in is asked once the mode is Pattern), and a start begins the
+   * recording pass at once (not a telemetry frame later, which could miss a
+   * note played right on Play).
    */
-  function transportToggle() {
+  function transportHooks(r: Recorder, c: AudioClock): TransportHooks {
+    return { beforeStop: () => r.onTransport(false, c.heardTicks()), countIn: () => r.countInTicks() };
+  }
+  function startTransport(mode: 'pattern' | 'song') {
     if (!engine || !recorder || !clock || project.loading) return;
-    if (project.playing) {
-      recorder.onTransport(false, clock.heardTicks());
-      stop(project, engine);
-    } else {
-      // A failed (or closed) engine refuses PLAY: stay stopped, no recording pass.
-      if (!play(project, engine, recorder.countInTicks())) return;
-      recorder.onTransport(true, clock.heardTicks());
-    }
+    const start = mode === 'song' ? playSong : playPattern;
+    // A failed (or closed) engine refuses PLAY: stay stopped, no recording pass.
+    if (start(project, engine, transportHooks(recorder, clock))) recorder.onTransport(true, clock.heardTicks());
     refreshRec();
   }
+  function stopAny() {
+    if (!engine || !recorder || !clock || project.loading) return;
+    stopTransport(project, engine, transportHooks(recorder, clock));
+    refreshRec();
+  }
+  /** The selected track's pattern can play (the pattern transport is disabled otherwise). */
+  const hasPatternTrack = () => {
+    const t = project.tracks.find((x) => x.id === project.selectedTrackId);
+    return !!t && isPatternTrack(t);
+  };
+  /** Top bar Play / Stop, and Space outside the bottom panel. */
+  function toggleSong() {
+    if (transportPlaying(project, 'song')) stopAny();
+    else startTransport('song');
+  }
+  /** Space inside the bottom panel: as the panel's Play / Stop (a disabled Play only says why). */
+  function togglePattern() {
+    if (transportPlaying(project, 'pattern')) stopAny();
+    else if (!hasPatternTrack()) flashHint('Select a drum or synth track to play its pattern');
+    else startTransport('pattern');
+  }
+  /** Focus is inside the bottom panel (Space then means the pattern transport). */
+  let bottomEl = $state<HTMLElement | null>(null);
+  const inBottomPanel = (t: EventTarget | null) =>
+    !!bottomEl && ((t instanceof Node && bottomEl.contains(t)) || bottomEl.contains(document.activeElement));
 
   /**
    * Live-input switches (select, remove, add a synth track — from any code
@@ -425,14 +453,22 @@
     if (recorder && clock) recorder.onInputChanged(clock.heardTicks());
   });
 
-  /** R / Rec button. Song mode can't arm (recording is Pattern-mode only): say so briefly. */
+  /**
+   * R / the pattern transport's Rec. Recording is Pattern-mode only: while
+   * the song plays arming is refused (say so briefly); stopped in Song mode
+   * (the song ran last) arming switches to Pattern mode first, so the next
+   * pattern Play records (and counts in).
+   */
   function toggleArm() {
-    if (project.loading) return;
-    if (recorder && project.mode === 'song' && !recorder.armed) {
-      flashHint('Recording works in Pattern mode (Shift+L)');
-      return;
+    if (project.loading || !recorder) return;
+    if (project.mode === 'song' && !recorder.armed) {
+      if (project.playing) {
+        flashHint('Recording works with the pattern transport: stop the song first');
+        return;
+      }
+      if (engine) setMode(project, engine, 'pattern');
     }
-    recorder?.toggleArm();
+    recorder.toggleArm();
     refreshRec();
   }
 
@@ -617,7 +653,9 @@
     uninstall = installShortcuts(project, live, input, {
       initialOctave: octave,
       onOctave: (o) => changeOctave(o, true),
-      onTogglePlay: transportToggle,
+      onToggleSong: toggleSong,
+      onTogglePattern: togglePattern,
+      inBottomPanel,
       onToggleArm: toggleArm,
       onSave: () => void s.save(),
       onSaveAs: () => void s.saveAs(),
@@ -809,7 +847,7 @@
       <TopBar
         bind:this={topBar}
         p={project} {engine} {octave} onOctave={(o) => changeOctave(o)} {midi} {midiCc} {recorder} {rec} {session} {restoreOffer} {undoLabels}
-        onTogglePlay={transportToggle} onToggleArm={toggleArm}
+        onToggleSong={toggleSong}
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
       />
@@ -829,7 +867,12 @@
       <Browser {engine} p={project} />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
-        <div class="bottom"><BottomPanel bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} capturing={() => !!recorder?.armed && project.playing} /></div>
+        <div class="bottom" bind:this={bottomEl}>
+          <BottomPanel
+            bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} capturing={() => !!recorder?.armed && project.playing}
+            {recorder} {rec} onPatternPlay={() => startTransport('pattern')} onPatternStop={stopAny} onToggleArm={toggleArm}
+          />
+        </div>
       </div>
     </div>
     <AutoMenu p={project} {engine} bus={autoBus} />

@@ -202,14 +202,15 @@ test('audio clip is heard in song mode and after a mid-clip seek', async ({ page
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 4);
-  // Pattern mode: audio tracks are silent.
-  await page.keyboard.press('Space');
+  // Pattern mode (the drum track's pattern transport): audio tracks are silent.
+  await page.getByTestId('track-0').click();
+  await page.getByTestId('pattern-play').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.playing)).toBe(true);
   expect(await stripPeak(page, slot, 400)).toBeLessThan(0.001);
-  await page.keyboard.press('Space');
-  // Song mode from the start: heard.
-  await page.keyboard.press('Shift+L');
+  await page.getByTestId('pattern-stop').click();
+  // Song Play from the start: heard.
+  await page.getByTestId('play').click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.mode)).toBe('song');
-  await page.keyboard.press('Space');
   expect(await stripPeak(page, slot, 500)).toBeGreaterThan(0.3);
   // Past the clip: silent.
   await page.evaluate((t) => (window as unknown as { __daw: Daw }).__daw.actions.seek(t), 6 * BAR);
@@ -393,7 +394,7 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await expect.poll(async () => [(await c0()).fadeIn, (await c0()).fadeOut]).toEqual([BEAT / 2, 4 * BEAT]);
 
   // The fade-out lowers the last beat's peak (per-beat meter peaks over one pass).
-  await page.keyboard.press('Shift+L');
+  // (Focus is on the page: the Space below is the song transport.)
   const perBeat = await page.evaluate(
     ({ slot, beat }) =>
       new Promise<number[]>((resolve) => {

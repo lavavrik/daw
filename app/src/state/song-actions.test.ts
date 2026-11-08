@@ -6,7 +6,8 @@ import { addDrumTrack, stop } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 import {
-  addClip, deleteClips, duplicateClips, makeUnique, moveClips, patternPosAt, resizeClip, seek, setLoop, setMode, splitClips,
+  addClip, deleteClips, duplicateClips, makeUnique, moveClips, patternPosAt, playPattern, playSong, resizeClip, seek, setLoop,
+  setMode, splitClips, stopTransport, toggleTransport,
 } from './song-actions';
 import { addAudioClip, addAudioTrack } from './audio-actions';
 
@@ -249,6 +250,66 @@ describe('audio clips on the timeline (plan 9)', () => {
     deleteClips(p, sink, [a.id, copy.id]);
     expect(sent).toEqual([[Op.CLIP_REMOVE, 3 * MAX_CLIPS, 0, 0, 0], [Op.CLIP_REMOVE, 3 * MAX_CLIPS + 1, 0, 0, 0]]);
     expect(a3.clips).toEqual([]);
+  });
+});
+
+describe('transports', () => {
+  it('playPattern while the song plays: stops, then Pattern mode, then plays', () => {
+    const { p, sink, sent } = setup();
+    expect(playSong(p, sink)).toBe(true);
+    expect([p.mode, p.playing]).toEqual(['song', true]);
+    sent.length = 0;
+    const calls: string[] = [];
+    const hooks = { beforeStop: () => calls.push(`stop:${p.playing}`), countIn: () => (calls.push(`countIn:${p.mode}`), 3840) };
+    expect(playPattern(p, sink, hooks)).toBe(true);
+    expect(sent.map((x) => x[0])).toEqual([Op.STOP, Op.SET_MODE, Op.PLAY]);
+    expect(sent[1][1]).toBe(0); // Pattern mode
+    expect(sent[2][1]).toBe(3840); // the count-in, asked once the mode is Pattern
+    expect(calls).toEqual(['stop:true', 'countIn:pattern']);
+    expect([p.mode, p.playing]).toEqual(['pattern', true]);
+  });
+
+  it('playSong while the pattern plays: stops, then Song mode (+ SEEK), then plays', () => {
+    const { p, sink, sent } = setup();
+    playPattern(p, sink);
+    seek(p, sink, 3840);
+    sent.length = 0;
+    expect(playSong(p, sink)).toBe(true);
+    expect(sent).toEqual([[Op.STOP, 0, 0, 0, 0], [Op.SET_MODE, 1, 0, 0, 0], [Op.SEEK, 3840, 0, 0, 0], [Op.PLAY, 0, 0, 0, 0]]);
+    expect([p.mode, p.playing]).toEqual(['song', true]);
+  });
+
+  it('starting the transport that already runs sends nothing; from stopped there is no STOP', () => {
+    const { p, sink, sent } = setup();
+    playPattern(p, sink); // mode already Pattern: just PLAY
+    expect(sent).toEqual([[Op.PLAY, 0, 0, 0, 0]]);
+    sent.length = 0;
+    let stops = 0;
+    expect(playPattern(p, sink, { beforeStop: () => stops++ })).toBe(true);
+    expect(sent).toEqual([]);
+    expect(stops).toBe(0);
+  });
+
+  it('a refused PLAY leaves the transport stopped (and the other one stopped too)', () => {
+    const { p, sink } = setup();
+    playSong(p, sink);
+    const refusing = { send: (op: number, ...a: number[]) => (op === Op.PLAY ? false : sink.send(op, ...a)) };
+    expect(playPattern(p, refusing)).toBe(false);
+    expect([p.mode, p.playing]).toEqual(['pattern', false]);
+  });
+
+  it('toggleTransport stops the transport that runs, else starts it; stopTransport is a no-op when stopped', () => {
+    const { p, sink, sent } = setup();
+    toggleTransport(p, sink, 'song');
+    expect([p.mode, p.playing]).toEqual(['song', true]);
+    toggleTransport(p, sink, 'pattern'); // the other one: switches
+    expect([p.mode, p.playing]).toEqual(['pattern', true]);
+    toggleTransport(p, sink, 'pattern');
+    expect(p.playing).toBe(false);
+    sent.length = 0;
+    let stops = 0;
+    stopTransport(p, sink, { beforeStop: () => stops++ });
+    expect([sent, stops]).toEqual([[], 0]);
   });
 });
 

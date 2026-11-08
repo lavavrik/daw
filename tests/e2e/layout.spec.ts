@@ -6,7 +6,8 @@ import { expect, test } from '@playwright/test';
 // where a wrap would move the editors when playback starts). The essentials
 // stay visible at every width.
 
-const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'mode-toggle', 'rec-button', 'settings-button'];
+// (Rec and Count-in moved to the bottom panel's pattern transport in plan 20.)
+const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'settings-button'];
 
 for (const width of [1440, 1280, 1024]) {
   test(`top bar fits at ${width} px: no control is clipped`, async ({ page }) => {
@@ -15,17 +16,16 @@ for (const width of [1440, 1280, 1024]) {
     await page.getByRole('button', { name: 'Click to start audio' }).click();
     await expect(page.getByTestId('play')).toBeVisible();
     // No tracks: Keys shows "(no track)" (synth or drum: a selected drum
-    // track takes the keys since plan 15); plus an unsaved project (SONG
-    // mode is an edit) and playing (Stop is wider than Play).
+    // track takes the keys since plan 15); plus an unsaved project (song
+    // Play switches to Song mode, an edit) and playing (Stop is wider than Play).
     await page.getByTestId('track-0').hover();
     await page.getByRole('button', { name: 'Remove track Drums' }).click();
     await page.getByTestId('inline-confirm-ok').click();
     await expect(page.getByTestId('track-0')).toHaveCount(0);
-    await page.getByTestId('mode-song').click();
     await expect(page.getByTestId('keys-target')).toContainText('(no track)');
-    await expect(page.getByTestId('project-name')).toContainText('unsaved');
     await page.getByTestId('play').click();
     await expect(page.getByTestId('play')).toContainText('Stop');
+    await expect(page.getByTestId('project-name')).toContainText('unsaved');
     const out = await page.evaluate(() => {
       const bar = document.querySelector('header')!;
       const b = bar.getBoundingClientRect();
@@ -61,10 +61,9 @@ for (const width of [1440, 1400, 1280]) {
     await page.goto('/');
     await page.getByRole('button', { name: 'Click to start audio' }).click();
     await expect(page.getByTestId('play')).toBeVisible();
-    await page.getByTestId('mode-song').click();
-    await expect(page.getByTestId('project-name')).toContainText('unsaved');
     await page.getByTestId('play').click();
     await expect(page.getByTestId('play')).toContainText('Stop');
+    await expect(page.getByTestId('project-name')).toContainText('unsaved');
     // The top bar polls engine.dropouts() at 4 Hz.
     await page.evaluate(() => {
       const e = window.__daw.engine as unknown as { dropouts: () => number };

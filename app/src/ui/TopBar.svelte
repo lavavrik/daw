@@ -1,13 +1,16 @@
 <script lang="ts">
-  // Transport + record controls + live engine readouts. Telemetry refreshes
-  // at 4 Hz. If the engine dies after start, a red "Audio engine stopped —
-  // reload" alert replaces the readouts (AudioEngine.onError / failure).
+  // The song transport + live engine readouts. Telemetry refreshes at 4 Hz.
+  // If the engine dies after start, a red "Audio engine stopped — reload"
+  // alert replaces the readouts (AudioEngine.onError / failure).
   //
-  // Record: "● Rec" arms (R key); it is red while armed, reads "Count-in…"
-  // during the count-in and "● REC" (pulsing) while notes are being recorded.
-  // Play/Stop and arm go through the App (onTogglePlay / onToggleArm) so the
-  // count-in and the recorder's stop tick are handled in one place. Count-in
-  // and Rec offset persist in localStorage (state/recorder.ts).
+  // Song transport (plan 20): Play sets Song mode and plays the timeline,
+  // stopping the pattern transport first; it reads "■ Stop" while the song
+  // plays (not while the pattern plays). It goes through the App
+  // (onToggleSong) so the recorder's stop tick is handled in one place. There
+  // is no PAT/SONG switch any more: the pattern transport, with Rec and
+  // Count-in, is in the bottom panel's header (PatternTransport.svelte). The
+  // Rec offset and "↶ Take" stay here; the offset persists in localStorage
+  // (state/recorder.ts).
   //
   // Undo / redo (↶ ↷): the history's newest entries, named in the tooltips
   // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
@@ -43,7 +46,7 @@
   import type { LatencyHint } from '../audio/restart';
   import Settings from './Settings.svelte';
   import Spectrum from './vis/Spectrum.svelte';
-  import { setLoop, setMode } from '../state/song-actions';
+  import { setLoop, transportPlaying } from '../state/song-actions';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
@@ -74,8 +77,7 @@
     midiCc = null,
     recorder,
     rec,
-    onTogglePlay,
-    onToggleArm,
+    onToggleSong,
     session,
     restoreOffer = null,
     undoLabels = { undo: null, redo: null },
@@ -96,8 +98,8 @@
     recorder: Recorder;
     /** Recorder status, refreshed every frame by the App. */
     rec: RecStatus;
-    onTogglePlay: () => void;
-    onToggleArm: () => void;
+    /** Song Play / Stop (App: playSong / stop with the recorder hooks). */
+    onToggleSong: () => void;
     session: ProjectSession;
     /** The "Restore last session" offer, while it is open (New / Open would discard it). */
     restoreOffer?: { name: string } | null;
@@ -151,20 +153,15 @@
     run(cmd);
   }
 
-  // Mirrors of the recorder's persisted settings (the Recorder is not reactive).
-  // Seeded once on purpose: the recorder is created once per session and these
-  // toggles are its only writers, so untrack() states "initial value only"
-  // (and silences state_referenced_locally).
-  let countIn = $state(untrack(() => recorder.countIn));
+  // Mirror of the recorder's persisted offset (the Recorder is not reactive).
+  // Seeded once on purpose: the recorder is created once per session and this
+  // field is its only writer, so untrack() states "initial value only" (and
+  // silences state_referenced_locally).
   let offsetMs = $state(untrack(() => recorder.offsetMs));
-  const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? '● REC' : '● Rec');
+  const songPlaying = $derived(transportPlaying(p, 'song'));
 
   function persist() {
     saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
-  }
-  function toggleCountIn() {
-    recorder.countIn = countIn = !countIn;
-    persist();
   }
   /** Commit on change (clamped; Enter blurs, which fires it), then release focus so Space / R / the piano work again. */
   function commitOffset(e: Event) {
@@ -280,43 +277,18 @@
       title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
     >↷</button>
   </span>
-  <button class="play" class:on={p.playing} onclick={onTogglePlay} title="Play / Stop (Space)" data-testid="play">
-    {p.playing ? '■ Stop' : '▶ Play'}
+  <button class="play" class:on={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
+    {songPlaying ? '■ Stop' : '▶ Play'}
   </button>
-  <span class="seg" role="group" aria-label="Playback mode" data-testid="mode-toggle" data-mode={p.mode} title="Pattern or Song playback (Shift+L)">
-    <button class:on={p.mode === 'pattern'} aria-pressed={p.mode === 'pattern'} data-testid="mode-pat" onclick={() => setMode(p, engine, 'pattern')}>PAT</button>
-    <button class:on={p.mode === 'song'} aria-pressed={p.mode === 'song'} data-testid="mode-song" onclick={() => setMode(p, engine, 'song')}>SONG</button>
-  </span>
+  <!-- Loop belongs to the song transport; usable whichever transport ran last. -->
   <button
     class="small"
-    class:on={p.loop.on && p.mode === 'song'}
-    aria-pressed={p.loop.on && p.mode === 'song'}
+    class:on={p.loop.on}
+    aria-pressed={p.loop.on}
     data-testid="loop-toggle"
-    disabled={p.mode !== 'song'}
     onclick={() => setLoop(p, engine, { on: !p.loop.on })}
-    title={p.mode === 'song' ? 'Loop the loop range while playing the song' : 'Loop range applies to Song mode'}
+    title="Loop the loop range while playing the song"
   >Loop</button>
-  <button
-    class="rec"
-    class:armed={rec.armed}
-    class:live={rec.state === 'recording'}
-    aria-pressed={rec.armed}
-    data-testid="rec-button"
-    data-state={rec.state}
-    onclick={onToggleArm}
-    disabled={p.mode === 'song' && !rec.armed}
-    title={p.mode === 'song'
-      ? 'Recording works in Pattern mode (Shift+L)'
-      : 'Record arm (R). Records into the Keys → track\'s current pattern while playing.'}
-  >{recLabel}</button>
-  <button
-    class="small"
-    class:on={countIn}
-    aria-pressed={countIn}
-    data-testid="count-in"
-    onclick={toggleCountIn}
-    title="One bar of metronome before recording starts (when armed)"
-  >Count-in</button>
   <details class="pop">
     <summary title="Recording timing offset">Offset {offsetMs} ms</summary>
     <div class="panel">
@@ -468,10 +440,6 @@
   .small { font-size: 11px; padding: 4px 8px; }
   .hist button { padding: 4px 5px; }
   .play { min-width: 68px; }
-  .rec { min-width: 84px; color: #e06666; }
-  .rec.armed { background: #c92a2a; border-color: #c92a2a; color: #fff; font-weight: 700; }
-  .rec.live { animation: rec-pulse 1s ease-in-out infinite; }
-  @keyframes rec-pulse { 50% { background: #8a1c1c; border-color: #8a1c1c; } }
   .pop { position: relative; }
   .pop summary { list-style: none; cursor: pointer; font-size: 11px; color: #9a9da8; padding: 4px 6px; border-radius: 4px; }
   .pop summary::-webkit-details-marker { display: none; }

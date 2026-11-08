@@ -8,6 +8,8 @@
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
   import PatternPicker from './PatternPicker.svelte';
+  import PatternTransport from './PatternTransport.svelte';
+  import type { Recorder, RecStatus } from '../state/recorder';
   import { onMount } from 'svelte';
   import { currentPattern, isPatternTrack } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
@@ -25,7 +27,10 @@
   import { banners, flashHint } from '../state/banners.svelte';
   import { clearDownload } from '../export/exportFlow';
 
-  let { p, engine, clock, noteInput = null, capturing = () => false }: {
+  let {
+    p, engine, clock, noteInput = null, capturing = () => false,
+    recorder = null, rec = null, onPatternPlay = () => {}, onPatternStop = () => {}, onToggleArm = () => {},
+  }: {
     p: Project;
     engine: AudioEngine;
     clock: AudioClock | null;
@@ -33,6 +38,14 @@
     noteInput?: NoteInput | null;
     /** True while the recorder captures live notes (the Acid tab's step entry pauses). */
     capturing?: () => boolean;
+    /** The header's pattern transport (PatternTransport.svelte) shows once the App has a recorder. */
+    recorder?: Recorder | null;
+    /** Recorder status, refreshed every frame by the App. */
+    rec?: RecStatus | null;
+    /** Pattern transport Play / Stop and Rec (the App: recorder, count-in). */
+    onPatternPlay?: () => void;
+    onPatternStop?: () => void;
+    onToggleArm?: () => void;
   } = $props();
   const track = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
   /** The selected track when it plays patterns (an Audio track has none). */
@@ -109,12 +122,21 @@
     {#if ptrack}
       <span class="swatch" style:background={ptrack.color}></span>
       <b data-testid="panel-title">{ptrack.name} · {currentPattern(ptrack).name}</b>
-      <PatternPicker {p} {engine} track={ptrack} />
     {:else if track}
       <span class="swatch" style:background={track.color}></span>
       <b data-testid="panel-title">{track.name}{audioClipName ? ` · ${audioClipName}` : ''}</b>
     {:else}
       <span class="none">No track selected</span>
+    {/if}
+    <!-- Pattern transport (plan 20): beside the picker; disabled without a pattern track. -->
+    {#if recorder && rec}
+      <PatternTransport
+        {p} track={ptrack} audio={track?.kind === 'audio'} {clock} {recorder} {rec}
+        onPlay={onPatternPlay} onStop={onPatternStop} {onToggleArm}
+      />
+    {/if}
+    {#if ptrack}
+      <PatternPicker {p} {engine} track={ptrack} />
     {/if}
     <!-- Status line: flashed hints (banners.hint) win over the Song-mode hint. -->
     <span class="status">

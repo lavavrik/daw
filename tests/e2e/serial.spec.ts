@@ -89,6 +89,23 @@ function blockShare(page: Page, ms: number) {
   );
 }
 
+/**
+ * Starts a transport by its button (plan 20): the pattern transport (Play in
+ * the bottom panel's header; a drum or synth track must be selected) or the
+ * song transport (the top bar's Play). Waits until the engine plays.
+ */
+async function start(page: Page, mode: 'pattern' | 'song') {
+  await page.getByTestId(mode === 'pattern' ? 'pattern-play' : 'play').click();
+  await expect.poll(slot(page, 1)).toBe(1);
+}
+
+/** Stops whichever transport runs, by its button. */
+async function stop(page: Page) {
+  const mode = await page.evaluate(() => (window as unknown as { __daw: { project: { mode: string } } }).__daw.project.mode);
+  await page.getByTestId(mode === 'song' ? 'play' : 'pattern-stop').click();
+  await expect.poll(slot(page, 1)).toBe(0);
+}
+
 test('deferred drop while playing: notice, loads on Stop, engine keeps running at real time', async ({ page }) => {
   await startAudio(page);
   // Let the default kit load first: loading after the fill (stopped, so it
@@ -196,11 +213,10 @@ async function buildSpec6(page: Page) {
  * Budget: CPU share < 0.6, blocks >= 95% of real time, no new dropouts or
  * engine errors.
  */
-async function playAndMeasure(page: Page, label: string, scSlot: number, watch: number[] = []) {
+async function playAndMeasure(page: Page, label: string, scSlot: number, mode: 'pattern' | 'song', watch: number[] = []) {
   const drop0 = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
   const err0 = await slot(page, 7)();
-  await page.keyboard.press('Space');
-  await expect.poll(slot(page, 1)).toBe(1);
+  await start(page, mode);
   await page.waitForTimeout(2500); // warm-up (telemetry CPU is written once a second)
   // 10 s: sample the CPU share, the peak and the first comp's gain reduction.
   const run = await page.evaluate(
@@ -247,7 +263,7 @@ test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
   test.setTimeout(60_000);
   await startAudio(page);
   const { synths } = await buildSpec6(page);
-  await playAndMeasure(page, 'spec6 browser', synths[0]);
+  await playAndMeasure(page, 'spec6 browser', synths[0], 'pattern');
 });
 
 /**
@@ -334,12 +350,10 @@ test('spec 6 mix plus 4 audio tracks with long clips stays under the browser CPU
     return n;
   });
   expect(laid).toBeGreaterThan(0);
-  await page.keyboard.press('Shift+L');
-  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
-  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks browser', synths[0], audio);
+  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks browser', synths[0], 'song', audio);
   // Every stem was heard (the strips' meters, after the -6 dB fader).
   for (const p of run.strips) expect(p).toBeGreaterThan(0.05);
-  await page.keyboard.press('Space');
+  await stop(page);
 });
 
 /**
@@ -408,8 +422,9 @@ test('spec 6 mix plus audio tracks and 64 automation lanes stays under the brows
   });
   expect(built).toEqual({ clips: expect.any(Number), applying: 32, disabled: 32 });
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
-  await page.keyboard.press('Shift+L');
-  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
+  // Song mode (as the PAT/SONG switch did before plan 20): song Play, then Stop.
+  await start(page, 'song');
+  await stop(page);
 
   /** What a timeline scroll costs: 20 wheel steps, each until the next frame has run (ms per step). */
   const scrollCost = async (label: string) => {
@@ -470,7 +485,7 @@ test('spec 6 mix plus audio tracks and 64 automation lanes stays under the brows
     };
     requestAnimationFrame(step);
   });
-  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks + 64 lanes browser', synths[0], audio);
+  const run = await playAndMeasure(page, 'spec6 + 4 audio tracks + 64 lanes browser', synths[0], 'song', audio);
   for (const p of run.strips) expect(p).toBeGreaterThan(0.05);
   const ui = await page.evaluate(() => {
     const w = window as unknown as { __frames: number[]; __long: number[]; __stop: boolean };
@@ -481,7 +496,7 @@ test('spec 6 mix plus audio tracks and 64 automation lanes stays under the brows
   });
   console.log(`PERF UI while playing: ${ui.n} frames, p50 ${ui.p50.toFixed(1)} ms, p95 ${ui.p95.toFixed(1)} ms, max ${ui.max.toFixed(1)} ms, ${ui.slow} over 50 ms; ${ui.long} long tasks (max ${ui.longMax.toFixed(0)} ms)`);
   await scrollCost('64 lanes open, playing');
-  await page.keyboard.press('Space');
+  await stop(page);
 
   // A lane that was out of view while the view moved draws at the new view once scrolled in.
   const last = page.locator('[data-testid^="auto-lane-"]').last();
@@ -525,8 +540,7 @@ test('four house tracks stay under budget', async ({ page }) => {
   expect(ok).toBe(true);
   const drop0 = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
   const err0 = await slot(page, 7)();
-  await page.keyboard.press('Space');
-  await expect.poll(slot(page, 1)).toBe(1);
+  await start(page, 'pattern'); // the patterns loop (no clips); the last synth is selected
   await page.waitForTimeout(2500); // warm-up (telemetry CPU is written once a second)
   const run = await page.evaluate(
     () =>
@@ -611,8 +625,7 @@ test('scope edits while playing cause no dropouts', async ({ page }) => {
   });
   const drop0 = await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts());
   const err0 = await slot(page, 7)();
-  await page.keyboard.press('Space');
-  await expect.poll(slot(page, 1)).toBe(1);
+  await start(page, 'pattern');
   await addRackModule(page, 'scope'); // Deep Bass has 8 modules: the Scope is 8
   await patch(page, 'jack-1-out-out', 'jack-8-in-a');
   await patch(page, 'jack-5-out-env', 'jack-8-in-b');
@@ -634,8 +647,7 @@ test('scope edits while playing cause no dropouts', async ({ page }) => {
   await page.getByTestId('module-8').getByRole('button', { name: 'Remove Scope' }).click();
   await expect(page.getByTestId('module-8')).toHaveCount(0);
   await page.waitForTimeout(500);
-  await blur(page);
-  await page.keyboard.press('Space');
+  await stop(page);
   expect(await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.dropouts())).toBe(drop0);
   expect(await slot(page, 7)()).toBe(err0);
   expect(await page.evaluate(() => (window as unknown as VisWindow).__daw.engine.failure)).toBeNull();
@@ -683,9 +695,6 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
     return n;
   });
   expect(laid).toBeGreaterThan(0);
-  await page.keyboard.press('Shift+L');
-  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
-
   // 8 scopes on the first synth track, each fed by its oscillator (Chord Stab: Osc 1; Scopes 6..13).
   await page.getByTestId(`track-${synths[0]}`).click();
   await page.keyboard.press('Alt+4');
@@ -735,8 +744,9 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
   const seek0 = () => page.evaluate(() => (window as unknown as VisWindow).__daw.actions.seek(0));
 
   await blur(page); // Space on a focused jack would pick it up
-  await page.keyboard.press('Space');
+  await page.keyboard.press('Space'); // focus outside the bottom panel: the song transport
   await expect.poll(slot(page, 1)).toBe(1);
+  expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
   await page.waitForTimeout(2000); // warm-up
 
   // Top bar only.

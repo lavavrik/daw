@@ -1,13 +1,15 @@
-// Global keyboard shortcuts: Space = play/stop, R = record arm, Z/X = octave
-// down/up, Shift+L = PAT/SONG, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open,
+// Global keyboard shortcuts: Space = play/stop (the pattern transport while
+// focus is inside the bottom panel, the song transport otherwise; plan 20
+// removed the Shift+L PAT/SONG toggle), R = record arm, Z/X = octave
+// down/up, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open,
 // Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
 // through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
 // timeStamp, so the recorder can place them at the heard time. While the live
 // input is a drum track the keys play its rows instead (qwertyDrumNote: the
 // octave's C = row 1 = note 36); the note is mapped here, where QWERTY notes
 // enter, so the engine and the recorder both get the drum note.
-import { liveInputTrack, togglePlay } from '../state/actions';
-import { setMode } from '../state/song-actions';
+import { liveInputTrack } from '../state/actions';
+import { toggleTransport } from '../state/song-actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
 import { DEFAULT_OCTAVE, keyToNote, qwertyDrumNote } from './qwertyPiano';
@@ -58,12 +60,21 @@ export interface ShortcutOptions {
   initialOctave?: number;
   /** Fires (with the new octave) on Z/X (not on setOctave: the caller already knows). */
   onOctave?: (o: number) => void;
-  /** Space. The app passes its own (count-in, recorder stop tick); default togglePlay(p, sink). */
-  onTogglePlay?: () => void;
+  /**
+   * Space outside the bottom panel: start / stop the song transport. The app
+   * passes its own (recorder stop tick); default toggleTransport(p, sink, 'song').
+   */
+  onToggleSong?: () => void;
+  /**
+   * Space with focus inside the bottom panel: start / stop the pattern
+   * transport. The app passes its own (count-in, recorder); default
+   * toggleTransport(p, sink, 'pattern').
+   */
+  onTogglePattern?: () => void;
+  /** Is the key's target inside the bottom panel? (App: its root holds the target or document.activeElement.) Default: no. */
+  inBottomPanel?: (target: EventTarget | null) => boolean;
   /** R: toggle record arm. */
   onToggleArm?: () => void;
-  /** Shift+L: toggle PAT/SONG (plain L stays a piano key). Default setMode(p, sink, other). */
-  onToggleMode?: () => void;
   /** Cmd/Ctrl+S: Project ▸ Save (Save As when there is no folder yet). */
   onSave?: () => void;
   /** Cmd/Ctrl+Shift+S: Project ▸ Save As…. */
@@ -102,6 +113,13 @@ export function isTyping(t: EventTarget | null): boolean {
   if (el.tagName === 'INPUT') return !NON_TEXT_INPUTS.has((el as HTMLInputElement).type);
   return el.tagName === 'TEXTAREA' || el.isContentEditable;
 }
+
+/**
+ * A focused <select> keeps Space (it opens the list) like a text field keeps
+ * its keys: Space never starts a transport from one. Only Space: the piano
+ * keys and R stay live on a select, as before.
+ */
+const isSelect = (t: EventTarget | null) => (t as HTMLElement | null)?.tagName === 'SELECT';
 
 /** True inside an open inline confirmation / banner question (role=alertdialog). */
 function inDialog(t: EventTarget | null): boolean {
@@ -194,12 +212,11 @@ export function createShortcutHandlers(
       }
       if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === 'Space') {
+        if (isSelect(e.target)) return; // the select opens its list
         e.preventDefault(); // no page scroll / focused-button activation
-        if (!e.repeat) (opts.onTogglePlay ?? (() => togglePlay(p, sink)))();
-        return;
-      }
-      if (e.code === 'KeyL' && e.shiftKey) {
-        if (!e.repeat) (opts.onToggleMode ?? (() => setMode(p, sink, p.mode === 'song' ? 'pattern' : 'song')))();
+        if (e.repeat) return;
+        if (opts.inBottomPanel?.(e.target)) (opts.onTogglePattern ?? (() => toggleTransport(p, sink, 'pattern')))();
+        else (opts.onToggleSong ?? (() => toggleTransport(p, sink, 'song')))();
         return;
       }
       if (e.code === 'KeyR') {

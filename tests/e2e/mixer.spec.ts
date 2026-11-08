@@ -171,7 +171,7 @@ test('solo isolates', async ({ page }) => {
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
   await openMixer(page);
   await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
   await expect.poll(() => meterDb(page, 1), { timeout: 3_000 }).toBeGreaterThan(-40);
@@ -195,7 +195,7 @@ test('track header M and S mute / solo the track, in sync with the mixer strip',
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
   await openMixer(page);
   await expect.poll(async () => (await meterRange(page, 'strip-0', 600)).max, { timeout: 4_000 }).toBeGreaterThan(-30);
 
@@ -228,7 +228,7 @@ test('sidechain from kick ducks the synth', async ({ page }) => {
   await startAudio(page);
   await fourOnTheFloor(page);
   await synthHoldingNote(page);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click(); // the drums' pattern loops
   await openMixer(page);
   const synth = strip(page, 1);
   await expect.poll(() => meterDb(page, 1), { timeout: 3_000 }).toBeGreaterThan(-40);

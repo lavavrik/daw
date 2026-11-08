@@ -26,7 +26,7 @@
   // Plain letters are QWERTY piano keys (A = C, S = D, T = F#…) and must reach
   // input/shortcuts.ts so step entry works for every piano key. The piano
   // ignores Shift, so the four Shift combos are stopped (Shift+R would also
-  // toggle record arm there; Shift+L, PAT/SONG, is not one of them). Without
+  // toggle record arm there). Without
   // a selection only the arrows (select step 1) are taken. Space, Z/X, R,
   // undo and every other key bubble on to input/shortcuts.ts.
   //

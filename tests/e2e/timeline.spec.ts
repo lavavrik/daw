@@ -104,8 +104,9 @@ function record(page: Page, ms: number) {
 const peakIn = (rec: { t: number; peak: number }[], from: number, to: number) =>
   Math.max(0, ...rec.filter((r) => r.t >= from && r.t < to).map((r) => r.peak));
 
+/** Song Play (the top bar): Song mode, playing. */
 async function play(page: Page) {
-  await page.getByRole('button', { name: /Play/ }).click();
+  await page.getByTestId('play').click();
   await expect.poll(() => page.evaluate(() => (window as any).__daw.engine.telemetry()[1])).toBe(1);
 }
 
@@ -136,8 +137,7 @@ test('arrange a song', async ({ page }) => {
   await resizeRight(page, 0, 1, 8 * BAR);
   expect(await pos(page, 0, 1)).toEqual({ start: 4 * BAR, len: 4 * BAR });
 
-  // SONG, from the start (ruler click at bar 1), play.
-  await page.getByTestId('mode-song').click();
+  // The song, from the start (ruler click at bar 1): song Play.
   const r = (await page.getByTestId('tl-ruler').boundingBox())!;
   await page.mouse.click(r.x + 2, r.y + r.height / 2);
   expect(await page.evaluate(() => (window as any).__daw.project.songPosition)).toBe(0);
@@ -179,7 +179,6 @@ test('loop range wraps', async ({ page }) => {
   await expect(page.getByTestId('tl-ruler')).toHaveAttribute('data-loop', `${BAR},${3 * BAR},1`);
   await expect(page.getByTestId('tl-ruler')).toHaveAttribute('aria-label', /bars 2–3, loop on/);
 
-  await page.getByTestId('mode-song').click();
   await expect(page.getByTestId('loop-toggle')).toHaveAttribute('aria-pressed', 'true');
   await play(page);
   const rec = await record(page, 4500); // 0 -> bar 3 end (3 s), then wraps to bar 2
@@ -223,7 +222,6 @@ test('make unique detaches edits', async ({ page }) => {
   await expect(page.getByTestId('step-0-0')).toHaveAttribute('aria-pressed', 'false');
 
   // Engine side: bar 1 (Pattern 1) silent, bar 2 (the copy) kicks.
-  await page.getByTestId('mode-song').click();
   await play(page);
   const rec = await record(page, 2300);
   expect(peakIn(rec, 0, BAR)).toBeLessThan(0.001);
@@ -239,7 +237,6 @@ test('delete clip stops its sound', async ({ page }) => {
   await clickLane(page, 0, 100);
   await resizeRight(page, 0, 0, 8 * BAR);
   expect(await pos(page, 0, 0)).toEqual({ start: 0, len: 8 * BAR });
-  await page.getByTestId('mode-song').click();
   await play(page);
   const before = await record(page, 700);
   expect(Math.max(...before.map((x) => x.peak))).toBeGreaterThan(0.1);
@@ -333,14 +330,13 @@ test('ruler click seeks (beat snap, Alt = free); keys bubble from the timeline',
   await page.keyboard.up('Alt');
   expect(Math.abs((await songPos()) - (2 * BAR + 400))).toBeLessThan(80); // free (within a pixel)
 
-  // The lanes have focus: Space still toggles the transport, Shift+L the mode.
+  // The lanes have focus (outside the bottom panel): Space toggles the song transport.
   await clickLane(page, 0, 100);
   await page.keyboard.press('Space');
   await expect.poll(() => page.evaluate(() => (window as any).__daw.project.playing)).toBe(true);
+  expect(await page.evaluate(() => (window as any).__daw.project.mode)).toBe('song');
   await page.keyboard.press('Space');
   await expect.poll(() => page.evaluate(() => (window as any).__daw.project.playing)).toBe(false);
-  await page.keyboard.press('Shift+L');
-  expect(await page.evaluate(() => (window as any).__daw.project.mode)).toBe('song');
 });
 
 test('timeline screenshot', async ({ page }) => {
@@ -366,7 +362,6 @@ test('timeline screenshot', async ({ page }) => {
   const b = await at(page, 0, 7 * BAR + 100);
   const r = (await page.getByTestId('tl-ruler').boundingBox())!;
   await drag(page, { x: a.x, y: r.y + 10 }, { x: b.x, y: r.y + 10 }); // loop bars 1-8
-  await page.getByTestId('mode-song').click();
   await clip(page, 0, 1).click();
   await play(page);
   await page.waitForTimeout(3500);
@@ -412,7 +407,6 @@ test('the add-track buttons are disabled at 32 tracks and come back when one is 
 
 test('loop drag while playing sends the loop once, on release; Escape sends nothing', async ({ page }) => {
   await start(page);
-  await page.getByTestId('mode-song').click();
   await play(page);
   await page.evaluate(() => {
     const d = (window as any).__daw;

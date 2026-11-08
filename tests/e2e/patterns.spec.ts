@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 
-// Pattern picker, PAT/SONG toggle and song-aware playheads (plan 4, Task 4).
+// Pattern picker, the song and pattern transports (plan 20; the PAT/SONG
+// toggle until then) and song-aware playheads (plan 4, Task 4).
 
 async function start(page: Page) {
   await page.goto('/');
@@ -63,7 +64,7 @@ test('new pattern, edit, switch back', async ({ page }) => {
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 2' });
   await page.getByTestId('step-0-5').click();
   await expect(page.getByTestId('step-0-5')).toHaveAttribute('aria-pressed', 'false');
-  await page.getByRole('button', { name: /Play/ }).click();
+  await page.getByTestId('pattern-play').click();
   await expect(page.locator('.cell.playhead').first()).toBeVisible();
   // Pattern 2 (current) is empty: a window of two bars (1.94 s each at 124 BPM)
   // must be silent whatever the phase of the loop.
@@ -111,33 +112,127 @@ test('rename: Enter commits, Escape cancels, empty rejected; delete guards', asy
   await expect(page.getByTestId('pattern-delete')).toHaveAttribute('title', 'Used by 1 clip');
 });
 
-test('PAT/SONG toggle visible and switches mode', async ({ page }) => {
+test('song and pattern transports: starting either stops the other; the readout follows the pattern', async ({ page }) => {
   await start(page);
-  const mode = () => page.evaluate(() => (window as any).__daw.project.mode);
-  await expect(page.getByTestId('mode-toggle')).toBeVisible();
-  expect(await mode()).toBe('pattern');
-  await expect(page.getByTestId('loop-toggle')).toBeDisabled();
-  await page.getByTestId('mode-song').click();
-  expect(await mode()).toBe('song');
-  await expect(page.getByTestId('mode-song')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('loop-toggle')).toBeEnabled();
-  await expect(page.getByTestId('rec-button')).toBeDisabled();
-  await expect(page.getByTestId('rec-button')).toHaveAttribute('title', 'Recording works in Pattern mode (Shift+L)');
-  // R in Song mode does not arm; it says why, briefly.
-  await page.keyboard.press('r');
-  await expect(page.getByTestId('flash-hint')).toHaveText('Recording works in Pattern mode (Shift+L)');
-  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('flash-hint')).toHaveCount(0, { timeout: 5000 });
-  await page.getByTestId('mode-pat').click();
-  expect(await mode()).toBe('pattern');
+  const state = () => page.evaluate(() => {
+    const p = (window as any).__daw.project;
+    return `${p.mode}:${p.playing ? 'playing' : 'stopped'}`;
+  });
+  const song = page.getByTestId('play');
+  const patPlay = page.getByTestId('pattern-play');
+  const pos = page.getByTestId('pattern-pos');
+  await expect(page.getByTestId('mode-toggle')).toHaveCount(0); // the PAT/SONG switch is gone
+  await expect(pos).toHaveText('– / 1'); // the default kit's pattern: 16 steps = 1 bar
+  await expect(page.getByTestId('pattern-stop')).toBeDisabled();
 
-  // Shift+L toggles; plain L stays a piano key (no mode change).
-  await page.keyboard.press('l');
-  expect(await mode()).toBe('pattern');
-  await page.keyboard.press('Shift+L');
-  expect(await mode()).toBe('song');
-  await page.keyboard.press('Shift+L');
-  expect(await mode()).toBe('pattern');
+  // Pattern Play: Pattern mode, the readout runs (bar.beat / bars).
+  await patPlay.click();
+  await expect.poll(state).toBe('pattern:playing');
+  await expect(patPlay).toHaveAttribute('aria-pressed', 'true');
+  await expect(pos).toHaveText(/^1\.[1-4] \/ 1$/);
+  await expect(song).toHaveText('▶ Play'); // the song transport is not the one running
+
+  // Song Play stops the pattern, sets Song mode and plays.
+  await song.click();
+  await expect.poll(state).toBe('song:playing');
+  await expect(song).toHaveText('■ Stop');
+  await expect(patPlay).toHaveAttribute('aria-pressed', 'false');
+  await expect(pos).toHaveText('– / 1');
+  // While the song plays Rec can't arm (Song mode never records); R says why.
+  await expect(page.getByTestId('rec-button')).toBeDisabled();
+  await page.locator('body').press('r');
+  await expect(page.getByTestId('flash-hint')).toHaveText('Recording works with the pattern transport: stop the song first');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
+
+  // Pattern Play stops the song.
+  await patPlay.click();
+  await expect.poll(state).toBe('pattern:playing');
+  await expect(song).toHaveText('▶ Play');
+  await page.getByTestId('pattern-stop').click();
+  await expect.poll(state).toBe('pattern:stopped');
+  await expect(page.getByTestId('pattern-stop')).toBeDisabled();
+
+  // The song ran last (mode Song), stopped: arming switches to Pattern mode, so the next pattern Play records.
+  await song.click();
+  await song.click();
+  await expect.poll(state).toBe('song:stopped');
+  await expect(page.getByTestId('loop-toggle')).toBeEnabled(); // Loop belongs to the song transport, whatever ran last
+  await page.getByTestId('rec-button').click();
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(state).toBe('pattern:stopped');
+  await page.getByTestId('rec-button').click();
+
+  // Shift+L is no longer a mode toggle.
+  await page.locator('body').press('Shift+L');
+  await expect.poll(state).toBe('pattern:stopped');
+});
+
+test('Space plays the pattern with focus in the bottom panel, the song elsewhere; it types in a text field', async ({ page }) => {
+  await start(page);
+  const state = () => page.evaluate(() => {
+    const p = (window as any).__daw.project;
+    return `${p.mode}:${p.playing ? 'playing' : 'stopped'}`;
+  });
+  // Focus on a step cell (inside the bottom panel): the pattern transport.
+  await page.getByTestId('step-0-3').focus();
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('pattern:playing');
+  await expect(page.getByTestId('step-0-3')).toHaveAttribute('aria-pressed', 'false'); // Space did not click the cell
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('pattern:stopped');
+  // Clicking a step cell puts focus there too (its pointerdown is cancelled, so the grid focuses it).
+  await page.getByTestId('step-0-3').click();
+  await expect(page.getByTestId('step-0-3')).toBeFocused();
+  await page.getByTestId('step-0-3').click(); // back off
+  // Focus outside the panel (the top bar's Play): the song transport.
+  await page.getByTestId('play').focus();
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('song:playing');
+  // Space in the panel now switches to the pattern (starting one stops the other).
+  await page.getByTestId('step-0-3').focus();
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('pattern:playing');
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('pattern:stopped');
+
+  // The pattern-name field (Rename) is inside the panel: Space types a space, no transport.
+  await page.getByTestId('pattern-rename').click();
+  const input = page.getByTestId('pattern-rename-input');
+  await expect(input).toBeFocused();
+  await input.fill('Main');
+  await page.keyboard.press('Space');
+  await page.keyboard.type('groove');
+  await expect(input).toHaveValue('Main groove');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('panel-title')).toContainText('· Main groove');
+  expect(await state()).toBe('pattern:stopped');
+  // A select in the panel (the pattern picker) keeps Space too.
+  await page.getByTestId('pattern-picker').focus();
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Escape');
+  expect(await state()).toBe('pattern:stopped');
+});
+
+test('the pattern transport is disabled, with a reason, on an audio track or with no track selected', async ({ page }) => {
+  await start(page);
+  await expect(page.getByTestId('pattern-play')).toBeEnabled();
+  // Remove the only (drum) track: nothing is selected.
+  await page.getByTestId('track-0').hover();
+  await page.getByRole('button', { name: 'Remove track Drums' }).click();
+  await page.getByTestId('inline-confirm-ok').click();
+  await expect(page.getByTestId('track-0')).toHaveCount(0);
+  for (const id of ['pattern-play', 'pattern-stop', 'rec-button', 'count-in']) await expect(page.getByTestId(id)).toBeDisabled();
+  await expect(page.getByTestId('pattern-play')).toHaveAttribute('title', 'Select a drum or synth track');
+  await expect(page.getByTestId('pattern-pos')).toHaveText('– / –');
+  // An audio track has no pattern.
+  await page.getByTestId('add-audio-track').click();
+  await expect(page.getByTestId('pattern-play')).toBeDisabled();
+  await expect(page.getByTestId('pattern-play')).toHaveAttribute('title', 'An audio track has no pattern: select a drum or synth track');
+  // Space in the panel then plays nothing (it says why); the song transport still works.
+  await page.getByTestId('tab-clip').focus();
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('flash-hint')).toHaveText('Select a drum or synth track to play its pattern');
+  expect(await page.evaluate(() => (window as any).__daw.project.playing)).toBe(false);
 });
 
 test('Song mode playhead only shows while a clip of the pattern plays', async ({ page }) => {
@@ -147,12 +242,14 @@ test('Song mode playhead only shows while a clip of the pattern plays', async ({
     // Clip at bar 2 (song tick 3840) for one bar of the current pattern.
     d.actions.addClip(d.project.tracks[0].id, { start: 3840, len: 3840 });
   });
-  await page.getByTestId('mode-song').click();
+  // Song Play then Stop: Song mode, stopped.
+  await page.getByTestId('play').click();
+  await page.getByTestId('play').click();
   await expect(page.getByTestId('song-hint')).toBeVisible(); // stopped: nothing plays this pattern
   // The hint lives in the header's fixed status line: toggling it must never move the editor.
   const gridTop = () => page.locator('.cell').first().evaluate((el) => el.getBoundingClientRect().top);
   const top = await gridTop();
-  await page.getByRole('button', { name: /Play/ }).click();
+  await page.getByTestId('play').click();
   // Bar 1 is empty: no column; then the clip starts and the playhead appears.
   await expect(page.locator('.cell.playhead').first()).toBeVisible({ timeout: 6000 });
   await expect(page.getByTestId('song-hint')).toBeHidden();

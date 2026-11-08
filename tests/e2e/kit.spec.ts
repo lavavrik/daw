@@ -281,14 +281,14 @@ test('a selected drum track plays its rows from the computer keyboard and record
   await page.keyboard.down('KeyK'); // row 13: the kit has 8 rows, ignored
   await page.keyboard.up('KeyK');
   expect(await silent).toBeLessThan(0.01);
-  // Record: arm (R), play (Space), hit the Clap (KeyW = row 2), stop.
+  // Record: arm (R), play (the pattern transport), hit the Clap (KeyW = row 2), stop.
   expect((await steps()).every((n) => n === 0)).toBe(true); // the kit starts empty
   await page.keyboard.press('KeyR');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect(page.getByTestId('rec-button')).toContainText('REC');
   await page.keyboard.down('KeyW');
   await page.keyboard.up('KeyW');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   const after = await steps();
   expect(after[1]).toBe(1);
   expect(after.reduce((a, b) => a + b, 0)).toBe(1);

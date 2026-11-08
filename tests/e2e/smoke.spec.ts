@@ -843,7 +843,7 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
   await expect(rec).toHaveAttribute('aria-pressed', 'true');
   await expect(rec).toHaveAttribute('data-state', 'armed');
   expect(await slot(page, 1)()).toBe(0); // arming did not start the transport
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect(rec).toHaveAttribute('data-state', 'recording');
   await expect(rec).toHaveText('● REC');
   await page.keyboard.down('KeyA');
@@ -851,7 +851,7 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
   await page.keyboard.up('KeyA');
   await page.keyboard.down('KeyD'); // held through Stop
   await page.waitForTimeout(150);
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   await expect.poll(takeLen(page)).toBe(2);
   await page.keyboard.up('KeyD');
   await expect(rec).toHaveAttribute('data-state', 'armed');
@@ -869,7 +869,7 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   await countIn.click();
   await expect(countIn).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('KeyR');
-  await page.keyboard.press('Space');
+  await page.keyboard.press('Space'); // focus is on Count-in, inside the bottom panel: the pattern transport
   const rec = page.getByTestId('rec-button');
   await expect(rec).toHaveText('Count-in…');
   // Engine started at -3840 ticks (the label shows as soon as Play is sent, up
@@ -882,7 +882,7 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByTestId('count-in')).toHaveAttribute('aria-pressed', 'true');
   // Not armed: Play has no count-in.
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect.poll(slot(page, 1)).toBe(1);
   expect(await slot(page, 2)()).toBeGreaterThanOrEqual(0);
 });
@@ -892,7 +892,7 @@ test('record: switching the input track mid-pass ends held notes there and recor
   await page.getByTestId('add-synth-track').click(); // slot 1
   await page.getByTestId('add-synth-track').click(); // slot 2, selected: keys -> it
   await page.keyboard.press('KeyR');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
   await page.keyboard.down('KeyA'); // C, held across the switch
   await page.waitForTimeout(150);
@@ -902,7 +902,7 @@ test('record: switching the input track mid-pass ends held notes there and recor
   await page.keyboard.down('KeyD'); // E, played on track 1
   await page.waitForTimeout(150);
   await page.keyboard.up('KeyD');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
   const pitches = (i: number) =>
     page.evaluate((i) => (window as unknown as DawWindow).__daw!.project.tracks[i].patterns[0].notes!.map((n) => n.pitch % 12), i);
   await expect.poll(() => pitches(2)).toEqual([0]);
@@ -930,7 +930,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'armed');
 
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-play').click();
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
 
   // INDEPENDENT reference: the "rendered" tick from raw engine telemetry and
@@ -962,7 +962,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   const rawAfter = await rawTick();
   await page.waitForTimeout(200); // the held length itself; not a sync point
   await page.keyboard.up('KeyA');
-  await page.keyboard.press('Space');
+  await page.getByTestId('pattern-stop').click();
 
   await expect(page.getByTestId('pr-readout')).toContainText('1 note ');
   const notes = await page.evaluate(() =>

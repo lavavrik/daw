@@ -213,10 +213,11 @@ describe('acid steps: editing', () => {
 // --- reading -----------------------------------------------------------------
 
 describe('acid steps: reading', () => {
-  it('reads accents at vel ≥ 100 and covers ceil(len/240) steps', () => {
-    const notes = [mk(0, 241, 36, 100), mk(960, 240, 38, 99)];
+  it('reads accents at vel ≥ 110 and covers ceil(len/240) steps', () => {
+    // 100 is the app's default velocity (QWERTY, drawn notes): plain.
+    const notes = [mk(0, 241, 36, 110), mk(960, 240, 38, 109), mk(1200, 120, 40, 100)];
     expect(readSteps(notes, 1)).toEqual(
-      { ok: true, base: 36, steps: pad([note(0, { accent: true }), tie(), REST, REST, note(2)]) });
+      { ok: true, base: 36, steps: pad([note(0, { accent: true }), tie(), REST, REST, note(2), note(4)]) });
   });
 
   it('a note ending exactly at the next start is not a slide', () => {

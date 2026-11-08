@@ -101,7 +101,9 @@ accent and a slide flag.
 
 Reading is the reverse: a note covers ceil(len/240) steps, capped before the
 next note's step; it is a slide when it runs past the next note's start; vel
-≥ 100 reads as an accent. Notes starting at/after the pattern end are
+≥ 110 reads as an accent (the Accent module's default threshold, 110/127;
+not 100, the app's default velocity for QWERTY and drawn notes, which would
+make every ordinary note an accent). Notes starting at/after the pattern end are
 ignored (kept, never shown). A slide before a rest or at the end can't be
 stored, so the Slide toggle is disabled there ("Slide needs a next note"); a
 tie after a rest is a rest. When the pattern doesn't read at the tab's base

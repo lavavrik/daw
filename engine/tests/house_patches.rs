@@ -961,19 +961,19 @@ fn acid_notes(notes: &[(f32, u8)], min_hz: f32) -> Vec<(f64, f32)> {
 
 #[test]
 fn acid_line_accent_threshold_step() {
-    // vel 99 vs 100, 1 s apart (the accent store is empty by then). Velocity
+    // vel 109 vs 110, 1 s apart (the accent store is empty by then). Velocity
     // alone (the envelopes' vel_amt) moves 1/127 of its range; only the
-    // Accent module (threshold 100/127) makes this a step.
+    // Accent module (threshold 110/127) makes this a step.
     let step = |a: u8, b: u8| {
         let n = acid_notes(&[(0.0, a), (1.0, b)], 1000.0);
         (10.0 * (n[1].0 / n[0].0).log10() as f32, db(n[1].1 / n[0].1))
     };
-    let (hi, loud) = step(99, 100);
-    let (hi_ref, loud_ref) = step(98, 99); // below the threshold: velocity only
-    eprintln!("Acid threshold 99->100: >1 kHz {hi:+.1} dB, RMS {loud:+.1} dB; 98->99 (no accent): {hi_ref:+.2} dB, {loud_ref:+.2} dB");
-    assert!(hi_ref.abs() <= 0.5, "velocity alone moves 98->99 by {hi_ref:.2} dB");
-    assert!(hi >= 2.5, "vel 100 only {hi:.1} dB brighter than 99");
-    assert!(loud >= 0.5, "vel 100 only {loud:.2} dB louder (RMS) than 99");
+    let (hi, loud) = step(109, 110);
+    let (hi_ref, loud_ref) = step(108, 109); // below the threshold: velocity only
+    eprintln!("Acid threshold 109->110: >1 kHz {hi:+.1} dB, RMS {loud:+.1} dB; 108->109 (no accent): {hi_ref:+.2} dB, {loud_ref:+.2} dB");
+    assert!(hi_ref.abs() <= 0.5, "velocity alone moves 108->109 by {hi_ref:.2} dB");
+    assert!(hi >= 2.5, "vel 110 only {hi:.1} dB brighter than 109");
+    assert!(loud >= 0.5, "vel 110 only {loud:.2} dB louder (RMS) than 109");
 }
 
 #[test]

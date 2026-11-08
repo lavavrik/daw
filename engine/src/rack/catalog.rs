@@ -642,9 +642,11 @@ static ACCENT: ModuleSpec = ModuleSpec {
     inputs: &[port("gate", Signal::Gate), port("vel", Signal::Cv)],
     outputs: &[port("cv", Signal::Cv)],
     params: &[
-        // 100/127: MIDI velocity 100 and up is an accent (the step editor
-        // writes 120 for an accent, 80 for a plain note).
-        lin("threshold", "Threshold", 0.0, 1.0, 100.0 / 127.0, false),
+        // 110/127: MIDI velocity 110 and up is an accent (the step editor
+        // writes 120 for an accent, 80 for a plain note). Not 100: that is the
+        // app's default velocity (QWERTY, drawn notes), which would accent
+        // every ordinary note.
+        lin("threshold", "Threshold", 0.0, 1.0, 110.0 / 127.0, false),
         lin("amount", "Amount", 0.0, 1.0, 1.0, true),
         exp("decay", "Decay", 0.05, 2.0, 0.25, "s"),
     ],
@@ -934,7 +936,7 @@ mod tests {
         assert_eq!(
             ps,
             [
-                ("threshold", "Threshold", 0.0, 1.0, 100.0 / 127.0, Curve::Lin, "", false),
+                ("threshold", "Threshold", 0.0, 1.0, 110.0 / 127.0, Curve::Lin, "", false),
                 ("amount", "Amount", 0.0, 1.0, 1.0, Curve::Lin, "", true),
                 ("decay", "Decay", 0.05, 2.0, 0.25, Curve::Exp, "s", false),
             ]

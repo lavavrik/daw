@@ -20,8 +20,8 @@ describe('catalog', () => {
     expect(a.params.map((p) => [p.name, p.min, p.max, p.curve])).toEqual([
       ['threshold', 0, 1, 'lin'], ['amount', 0, 1, 'lin'], ['decay', 0.05, 2, 'exp'],
     ]);
-    // MIDI velocity 100 and up is an accent.
-    expect(a.params[paramIndex(a, 'threshold')].default).toBeCloseTo(100 / 127, 6);
+    // MIDI velocity 110 and up is an accent (100, the app's default velocity, is not).
+    expect(a.params[paramIndex(a, 'threshold')].default).toBeCloseTo(110 / 127, 6);
     expect(a.params[paramIndex(a, 'decay')].default).toBe(0.25);
   });
   it('the filter mode Diode is appended (id 5; LP24..Notch keep 0..4)', () => {

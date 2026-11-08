@@ -20,7 +20,9 @@
 //   Read      A note covers ceil(len/240) steps, capped before the next note's
 //             step and at the pattern end; the covered steps after its own are
 //             ties. It is a slide (flag on its last covered step) when it runs
-//             past the next note's start. vel ≥ 100 reads as an accent. Notes
+//             past the next note's start. vel ≥ 110 reads as an accent (not
+//             100: the app's default velocity for QWERTY and drawn notes is
+//             100, so every ordinary note would read as one). Notes
 //             starting at/after bars·16 steps are ignored: kept, never shown.
 //   Unshowable (precedence long > offgrid > chord > poly > range): more than
 //             4 bars; a start off the 240 grid; two starts on one step; a note
@@ -74,8 +76,12 @@ const GATE_TICKS = STEP_TICKS / 2;
 const SLIDE_OVERLAP = 60;
 const ACCENT_VEL = 120;
 const PLAIN_VEL = 80;
-/** A velocity at or above this reads as an accent. */
-const ACCENT_MIN_VEL = 100;
+/**
+ * A velocity at or above this reads as an accent. Matches the Accent module's
+ * default `threshold` (110/127, engine/src/rack/catalog.rs). Above 100, the
+ * app's default velocity (QWERTY piano, drawn notes), which must read plain.
+ */
+const ACCENT_MIN_VEL = 110;
 
 type NoteLike = NoteInit;
 

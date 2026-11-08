@@ -4,13 +4,15 @@
 //! little further each time, and a rest lets it settle back.
 //!
 //! * **Accent.** A rising `gate` edge (gate crosses 0.5) whose `vel` is at
-//!   least `threshold` (default 100/127, the MIDI velocity the step editor
-//!   reads as an accent) adds [`CHARGE`] to the store: `store = min(1,
+//!   least `threshold` (default 110/127, the MIDI velocity the step editor
+//!   reads as an accent; it writes 120 for an accent, 80 for a plain note) adds [`CHARGE`] to the store: `store = min(1,
 //!   store + 0.6)`. A plain note (below the threshold) adds nothing. `vel`
 //!   is read at the edge: 0..1 as MIDI In outputs it; unconnected (or a
 //!   gate channel beyond a poly `vel`'s channels) reads 1, as on the ADSR,
 //!   so with `vel` unpatched every note is an accent. The comparison has a
-//!   1e-6 tolerance, so MIDI velocity 100 (100/127 in f32) always counts.
+//!   1e-6 tolerance, so MIDI velocity 110 (110/127 in f32) always counts.
+//!   Why 110 and not 100: the app's default velocity is 100 (QWERTY piano,
+//!   notes drawn in the piano roll), so at 100 every ordinary note accented.
 //! * **Decay.** The store decays exponentially, `store ·= exp(−dt/decay)`
 //!   per sample (`decay` 0.05..2 s, read per sub-block). With the default
 //!   0.25 s and accents one 1/16 step apart at 120 BPM (0.125 s) the store
@@ -225,10 +227,13 @@ mod tests {
     fn below_threshold_no_charge() {
         let cv = run(48000.0, &params(0.25), &[0.0, STEP, 2.0 * STEP], STEP / 2.0, 0.5, 4.0 * STEP);
         assert!(cv.iter().all(|&x| x == 0.0), "vel 0.5 must not charge");
-        // MIDI velocity 99 is a plain note, 100 an accent (default threshold 100/127).
-        let plain = run(48000.0, &params(0.25), &[0.0], STEP / 2.0, 99.0 / 127.0, STEP);
-        assert!(plain.iter().all(|&x| x == 0.0));
-        let accent = run(48000.0, &params(0.25), &[0.0], STEP / 2.0, 100.0 / 127.0, STEP);
+        // MIDI velocity 109 is a plain note, 110 an accent (default threshold 110/127);
+        // 100 (the app's default velocity) is plain.
+        for v in [100.0, 109.0] {
+            let plain = run(48000.0, &params(0.25), &[0.0], STEP / 2.0, v / 127.0, STEP);
+            assert!(plain.iter().all(|&x| x == 0.0), "vel {v} must not charge");
+        }
+        let accent = run(48000.0, &params(0.25), &[0.0], STEP / 2.0, 110.0 / 127.0, STEP);
         assert!(peak(&accent, 48000.0, 0.0, STEP) > 0.5);
     }
 

@@ -540,7 +540,7 @@ const REESE_BASS: Patch = {
 /**
  * Acid Line: an original squelchy acid bass (not a copy of any instrument).
  * One saw into a driven, resonant Diode ladder with a snappy filter envelope.
- * The accent is velocity: an Accent module (vel >= 100) adds a sweep to the
+ * The accent is velocity: an Accent module (vel >= 110) adds a sweep to the
  * filter cv (a run of accents opens it further) and a little to the amp cv,
  * on top of the envelopes' own velocity response. The slide is legato glide
  * (only overlapping notes slide). The mod wheel adds to the cutoff.
@@ -568,9 +568,10 @@ const ACID_LINE: Patch = {
     { idx: 7, id: 'adsr', params: { attack: 0.002, decay: 0.4, sustain: 0.85, release: 0.06, vel_amt: 0.2 } },
     // Out: sets the house level.
     { idx: 8, id: 'out', params: { level: 0.3 } },
-    // Accent: vel >= 100 (the Acid editor's accent, 120) charges a store that
-    // decays in 0.3 s, so a run of accents climbs and opens the filter further.
-    { idx: 9, id: 'accent', params: { threshold: 100 / 127, amount: 1, decay: 0.3 } },
+    // Accent: vel >= 110 (the Acid editor's accent, 120; not the app's default
+    // velocity 100) charges a store that decays in 0.3 s, so a run of accents
+    // climbs and opens the filter further.
+    { idx: 9, id: 'accent', params: { threshold: 110 / 127, amount: 1, decay: 0.3 } },
     // Amp cv: the amp envelope (in1) plus a little accent (in2, 0.25): an
     // accented note is a bit louder.
     { idx: 10, id: 'mixer', params: { lvl1: 1, lvl2: 0.25 } },

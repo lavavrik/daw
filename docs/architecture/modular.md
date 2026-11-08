@@ -601,10 +601,12 @@ cabled to a Filter's `cv` it gives the acid "accent sweep" (a run of
 accents opens the filter a little further each time, a rest lets it fall
 back). Inline (no FX pool); one store per `gate` channel.
 
-- **Charge.** A rising gate whose `vel` ≥ `threshold` (default 100/127:
-  MIDI velocity 100 and up, which is what the Acid editor writes for an
+- **Charge.** A rising gate whose `vel` ≥ `threshold` (default 110/127:
+  MIDI velocity 110 and up, which is what the Acid editor writes for an
   accent, 120, and not for a plain note, 80) does `store = min(1, store +
-  0.6)`. `vel` is latched at the edge like the ADSR's; unconnected it reads
+  0.6)`. Not 100: that is the app's default velocity (QWERTY piano, notes
+  drawn in the piano roll), so every ordinary note would accent. The Acid
+  tab reads the same 110 as an accent (`state/acidSteps.ts`). `vel` is latched at the edge like the ADSR's; unconnected it reads
   1 (every note accents). A slid (legato) note has no rising edge, so it
   never accents.
 - **Decay.** `store ·= exp(−dt/decay)` (`decay` 0.05..2 s, default 0.25).

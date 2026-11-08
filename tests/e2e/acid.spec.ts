@@ -93,8 +93,9 @@ test('unshowable shows convert', async ({ page }) => {
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.history.labels.undo)).toBe('Add note');
   await page.getByTestId('acid-convert').click();
   await expect(page.getByTestId('acid-step-0')).toBeVisible();
-  // Canonical: snapped to step 0, vel 100 reads as an accent (120), a plain gate.
-  expect(await notes(page)).toEqual([{ pitch: 40, vel: 120, start: 0, len: 120 }]);
+  // Canonical: snapped to step 0, a plain gate; vel 100 (the app's default
+  // velocity) is below the accent threshold 110, so it is written as 80.
+  expect(await notes(page)).toEqual([{ pitch: 40, vel: 80, start: 0, len: 120 }]);
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.history.labels.undo)).toBe('Convert to steps');
   // One entry: a single undo brings back the off-grid note (and the notice).
   await page.keyboard.press('ControlOrMeta+z');

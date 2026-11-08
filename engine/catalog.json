@@ -196,7 +196,7 @@
       "inputs":[{"name":"gate","signal":"gate"},{"name":"vel","signal":"cv"}],
       "outputs":[{"name":"cv","signal":"cv"}],
       "params":[
-        {"name":"threshold","label":"Threshold","min":0,"max":1,"default":0.78740156,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
+        {"name":"threshold","label":"Threshold","min":0,"max":1,"default":0.86614174,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
         {"name":"amount","label":"Amount","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
         {"name":"decay","label":"Decay","min":0.05,"max":2,"default":0.25,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false}
       ]}

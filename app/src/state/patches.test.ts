@@ -206,6 +206,28 @@ describe('validatePatch', () => {
     expect(out.modules[1].params).toMatchObject({ attack: 0.01, release: 0.3, delay: 0, vel_amt: 0 });
   });
 
+  it('a Sample Player saved with its first 5 params loads with end/loop/loopStart/fine at defaults', () => {
+    // Plan 15 appended end, loop, loopStart and fine; older patches and
+    // projects carry only sample..root.
+    const old = {
+      name: 'Old SP',
+      modules: [
+        { idx: 0, id: 'midi_in' },
+        { idx: 1, id: 'sample_player', params: { sample: 2, gain: 0.8, start: 0.25, pitchTrack: 0, root: 48 } },
+        { idx: 2, id: 'out' },
+      ],
+      cables: [{ from: [0, 'gate'], to: [1, 'gate'] }, { from: [1, 'out'], to: [2, 'l'] }],
+    };
+    const r = validatePatch(old);
+    expect(r.warnings).toEqual([]);
+    const p = new Project();
+    const t = addSynthTrack(p, { send: () => true }, 'S', r.patch)!;
+    const out = trackPatch(t, (id) => id);
+    expect(out.modules[1].params).toEqual({
+      sample: 2, gain: 0.8, start: 0.25, pitchTrack: 0, root: 48, end: 1, loop: 0, loopStart: 0, fine: 0,
+    });
+  });
+
   it('drops pooled effects beyond the free FX-pool budget', () => {
     const modules = Array.from({ length: 5 }, (_, i) => ({ idx: i, id: 'delay' }));
     const r = validatePatch({ name: 'D', modules, cables: [] }, { fxFree: (id) => (id === 'delay' ? 3 : Infinity) });

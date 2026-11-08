@@ -293,14 +293,31 @@ A *Source* that plays a sample of the project's sample pool (the samples
 the drum rows use), one voice per channel. Inputs `pitch` and `gate`, output
 `out` (one mono channel per voice; stereo samples play as `(L + R) / 2`).
 Params: `sample` (pool id 0..255, −1 = none), `gain` (0..2, smoothed),
-`start` (0..1 of the sample, read at trigger), `pitchTrack` (Off/On) and
-`root` (MIDI note, default 60).
+`start` (0..1 of the sample, read at trigger), `pitchTrack` (Off/On),
+`root` (MIDI note, default 60) and, appended in plan 15, `end` (0..1,
+default 1), `loop` (Off/On), `loopStart` (0..1) and `fine` (−100..+100 ct).
 
-- A rising gate starts the voice at `start · frames`; it plays to the end of
-  the sample (one-shot: follow it with an ADSR + VCA for gated notes). A gate
-  with no playable sample starts nothing.
-- With `pitchTrack` on the rate is `2^(pitch − (root − 60)/12)`, per sample
-  (bends follow), with linear interpolation; off, the rate is 1.
+- A rising gate starts the voice at `s = floor(start · frames)`. It is a
+  one-shot (follow it with an ADSR + VCA for gated notes). A gate with no
+  playable sample starts nothing.
+- **Region** (`end`, `loop`, `loopStart` are read live, so markers and
+  automation act on sounding voices): the voice plays `[s, e)`,
+  `e = max(floor(end · frames), s + 1)` clamped to `frames` (so `start ≥ end`
+  plays one frame; nothing outside the sample is ever read). Loop off: at
+  `e` the last value is held and faded out over 2 ms.
+- **Loop** on: the loop region is `[ls, e)`, `ls = max(floor(loopStart ·
+  frames), s)`; the voice keeps looping while it plays (gate low too). The
+  seam has a fixed 10 ms (`xf`) equal-power crossfade inside the region:
+  over the last `xf` frames the tail fades out (cos) while the head
+  `[ls, ls + xf)` fades in (sin), then the read jumps to `ls + xf`. A loop
+  region shorter than `2 · xf` plays as loop off. Overshoot past `e` (high
+  rates, `end` moved under the position) wraps modulo the loop, so the
+  position stays in the region at any pitch.
+- **Rate** `2^(pitch − (root − 60)/12 + fine/1200)` with `pitchTrack` on
+  (per sample: bends follow), `2^(fine/1200)` off; exponent clamped to
+  ±11 octaves. Reads use 4-point, 3rd-order Hermite (Catmull-Rom)
+  interpolation with the points clamped to `[s, e)`; on whole frames it is
+  the frame exactly.
 - Declicked like the drum voices: a retrigger fades the sounding voice out
   over 2 ms under the new one. A voice captures the sample's *generation*
   (`engine/src/samples.rs`) at trigger; when the sample is replaced,

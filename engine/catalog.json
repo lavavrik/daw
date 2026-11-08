@@ -158,7 +158,11 @@
         {"name":"gain","label":"Gain","min":0,"max":2,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
         {"name":"start","label":"Start","min":0,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
         {"name":"pitchTrack","label":"Pitch track","min":0,"max":1,"default":1,"integer":true,"curve":"lin","unit":"","choices":["Off","On"],"smooth":false},
-        {"name":"root","label":"Root","min":0,"max":127,"default":60,"integer":true,"curve":"lin","unit":"","choices":[],"smooth":false}
+        {"name":"root","label":"Root","min":0,"max":127,"default":60,"integer":true,"curve":"lin","unit":"","choices":[],"smooth":false},
+        {"name":"end","label":"End","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
+        {"name":"loop","label":"Loop","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Off","On"],"smooth":false},
+        {"name":"loopStart","label":"Loop start","min":0,"max":1,"default":0,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
+        {"name":"fine","label":"Fine","min":-100,"max":100,"default":0,"integer":false,"curve":"lin","unit":"ct","choices":[],"smooth":false}
       ]},
     {"kind":17,"id":"formant","name":"Formant","category":"shaping",
       "inputs":[{"name":"in","signal":"audio"},{"name":"pitch","signal":"pitch"},{"name":"cv","signal":"cv"}],

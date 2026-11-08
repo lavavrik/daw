@@ -31,7 +31,13 @@ describe('catalog', () => {
     expect(sp.category).toBe('source');
     expect(fxPoolSlots(sp)).toBeNull();
     expect(sp.inputs.map((p) => p.name)).toEqual(['pitch', 'gate']);
-    expect(sp.params.map((p) => p.name)).toEqual(['sample', 'gain', 'start', 'pitchTrack', 'root']);
+    // end/loop/loopStart/fine appended in plan 15 (never reordered).
+    expect(sp.params.map((p) => p.name)).toEqual(
+      ['sample', 'gain', 'start', 'pitchTrack', 'root', 'end', 'loop', 'loopStart', 'fine'],
+    );
+    expect(sp.params.slice(5).map((p) => [p.label, p.min, p.max, p.default])).toEqual([
+      ['End', 0, 1, 1], ['Loop', 0, 1, 0], ['Loop start', 0, 1, 0], ['Fine', -100, 100, 0],
+    ]);
     const sample = sp.params[paramIndex(sp, 'sample')];
     expect([sample.min, sample.max, sample.default, sample.integer]).toEqual([-1, 255, -1, true]);
     expect(sp.params[paramIndex(sp, 'root')].default).toBe(60);

@@ -559,6 +559,15 @@ static SAMPLE_PLAYER: ModuleSpec = ModuleSpec {
         choice("pitchTrack", "Pitch track", &["Off", "On"], 1.0),
         // The MIDI note at which the sample plays at its own speed.
         int("root", "Root", 0.0, 127.0, 60.0, ""),
+        // Appended in plan 15 (never reorder the five above). `end`, `loop`
+        // and `loopStart` are read live, per sample; `start` at trigger.
+        // Playback stops (2 ms fade) at `end`, unless `loop` repeats
+        // [loopStart, end) with a 10 ms equal-power crossfade at the seam.
+        lin("end", "End", 0.0, 1.0, 1.0, false),
+        choice("loop", "Loop", &["Off", "On"], 0.0),
+        lin("loopStart", "Loop start", 0.0, 1.0, 0.0, false),
+        // Cents on top of the pitch (applies with pitchTrack off too).
+        cont("fine", "Fine", -100.0, 100.0, 0.0, Curve::Lin, "ct", false),
     ],
 };
 
@@ -791,8 +800,17 @@ mod tests {
                 ("start", 0.0, 1.0, 0.0, false),
                 ("pitchTrack", 0.0, 1.0, 1.0, true),
                 ("root", 0.0, 127.0, 60.0, true),
+                // Appended in plan 15.
+                ("end", 0.0, 1.0, 1.0, false),
+                ("loop", 0.0, 1.0, 0.0, true),
+                ("loopStart", 0.0, 1.0, 0.0, false),
+                ("fine", -100.0, 100.0, 0.0, false),
             ]
         );
+        let labels: Vec<_> = s.params[5..].iter().map(|p| p.label).collect();
+        assert_eq!(labels, ["End", "Loop", "Loop start", "Fine"]);
+        assert_eq!(s.params[6].choices, ["Off", "On"]);
+        assert_eq!(s.params[8].unit, "ct");
         assert!(s.params[1].smooth, "gain is smoothed");
     }
 

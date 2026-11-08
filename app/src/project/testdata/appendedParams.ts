@@ -9,6 +9,8 @@ export const APPENDED_PARAMS: Record<string, Record<string, number>> = {
   // Plan 11.
   adsr: { delay: 0, vel_amt: 0 },
   midi_in: { glide_mode: 0 },
+  // Plan 15.
+  sample_player: { end: 1, loop: 0, loopStart: 0, fine: 0 },
 };
 
 type FixtureModule = { id: string; params?: Record<string, number> };

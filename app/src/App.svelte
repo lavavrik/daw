@@ -612,6 +612,7 @@
       onOpen: () => topBar?.request('open'),
       onUndo: undo,
       onRedo: redo,
+      pointerDown: () => gestures.pointerDown(),
       onTab: (t) => bottomPanel?.pickTab(t),
     });
     // Not awaited: the permission prompt must never block startup/rendering.

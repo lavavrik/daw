@@ -27,6 +27,8 @@
 // pixel (16 px per sample), or FINE_FPP when sample-level data cannot come.
 import type { AudioClip, Peaks } from '../../state/project.svelte';
 import { peaksFrames, peaksLevel } from '../../audio/peaks';
+import { PPQ } from '../../audio/audioClock';
+import { STEP_TICKS } from '../../audio/protocol';
 import { clipGainLinear, ticksPerSecond } from '../../state/audio-actions';
 
 /** Below this many frames per pixel the floats are drawn (peaks have nothing finer). */
@@ -401,10 +403,10 @@ export function dragDeltaTicks(dxPx: number, framesPerPx: number, framesPerTick:
 
 /**
  * How far a key moves a focused handle along the clip: → / ↑ later, ← / ↓
- * earlier, a quarter beat (Shift: a beat); null for any other key.
+ * earlier, a quarter beat = one drum step (Shift: a beat); null for any other key.
  */
 export function handleKeyDelta(key: string, shift: boolean): number | null {
-  const step = shift ? 960 : 240;
+  const step = shift ? PPQ : STEP_TICKS;
   if (key === 'ArrowRight' || key === 'ArrowUp') return step;
   if (key === 'ArrowLeft' || key === 'ArrowDown') return -step;
   return null;

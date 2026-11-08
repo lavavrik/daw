@@ -24,10 +24,13 @@
 // through the same edit path as Escape, inside the still-open gesture, so
 // the gesture ends where it began and its commit makes no entry; the key
 // does nothing else (no undo of an older entry). The keys stay swallowed
-// until the gesture ends (a held Cmd+Z repeats). A press on something that
-// is not a cancellable drag (no widget says it was dragging): the old rule,
-// the undo commits the gesture and afterApply() re-opens one for the rest
-// of the press.
+// until the gesture ends (a held Cmd+Z repeats). The step grid's paint has
+// nothing to put back (ruling Q): its "cancel" just says true while it
+// paints, so the key is swallowed and the paint goes on. A press on
+// something that is not a cancellable drag (no widget says it was
+// dragging): the old rule, the undo commits the gesture and afterApply()
+// re-opens one for the rest of the press. pointerDown() lets the shortcut
+// layer take Cmd/Ctrl+Alt+Z as undo mid-drag (an Alt-drag's bend).
 
 export interface GestureHistory {
   begin(): void;
@@ -49,6 +52,8 @@ export interface Gestures {
    * Stays true until the gesture ends, so a held key never undoes an older entry.
    */
   cancelDrag(): boolean;
+  /** A pointer is down (a gesture is in progress). */
+  pointerDown(): boolean;
 }
 
 /** Each drag widget's cancel: true when it was dragging (and now restored the pre-drag value). */
@@ -120,6 +125,7 @@ export function createGestures(o: {
       if (cancel()) cancelled = true;
       return cancelled;
     },
+    pointerDown: () => down.size > 0,
   };
 }
 

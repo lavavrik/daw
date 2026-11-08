@@ -72,6 +72,13 @@ export interface ShortcutOptions {
   onUndo?: () => void;
   /** Shift+Cmd/Ctrl+Z or Ctrl+Y (not while typing). */
   onRedo?: () => void;
+  /**
+   * True while a pointer gesture is down (App: history/gestures.ts
+   * pointerDown). Then Alt held too still means undo/redo: an Alt-drag (an
+   * automation segment's bend) must be cancellable by Cmd/Ctrl+Z without
+   * letting go of Alt first.
+   */
+  pointerDown?: () => boolean;
 }
 
 /** Performance-time stamp of an event; "now" when absent (synthetic releases). */
@@ -153,8 +160,10 @@ export function createShortcutHandlers(
       }
       // Undo / redo (held: repeats, like any editor). In a text field the
       // browser's own text undo runs instead.
-      const undoKey = (e.metaKey || e.ctrlKey) && !e.altKey && e.code === 'KeyZ';
-      const redoKey = (undoKey && e.shiftKey) || (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyY');
+      // Alt is no undo key, except mid-drag (an Alt-drag's Cmd/Ctrl+Alt+Z).
+      const noAlt = !e.altKey || (opts.pointerDown?.() ?? false);
+      const undoKey = (e.metaKey || e.ctrlKey) && noAlt && e.code === 'KeyZ';
+      const redoKey = (undoKey && e.shiftKey) || (e.ctrlKey && !e.metaKey && noAlt && !e.shiftKey && e.code === 'KeyY');
       if ((undoKey || redoKey) && !isTyping(e.target)) {
         e.preventDefault();
         (redoKey ? opts.onRedo : opts.onUndo)?.();

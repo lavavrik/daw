@@ -813,10 +813,20 @@
 
   // ---- Examples ▾ -----------------------------------------------------------------
   let exOpen = $state(false);
-  /** Max height of the popover: the room below the button (it scrolls inside), so it never runs past a short window. */
+  /**
+   * Max height of the popover: min(60vh, the room below the button) (it
+   * scrolls inside), so it never runs past a short window. The inline style
+   * replaces the stylesheet's 60vh, hence both here. Re-measured on a window
+   * resize while open.
+   */
   let exMaxH = $state(0);
+  function measureExamples() {
+    if (!exBtn) return;
+    const room = window.innerHeight - exBtn.getBoundingClientRect().bottom - 4 - 8;
+    exMaxH = Math.max(80, Math.min(window.innerHeight * 0.6, room));
+  }
   function toggleExamples() {
-    if (!exOpen && exBtn) exMaxH = Math.max(80, window.innerHeight - exBtn.getBoundingClientRect().bottom - 4 - 8);
+    if (!exOpen) measureExamples();
     exOpen = !exOpen;
   }
   let exMenu = $state<HTMLElement | null>(null);
@@ -888,8 +898,12 @@
       if (!exMenu?.contains(t) && !exBtn?.contains(t)) exOpen = false;
     };
     window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('resize', measureExamples);
     void tick().then(() => (exMenu?.querySelector<HTMLElement>('button:not(:disabled)') ?? exMenu)?.focus());
-    return () => window.removeEventListener('pointerdown', outside, true);
+    return () => {
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('resize', measureExamples);
+    };
   });
 
   onDestroy(() => {

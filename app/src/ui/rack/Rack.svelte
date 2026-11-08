@@ -45,7 +45,7 @@
   // unplugs a carried cable; Esc or a pointer press, anywhere, cancels; a
   // re-measure (scroll, resize) keeps the free end on the focused jack. A
   // visually hidden live region says what is picked up.
-  import { tick, untrack } from 'svelte';
+  import { onDestroy, tick, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
@@ -247,6 +247,12 @@
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
+  /** The open pointer drag's cleanup (listeners, undo-cancel registration); run on destroy too. */
+  let endPointerDrag: (() => void) | null = null;
+  // The rack going away mid-drag (track switch, panel closed) must not leave
+  // its window keydown listener or its registerDragCancel entry behind.
+  onDestroy(() => endPointerDrag?.());
+
   function jackDown(e: PointerEvent, m: number, dir: 'in' | 'out', port: number) {
     if (drag?.kbd) drag = null; // a press cancels a keyboard pick
     if (e.button !== 0 || !content || drag) return;
@@ -271,6 +277,7 @@
       el.removeEventListener('lostpointercapture', cancel);
       window.removeEventListener('keydown', esc, true);
       offUndo();
+      endPointerDrag = null;
       const d = drag;
       drag = null;
       return d;
@@ -293,7 +300,7 @@
     // Cmd/Ctrl+Z or redo mid-drag: the same as Escape (history/gestures.ts).
     const mine = drag;
     const offUndo = registerDragCancel(() => {
-      if (drag !== mine) { // this drag already ended without its cleanup (the rack went away)
+      if (drag !== mine) { // this drag already ended without its cleanup
         offUndo();
         return false;
       }
@@ -301,6 +308,7 @@
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
       return true;
     });
+    endPointerDrag = cancel;
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', cancel);

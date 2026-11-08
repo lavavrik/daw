@@ -10,7 +10,8 @@
   // time, not saved, display only. It draws no start/end/fade markers and no
   // playhead: drum rows have no such engine params yet and drum voices
   // report no position (follow-ups).
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { registerDragCancel } from '../history/gestures';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { droppedFiles } from '../library/drag';
@@ -87,6 +88,11 @@
   // click has detail >= 1 and was already handled on pointerdown).
   // Right-click a step clears it (no browser context menu on the cells).
   let paintVel: number | null = null;
+  // Cmd/Ctrl+Z or redo mid-paint (plan 16 ruling Q): a paint has no cancel
+  // (each crossed cell already holds its value; there is no single value to
+  // put back), so the key is swallowed: say "dragging" without restoring
+  // anything. The paint goes on and stays one entry (history/gestures.ts).
+  onDestroy(registerDragCancel(() => paintVel !== null));
 
   function down(e: PointerEvent, rowId: string, step: number, cur: number) {
     if (e.button === 2) {

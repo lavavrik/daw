@@ -29,9 +29,15 @@
   //             for the trim: the end stays, the offset follows). The pixel
   //             -> tick scale is the view's at the grab, so a trim (which
   //             rescales a fitted view as the clip shrinks) does not feed
-  //             back. Escape / pointercancel / lost capture mid-drag puts
-  //             the grabbed values back. Keys: ←/→ (↓/↑) move the handle a
-  //             quarter beat, Shift a beat (each press its own undo entry).
+  //             back. The Trim bar is placed by handleX like the flags, at
+  //             clip tick 0: the axis is clip time, so a trim moves the
+  //             axis with it and the bar stays on the clip's (new) start,
+  //             the left edge of a fitted or unscrolled view; scrolled
+  //             right it is pinned to the edge (handleX) and stays
+  //             focusable. Escape / pointercancel / lost capture mid-drag
+  //             puts all five grabbed fields back (restoreAudioClip). Keys:
+  //             ←/→ (↓/↑) move the handle a quarter beat, Shift a beat (each
+  //             press its own undo entry).
   //             A pointer drag is one undo entry (history/gestures.ts).
   //
   // Every change goes through state/audio-actions.ts setAudioClip (one
@@ -44,7 +50,7 @@
   import type { AudioClock } from '../audio/audioClock';
   import { fineRequestFor } from '../audio/fineSamples';
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
-  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, setAudioClip, ticksPerSecond, trimAudioClipStart } from '../state/audio-actions';
+  import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, restoreAudioClip, setAudioClip, ticksPerSecond, trimAudioClipStart } from '../state/audio-actions';
   import WaveformView from './vis/WaveformView.svelte';
   import { clipEnvelope, clipMap, dragDeltaTicks, handleKeyDelta, handleX, seamFrames, waveBase } from './vis/waveMath';
   import type { View, WaveOverlay } from './vis/waveMath';
@@ -158,11 +164,17 @@
   type Grab = Pick<AudioClip, 'start' | 'len' | 'offset' | 'fadeIn' | 'fadeOut'>;
   let drag: { h: Handle; x0: number; fpp: number; orig: Grab; moved: boolean; id: number } | null = null;
 
-  /** Move handle `h` to `dt` ticks from where the grab (or the clip as it is, for keys) put it. */
+  /**
+   * Move handle `h` to `dt` ticks from where the grab (or the clip as it is,
+   * for keys) put it. The other fade is the grab's too (a fade the moved one
+   * squeezed comes back when it moves away again), and a trim asks for the
+   * grab's fades: the result depends only on the grab and `dt`, never on
+   * the drag's path.
+   */
   function moveHandle(c: AudioClip, h: Handle, from: Grab, dt: number) {
-    if (h === 'fadeIn') setAudioClip(p, engine, c.id, { fadeIn: Math.max(0, Math.round(from.fadeIn + dt)) });
-    else if (h === 'fadeOut') setAudioClip(p, engine, c.id, { fadeOut: Math.max(0, Math.round(from.fadeOut - dt)) });
-    else trimAudioClipStart(p, engine, c.id, from.start + dt);
+    if (h === 'fadeIn') setAudioClip(p, engine, c.id, { fadeIn: Math.max(0, Math.round(from.fadeIn + dt)), fadeOut: from.fadeOut });
+    else if (h === 'fadeOut') setAudioClip(p, engine, c.id, { fadeOut: Math.max(0, Math.round(from.fadeOut - dt)), fadeIn: from.fadeIn });
+    else trimAudioClipStart(p, engine, c.id, from.start + dt, from);
   }
   function hDown(e: PointerEvent, c: AudioClip, h: Handle) {
     if (e.button !== 0 || !shown) return;
@@ -182,14 +194,17 @@
   function hUp(e: PointerEvent) {
     if (drag && e.pointerId === drag.id) drag = null;
   }
-  /** Abort the drag: the grabbed values back (nothing when nothing moved). */
+  /**
+   * Abort the drag: all five grabbed fields back exactly (nothing when
+   * nothing moved). restoreAudioClip never caps `len`, so inside the drag's
+   * still-open gesture the clip ends where it began and no entry is made.
+   */
   function hCancel(c: AudioClip) {
     if (!drag) return;
     const d = drag;
     drag = null;
     if (!d.moved) return;
-    if (d.h === 'trim') setAudioClip(p, engine, c.id, { start: d.orig.start, len: d.orig.len, offset: d.orig.offset });
-    else setAudioClip(p, engine, c.id, { [d.h]: d.orig[d.h] });
+    restoreAudioClip(p, engine, c.id, d.orig);
   }
   // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
   onDestroy(registerDragCancel(() => {
@@ -303,7 +318,7 @@
               aria-valuenow={Number(handleValue(c, h).toFixed(3))} aria-valuetext={handleText(c, h)}
               title="{HANDLE_LABEL[h]}: {handleText(c, h)}: drag, or ←/→ (Shift: a beat)"
               data-testid="cliptab-handle-{h === 'fadeIn' ? 'fade-in' : h === 'fadeOut' ? 'fade-out' : 'trim'}"
-              style:left="{h === 'fadeOut' ? Math.max(0, x - FLAG_W) : h === 'trim' ? 0 : Math.min((shown?.width ?? 0) - FLAG_W, x)}px"
+              style:left="{h === 'fadeOut' ? Math.max(0, x - FLAG_W) : h === 'trim' ? x : Math.min((shown?.width ?? 0) - FLAG_W, x)}px"
               onpointerdown={(e) => hDown(e, c, h)}
               onpointermove={(e) => hMove(e, c)}
               onpointerup={hUp}

@@ -207,12 +207,36 @@ export function setAudioClip(p: Project, sink: CommandSink, id: string, partial:
 }
 
 /**
+ * Puts grabbed clip fields back exactly (a drag's cancel: ClipPanel's
+ * handles). Like setAudioClip but never caps `len` at the file's end: the
+ * values were valid when grabbed, and a cap (the tempo may have moved, or
+ * the restored `len` is longer than a capped one) would leave the cancel
+ * short of the grab, i.e. a change and an undo entry. Same title as
+ * setAudioClip, so inside the drag's open gesture it is one edit with it.
+ */
+export function restoreAudioClip(p: Project, sink: CommandSink, id: string, partial: Partial<ClipFields>): boolean {
+  return edit(p, 'Edit audio clip', () => {
+    const f = findAudioClip(p, id);
+    if (!f) return false;
+    const next = normalize(p, { ...f.c, ...partial }, false);
+    if (!next) return false;
+    apply(sink, f.t, f.c, next);
+    return true;
+  });
+}
+
+/**
  * Left-edge trim to `start` (rounded): the end stays and the offset moves
  * with the start, so the audio stays where it was in the song. A one-shot
  * clip cannot start before its file (offset 0); a loop clip wraps around
  * its file. Clamped to leave at least one tick. False for an unknown clip.
+ * `fades` (a handle drag: the fades at its grab) are the fades asked for
+ * instead of the clip's current ones, so a drag that shortens the clip and
+ * then lengthens it again gets its fades back (each shortened to fit).
  */
-export function trimAudioClipStart(p: Project, sink: CommandSink, id: string, start: number): boolean {
+export function trimAudioClipStart(
+  p: Project, sink: CommandSink, id: string, start: number, fades?: Pick<AudioClip, 'fadeIn' | 'fadeOut'>,
+): boolean {
   return edit(p, 'Trim audio clip', () => {
     const f = findAudioClip(p, id);
     if (!f || !Number.isFinite(start)) return false;
@@ -226,7 +250,7 @@ export function trimAudioClipStart(p: Project, sink: CommandSink, id: string, st
     const s = Math.min(end - 1, Math.max(first, Math.round(start)));
     let offset = Math.max(0, c.offset + (s - c.start) / tps);
     if (wraps) offset = (((c.offset + (s - c.start) / tps) % seconds!) + seconds!) % seconds!;
-    const next = normalize(p, { ...c, start: s, len: end - s, offset }, false);
+    const next = normalize(p, { ...c, start: s, len: end - s, offset, ...(fades && { fadeIn: fades.fadeIn, fadeOut: fades.fadeOut }) }, false);
     if (!next) return false;
     apply(sink, t, c, next);
     return true;

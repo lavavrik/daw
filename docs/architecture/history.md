@@ -47,12 +47,35 @@ edit is undoable as long as it is in the saved project.
   primary press forgets stale pointer ids and `begin()` closes a gesture
   still open; a `<select>` `change` and a `contextmenu` (capture phase)
   and window `blur` end the gesture at once. A text field's `change` does
-  not: it fires when a press elsewhere blurs the field, mid-gesture. Undo /
-  redo while a pointer is still down commits the gesture and then re-opens
-  one (`afterApply`) for the rest of the drag. A knob, fader, note, clip
+  not: it fires when a press elsewhere blurs the field, mid-gesture. A knob,
+  fader, note, clip
   or step-paint drag is one entry; the "before" snapshot is taken lazily at
   the first edit, so a click that edits nothing costs nothing, and a drag
   that ends where it started (Escape) leaves no entry.
+- **Undo / redo during a drag cancels the drag** (plan 16 Task 5). Every
+  component with a pointer drag (`Knob`, `Fader`, `AutoLane` points /
+  curves / draw / box, `ClipPanel` fade and trim handles, `SampleStrip`
+  markers, `PianoRoll`, `Timeline`, `Rack` cables) registers its Escape
+  cancel with `registerDragCancel(() => boolean)` (`history/gestures.ts`:
+  a module registry, like `inlineConfirms.ts`; true = "I was dragging and
+  put the pre-drag values back"; a guard test fails for any `.svelte` that
+  calls `setPointerCapture` without registering). App's undo/redo (⌘Z,
+  ⇧⌘Z / Ctrl+Y, ↶ ↷) first call `gestures.cancelDrag()`: with a pointer
+  down it asks every registered cancel; if one was dragging, the key does
+  nothing else. *Why it leaves no entry:* the cancel restores through the
+  same actions as the drag, inside the still-open gesture, so the gesture
+  ends where it began and its `commit()` at the release pushes nothing
+  (`sameProject(before, after)`); no explicit "discard" is needed (a
+  restore that missed a field would show up as an entry, not as a silent
+  loss). *Why nothing older is undone:* the key never reaches
+  `history.undo()`, and until that gesture ends (release, blur, context
+  menu, a new primary press) further undo/redo keys are swallowed too, so a
+  held ⌘Z's auto-repeat does not undo the entry before the drag. With a
+  pointer down on something that is not a cancellable drag (a button, the
+  step grid's paint), the old rule holds: the undo commits the gesture and
+  `afterApply` re-opens one for the rest of the press. While a recording
+  pass holds its entry open the drag's edits and the restore merge into it
+  (net nothing; the absorbed count may say 1).
 - **Same task:** App sets `coalesceTask`: one-shot edits made in the same
   task merge into one entry (a key press or paste that runs several
   actions).
@@ -287,7 +310,11 @@ removed notes`).
   `JSON.stringify`; sharing by slot; `sameProject` is fingerprint equality.
 - `history.measure.test.ts`: the numbers above (skipped unless `MEASURE=1`).
 - `gestures.test.ts`: lost pointerup, `<select>` change, context menu,
-  blur, multi-pointer, undo mid-drag.
+  blur, multi-pointer, undo mid-drag; plan 16: undo/redo during a drag
+  cancels it (no history call, held key swallowed until the release,
+  normal again after), Cmd+Z with no drag is a normal undo, the registry,
+  a cancelled fader drag on a real history leaves no entry and undoes
+  nothing older, and the guard that every drag component registers.
 - `diffApply.test.ts`: every kind of edit is undone and redone, and after
   each the UI state serializes to the snapshot and the modelled engine
   (`engineModel.ts`) equals a fresh load of it; only the changed note is
@@ -313,6 +340,11 @@ removed notes`).
   them (sound resumes, transport never stops); undo/redo while a note
   sounds; a fader drag is one step; `undo closes an open confirm` (↶ and
   ⌘Z with "Remove track?" open: popover gone, track kept, previous edit
-  undone, focus back on the ×).
+  undone, focus back on the ×); `undo during a knob or fader drag cancels
+  the drag` (⌘Z on a pan knob and ⇧⌘Z on a fader with the mouse down:
+  value back, the dead drag moves nothing, no entry, the track add not
+  undone; released, ⌘Z undoes normally). Also `automation.spec.ts` `undo
+  during a point drag cancels the drag` and the end of `audioclips.spec.ts`
+  `Clip tab drag handles` (a fade-out handle).
 - e2e `tests/e2e/settings.spec.ts` `undo audible after restart`: a row-gain
   edit undone after an audio restart is heard through the new engine.

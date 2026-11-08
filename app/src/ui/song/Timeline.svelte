@@ -96,6 +96,7 @@
   // Every other key bubbles on: letters keep playing the QWERTY piano, Space
   // toggles the transport, Shift+L toggles PAT/SONG.
   import { onDestroy, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import { TRACKS_FULL_TEXT, addDrumTrack, selectTrack } from '../../state/actions';
   import type { ImportEngine } from '../../state/sampleImport';
@@ -966,6 +967,12 @@
     }
   }
 
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!drag) return false;
+    cancel();
+    return true;
+  }));
   /** Abort the drag and put the original values back. */
   function cancel() {
     if (!drag) return;

@@ -38,7 +38,9 @@
   // undoable edit; SOURCE, GAIN, SET to the engine).
   // Test ids start with `cliptab-`, never `clip-` (that prefix is the
   // timeline's clips: tests count `[data-testid^="clip-"]`).
+  import { onDestroy } from 'svelte';
   import type { AudioEngine } from '../audio/engine';
+  import { registerDragCancel } from '../history/gestures';
   import type { AudioClock } from '../audio/audioClock';
   import { fineRequestFor } from '../audio/fineSamples';
   import type { AudioClip, AudioTrack, Project } from '../state/project.svelte';
@@ -189,6 +191,13 @@
     if (d.h === 'trim') setAudioClip(p, engine, c.id, { start: d.orig.start, len: d.orig.len, offset: d.orig.offset });
     else setAudioClip(p, engine, c.id, { [d.h]: d.orig[d.h] });
   }
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!drag) return false;
+    if (clip) hCancel(clip);
+    else drag = null;
+    return true;
+  }));
   function hKey(e: KeyboardEvent, c: AudioClip, h: Handle) {
     if (drag) {
       if (e.key === 'Escape') {

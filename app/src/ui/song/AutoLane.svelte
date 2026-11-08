@@ -49,6 +49,7 @@
   // the menu / clears the selection, ← / → nudge the selection a 1/16
   // (Shift: a beat). Every other key bubbles on (the QWERTY piano, Space...).
   import { onDestroy, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import { moduleDef } from '../../audio/catalog';
   import type { MixParamDef } from '../../audio/mixerCatalog';
   import type { CommandSink } from '../../state/actions';
@@ -440,6 +441,13 @@
       selected = new Set();
     } else if (d.moved) movePoints(p, engine, lane.id, d.ids, 0, 0, d.origin);
   }
+
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!drag) return false;
+    cancel();
+    return true;
+  }));
 
   function dbl(e: MouseEvent) {
     e.stopPropagation();

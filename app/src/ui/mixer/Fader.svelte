@@ -30,6 +30,7 @@
   // as Knob.svelte: the learn target pulses, a mapped fader shows a "CC"
   // tag `<testid>-cc` and its title (the accessible description) says "MIDI CC 7").
   import { onDestroy, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
   import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
@@ -194,6 +195,13 @@
     }
   }
   onDestroy(flush);
+
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!dragging) return false;
+    cancel();
+    return true;
+  }));
 
   function key(e: KeyboardEvent) {
     if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {

@@ -709,7 +709,11 @@
   const gestures = createGestures({ history: () => history, loading: () => project.loading });
   onMount(() => installGestures(gestures));
   /**
-   * ⌘Z / ↶ and ⇧⌘Z / ↷: a drag still held after it continues as a new entry.
+   * ⌘Z / ↶ and ⇧⌘Z / ↷. During a drag (a knob, fader, automation point,
+   * clip handle ... registered with registerDragCancel) the key cancels the
+   * drag instead, as Escape would: the pre-drag value back, no entry, nothing
+   * older undone (history/gestures.ts cancelDrag). Any other held press
+   * continues as a new entry after the undo.
    * An open inline confirm is cancelled first, exactly like its Cancel
    * (ui/inlineConfirms.ts: it asked about a state the undo replaces); the
    * flush closes it (and returns focus to its anchor) before the undo applies.
@@ -718,11 +722,13 @@
     if (cancelOpenConfirms()) flushSync();
   };
   const undo = () => {
+    if (gestures.cancelDrag()) return;
     closeConfirms();
     history?.undo();
     gestures.afterApply();
   };
   const redo = () => {
+    if (gestures.cancelDrag()) return;
     closeConfirms();
     history?.redo();
     gestures.afterApply();

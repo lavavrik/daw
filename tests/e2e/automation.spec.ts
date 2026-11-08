@@ -242,6 +242,35 @@ test('undo removes a drawn gesture in one step', async ({ page }) => {
   await expect.poll(() => savedLanes(page, slot)).toEqual(drawn);
 });
 
+// Plan 16 Task 5: Cmd/Ctrl+Z during a point drag cancels the drag: the point
+// goes back, no entry is made and no older entry is undone.
+test('undo during a point drag cancels the drag', async ({ page }) => {
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2);
+  const lane = await addLane(page, slot, 'Fader');
+  await clickLane(page, lane, BAR, 0.5);
+  const before = await savedLanes(page, slot);
+  expect(before[0].points).toHaveLength(1);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add automation point/); // the click's gesture closed
+  const undoTitle = await page.getByTestId('undo').getAttribute('title');
+  const a = await lanePt(page, lane, BAR, 0.5);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 40, a.y + 15, { steps: 6 });
+  await expect.poll(async () => (await savedLanes(page, slot))[0].points).not.toEqual(before[0].points);
+  await page.keyboard.press(undoKey);
+  await expect.poll(() => savedLanes(page, slot)).toEqual(before);
+  await page.mouse.move(a.x + 80, a.y + 20, { steps: 4 }); // the cancelled drag moves nothing
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  expect(await savedLanes(page, slot)).toEqual(before); // the point (the newest entry) is still there
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+  // Released: Cmd+Z is the normal undo again (takes the point away).
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await savedLanes(page, slot))[0]?.points ?? []).toHaveLength(0);
+});
+
 test('master row lane on the limiter ceiling', async ({ page }) => {
   test.setTimeout(60_000);
   await start(page);

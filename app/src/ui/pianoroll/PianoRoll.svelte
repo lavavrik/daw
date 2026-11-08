@@ -48,6 +48,7 @@
   // example. Each is one undo step. At MAX_PATTERNS / MAX_TRACKS the buttons
   // are disabled with the same reason the pattern picker / timeline give.
   import { onDestroy, tick, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import type { AudioClock } from '../../audio/audioClock';
   import { mod } from '../../audio/audioClock';
@@ -680,6 +681,12 @@
     if (d.kind === 'box') box = null;
   }
 
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!drag) return false;
+    cancel();
+    return true;
+  }));
   /** Abort the drag and put the original values back. */
   function cancel() {
     if (!drag) return;

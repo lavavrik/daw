@@ -46,6 +46,7 @@
   // re-measure (scroll, resize) keeps the free end on the focused jack. A
   // visually hidden live region says what is picked up.
   import { tick, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
@@ -269,6 +270,7 @@
       el.removeEventListener('pointercancel', cancel);
       el.removeEventListener('lostpointercapture', cancel);
       window.removeEventListener('keydown', esc, true);
+      offUndo();
       const d = drag;
       drag = null;
       return d;
@@ -288,6 +290,17 @@
       cleanup();
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     };
+    // Cmd/Ctrl+Z or redo mid-drag: the same as Escape (history/gestures.ts).
+    const mine = drag;
+    const offUndo = registerDragCancel(() => {
+      if (drag !== mine) { // this drag already ended without its cleanup (the rack went away)
+        offUndo();
+        return false;
+      }
+      cleanup();
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+      return true;
+    });
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', cancel);

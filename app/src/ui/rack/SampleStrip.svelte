@@ -33,6 +33,8 @@
   // Keys on a focused flag (sampleStrip.keyMarker): ←/↓ −0.01, →/↑ +0.01,
   // Shift a tenth, PageDown/PageUp ∓0.1, Home/End the lowest/highest value
   // (each press its own undo entry, like a knob's).
+  import { onDestroy } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { SampleMeta } from '../../state/project.svelte';
   import { columns, fileMap, waveBase } from '../vis/waveMath';
   import {
@@ -159,6 +161,12 @@
     for (const k of d.moved) if (region[k] !== d.orig[k]) back[k] = d.orig[k];
     if (Object.keys(back).length) onchange(back);
   }
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!drag) return false;
+    cancel();
+    return true;
+  }));
   function key(e: KeyboardEvent, m: Marker) {
     if (drag) {
       if (e.key === 'Escape') {

@@ -508,6 +508,19 @@ test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) =>
   await page.keyboard.press('Escape');
   await expect.poll(async () => (await c0()).fadeOut).toBe(g.fadeOut);
   await page.mouse.up();
+
+  // Plan 16 Task 5: Cmd/Ctrl+Z mid-drag cancels it the same way, and undoes nothing older
+  // (the newest entry, the ArrowRight above, would make the fade out a quarter beat longer).
+  const undoTitle = await page.getByTestId('undo').getAttribute('title');
+  await drag('cliptab-handle-fade-out', -wave.width / 8);
+  await expect.poll(async () => (await c0()).fadeOut).not.toBe(g.fadeOut);
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).fadeOut).toBe(g.fadeOut);
+  await page.mouse.move(wave.x + wave.width / 2, wave.y + 4, { steps: 3 }); // the dead drag no longer moves it
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  expect((await c0()).fadeOut).toBe(g.fadeOut);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
 });
 
 test('drop on a drum lane shows the hint', async ({ page }) => {

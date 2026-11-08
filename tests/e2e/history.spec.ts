@@ -172,6 +172,54 @@ test('a fader drag is one undo step', async ({ page }) => {
   await expect(page.getByTestId('redo')).toBeDisabled();
 });
 
+// Plan 16 Task 5: Cmd/Ctrl+Z (or redo) while a knob or fader is being
+// dragged cancels the drag: the value from before it comes back, no entry is
+// made, and no older entry is undone. Released, Cmd+Z is a normal undo.
+test('undo during a knob or fader drag cancels the drag', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
+  await page.getByTestId('mixer-tab').click();
+  const strip = page.getByTestId('strip-1');
+
+  // Knob (pan): drag up, Cmd+Z with the mouse still down, keep moving, release.
+  const knob = strip.getByTestId('knob-pan');
+  await expect(knob).toHaveAttribute('aria-valuenow', '0');
+  const k = (await knob.boundingBox())!;
+  await page.mouse.move(k.x + k.width / 2, k.y + k.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 6; i++) await page.mouse.move(k.x + k.width / 2, k.y + k.height / 2 - i * 8);
+  await expect(knob).not.toHaveAttribute('aria-valuenow', '0');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(knob).toHaveAttribute('aria-valuenow', '0');
+  await page.mouse.move(k.x + k.width / 2, k.y - 80, { steps: 4 }); // the cancelled drag moves nothing
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  await expect(knob).toHaveAttribute('aria-valuenow', '0');
+  await expect(page.getByTestId('track-1')).toHaveCount(1); // the add was not undone
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
+  await expect(page.getByTestId('redo')).toBeDisabled();
+
+  // Fader: the same with redo (Shift+Cmd+Z).
+  const fader = strip.getByTestId('fader');
+  const b = (await fader.boundingBox())!;
+  const capY = b.y + b.height * 0.25; // 0 dB
+  await page.mouse.move(b.x + b.width / 2, capY);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) await page.mouse.move(b.x + b.width / 2, capY + i * 6);
+  await expect(strip.getByTestId('fader-readout')).not.toHaveText('0.0 dB');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect(strip.getByTestId('fader-readout')).toHaveText('0.0 dB');
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  await expect(strip.getByTestId('fader-readout')).toHaveText('0.0 dB');
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
+
+  // No drag in progress: Cmd+Z is the normal undo (the track goes).
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByTestId('track-1')).toHaveCount(0);
+});
+
 // Plan 9 Task 1: the question was about a state the undo replaces, so an
 // undo (↶, ⌘Z) closes an open inline confirm (as its Cancel would) first.
 test('undo closes an open confirm', async ({ page }) => {

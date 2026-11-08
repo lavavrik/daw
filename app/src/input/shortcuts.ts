@@ -68,7 +68,7 @@ export interface ShortcutOptions {
   onSaveAs?: () => void;
   /** Cmd/Ctrl+O: Project ▸ Open…. */
   onOpen?: () => void;
-  /** Cmd/Ctrl+Z (not while typing: the text field undoes its own text). */
+  /** Cmd/Ctrl+Z (not while typing: the text field undoes its own text). During a drag App cancels the drag instead (history/gestures.ts cancelDrag). */
   onUndo?: () => void;
   /** Shift+Cmd/Ctrl+Z or Ctrl+Y (not while typing). */
   onRedo?: () => void;

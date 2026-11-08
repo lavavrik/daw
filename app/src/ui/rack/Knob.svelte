@@ -55,6 +55,7 @@
   // "MIDI CC 74". A CC move arrives as an ordinary `value` change (the
   // router calls the same action as onchange, plus bus.touch).
   import { onDestroy, untrack } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
   import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
@@ -236,6 +237,13 @@
     }
   }
   onDestroy(flush);
+
+  // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(() => {
+    if (!dragging) return false;
+    cancel();
+    return true;
+  }));
 
   // ---- typed entry -------------------------------------------------------
   let editing = $state(false);

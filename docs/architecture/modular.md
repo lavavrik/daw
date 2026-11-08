@@ -483,3 +483,35 @@ Rack effects (plan 6, `fx_chain_track_renders_under_budget`): one track
 running MIDI In → Osc → Filter (8 voices) → Chorus → Delay → Reverb → Out
 measured 0.65% of real time natively. The effects run once, on the summed
 stereo signal.
+
+## Sample Player panel (plan 15)
+
+The Sample Player's panel (`app/src/ui/rack/ModulePanel.svelte`) shows its
+sample under the sample dropdown in `SampleStrip.svelte` (maths in
+`sampleStrip.ts`, unit-tested):
+
+- **Strip**, 220 × 48 px (`data-testid="sample-strip-<module idx>"`): the
+  whole file from its peaks (`waveMath.columns` over `waveBase`, the Clip
+  tab's helpers; no zoom), redrawn only when the sample's `SampleMeta`
+  changes. Outside `[start, end)` is dimmed, the loop region tinted while
+  Loop is On. No sample: "Drop a sample here" (the panel is the drop
+  target).
+- **Markers** as the engine plays them (see *Sample Player* above): Start
+  green, End red (never drawn left of Start + 1 px), Loop start yellow
+  (only with Loop On, drawn inside [Start, End]). Each has a small flag
+  that is a `role="slider"` (`aria-label` "Start" / "End" / "Loop start",
+  value 0..1): Start's and End's flags at the top (pointing right / left),
+  Loop start's at the bottom, so coinciding markers stay grabbable.
+  A drag moves the value by dx / 220 from where it was grabbed; arrow keys
+  ±0.01 (Shift ±0.001). Drags and keys keep `start ≤ end − 1 px`,
+  `end ≥ start + 1 px`, `start ≤ loopStart ≤ end − 1 px` (the knobs can
+  still set anything; the engine copes). Every change goes through the
+  panel's `onparam` → `setParam`, like the knobs; a drag is one undo entry
+  (pointer gestures, `history/gestures.ts`); Escape / pointercancel
+  mid-drag restores the grabbed value.
+- **Root** reads and types as a note name (`knobMath.isNoteParam`: "C4" =
+  60, "C#4", "C-1" = 0; "E4", "Db4" or the number typed).
+  **Root ← last note** (`data-testid="root-from-last-<idx>"`) sets `root`
+  to the last live note (QWERTY or MIDI note-on, kept by App from the note
+  bus's `onNoteOn` in `input/lastNote.svelte.ts`); disabled until a note
+  has arrived since the page loaded.

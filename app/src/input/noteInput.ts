@@ -14,7 +14,8 @@
 // `onNoteOn` (plan 12; App passes visWake().wake): after the engine got a
 // note-on, idle visuals (voice LEDs, analysers: ui/vis/visWake.ts) come back
 // to show it, also while the transport is stopped. Its errors are swallowed
-// like the recorder's.
+// like the recorder's. It gets the note: App also keeps it as the last live
+// note (input/lastNote.svelte.ts, the Sample Player's "Root ← last note").
 import { Op } from '../audio/protocol';
 import type { CommandSink } from '../state/actions';
 
@@ -41,7 +42,7 @@ export interface NoteInput {
   sustain(on: boolean, perfMs: number, source: string): void;
 }
 
-export function createNoteInput(sink: CommandSink, recorder: NoteListener | null, onNoteOn?: () => void): NoteInput {
+export function createNoteInput(sink: CommandSink, recorder: NoteListener | null, onNoteOn?: (note: number) => void): NoteInput {
   const tell = (f: () => void) => {
     try {
       f();
@@ -52,7 +53,7 @@ export function createNoteInput(sink: CommandSink, recorder: NoteListener | null
   return {
     on(note, vel, perfMs, source) {
       sink.send(Op.NOTE_ON, note, vel);
-      if (onNoteOn) tell(onNoteOn);
+      if (onNoteOn) tell(() => onNoteOn(note));
       if (recorder) tell(() => recorder.noteOn(note, vel, perfMs, source));
     },
     off(note, perfMs, source) {

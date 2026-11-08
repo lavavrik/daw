@@ -49,4 +49,12 @@ describe('noteInput', () => {
     input.off(60, 0, 'q'); // no wake: a note-off brings nothing new to show
     expect(order).toEqual(['on', 'wake', 'off']);
   });
+
+  it('onNoteOn gets the note (App keeps the last live note: input/lastNote.svelte.ts)', () => {
+    const got: number[] = [];
+    const input = createNoteInput({ send: () => true }, null, (n) => got.push(n));
+    input.on(64, 100, 0, 'midi:x');
+    input.off(64, 0, 'midi:x');
+    expect(got).toEqual([64]);
+  });
 });

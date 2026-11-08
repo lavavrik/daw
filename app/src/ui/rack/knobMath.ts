@@ -7,6 +7,7 @@
 // factor instead of adding Hz.
 import { clampParam } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
+import { noteName } from '../pianoroll/prMath';
 
 /**
  * What a knob needs to know about a param: rack params (catalog ParamDef) and
@@ -114,11 +115,14 @@ export function minLabelText(label: string): string {
  * Mixer additions: a param at its minimum shows its minLabel ("Off", "−∞");
  * dB -> one decimal ("−18.0 dB", "+3.0 dB" when bipolar); ":1" -> "4:1";
  * the "pan" param -> "L50" / "C" / "R100" (percent of the way to the side).
+ * A MIDI note param (isNoteParam: the Sample Player's `root`) -> its note
+ * name, "C4" for 60.
  */
 export function formatValue(d: KnobDef, v: number): string {
   if (d.choices.length) return d.choices[Math.round(v)] ?? String(v);
   if (d.minLabel && v <= d.min) return minLabelText(d.minLabel);
   const bipolar = d.min < 0;
+  if (isNoteParam(d)) return noteName(Math.round(v));
   if (d.name === 'pan' && d.unit === '') {
     const pct = Math.round(Math.abs(v) * 100);
     return pct === 0 ? 'C' : `${v < 0 ? 'L' : 'R'}${pct}`;
@@ -150,6 +154,17 @@ export function formatValue(d: KnobDef, v: number): string {
   }
 }
 
+/** A MIDI note number param, shown and typed as a note name: the Sample Player's `root` (0..127, integer, no unit). */
+export const isNoteParam = (d: KnobDef) => d.name === 'root' && d.integer && d.unit === '' && d.min >= 0 && d.max <= 127;
+
+const NOTE_STEPS: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+/** "E4" → 64, "c#3" → 49, "Db4" → 61, "C-1" → 0 (C4 = 60, as noteName); null if it isn't one. */
+export function parseNoteName(text: string): number | null {
+  const m = /^([a-g])([#b]?) ?(-?\d+)$/.exec(text.trim().toLowerCase().replace(/[−–]/g, '-').replace('♯', '#').replace('♭', 'b'));
+  if (!m) return null;
+  return NOTE_STEPS[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (Number(m[3]) + 1) * 12;
+}
+
 /**
  * Typed entry (click a knob's readout, or Enter on a focused knob): text ->
  * value, clamped to the range (integers rounded), or null when it doesn't
@@ -161,6 +176,7 @@ export function formatValue(d: KnobDef, v: number): string {
  *   dB / st / oct / ct / :1 — the number, unit optional; "−" or "-" alike
  *   0..1 "45%" or "45" (percent); a decimal ≤ 1 ("0.3") is the raw value
  *   pan  "C", "L30", "R 100"; minimum labels ("−∞", "-inf", "Off")
+ *   note "E4", "c#3", "Db4" (or the MIDI number) for a note param (root)
  * A bare number is read in the unit the readout currently shows (`shown`):
  * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
  */
@@ -185,6 +201,10 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
     if (m) return done(((m[1] === 'l' ? -1 : 1) * Number(m[2])) / 100);
   }
   if (d.unit === 's' && d.min <= 0 && t === 'off') return done(0);
+  if (isNoteParam(d)) {
+    const n = parseNoteName(t);
+    if (n !== null) return done(n);
+  }
 
   const m = /^([+-]?(?:\d+\.?\d*|\.\d+)) ?([a-z%:0-9]*)$/.exec(t);
   if (!m) return null;

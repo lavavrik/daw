@@ -9,6 +9,12 @@
   // dropdown of the project's loaded samples instead of a knob, and the
   // whole panel accepts a sample dropped on it (Finder file or library
   // sample; Rack.svelte imports it and assigns it).
+  // Under the dropdown, SampleStrip.svelte (plan 15 Task 5) shows the sample
+  // (`sampleMeta`'s peaks) with draggable Start / End / Loop start markers;
+  // they edit through `onparam` like the knobs. Its Root knob reads as a
+  // note name (knobMath.formatValue), and "Root ← last note" sets Root to
+  // `lastNote` (the last live note, input/lastNote.svelte.ts; disabled until
+  // one has arrived since load).
   //
   // Scope (plan 12): its screen (ScopeView.svelte) sits above the knobs;
   // Rack passes `scope` = the track's engine slot (with the module idx it
@@ -23,16 +29,20 @@
   // "Automate" on right-click when the param is continuous.
   import type { ModuleDef } from '../../audio/catalog';
   import { isSampleDrag } from '../../library/drag';
-  import type { RackModule } from '../../state/project.svelte';
+  import type { RackModule, SampleMeta } from '../../state/project.svelte';
   import { delayClampNote } from '../mixer/mixMath';
   import { categoryColor } from './cables';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
   import ScopeView from './ScopeView.svelte';
+  import SampleStrip from './SampleStrip.svelte';
+  import type { Marker } from './sampleStrip';
+  import { noteName } from './sampleStrip';
   import ShapePreview from './ShapePreview.svelte';
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
+    sampleMeta = null, sampleRate = 48000, lastNote = null,
   }: {
     module: RackModule;
     def: ModuleDef;
@@ -56,6 +66,12 @@
     onsampledrop?: (e: DragEvent) => void;
     /** Sample Player only: the dropdown is about to open (refresh `samples`). */
     onsamplesopen?: () => void;
+    /** Sample Player only: the assigned sample's meta (its strip's peaks), or null. */
+    sampleMeta?: SampleMeta | null;
+    /** The engine's sample rate (the strip's axis before peaks exist). */
+    sampleRate?: number;
+    /** Sample Player only: the last live note since load, or null ("Root ← last note"). */
+    lastNote?: number | null;
     /** Scope only: the track's engine slot and the sample rate (its screen). */
     scope?: { track: number; sampleRate: number } | null;
   } = $props();
@@ -85,6 +101,17 @@
   function selectKey(e: KeyboardEvent) {
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
   }
+
+  // Sample Player: the strip's markers and the root button.
+  const pi = (name: string) => def.params.findIndex((pd) => pd.name === name);
+  const strip = $derived.by(() => {
+    if (!samples || def.id !== 'sample_player') return null;
+    const at = { start: pi('start'), end: pi('end'), loopStart: pi('loopStart'), loop: pi('loop'), root: pi('root') };
+    if (at.start < 0 || at.end < 0 || at.loopStart < 0 || at.loop < 0 || at.root < 0) return null;
+    const v = (i: number) => module.params[i];
+    return { at, region: { start: v(at.start), end: v(at.end), loopStart: v(at.loopStart) }, loop: v(at.loop) >= 0.5 };
+  });
+  const markerChange = (m: Marker, v: number) => { if (strip) onparam(strip.at[m], v); };
 
   /** Extra line under a control: the Delay division clamped to 2 s (shared
    * with the mixer delay: same table, same rule). */
@@ -122,6 +149,9 @@
         {/each}
       </select>
     </label>
+    {#if strip}
+      <SampleStrip idx={module.idx} meta={sampleMeta} {sampleRate} region={strip.region} loop={strip.loop} {color} onchange={markerChange} />
+    {/if}
   {/if}
   {#if scope}
     <ScopeView track={scope.track} idx={module.idx} params={module.params} sampleRate={scope.sampleRate} {tempo} />
@@ -140,6 +170,14 @@
           auto={owner && !scope ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null} />
       {/each}
     </div>
+  {/if}
+  {#if strip}
+    {@const root = strip.at.root}
+    <button
+      class="root-last" data-testid={`root-from-last-${module.idx}`} disabled={lastNote === null}
+      title={lastNote === null ? 'Play a note (keyboard or MIDI) first: Root then takes it' : `Set Root to the last played note (${noteName(lastNote)})`}
+      onclick={() => { if (lastNote !== null && lastNote !== module.params[root]) onparam(root, lastNote); }}
+    >Root ← last note{lastNote !== null ? ` (${noteName(lastNote)})` : ''}</button>
   {/if}
   <div class="spacer"></div>
   <!-- inputs, then outputs (boxed); side by side when they fit, keeps the rail short -->
@@ -175,6 +213,10 @@
   .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
   .smp { display: flex; flex-direction: column; gap: 2px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #8d90a0; }
   .smp select { font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; max-width: 120px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 2px; }
+  .root-last { align-self: center; font: inherit; font-size: 10px; background: #15161a; color: #d7d9e0; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 6px; cursor: pointer; }
+  .root-last:hover:not(:disabled) { border-color: var(--c); color: #fff; }
+  .root-last:disabled { opacity: 0.45; cursor: default; }
+  .root-last:focus-visible { outline: 1px solid #f0a23a; }
   .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
   header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); }
   .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }

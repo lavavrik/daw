@@ -27,6 +27,7 @@
   import { loadOctave, saveOctave } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
+  import { lastLive } from './input/lastNote.svelte';
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
@@ -536,7 +537,12 @@
     // Before a track's current pattern changes (selectPattern): held recorded
     // notes are written into the old pattern while the engine still edits it.
     project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, liveClock.heardTicks());
-    const input = createNoteInput(live, r, visWake().wake);
+    // A played note-on wakes the idle visuals and is the last live note
+    // (the Sample Player's "Root ← last note").
+    const input = createNoteInput(live, r, (note) => {
+      lastLive.note = note;
+      visWake().wake();
+    });
     noteInput = input;
     wireEngine(e);
     // Undo/redo (history/history.ts): every action is a transact, every

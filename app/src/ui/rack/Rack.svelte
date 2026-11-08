@@ -49,6 +49,7 @@
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
   import type { ModuleDef, SignalKind } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
+  import { lastLive } from '../../input/lastNote.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { baseName } from '../../audio/samples';
@@ -534,6 +535,11 @@
     return list.map((s) => (count.get(s.name)! > 1 ? { ...s, name: `${s.name} #${s.id}` } : s));
   });
   const SAMPLE_PARAM = paramIndex(moduleDef('sample_player'), 'sample');
+  /** A Sample Player's sample's meta (its strip's peaks); sampleMeta is a plain Map, re-read on peaksVersion. */
+  function sampleMetaFor(id: number) {
+    void p.peaksVersion;
+    return id >= 0 ? (p.sampleMeta.get(id) ?? null) : null;
+  }
 
   /** A sample dropped on Sample Player `idx`: import it (same path as a step-grid drop), then assign it. */
   async function dropSample(e: DragEvent, idx: number) {
@@ -767,6 +773,9 @@
           samples={moduleDef(m.kind).id === 'sample_player' ? sampleOptions : null}
           onsampledrop={moduleDef(m.kind).id === 'sample_player' ? (e) => void dropSample(e, m.idx) : undefined}
           onsamplesopen={() => sampleTick++}
+          sampleMeta={moduleDef(m.kind).id === 'sample_player' ? sampleMetaFor(m.params[SAMPLE_PARAM]) : null}
+          sampleRate={engine.sampleRate}
+          lastNote={moduleDef(m.kind).id === 'sample_player' ? lastLive.note : null}
           scope={moduleDef(m.kind).id === 'scope' ? { track: track.slot, sampleRate: engine.sampleRate } : null}
         />
       {/each}

@@ -166,3 +166,33 @@ module the FX pool dropped. Slots become the new track ids in
   knob → MIDI learn". The list is reactive, so a learn or an undo updates
   it while open.
 - e2e: the "MIDI popover" test in `tests/e2e/midi.spec.ts`.
+
+## Pitch and Mod wheels (`ui/Wheels.svelte`, `input/wheels.svelte.ts`)
+
+The on-screen wheels sit in a narrow strip on the left of every synth tab
+(Piano roll, Acid, Instrument), like the wheels beside a keyboard's keys.
+
+- **What they control.** The same two values as the hardware wheels:
+  `PITCH_BEND` (−1..1; the patch's MIDI In `bend` param sets the range in
+  semitones) and `MOD_WHEEL` (0..1, CC 1). The engine keeps one global bend
+  and one global mod, and applies them to the live input track (the selected
+  synth track). It re-sends both when the input track changes, so the
+  wheels are global and don't reset when you switch tracks.
+- **One source of truth.** `wheels` holds what the engine was last sent.
+  App forwards `AudioEngine.onCommand(op, a)` to `observeCommand`, so a
+  hardware wheel (input/midi.ts), a drag on screen and a `RESET_ALL`
+  (project load) all move the same state. A new engine (audio start or
+  restart) starts at rest, so `wireEngine` calls `resetWheels`.
+- **Behaviour.**
+  - Pitch springs back to the centre on release (pointer up, cancel, lost
+    capture, key up, blur); Mod stays where it is left.
+  - A drag is relative: grab anywhere, and the wheel's full height is its
+    full range, so grabbing doesn't jump the value.
+  - Double-click resets either wheel.
+  - Keys: Up/Down step 0.05, PageUp/PageDown step 0.25, Home resets. These
+    keys don't reach the global shortcuts or the QWERTY piano.
+- **The readout.** Pitch shows semitones from the patch's bend range ("+1.0
+  st"), or the raw value when there is no MIDI In. Mod shows 0..127.
+- **Not edits.** `PITCH_BEND` and `MOD_WHEEL` are in `NON_EDIT_OPS`: no
+  undo entry, never saved, not recorded. To record a wheel, MIDI-learn CC 1
+  onto a knob (the mod wheel also arrives as `cc 1`).

@@ -64,10 +64,11 @@ export class AudioEngine {
    */
   onRackAddRefused?: (slot: number, idx: number, kind: number) => void;
   /**
-   * Every command queued through send() (op only), before it is queued. App
-   * uses it to mark project edits (state/edits.ts); keep it O(1).
+   * Every command queued through send() (op and first argument), before it
+   * is queued. App uses it to mark project edits (state/edits.ts) and to
+   * mirror the bend / mod wheels (input/wheels.svelte.ts); keep it O(1).
    */
-  onCommand?: (op: number) => void;
+  onCommand?: (op: number, a: number) => void;
     /** Fires once if the engine stops working after start (see `failure`). */
   onError?: (message: string) => void;
   /**
@@ -219,7 +220,7 @@ export class AudioEngine {
    */
   send(op: number, a = 0, b = 0, c = 0, d = 0): boolean {
     if (this.failMsg !== null || this.closed) return false;
-    this.onCommand?.(op);
+    this.onCommand?.(op, a);
     this.sender.send(op, a, b, c, d);
     return true;
   }

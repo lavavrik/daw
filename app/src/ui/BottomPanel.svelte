@@ -15,6 +15,7 @@
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
   import AcidSteps from './acid/AcidSteps.svelte';
+  import Wheels from './Wheels.svelte';
   import MixerView from './mixer/MixerView.svelte';
   import ClipPanel from './ClipPanel.svelte';
   import { clipFocus, sampleName } from './song/clipFocus.svelte';
@@ -175,12 +176,21 @@
       <MixerView {p} {engine} />
     {:else if track && track.kind === 'drum'}
       <StepGrid {p} {engine} {clock} {track} onerror={(m) => (banners.error = m)} />
-    {:else if track && track.kind === 'synth' && active === 'pianoroll'}
-      {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}
-    {:else if track && track.kind === 'synth' && active === 'acid'}
-      {#key track.id}<AcidSteps {p} {engine} {clock} {track} {noteInput} {capturing} />{/key}
     {:else if track && track.kind === 'synth'}
-      {#key track.id}<Rack {p} {engine} {track} onpianoroll={() => pickSynthTab('pianoroll')} />{/key}
+      <!-- The Pitch / Mod wheels sit left of every synth editor, like a
+           keyboard's wheels beside its keys (ui/Wheels.svelte). -->
+      <div class="synth">
+        <Wheels {engine} {track} />
+        <div class="editor">
+          {#if active === 'pianoroll'}
+            {#key track.id}<PianoRoll {p} {engine} {clock} {track} {noteInput} />{/key}
+          {:else if active === 'acid'}
+            {#key track.id}<AcidSteps {p} {engine} {clock} {track} {noteInput} {capturing} />{/key}
+          {:else}
+            {#key track.id}<Rack {p} {engine} {track} onpianoroll={() => pickSynthTab('pianoroll')} />{/key}
+          {/if}
+        </div>
+      </div>
     {:else if track && track.kind === 'audio'}
       <ClipPanel {p} {engine} {clock} {track} />
     {/if}
@@ -202,6 +212,8 @@
   .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
   .tab.active { background: #f0a23a; color: #111; }
   .tab:disabled { opacity: 0.45; cursor: not-allowed; }
+  .synth { display: flex; flex: 1; min-height: 0; min-width: 0; }
+  .editor { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
   .body { padding: 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .banner { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 8px; margin-bottom: 6px; border-radius: 3px; }
   .banner button { font: inherit; border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 14px; }

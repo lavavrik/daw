@@ -28,6 +28,7 @@
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
   import { lastLive } from './input/lastNote.svelte';
+  import { observeCommand, resetWheels } from './input/wheels.svelte';
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
@@ -504,8 +505,14 @@
       const msg = rollbackRefusedAdd(project, slot, idx, kind);
       if (msg !== null) banners.error = msg;
     };
-    // Every edit command marks the project dirty (state/edits.ts).
-    e.onCommand = (op) => commandEdits(project, op);
+    // Every edit command marks the project dirty (state/edits.ts); bend /
+    // mod / reset move the on-screen wheels (input/wheels.svelte.ts). A new
+    // engine starts with both wheels at rest.
+    resetWheels();
+    e.onCommand = (op, a) => {
+      commandEdits(project, op);
+      observeCommand(op, a);
+    };
     // Session-lifetime: deferred sample loads must land even while the step
     // grid is unmounted (a synth track selected). A restart moves them over.
     if (codes) rebindSampleLoads(e, codes);

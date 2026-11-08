@@ -12,9 +12,12 @@ import { startApp } from './startApp';
 test.use({ launchOptions: { args: [] } });
 
 type Any = any; // eslint-disable-line @typescript-eslint/no-explicit-any
-const ctxState = (page: Page) => page.evaluate(() => (window as Any).__daw.engine?.state ?? null);
-/** Telemetry slot 1 (TELEMETRY.playing): 1 while the transport plays. */
+// page.evaluate / waitForFunction run as a user gesture (Playwright's CDP
+// evaluate), so before the first real click or key the tests read state
+// through locators only (the pill's data-state mirrors the context's state).
+/** Telemetry slot 1 (TELEMETRY.playing): 1 while the transport plays. Only after the first gesture. */
 const playing = (page: Page) => page.evaluate(() => (window as Any).__daw.engine.telemetry()[1]);
+const ctxState = (page: Page) => page.evaluate(() => (window as Any).__daw.engine.state);
 
 test('the app renders without a click; the pill says paused; clicking Play starts audio and plays', async ({ page }) => {
   await page.goto('/');
@@ -24,22 +27,34 @@ test('the app renders without a click; the pill says paused; clicking Play start
   await expect(page.getByTestId('play')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Click to start audio' })).toHaveCount(0);
   // The engine exists, its context waits for a gesture.
-  expect(await ctxState(page)).toBe('suspended');
   const pill = page.getByTestId('audio-status');
   await expect(pill).toHaveAttribute('data-state', 'paused');
   await expect(pill).toHaveText('Audio paused — click anywhere to start');
+  await expect(pill.locator('svg')).toHaveCount(1); // the SpeakerSlash icon
   await expect(page.getByTestId('cpu')).toHaveCount(0); // steps aside for the longer pill
 
   // The first click (on Play) both starts audio and plays.
   await page.getByTestId('play').click();
-  await expect.poll(() => ctxState(page)).toBe('running');
+  await expect(pill).toHaveAttribute('data-state', 'running');
+  expect(await ctxState(page)).toBe('running');
   await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => playing(page)).toBe(1);
   // The pill is the ⚙ latency pill again.
-  await expect(pill).toHaveAttribute('data-state', 'running');
   await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms$/);
   await expect(page.getByTestId('cpu')).toBeVisible();
   await page.getByTestId('song-stop').click();
+});
+
+test('Space as the first interaction starts audio and the song', async ({ page }) => {
+  await page.goto('/');
+  const pill = page.getByTestId('audio-status');
+  await expect(pill).toHaveAttribute('data-state', 'paused');
+  await page.keyboard.press('Space');
+  await expect(pill).toHaveAttribute('data-state', 'running');
+  await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => playing(page)).toBe(1);
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'false');
 });
 
 test('a context the browser suspends later shows the pill again; clicking it resumes', async ({ page }) => {
@@ -55,13 +70,36 @@ test('a context the browser suspends later shows the pill again; clicking it res
   await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms$/);
 });
 
+test('Options ▸ Audio settings… while paused resumes and opens Settings', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('menu-options').click(); // the first gesture: audio runs, the menu is open
+  await startApp(page);
+  await page.evaluate(() => (window as Any).__daw.engine.context.suspend());
+  const pill = page.getByTestId('audio-status');
+  await expect(pill).toHaveAttribute('data-state', 'paused');
+  await page.getByTestId('menu-audio-settings').click();
+  await expect(pill).toHaveAttribute('data-state', 'running');
+  await expect(page.getByTestId('settings')).toBeVisible();
+});
+
 test('the paused pill keeps the top bar on one row at 1280 px', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/');
-  await expect(page.getByTestId('audio-status')).toHaveAttribute('data-state', 'paused');
-  const bar = await page.locator('header.bar').evaluate((el) => ({ h: el.getBoundingClientRect().height, sw: el.scrollWidth, cw: el.clientWidth }));
-  expect(bar.h).toBe(64); // one row (layout.spec.ts: the approved 64 px bar)
-  expect(bar.sw).toBe(bar.cw);
+  const pill = page.getByTestId('audio-status');
+  await expect(pill).toHaveAttribute('data-state', 'paused');
+  const bar = (await page.locator('header.bar').boundingBox())!;
+  const p = (await pill.boundingBox())!;
+  expect(bar.height).toBe(64); // one row (layout.spec.ts: the approved 64 px bar)
+  expect(p.x + p.width).toBeLessThanOrEqual(1280);
+});
+
+test('a hanging start says "Starting audio…" instead of a blank page', async ({ page }) => {
+  await page.route('**/engine.wasm', () => {}); // never answered
+  await page.goto('/');
+  const pill = page.getByTestId('audio-status');
+  await expect(pill).toHaveAttribute('data-state', 'starting');
+  await expect(pill).toHaveText('Starting audio…');
+  await expect(page.getByTestId('play')).toHaveCount(0);
 });
 
 test('a failed start says so with the error; its retry builds the engine', async ({ page }) => {

@@ -5,6 +5,18 @@ A knob or fader can be bound to a Control Change number on a MIDI controller;
 moving that controller knob then moves the control exactly as dragging it
 would.
 
+## When MIDI access is requested
+
+`connectMidi` (input/midi.ts) runs in App's start-up (`onstarted`), which
+since the start splash went away (spec 2026-11-15 §10; audio-path.md
+"Start-up") runs at page load, a few hundred ms in, with no user gesture.
+So `navigator.requestMIDIAccess()` is asked at load: Chrome may show its MIDI
+permission prompt right away, before the first click (it is never awaited,
+so the prompt blocks nothing). Until the first click or key press audio is
+paused, and notes played meanwhile are dropped, not queued
+(input/pausedGate.ts: no burst on resume); CCs, bend and mod apply as
+usual (they are state, not sound).
+
 ## The CC path
 
 ```

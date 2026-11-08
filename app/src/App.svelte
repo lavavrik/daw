@@ -30,6 +30,7 @@
   import { connectMidi, createMidiHandler } from './input/midi';
   import { loadOctave, saveOctave } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
+  import { dropNotesWhilePaused } from './input/pausedGate';
   import type { NoteInput } from './input/noteInput';
   import { lastLive } from './input/lastNote.svelte';
   import { observeCommand, resetWheels, wheels } from './input/wheels.svelte';
@@ -625,7 +626,9 @@
     // A played note-on wakes the idle visuals and is the last live note
     // (the Sample Player's "Root ← last note"; the Acid tab's step entry
     // watches the count).
-    const input = createNoteInput(live, r, (note) => {
+    // While audio is paused (no gesture yet) played notes are dropped, not
+    // queued to burst out on the first click (input/pausedGate.ts).
+    const input = createNoteInput(dropNotesWhilePaused(live, () => engine?.state === 'running'), r, (note) => {
       wakeAudio(); // a MIDI note is no gesture: it may still be paused
       lastLive.note = note;
       lastLive.seq++;
@@ -732,19 +735,27 @@
   let building = false;
   const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-  /** Build the engine and run the normal start-up on it (onstarted). Also the failed pill's retry. */
+  /**
+   * Build the engine and run the normal start-up on it (onstarted). Also the
+   * failed pill's retry. Only the build can fail as "Audio failed": an
+   * exception in onstarted is a bug and surfaces as one (unhandled), never
+   * as a retryable audio failure over a half-done start-up.
+   */
   async function startEngine() {
     if (building || engine) return;
     building = true;
     audioError = null;
+    let e: AudioEngine;
     try {
-      onstarted(await AudioEngine.start({ latencyHint: loadLatencyHint() }));
-    } catch (e) {
-      console.error('Audio could not start', e);
-      audioError = errText(e);
+      e = await AudioEngine.start({ latencyHint: loadLatencyHint() });
+    } catch (err) {
+      console.error('Audio could not start', err);
+      audioError = errText(err);
+      return;
     } finally {
       building = false;
     }
+    onstarted(e);
   }
   onMount(() => void startEngine());
 
@@ -762,11 +773,23 @@
     });
   }
 
-  /** The pill's click: retry a failed start, else resume. */
-  function resumeAudio() {
-    if (!engine) return void startEngine();
+  /**
+   * The pill's click (and Options ▸ Audio settings… while paused): retry a
+   * failed start, else resume. Resolves once audio runs (or failed), with
+   * the pill already updated, so a caller can open what the running state
+   * shows (TopBar: the ⚙ Settings).
+   */
+  async function resumeAudio(): Promise<void> {
+    if (!engine) return startEngine();
     audioError = null;
-    wakeAudio();
+    const e = engine;
+    try {
+      await e.resume();
+    } catch (err) {
+      if (engine === e) audioError = errText(err);
+      return;
+    }
+    if (engine === e) ctxState = e.state; // don't wait for the statechange event
   }
 
   /**
@@ -952,10 +975,12 @@
         {audio} onAudioResume={resumeAudio}
       />
     {/if}
-  {:else if audio.kind === 'failed'}
-    <!-- No engine, so no top bar: a bare bar keeps the pill's retry reachable. -->
+  {:else}
+    <!-- No engine (yet), so no top bar: a bare bar says "Starting audio…"
+         while it is built (a hanging start is not a blank page), or holds the
+         failed pill's retry. -->
     <header class="bare">
-      <span data-testid="audio-status" data-state={audio.kind}><AudioStatusPill status={audio} onresume={resumeAudio} /></span>
+      <span data-testid="audio-status" data-state={audio.kind}><AudioStatusPill status={audio} onresume={() => void resumeAudio()} /></span>
     </header>
   {/if}
   {#if autosaveOff}

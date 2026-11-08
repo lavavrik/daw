@@ -163,7 +163,7 @@
     onApplyAudio = async () => null,
     onTab,
     audio = { kind: 'running' },
-    onAudioResume = () => {},
+    onAudioResume = async () => {},
   }: {
     p: Project;
     engine: AudioEngine;
@@ -200,11 +200,20 @@
     /** Is audio running yet (App: the engine's context state)? */
     audio?: AudioStatus;
     /** The audio pill's click: resume, or retry after a failure (App). */
-    onAudioResume?: () => void;
+    onAudioResume?: () => Promise<void>;
   } = $props();
 
   /** The Settings panel mounts while open (its readout polls only then). */
   let settingsOpen = $state(false);
+  // The ⚙ <details> unmounts while audio is not running and comes back
+  // closed: Settings must not stay mounted (and polling) inside it.
+  // (Keyed on the kind alone: an audio restart hands over a new, equal
+  // status object and must not close the panel it was applied from.)
+  const audioKind = $derived(audio.kind);
+  $effect(() => {
+    void audioKind;
+    settingsOpen = false;
+  });
 
   // ---- menu bar (MenuBar.svelte) -------------------------------------------
   const mod = IS_MAC ? '⌘' : 'Ctrl+';
@@ -225,8 +234,13 @@
   /** Options ▸ Audio settings…: open the ⚙ panel and focus its first control. */
   let settingsEl = $state<HTMLDetailsElement | null>(null);
   async function openSettings() {
-    // Paused: the ⚙ pill is the audio pill until audio runs (that click already resumed it).
-    if (!settingsEl) return onAudioResume();
+    // Paused: the ⚙ slot is the audio pill until audio runs. Resume (the
+    // menu click is the gesture), let the ⚙ pill render, then open it.
+    if (audio.kind !== 'running') {
+      await onAudioResume();
+      await tick();
+    }
+    if (!settingsEl) return; // still not running (refused: the pill says so)
     settingsEl.open = true;
     await tick();
     settingsEl.querySelector<HTMLElement>('.panel select, .panel button, .panel input')?.focus();
@@ -437,7 +451,7 @@
             </div>
           </details>
         {:else}
-          <AudioStatusPill status={audio} onresume={onAudioResume} />
+          <AudioStatusPill status={audio} onresume={() => void onAudioResume()} />
         {/if}
       </span>
     </div>

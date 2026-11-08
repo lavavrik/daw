@@ -65,22 +65,39 @@ rule can't be bypassed, but it needs no "Click to start audio" screen:
   Every path that plays (song / pattern Play, QWERTY and MIDI notes, the
   sample preview) also calls `resume()` first; a MIDI note is no gesture, so
   it only helps after one.
+- **Played notes are dropped while paused** (`input/pausedGate.ts`, the
+  note input's sink): a NOTE_ON sent while the context is not running would
+  wait in the ring and burst out with every other one on the first click.
+  NOTE_OFF always passes (a note held across a later suspension must end).
+  Transport and edit commands do queue: a Play pressed first still plays.
+- **MIDI access is requested at load** (start-up runs at load now): Chrome
+  may show its MIDI permission prompt before any click (docs/architecture/
+  midi.md "When MIDI access is requested").
 - **The audio pill** (`ui/AudioStatusPill.svelte`, state in
   `audio/audioStatus.ts`; `data-testid="audio-status"` with `data-state`)
-  sits in the ⚙ latency slot: "Audio paused — click anywhere to start"
-  (`--accent`) while the context is suspended, the ⚙ latency once it runs
-  (`AudioEngine.onStateChange` follows `statechange`), and "Audio failed —
-  retry" (`--rec`, the error in its tooltip) if `start()` threw or
-  `resume()` was refused. Its click resumes, or retries the start. With no
-  engine at all (start failed) App shows it alone in a bare bar. The CPU
-  pill steps aside while it shows, so the bar keeps one row.
+  sits in the ⚙ latency slot: a SpeakerSlash icon and "Audio paused —
+  click anywhere to start" (`--accent`) while the context is suspended, the
+  ⚙ latency once it runs (`AudioEngine.onStateChange` follows
+  `statechange`), and "Audio failed — retry" (`--rec`, the error in its
+  tooltip) if `AudioEngine.start()` threw or `resume()` was refused (an
+  exception in `onstarted` is a bug, not an audio failure: it surfaces
+  unhandled). Its click resumes, or retries the start. With no engine yet
+  App shows a bare bar holding it: a quiet "Starting audio…" while the
+  engine is built (a hanging start is never a blank page), or the failed
+  pill. The CPU pill (and below 1400 px the MIDI pill) steps aside while it
+  shows, so the bar keeps one row at 1280 px. Options ▸ Audio settings…
+  while paused awaits the resume, then opens Settings; the Settings panel
+  closes whenever the status kind changes (it never stays mounted, and
+  polling, inside a hidden ⚙).
 - **Banners:** the start screen's other note, "Autosave is off — this
   project is open in another tab" (`autosave-off`), is a banner from mount on.
 - **Tests:** Playwright launches Chrome with
   `--autoplay-policy=no-user-gesture-required`, so the context runs at once;
   `tests/e2e/startApp.ts` waits for the engine and the top bar instead of
   clicking anything. `tests/e2e/audiostart.spec.ts` runs without the flag to
-  check the paused pill and the first-click start.
+  check the paused pill and the first click / first key (Space) start; it
+  reads state only through locators until then, since Playwright's
+  `page.evaluate` runs as a user gesture.
 
 ## Real-time rules (and why)
 

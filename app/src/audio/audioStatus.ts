@@ -28,6 +28,7 @@ export function audioStatus(o: { engine: boolean; state: AudioContextState | nul
 
 export const PAUSED_LABEL = 'Audio paused — click anywhere to start';
 export const FAILED_LABEL = 'Audio failed — retry';
+export const STARTING_LABEL = 'Starting audio…';
 
 /** The pill's tooltip. */
 export function audioStatusTitle(s: AudioStatus): string {

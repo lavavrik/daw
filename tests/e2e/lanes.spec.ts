@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { pickAutomation } from './automate';
 import { startApp } from './startApp';
 
 // Resizable automation lanes (plan 19 Task 2): the grab strip on a lane
@@ -54,7 +55,7 @@ async function dragStrip(page: Page, strip: Locator, dy: number) {
 test('drag a lane taller: header and lane follow, points use the new height, no undo entry', async ({ page }) => {
   await start(page);
   await page.getByTestId('track-auto-0').click();
-  await page.getByTestId('auto-add-0').selectOption({ label: 'Pan' });
+  await pickAutomation(page, 0, 'Pan', 'Pan');
   const lane = page.getByTestId('auto-lane-0-0');
   const head = page.getByTestId('auto-head-0-0');
   await expect(lane).toBeVisible();

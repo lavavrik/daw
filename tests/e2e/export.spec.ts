@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
 import { openMenu } from './topbar';
 import { addTrack } from './addTrack';
+import { pickAutomation } from './automate';
 import { startApp } from './startApp';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
@@ -360,16 +361,16 @@ test('automation round-trips through save, undo, restart and export', async ({ p
     const b = (await page.getByTestId(testid).boundingBox())!;
     return { x: b.x + (tick - v.scrollTick) / v.ticksPerPx, y: b.y + LANE_PAD + (1 - pos) * (LANE_H - 2 * LANE_PAD) };
   };
-  const addLane = async (label: string, k: number) => {
+  const addLane = async (group: string, param: string, k: number) => {
     const toggle = page.getByTestId(`track-auto-${slot}`);
     if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
-    await page.getByTestId(`auto-add-${slot}`).last().selectOption({ label });
+    await pickAutomation(page, slot, group, param);
     await expect(page.getByTestId(`auto-lane-${slot}-${k}`)).toBeVisible();
     return `auto-lane-${slot}-${k}`;
   };
 
   // 1. The cutoff sweep: one Cmd/Ctrl-drag stroke from low at 0 to high at bar 1.
-  const cutoff = await addLane('Filter · Cutoff', 0);
+  const cutoff = await addLane('Filter', 'Cutoff', 0);
   const a = await lanePt(cutoff, 0, 0.15);
   const b = await lanePt(cutoff, BAR, 0.95);
   await page.keyboard.down('ControlOrMeta');
@@ -379,7 +380,7 @@ test('automation round-trips through save, undo, restart and export', async ({ p
   await page.mouse.up();
   await page.keyboard.up('ControlOrMeta');
   // The fader drop: 0 dB (hold) at 0, −∞ at 1.5 bars.
-  const fader = await addLane('Fader', 1);
+  const fader = await addLane('Volume', 'Volume', 1);
   const p0 = await lanePt(fader, 0, 0.75); // 0 dB on the fader taper (plan 19)
   await page.mouse.click(p0.x, p0.y);
   const p1 = await lanePt(fader, DROP, 0);

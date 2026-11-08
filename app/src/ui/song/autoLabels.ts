@@ -7,7 +7,7 @@
 import { moduleDef } from '../../audio/catalog';
 import { MIX_PARAMS } from '../../audio/mixerCatalog';
 import type { MixParamDef } from '../../audio/mixerCatalog';
-import { automatableParams, isMasterChannel } from '../../state/automation';
+import { isMasterChannel } from '../../state/automation';
 import type { AutoOwner } from '../../state/automation';
 import type { AutoTarget, MasterChannel, RackModule } from '../../state/project.svelte';
 
@@ -48,11 +48,4 @@ export function targetLabel(owner: AutoOwner, target: AutoTarget): string {
   const m = owner.modules.find((x) => x.idx === target.module);
   const def = m ? moduleDef(m.kind).params.find((d) => d.name === target.param) : undefined;
   return `${moduleTitles(owner.modules).get(target.module) ?? '?'} · ${def?.label ?? target.param}`;
-}
-
-/** "+ Lane" choices for `owner`: its automatable targets that have no lane yet, in automatableParams order. */
-export function laneChoices(owner: AutoOwner, used: readonly AutoTarget[]): { target: AutoTarget; label: string }[] {
-  const key = (t: AutoTarget) => (t.kind === 'mix' ? `mix:${t.param}` : `rack:${t.module}:${t.param}`);
-  const taken = new Set(used.map(key));
-  return automatableParams(owner).filter((x) => !taken.has(key(x.target))).map((x) => ({ target: x.target, label: targetLabel(owner, x.target) }));
 }

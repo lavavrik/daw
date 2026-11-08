@@ -167,7 +167,7 @@ Letters are the QWERTY piano, so every `<select>` takes
 (Cmd/Ctrl/Alt chords and the navigation keys pass). That is the rack's patch
 and sample pickers, choice params, the mixer's sidechain picker, the pattern
 picker, the step grid's step count, the piano roll's grid and length, the
-Acid tab's length / root / scale, the track headers' "+ Lane" and Settings'
+Acid tab's length / root / scale and Settings'
 latency. After a pick, `releaseSelect(sel)` gives the keys back:
 base-select's picker hands focus back to its select as it closes, after the
 change event, so besides the blur a one-shot `focus` listener blurs it again

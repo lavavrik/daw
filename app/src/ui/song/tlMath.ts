@@ -70,7 +70,7 @@ export const MASTER_GREY = THEME.textDim;
  * - `lane`: an automation lane (its own height: rowLayout's `laneH`, AUTO_H
  *   by default) of track `trackId`, or of the Master row (trackId
  *   MASTER_ROW). Without `laneId` it is an open owner's empty lane row
- *   (always AUTO_H): no lane yet, its header offers "+ Lane";
+ *   (always AUTO_H): no lane yet, its header offers "Automate…";
  * - `master`: the Master row's own header row (LANE_H): no clips.
  * `track` is the owner's index in the track list (moveClips' lanes, ClipBox
  * lane), -1 for the Master row.

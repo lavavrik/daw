@@ -17,9 +17,10 @@
   // Each lane row's header: the enable toggle (a disabled lane plays the
   // base value), the target ("Filter · Cutoff", "Fader": autoLabels.ts), ×
   // to remove the lane (one undo entry; no question: undo brings it back),
-  // and on the owner's last lane row the "+ Lane" <select> of the targets
-  // that have no lane yet. An open track without lanes shows one empty lane
-  // row with just the select. While the pattern transport ran last (Pattern
+  // and on the owner's last lane row the "Automate…" button (AutoPicker.svelte,
+  // plan 21 §9: a searchable, grouped popover of the targets; it replaced the
+  // "+ Lane" <select> and keeps its test id). An open track without lanes
+  // shows one empty lane row with just that button. While the pattern transport ran last (Pattern
   // mode) a lane header says lanes play with the song only. The Master row (pinned under the last track) holds the
   // master's and both returns' lanes; its own A, and × to hide it while it
   // has no lane (the timeline footer's "+ Add track" list shows it: "Master row").
@@ -52,22 +53,21 @@
   import TrackVol from './TrackVol.svelte';
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
-  import { releaseSelect, selectKey } from '../selectKey';
   import { soloTitle } from '../soloTitle';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { MAX_AUTO_LANES } from '../../audio/protocol';
   import { laneCount, projectLanes } from '../../state/automation';
   import type { AutoOwner } from '../../state/automation';
-  import { addLane, removeLane, setLaneEnabled } from '../../state/automation-actions';
-  import type { AutoTarget, AutomationLane, MasterChannel } from '../../state/project.svelte';
-  import { laneChoices, targetLabel } from './autoLabels';
+  import { removeLane, setLaneEnabled } from '../../state/automation-actions';
+  import type { AutomationLane } from '../../state/project.svelte';
+  import { targetLabel } from './autoLabels';
+  import AutoPicker from './AutoPicker.svelte';
   import { laneHeight, laneView, setLaneHeight, setOpen } from './laneView.svelte';
   import { AUTO_H, LANE_MAX_H, LANE_MIN_H, MASTER_GREY, MASTER_ROW } from './tlMath';
   import type { Row } from './tlMath';
 
   let { p, engine, rows }: { p: Project; engine: CommandSink; rows: readonly Row[] } = $props();
 
-  const CHANNELS: MasterChannel[] = ['master', 'reverb', 'delay'];
   const full = $derived(laneCount(p) >= MAX_AUTO_LANES);
   const FULL = `${MAX_AUTO_LANES} lanes is the maximum: remove one to add another`;
 
@@ -81,27 +81,8 @@
   });
   /** The testid key of a row's owner: the track's slot, or "m" for the Master row. */
   const ownerKey = (trackId: string) => (trackId === MASTER_ROW ? 'm' : String(trackById.get(trackId)?.slot ?? '?'));
-  /** The owner's last row (where its "+ Lane" select sits). */
+  /** The owner's last row (where its "Automate…" button sits). */
   const isLastOfOwner = (i: number) => rows[i + 1]?.trackId !== rows[i].trackId || rows[i + 1]?.kind !== 'lane';
-
-  /** "+ Lane" options for a row's owner, each with the owner it adds to (Master row: one per channel). */
-  function choices(trackId: string): { group: string | null; items: { owner: string; target: AutoTarget; label: string }[] }[] {
-    if (trackId === MASTER_ROW) {
-      const used = (c: MasterChannel) => p.mixer.automation.filter((x) => x.channel === c).map((x) => x.lane.target);
-      return CHANNELS.map((c) => ({ group: c[0].toUpperCase() + c.slice(1), items: laneChoices(c, used(c)).map((x) => ({ owner: c, ...x })) }));
-    }
-    const t = trackById.get(trackId);
-    if (!t) return [];
-    return [{ group: null, items: laneChoices(t, t.automation.map((l) => l.target)).map((x) => ({ owner: t.id, ...x })) }];
-  }
-  function pick(e: Event & { currentTarget: HTMLSelectElement }, trackId: string) {
-    const sel = e.currentTarget;
-    const [g, i] = sel.value.split(':').map(Number);
-    sel.value = '';
-    releaseSelect(sel); // give the keys back to the piano
-    const item = choices(trackId)[g]?.items[i];
-    if (item) addLane(p, engine, item.owner, item.target);
-  }
 
   /** The open question: which track, and the × that asked. */
   let asking = $state<{ track: Track; anchor: HTMLElement } | null>(null);
@@ -163,28 +144,8 @@
   }
 </script>
 
-{#snippet addSelect(trackId: string)}
-  {@const groups = choices(trackId)}
-  <select
-    class="add"
-    data-testid="auto-add-{ownerKey(trackId)}"
-    aria-label="Add an automation lane"
-    title={full ? FULL : 'Add an automation lane: choose what it drives'}
-    disabled={full}
-    onkeydown={selectKey}
-    onchange={(e) => pick(e, trackId)}
-  >
-    <option value="">+ Lane</option>
-    {#each groups as grp, g (g)}
-      {#if grp.group}
-        <optgroup label={grp.group}>
-          {#each grp.items as it, i (i)}<option value="{g}:{i}">{it.label}</option>{/each}
-        </optgroup>
-      {:else}
-        {#each grp.items as it, i (i)}<option value="{g}:{i}">{it.label}</option>{/each}
-      {/if}
-    {/each}
-  </select>
+{#snippet addPicker(trackId: string)}
+  <AutoPicker {p} {engine} rowId={trackId} testKey={ownerKey(trackId)} disabled={full} title={full ? FULL : 'Add an automation lane: search or browse what it drives'} />
   {#if full}<span class="cap" data-testid="auto-full" title={FULL}>{MAX_AUTO_LANES} max</span>{/if}
 {/snippet}
 
@@ -283,7 +244,7 @@
           <div class="lrow"><span class="target none">No lanes yet</span></div>
         {/if}
         <div class="lrow">
-          {#if isLastOfOwner(i)}{@render addSelect(r.trackId)}{/if}
+          {#if isLastOfOwner(i)}{@render addPicker(r.trackId)}{/if}
           {#if p.playing && p.mode === 'pattern' && info}<span class="pat" title="Lanes play with the song: press Play in the top bar to hear them (the pattern transport ignores them)">Song only</span>{/if}
         </div>
         {#if info && r.laneId}
@@ -365,7 +326,7 @@
   .row.lane { position: relative; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 12px; background: color-mix(in srgb, var(--panel), var(--well) 30%); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
   /* Under 40 px (LANE_MIN_H is 32) the two header lines close up so they still fit. */
   .row.lane.compact { gap: 0; }
-  .row.lane.compact .lrow, .row.lane.compact .add, .row.lane.compact .x, .row.lane.compact .en { height: 15px; line-height: 15px; }
+  .row.lane.compact .lrow, .row.lane.compact .x, .row.lane.compact .en { height: 15px; line-height: 15px; }
   /* bottom: -1px: over the row's bottom border too, so the strip ends at the row's edge. */
   .resize { position: absolute; left: 0; right: 0; bottom: -1px; height: 5px; z-index: 1; cursor: row-resize; touch-action: none; outline: none; }
   .resize:hover, .resize:active { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 55%, transparent); }
@@ -377,8 +338,6 @@
   .en { width: 16px; height: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--c); font-size: 11px; line-height: 16px; cursor: pointer; }
   .en:not(.on) { color: var(--text-2); opacity: 0.6; }
   .en:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
-  /* The skinned select (theme.css), squeezed into the 18 px line. */
-  .add { max-width: 92px; height: 18px; padding: 0 4px 0 6px; border-radius: var(--r-sm); font-size: var(--fs-lbl); }
   .cap { font-size: 9px; color: var(--rec); white-space: nowrap; }
   .pat { font-size: 9px; color: var(--accent); white-space: nowrap; }
   .empty { color: var(--text-2); margin: 0; padding: 6px 8px; }

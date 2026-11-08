@@ -347,7 +347,7 @@ changes nothing and sends nothing.
   then its lanes (`AUTO_H` 48 px unless resized, see *Lane height*) while
   it is open (the header's **A**; `ui/song/laneView.svelte.ts`, UI state,
   not saved), an open track without
-  lanes showing one empty lane row (no `laneId`) for "+ Lane"; then the
+  lanes showing one empty lane row (no `laneId`) for "Automate…"; then the
   pinned Master row (28 px) and its lanes. Every y question goes through it
   (`rowAt`, `clipLaneAt`): drawing, clip hit tests and box selection,
   audio clips' cross-lane moves, drops, and the header column, which
@@ -405,8 +405,49 @@ changes nothing and sends nothing.
   hides it).
 - **Headers** (`TrackHeaders.svelte`, labels in `autoLabels.ts`): the
   target ("Filter · Cutoff", "Fader", "Master · Ceiling"; module titles as
-  the rack shows them), the on/off dot, ×, and "+ Lane" on the owner's last
-  lane row, listing `automatableParams` without a lane yet.
+  the rack shows them), the on/off dot, ×, and **Automate…** on the owner's
+  last lane row (see *Automation picker*).
+
+### Automation picker (plan 21 Task 6)
+
+`ui/song/AutoPicker.svelte` (the button and its popover) over
+`ui/song/autoPick.ts` (the pure model, `autoPick.test.ts`). It replaced the
+"+ Lane" `<select>`, whose one flat list ran to hundreds of options on a big
+rack. The button keeps the select's test id `auto-add-<owner>`; e2e adds
+lanes with `pickAutomation(page, owner, 'Filter', 'Cutoff')`
+(`tests/e2e/automate.ts`).
+
+- **Groups** (`ownerGroups` / `rowGroups`), from `automatableParams`, so
+  only continuous, engine-accepted targets: a track's mixer as Volume / Pan
+  / Sends / EQ / Comp (section "Mixer"; the catalog's `fader` group is split
+  in two), then one group per rack module in rack order, named by its rack
+  title ("Filter", "Oscillator 2"; section "Rack"). The Master row has one
+  group per channel: Master, Reverb, Delay. Params go by their knob label
+  ("Cutoff", "Low cut"); the lane header label ("EQ Low cut") is the
+  tooltip and is searched too. A target that already has a lane stays
+  listed, disabled ("already automated"), so nothing reshuffles.
+- **Search** (`filterGroups`): case-insensitive substring. A group whose
+  name (or section) matches keeps all its params; otherwise only matching
+  params stay, and empty groups go. Typing expands what is left and makes
+  the best match active (`bestMatch`: a param that starts with the query,
+  then one with a word that does, then any; else the first param on screen),
+  so "cut" + Enter is Filter › Cutoff, not EQ › Low cut.
+- **Keys.** The focus stays in the search field (a combobox whose
+  `aria-activedescendant` is the active row of a flat `role=tree` with
+  `aria-level`). ↑/↓ move over the visible rows (headers, and params of
+  open groups; used params are skipped); → opens a group, or enters an open
+  one; ← closes it (from a param: back to its header); Enter picks a param
+  or toggles a header; Esc closes and refocuses the button (stopped, so only
+  this layer closes); Tab closes. ←/→ drive the list, not the caret.
+- **Placement.** `position: fixed` under the button (above it when there is
+  more room there), at most 360 px tall; the list scrolls inside, so a
+  32-module rack stays usable. A press outside, a resize, or the button
+  moving (the timeline scrolled) closes it. The popover never calls
+  `scrollIntoView` or a scrolling `focus()`: those would scroll the
+  timeline, its DOM ancestor, and close it.
+- **Picking** calls `addLane` (one undo entry), as the select did. The
+  button then lives on the new last lane row, so the focus is released and
+  the piano keys work again.
 
 ### Lane height (plan 19 Task 2)
 
@@ -420,7 +461,7 @@ changes nothing and sends nothing.
   get a new id (history/diffApply.ts) and then shows at the default height.
 - **Layout.** `rowLayout(tracks, open, masterRow, laneH)` asks `laneH(laneId)`
   for each lane row's `h` (the timeline passes `laneHeight`); the empty
-  "+ Lane" row is always `AUTO_H`. The header column and the lane overlays
+  "Automate…" row is always `AUTO_H`. The header column and the lane overlays
   render the same rows, so they stay aligned while a height changes.
 - **Every lane-local helper takes the row's `h`** (`posToY`, `yToPos`,
   `pointHit`, `pointBox`, `segmentHit`, `lanePolyline`), with no default, so

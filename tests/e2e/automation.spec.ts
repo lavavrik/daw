@@ -2,10 +2,11 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import mixerCatalog from '../../engine/mixer_catalog.json' with { type: 'json' };
 import { addTrack, closeAddTrack, openAddTrack } from './addTrack';
+import { pickAutomation } from './automate';
 import { startApp } from './startApp';
 
 // Automation lanes on the timeline (plan 10 Task 3): the A toggle opens a
-// track's lanes under its clip row, "+ Lane" picks a target, clicks add
+// track's lanes under its clip row, "Automate…" picks a target, clicks add
 // points, Cmd/Ctrl-drag draws, right-click a point for Linear / Hold, the
 // Master row for the master and the returns, and what the engine plays.
 // Tempo 240 throughout: one bar = 1 s.
@@ -105,13 +106,13 @@ async function clickLane(page: Page, testid: string, tick: number, pos: number, 
   await page.mouse.click(p.x, p.y, opts);
 }
 
-/** Open slot's lanes (A) and add a lane on the target labelled `label`; returns the new lane's testid. */
-async function addLane(page: Page, slot: number | 'master', label: string) {
+/** Open slot's lanes (A) and add a lane on `group` › `param` (pickAutomation); returns the new lane's testid. */
+async function addLane(page: Page, slot: number | 'master', group: string, param: string) {
   const owner = slot === 'master' ? 'm' : String(slot);
   const toggle = page.getByTestId(slot === 'master' ? 'master-auto' : `track-auto-${slot}`);
   if ((await toggle.getAttribute('aria-pressed')) !== 'true') await toggle.click();
   const before = await page.locator(`[data-testid^="auto-lane-${owner}-"]`).count();
-  await page.getByTestId(`auto-add-${owner}`).last().selectOption({ label });
+  await pickAutomation(page, owner, group, param);
   const id = `auto-lane-${owner}-${before}`;
   await expect(page.getByTestId(id)).toBeVisible();
   return id;
@@ -166,7 +167,7 @@ test('add a fader lane and draw a ride', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 4);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await expect(page.getByTestId(`auto-head-${slot}-0`)).toContainText('Fader');
   // Two clicks: −24 dB at bar 1, 0 dB at bar 2 (snapped to the 1/16 grid).
   await clickLane(page, lane, 50, faderPos(-24));
@@ -195,7 +196,7 @@ test('hold point makes a drop', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 4);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await clickLane(page, lane, 0, faderPos(0));
   await clickLane(page, lane, BAR, 0); // −∞
   // Right-click the first point: Hold (the level stays until the next point, then drops).
@@ -218,7 +219,7 @@ test('freehand draw is thinned', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   // A straight Cmd/Ctrl stroke from the bottom left to the top right: 36 px up over 144 px.
   const a = await lanePt(page, lane, 0, 0);
   const b = { x: a.x + 144, y: a.y - 36 };
@@ -240,7 +241,7 @@ test('undo removes a drawn gesture in one step', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await clickLane(page, lane, 0, 0.2);
   await clickLane(page, lane, 2 * BAR, 0.8);
   const before = await savedLanes(page, slot);
@@ -268,7 +269,7 @@ test('undo during a point drag cancels the drag', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await clickLane(page, lane, BAR, 0.5);
   const before = await savedLanes(page, slot);
   expect(before[0].points).toHaveLength(1);
@@ -299,7 +300,7 @@ test('master row lane on the limiter ceiling', async ({ page }) => {
   await expect(page.getByTestId('tl-master-row')).toHaveCount(0);
   await addTrack(page, 'master');
   await expect(page.getByTestId('tl-master-row')).toBeVisible();
-  const lane = await addLane(page, 'master', 'Master · Ceiling');
+  const lane = await addLane(page, 'master', 'Master', 'Ceiling');
   await expect(page.getByTestId('auto-head-m-0')).toContainText('Master · Ceiling');
   // −6 dB held through bar 1, then 0 dB.
   await clickLane(page, lane, 0, 0);
@@ -328,7 +329,7 @@ test('removing a module removes its lane, undo restores it', async ({ page }) =>
   await addTrack(page, 'synth');
   const t = (await tracks(page)).at(-1)!;
   expect(t.kind).toBe('synth');
-  const lane = await addLane(page, t.slot, 'Filter · Cutoff');
+  const lane = await addLane(page, t.slot, 'Filter', 'Cutoff');
   await clickLane(page, lane, 0, 0.3);
   await clickLane(page, lane, BAR, 0.9);
   const before = await savedLanes(page, t.slot);
@@ -352,8 +353,8 @@ test('audio drop and cross-lane move with an open automation row above the targe
   const a = await dropBelow(page, 'one', 1);
   const b = await dropBelow(page, 'two', 1, 330);
   // a's lanes open between the two audio tracks: a 48 px row above b.
-  await addLane(page, a, 'Fader');
-  await addLane(page, a, 'Pan');
+  await addLane(page, a, 'Volume', 'Volume');
+  await addLane(page, a, 'Pan', 'Pan');
   const la = (await page.getByTestId(`tl-lane-${a}`).boundingBox())!;
   const lb = (await page.getByTestId(`tl-lane-${b}`).boundingBox())!;
   expect(lb.y - la.y).toBe(28 + 2 * 48);
@@ -378,7 +379,7 @@ test('audio drop and cross-lane move with an open automation row above the targe
 test('lane keys: select all, nudge, delete; enable and remove from the header', async ({ page }) => {
   await start(page);
   const t = (await tracks(page))[0];
-  const lane = await addLane(page, t.slot, 'Fader');
+  const lane = await addLane(page, t.slot, 'Volume', 'Volume');
   await clickLane(page, lane, BAR, 0.5);
   await clickLane(page, lane, 2 * BAR, 0.5);
   await page.keyboard.press('ControlOrMeta+a');
@@ -403,7 +404,7 @@ test('the play-follow page flip waits for a lane gesture to end', async ({ page 
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   // Zoom in to about two bars (two seconds), so the playhead runs off the right edge soon.
   const box = (await page.getByTestId(lane).boundingBox())!;
   await page.mouse.move(box.x + 10, box.y + 10);
@@ -443,7 +444,7 @@ test('a loaded Master row stays when its last lane goes; the 64-lane cap is show
   test.setTimeout(60_000);
   await start(page);
   await addTrack(page, 'master');
-  await addLane(page, 'master', 'Master · Ceiling');
+  await addLane(page, 'master', 'Master', 'Ceiling');
   const name = `e2e-auto-master-${test.info().workerIndex}`;
   await page.evaluate(async (name) => {
     const root = await navigator.storage.getDirectory();
@@ -465,9 +466,9 @@ test('a loaded Master row stays when its last lane goes; the 64-lane cap is show
   await expect(page.getByTestId('tl-master-row')).toBeVisible();
   await expect(page.getByTestId('auto-head-m-new')).toBeVisible();
 
-  // 64 lanes: "+ Lane" is disabled and says why.
+  // 64 lanes: "Automate…" is disabled and says why.
   const t = (await tracks(page))[0];
-  await addLane(page, t.slot, 'Fader');
+  await addLane(page, t.slot, 'Volume', 'Volume');
   await expect(page.getByTestId('auto-full')).toHaveCount(0);
   await page.evaluate(() => {
     const d = (window as Any).__daw;
@@ -477,10 +478,10 @@ test('a loaded Master row stays when its last lane goes; the 64-lane cap is show
   });
   for (const x of (await tracks(page)).slice(1, 32)) {
     await page.getByTestId(`track-auto-${x.slot}`).click();
-    await page.getByTestId(`auto-add-${x.slot}`).selectOption({ label: 'Fader' });
-    await page.getByTestId(`auto-add-${x.slot}`).selectOption({ label: 'Pan' });
+    await pickAutomation(page, x.slot, 'Volume', 'Volume');
+    await pickAutomation(page, x.slot, 'Pan', 'Pan');
   }
-  await page.getByTestId(`auto-add-${t.slot}`).selectOption({ label: 'Pan' });
+  await pickAutomation(page, t.slot, 'Pan', 'Pan');
   await expect(page.getByTestId(`auto-add-${t.slot}`)).toBeDisabled();
   await expect(page.getByTestId('auto-full').first()).toHaveText('64 max');
 });
@@ -493,7 +494,7 @@ test('knob ring follows a cutoff lane while playing', async ({ page }) => {
   await setTempo(page, 240);
   await addTrack(page, 'synth');
   const t = (await tracks(page)).at(-1)!;
-  const lane = await addLane(page, t.slot, 'Filter · Cutoff');
+  const lane = await addLane(page, t.slot, 'Filter', 'Cutoff');
   await clickLane(page, lane, 0, 0.1);
   await clickLane(page, lane, BAR, 0.9);
   await page.getByTestId(`track-${t.slot}`).click();
@@ -544,7 +545,7 @@ test('manual move overrides until the next breakpoint', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 4);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   // A quiet ride: −40 dB, −36 dB at bar 2, −40 dB at bar 3.
   await clickLane(page, lane, 0, faderPos(-40));
   await clickLane(page, lane, BAR, faderPos(-36));
@@ -649,11 +650,11 @@ test('a track header volume slider has the control menu: Automate, MIDI learn (a
 test('automated readouts and arrow keys follow the heard value', async ({ page }) => {
   await start(page);
   const t = (await tracks(page))[0];
-  const fl = await addLane(page, t.slot, 'Fader');
+  const fl = await addLane(page, t.slot, 'Volume', 'Volume');
   await clickLane(page, fl, 0, faderPos(-40));
   await clickLane(page, fl, BAR, faderPos(-20));
   await page.mouse.move(0, 0); // no hover tip (its testid shares the lanes' prefix)
-  const pl = await addLane(page, t.slot, 'Pan');
+  const pl = await addLane(page, t.slot, 'Pan', 'Pan');
   await clickLane(page, pl, 0, 0.1);
   await clickLane(page, pl, BAR, 0.3);
   await page.getByTestId('mixer-tab').click();
@@ -720,8 +721,8 @@ test('Automate menu from the keyboard; the 64-lane cap', async ({ page }) => {
   });
   for (const x of await tracks(page)) {
     await page.getByTestId(`track-auto-${x.slot}`).click();
-    await page.getByTestId(`auto-add-${x.slot}`).last().selectOption({ label: 'Fader' });
-    await page.getByTestId(`auto-add-${x.slot}`).last().selectOption({ label: 'Pan' });
+    await pickAutomation(page, x.slot, 'Volume', 'Volume');
+    await pickAutomation(page, x.slot, 'Pan', 'Pan');
   }
   await expect(page.locator('[data-testid^="auto-lane-"][data-lane]')).toHaveCount(64);
   // The ContextMenu key, Enter on "Automate": refused with the reason, nothing added.
@@ -738,7 +739,7 @@ test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 4);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   // A ride from −60 dB to 0 dB over a bar, then flat.
   await clickLane(page, lane, 0, 0);
   await clickLane(page, lane, BAR, faderPos(0));
@@ -779,7 +780,7 @@ test('undo during an Alt-drag bend (Alt still held) cancels it (plan 16)', async
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await clickLane(page, lane, 0, 0.2);
   await clickLane(page, lane, BAR, 0.8);
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add automation point/); // the click's gesture closed
@@ -805,7 +806,7 @@ test('Alt-click on a line adds a free point; it bends nothing (plan 16, Ruling P
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  const lane = await addLane(page, slot, 'Fader');
+  const lane = await addLane(page, slot, 'Volume', 'Volume');
   await clickLane(page, lane, 0, 0.2);
   await clickLane(page, lane, BAR, 0.8);
   // On the straight line, off the 1/16 grid (240 ticks), with a 1 px jitter: still a click.

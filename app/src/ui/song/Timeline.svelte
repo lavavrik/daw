@@ -1435,7 +1435,7 @@
         <!-- Automation lane rows (AutoLane: own canvas, pointer and keys) and the Master row's own row. -->
         {#each autoRows as a ('empty' in a ? `new-${a.row.trackId}` : a.lane.id)}
           {#if 'empty' in a}
-            <div class="lane auto-empty" style:top="{a.row.y}px" style:height="{a.row.h}px">Choose what to automate with + Lane on the left</div>
+            <div class="lane auto-empty" style:top="{a.row.y}px" style:height="{a.row.h}px">Choose what to automate with Automate… on the left</div>
           {:else if view}
             <AutoLane
               {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y} h={a.row.h}

@@ -2,7 +2,7 @@
 // `onkeydown={selectKey}` and calls releaseSelect after a pick (rack patch and
 // sample pickers, choice params, the mixer's sidechain picker, the pattern
 // picker, the step grid's steps, the piano roll's grid / length, the Acid
-// tab's length / root / scale, the track headers' "+ Lane", Settings).
+// tab's length / root / scale, Settings).
 //
 // A focused <select> type-aheads on printable keys: "a" jumps to the first
 // option starting with A. Here letters and digits are the QWERTY piano and

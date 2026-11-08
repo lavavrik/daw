@@ -106,6 +106,13 @@
   import { THEME } from './theme';
   import { hintText } from './bigTimer';
   import { setLoop, transportPlaying } from '../state/song-actions';
+  import Icon from './Icon.svelte';
+  import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
+  import ArrowCounterClockwise from 'phosphor-svelte/lib/ArrowCounterClockwise';
+  import Metronome from 'phosphor-svelte/lib/Metronome';
+  import Play from 'phosphor-svelte/lib/Play';
+  import Repeat from 'phosphor-svelte/lib/Repeat';
+  import Stop from 'phosphor-svelte/lib/Stop';
   import { liveInputTrack, previewTempo, setMetronome, setTempo } from '../state/actions';
   import { setMix } from '../state/mixer-actions';
   import type { Project } from '../state/project.svelte';
@@ -419,25 +426,25 @@
     <button
       class="ib" data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
       title={undoLabels.undo ? `Undo ${undoLabels.undo} (${mod}Z)` : 'Nothing to undo'}
-    ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4 2 7l3 3" /><path d="M2.5 7H10a4 4 0 0 1 0 8H7" /></svg></button>
+    ><Icon icon={ArrowCounterClockwise} /></button>
     <button
       class="ib" data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
       title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
-    ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11 4 3 3-3 3" /><path d="M13.5 7H6a4 4 0 0 0 0 8h3" /></svg></button>
+    ><Icon icon={ArrowClockwise} /></button>
   </span>
   <span class="sep" aria-hidden="true"></span>
 
   <span class="grp" role="group" aria-label="Song transport">
     <button class="tp play" class:on={songPlaying} aria-pressed={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
-      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor" /></svg><span class="sr-only">Play song</span>
+      <Icon icon={Play} size={20} weight="fill" /><span class="sr-only">Play song</span>
     </button>
     <button class="tp" data-testid="song-stop" aria-label="Stop all" title="Stop all (the song or the pattern)" onclick={onStop}>
-      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
+      <Icon icon={Stop} weight="fill" />
     </button>
     <button
       class="tp" class:on={p.loop.on} aria-pressed={p.loop.on} aria-label="Loop" data-testid="loop-toggle"
       onclick={() => setLoop(p, engine, { on: !p.loop.on })} title="Loop the loop range while playing the song"
-    ><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V6a2 2 0 0 1 2-2h7l-2-2" /><path d="M13 9v1a2 2 0 0 1-2 2H4l2 2" /></svg></button>
+    ><Icon icon={Repeat} size={20} /></button>
   </span>
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -452,7 +459,7 @@
   <BigTimer {p} {clock} />
 
   <button class="ib" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome" aria-label="Metronome">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h4l3 12H3z" /><path d="m8 10 4-6" /></svg>
+    <Icon icon={Metronome} />
   </button>
 
   <div class="master">

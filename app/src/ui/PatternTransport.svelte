@@ -36,6 +36,9 @@
   import { patternLength, currentPattern } from '../state/project.svelte';
   import type { PatternTrack, Project } from '../state/project.svelte';
   import { transportPlaying } from '../state/song-actions';
+  import Icon from './Icon.svelte';
+  import Play from 'phosphor-svelte/lib/Play';
+  import Stop from 'phosphor-svelte/lib/Stop';
   import { saveRecSettings } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import { noPatternReason, patternReadout } from './patternReadout';
@@ -100,11 +103,11 @@
   <button
     class="b play" class:on={playing} aria-pressed={playing} data-testid="pattern-play" disabled={!!why}
     aria-label="Play pattern" title={why ?? 'Play the patterns on a loop (Space while the panel has focus)'} onclick={onPlay}
-  ><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor"></path></svg></button>
+  ><Icon icon={Play} size={12} weight="fill" /></button>
   <button
     class="b" data-testid="pattern-stop" disabled={!playing && !!why}
     aria-label="Stop pattern" title="Stop the pattern (Space while the panel has focus)" onclick={onStop}
-  ><svg width="10" height="10" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"></rect></svg></button>
+  ><Icon icon={Stop} size={12} weight="fill" /></button>
   <button
     class="b rec" class:armed={rec.armed} class:live={rec.state === 'recording'}
     aria-pressed={rec.armed} data-testid="rec-button" data-state={rec.state}

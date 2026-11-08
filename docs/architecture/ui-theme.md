@@ -277,3 +277,27 @@ show C2..C5 at 9 px rows at 1280×720 (`pianoroll.spec.ts`).
 Sizing hooks for other components (custom properties, not `:global`):
 NumberField's LCD takes `--nf-lcd-h`, `--nf-lcd-w`, `--nf-lcd-pad`; Knob's
 slider takes `--slider-min-w` (default 112 px).
+
+## Icons (Phosphor)
+Icons come from `phosphor-svelte` (MIT, Svelte 5), drawn through
+`app/src/ui/Icon.svelte`.
+
+- **Add one:** import the per-icon component and hand it to `Icon`:
+  `import Play from 'phosphor-svelte/lib/Play';` then
+  `<Icon icon={Play} />`. Never import from the package root
+  (`'phosphor-svelte'`): the barrel would pull the whole set into the bundle.
+  Names are Phosphor's PascalCase (`ArrowCounterClockwise`); browse them at
+  phosphoricons.com. (Measured: six icons cost about 3 KB raw each, the
+  weights are in the component.)
+- **Props:** `size` (px, default 16), `weight` (default `regular`; `fill` for
+  the solid transport glyphs Play / Stop), `label`. Colour is always
+  `currentColor`: set `color` on the button, never a fill on the icon, and
+  the Idle / active / disabled rules above apply unchanged.
+- **Sizes:** 16 in the 32 px icon buttons, 20 in the 44 px transport
+  buttons, 12 inside the 22 px pattern transport.
+- **Icon-only buttons:** the button needs an `aria-label` (or visually hidden
+  text, as the song Play's `.sr-only` "Play song") and a tooltip (`title`
+  until the tooltip component lands). The icon itself stays decorative
+  (`aria-hidden`, no `label`). Give `Icon` a `label` only when it stands
+  alone with no labelled control around it (`role="img"`).
+- Tests find controls by test id or accessible name, never by a glyph.

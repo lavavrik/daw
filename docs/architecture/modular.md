@@ -60,6 +60,20 @@ replaces it).
 - The ladder filter (LP24) is characterful on purpose: a saturator inside the
   feedback loop makes the resonant peak compress with input level (ruling
   R10; see `rack/modules/filter.rs`). Cutoff is smoothed in the log domain.
+- The filter's **Diode** mode (plan 17, `mode` id 5, appended after Notch)
+  is a 3-pole ladder for acid lines: each stage driven through a soft
+  saturator, the feedback taken through a high-pass at half the stage
+  frequency. Its resonance is softer and wider than LP24's and stops just
+  short of self-oscillation at reso 1 (`k = 12.8 × reso`; the linear loop
+  oscillates at ≈ 12.85), and it thins the bass as it rises: at reso 0.9
+  and a 1 kHz cutoff the 30..200 Hz band sits ~3.5..6 dB down and the peak
+  ~+10 dB. A makeup of `1 + 0.5·k` applies only to the high-passed part of
+  the output, so the passband comes back up without boosting the
+  sub-bass. It has its own state (three stages + the high-pass), and a
+  switch to or from it uses the same 2 ms crossfade as every core change
+  (the incoming core starts from zero). Tested stable (finite, bounded
+  states, output under the limiter's ±3.5) at every cutoff and reso at
+  44.1 and 96 kHz.
 - **Voice LEDs** (plan 12; `app/src/ui/rack/VoiceLeds.svelte`): the
   Instrument tab's header shows "Voices" and one LED per voice of the
   first MIDI In (lowest module idx; its `voices`, 1 in Mono; none without a
@@ -519,6 +533,33 @@ two-input oscilloscope drawn live in its own panel (`ScopeView.svelte`).
   many rows; *a ninth scope is greyed out*) and `serial.spec.ts` (*scope
   edits while playing cause no dropouts*; 8 Scopes on screen cost ~1 % of
   the main thread). The view's UI side is in `visuals.md` *Scope*.
+
+## Accent (19)
+
+A *Shaping* module (`rack/modules/accent.rs`, plan 17): `gate` + `vel` in,
+`cv` (0..1) out. It holds a charge that builds up across accented notes;
+cabled to a Filter's `cv` it gives the acid "accent sweep" (a run of
+accents opens the filter a little further each time, a rest lets it fall
+back). Inline (no FX pool); one store per `gate` channel.
+
+- **Charge.** A rising gate whose `vel` ≥ `threshold` (default 100/127:
+  MIDI velocity 100 and up, which is what the Acid editor writes for an
+  accent, 120, and not for a plain note, 80) does `store = min(1, store +
+  0.6)`. `vel` is latched at the edge like the ADSR's; unconnected it reads
+  1 (every note accents). A slid (legato) note has no rising edge, so it
+  never accents.
+- **Decay.** `store ·= exp(−dt/decay)` (`decay` 0.05..2 s, default 0.25).
+  Accents a 1/16 step apart at 120 BPM peak at 0.6, 0.96, 1.0; after 2 s of
+  rest the next one peaks at 0.6 again (`stacked_accents_rise`,
+  `rested_accent_matches_first`).
+- **Output.** `cv = amount × level`; `level` follows the store, rising at
+  most full scale per 1 ms (a 0.6 charge is a 0.6 ms ramp, so the cv never
+  steps) and falling with it exactly; `amount` is smoothed over 5 ms. The
+  plan first asked for a 5 ms one-pole on the store: because the store
+  decays from the moment of the accent, that lag would cut a single
+  accent's peak to ≈0.55 at decay 0.25 s and ≈0.47 at 0.05 s, so the ramp
+  is used instead: a single accent peaks at 0.6 ± 0.01 at any decay and
+  sample rate (`short_decay_96k`).
 
 ## Adding a module
 

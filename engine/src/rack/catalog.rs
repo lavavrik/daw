@@ -18,7 +18,7 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK, VIS_SCOPES};
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
 /// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
 /// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15,
-/// SamplePlayer=16, Formant=17, Scope=18.
+/// SamplePlayer=16, Formant=17, Scope=18, Accent=19.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -41,6 +41,7 @@ pub enum ModuleKind {
     SamplePlayer = 16,
     Formant = 17,
     Scope = 18,
+    Accent = 19,
 }
 
 impl ModuleKind {
@@ -65,6 +66,7 @@ impl ModuleKind {
         ModuleKind::SamplePlayer,
         ModuleKind::Formant,
         ModuleKind::Scope,
+        ModuleKind::Accent,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
@@ -294,8 +296,9 @@ static NOISE: ModuleSpec = ModuleSpec {
 /// Noise `color` choices (ids 0..1; see `modules::noise`).
 pub const NOISE_COLORS: &[&str] = &["White", "Pink"];
 
-/// Filter `mode` choices (ids 0..4; see `modules::filter`).
-pub const FILTER_MODES: &[&str] = &["LP24", "LP12", "HP", "BP", "Notch"];
+/// Filter `mode` choices (ids 0..5; see `modules::filter`). "Diode" (5) was
+/// appended in plan 17: never reorder, saved projects store the id.
+pub const FILTER_MODES: &[&str] = &["LP24", "LP12", "HP", "BP", "Notch", "Diode"];
 
 static FILTER: ModuleSpec = ModuleSpec {
     kind: ModuleKind::Filter,
@@ -626,6 +629,27 @@ static SCOPE: ModuleSpec = ModuleSpec {
     ],
 };
 
+// ---- acid (plan 17) -----------------------------------------------------------
+
+static ACCENT: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Accent,
+    id: "accent",
+    name: "Accent",
+    category: "shaping",
+    // See `modules::accent`: a rising gate with vel >= threshold adds 0.6 to
+    // a store (max 1) that decays with time constant `decay`; cv = amount ×
+    // the store. One store per gate channel; `vel` unconnected reads 1.
+    inputs: &[port("gate", Signal::Gate), port("vel", Signal::Cv)],
+    outputs: &[port("cv", Signal::Cv)],
+    params: &[
+        // 100/127: MIDI velocity 100 and up is an accent (the step editor
+        // writes 120 for an accent, 80 for a plain note).
+        lin("threshold", "Threshold", 0.0, 1.0, 100.0 / 127.0, false),
+        lin("amount", "Amount", 0.0, 1.0, 1.0, true),
+        exp("decay", "Decay", 0.05, 2.0, 0.25, "s"),
+    ],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -648,6 +672,7 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::SamplePlayer => &SAMPLE_PLAYER,
         ModuleKind::Formant => &FORMANT,
         ModuleKind::Scope => &SCOPE,
+        ModuleKind::Accent => &ACCENT,
     }
 }
 
@@ -865,7 +890,6 @@ mod tests {
         let k = ModuleKind::Scope;
         assert_eq!(k as u8, 18);
         assert_eq!(ModuleKind::from_id(18), Some(k));
-        assert_eq!(ModuleKind::from_id(19), None);
         assert_eq!(k.fx_kind(), Some(FxKind::Scope), "its rings live in the FX pool's scope bank");
         let s = spec(k);
         assert_eq!((s.id, s.name, s.category), ("scope", "Scope", "utility"));
@@ -892,6 +916,39 @@ mod tests {
         assert_eq!(s.params[6].choices, &["Auto", "Free"]);
         assert!(s.params.iter().all(|p| !p.smooth));
         assert!(catalog_json().contains("\"fxPool\": {\"delay\": 8, \"reverb\": 8, \"chorus\": 16, \"scope\": 8}"));
+    }
+
+    #[test]
+    fn catalog_id_19() {
+        let k = ModuleKind::Accent;
+        assert_eq!(k as u8, 19);
+        assert_eq!(ModuleKind::from_id(19), Some(k));
+        assert_eq!(ModuleKind::from_id(20), None);
+        assert_eq!(k.fx_kind(), None, "inline: no FX pool");
+        let s = spec(k);
+        assert_eq!((s.id, s.name, s.category), ("accent", "Accent", "shaping"));
+        let names = |ps: &[PortSpec]| ps.iter().map(|p| (p.name, p.signal)).collect::<Vec<_>>();
+        assert_eq!(names(s.inputs), [("gate", Signal::Gate), ("vel", Signal::Cv)]);
+        assert_eq!(names(s.outputs), [("cv", Signal::Cv)]);
+        let ps: Vec<_> = s.params.iter().map(|p| (p.name, p.label, p.min, p.max, p.default, p.curve, p.unit, p.smooth)).collect();
+        assert_eq!(
+            ps,
+            [
+                ("threshold", "Threshold", 0.0, 1.0, 100.0 / 127.0, Curve::Lin, "", false),
+                ("amount", "Amount", 0.0, 1.0, 1.0, Curve::Lin, "", true),
+                ("decay", "Decay", 0.05, 2.0, 0.25, Curve::Exp, "s", false),
+            ]
+        );
+        assert!(s.params.iter().all(|p| !p.integer));
+    }
+
+    #[test]
+    fn filter_diode_mode_is_appended() {
+        let mode = &spec(ModuleKind::Filter).params[0];
+        assert_eq!(mode.name, "mode");
+        // The first five ids never move; Diode is id 5.
+        assert_eq!(mode.choices, ["LP24", "LP12", "HP", "BP", "Notch", "Diode"]);
+        assert_eq!((mode.min, mode.max, mode.default), (0.0, 5.0, 0.0));
     }
 
     #[test]

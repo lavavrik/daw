@@ -416,3 +416,76 @@ fn scope_does_not_allocate() {
     assert_eq!(COUNT.with(|c| c.get()), 0, "scope allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
 }
+
+/// Plan 17: an acid voice (MIDI In mono -> Osc -> Filter in Diode mode ->
+/// VCA, with an Accent on gate/vel opening the cutoff), accented and plain
+/// notes, legato slides, param moves (decay, amount, threshold, reso) and
+/// mode switches into and out of Diode while sounding, then removal.
+#[test]
+fn accent_and_diode_do_not_allocate() {
+    // MIDI In 0: pitch 0, gate 1, vel 2. Osc 1. Filter 2: in 0, cv 1;
+    // params mode 0, reso 2, cv_amt 3. Accent 3: gate 0, vel 1; params
+    // threshold 0, amount 1, decay 2. Adsr 4. Vca 5. Out 6.
+    let mut r = Rack::new(48000.0);
+    let mut fx = FxPool::new(48000.0);
+    let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+    let mut ctx = Ctx { sr: 48000.0, bpm: 124.0, playing: true, ticks: 0.0, ticks_per_frame: 124.0 * 960.0 / 60.0 / 48000.0 };
+    let mut render = |r: &mut Rack, fx: &mut FxPool, blocks: usize, ctx: &mut Ctx| {
+        for _ in 0..blocks {
+            r.render_add(ctx, fx, SampleView::NONE, &mut l, &mut rr);
+            ctx.ticks += 128.0 * ctx.ticks_per_frame;
+        }
+    };
+
+    ARMED.with(|a| a.set(true));
+    COUNT.with(|c| c.set(0));
+
+    for (m, k) in [
+        (0, ModuleKind::MidiIn),
+        (1, ModuleKind::Osc),
+        (2, ModuleKind::Filter),
+        (3, ModuleKind::Accent),
+        (4, ModuleKind::Adsr),
+        (5, ModuleKind::Vca),
+        (6, ModuleKind::Out),
+    ] {
+        assert_eq!(r.add_module(m, k, &mut fx), OK);
+    }
+    for (from, to) in [((0, 0), (1, 0)), ((1, 0), (2, 0)), ((0, 1), (3, 0)), ((0, 2), (3, 1)), ((3, 0), (2, 1)), ((0, 1), (4, 0)), ((2, 0), (5, 0)), ((4, 0), (5, 1)), ((5, 0), (6, 0))] {
+        assert_eq!(r.connect(from, to), OK);
+    }
+    assert_eq!(r.set_param(0, 1, 1.0), OK); // mono
+    assert_eq!(r.set_param(0, 2, 0.05), OK); // glide
+    assert_eq!(r.set_param(0, 4, 1.0), OK); // glide_mode Legato
+    assert_eq!(r.set_param(2, 0, 5.0), OK); // Diode
+    assert_eq!(r.set_param(2, 2, 0.9), OK); // reso
+    assert_eq!(r.set_param(2, 3, 3.0), OK); // cv_amt
+    for (step, (n, v)) in [(36u8, 120u8), (48, 80), (43, 120), (36, 120), (39, 80)].into_iter().enumerate() {
+        r.note(NoteEvent::On { note: n, vel: v });
+        render(&mut r, &mut fx, 10, &mut ctx);
+        if step != 2 {
+            r.note(NoteEvent::Off { note: n }); // step 2 slides into step 3
+        }
+        render(&mut r, &mut fx, 10, &mut ctx);
+    }
+    for blk in 0..12 {
+        assert_eq!(r.set_param(3, 2, 0.05 + 0.15 * blk as f32), OK); // decay
+        assert_eq!(r.set_param(3, 1, (blk % 3) as f32 * 0.5), OK); // amount
+        assert_eq!(r.set_param(3, 0, (blk % 4) as f32 * 0.3), OK); // threshold
+        assert_eq!(r.set_param(2, 0, [5.0, 0.0, 5.0, 1.0][blk % 4]), OK); // Diode <-> LP24/LP12
+        r.automate(2, 2, (blk % 5) as f32 * 0.25); // reso, automated
+        r.automate(3, 1, 1.0 - (blk % 2) as f32 * 0.5); // amount, automated
+        r.note(NoteEvent::On { note: 36 + blk as u8, vel: if blk % 2 == 0 { 127 } else { 64 } });
+        render(&mut r, &mut fx, 3, &mut ctx);
+    }
+    assert!(r.is_sounding());
+    assert_eq!(r.remove_module(3), OK);
+    render(&mut r, &mut fx, 10, &mut ctx);
+    r.note(NoteEvent::AllOff);
+    r.clear();
+    render(&mut r, &mut fx, 10, &mut ctx);
+
+    ARMED.with(|a| a.set(false));
+    assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
+    assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
+}

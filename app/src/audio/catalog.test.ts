@@ -3,13 +3,30 @@ import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } fr
 import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18)', () => {
+  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18, accent 19)', () => {
     expect(CATALOG.modules.map((m) => m.id)).toEqual([
       'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
       'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
-      'sample_player', 'formant', 'scope',
+      'sample_player', 'formant', 'scope', 'accent',
     ]);
-    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(19).keys()]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(20).keys()]);
+  });
+  it('the accent is an inline shaping module: gate/vel in, cv out (plan 17)', () => {
+    const a = moduleDef('accent');
+    expect(a.category).toBe('shaping');
+    expect(fxPoolSlots(a)).toBeNull();
+    expect(a.inputs.map((p) => [p.name, p.signal])).toEqual([['gate', 'gate'], ['vel', 'cv']]);
+    expect(a.outputs.map((p) => [p.name, p.signal])).toEqual([['cv', 'cv']]);
+    expect(a.params.map((p) => [p.name, p.min, p.max, p.curve])).toEqual([
+      ['threshold', 0, 1, 'lin'], ['amount', 0, 1, 'lin'], ['decay', 0.05, 2, 'exp'],
+    ]);
+    // MIDI velocity 100 and up is an accent.
+    expect(a.params[paramIndex(a, 'threshold')].default).toBeCloseTo(100 / 127, 6);
+    expect(a.params[paramIndex(a, 'decay')].default).toBe(0.25);
+  });
+  it('the filter mode Diode is appended (id 5; LP24..Notch keep 0..4)', () => {
+    const f = moduleDef('filter');
+    expect(f.params[paramIndex(f, 'mode')].choices).toEqual(['LP24', 'LP12', 'HP', 'BP', 'Notch', 'Diode']);
   });
   it('the scope is a pooled utility sink (no outputs, a bank of 8)', () => {
     const s = moduleDef('scope');

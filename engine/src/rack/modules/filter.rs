@@ -1,5 +1,6 @@
-//! Filter: a resonant 4-pole ladder (LP24) plus a state-variable filter
-//! (LP12 / HP / BP / Notch). The heart of house basses and stabs.
+//! Filter: a resonant 4-pole ladder (LP24), a state-variable filter
+//! (LP12 / HP / BP / Notch) and a 3-pole diode-style ladder (Diode, plan 17).
+//! The heart of house basses, stabs and acid lines.
 //!
 //! * **Cutoff.** Effective cutoff = `cutoff × 2^(cv × cv_amt)` (cv in V/oct),
 //!   clamped to 20 Hz..0.45 × sample rate. It is computed per sample and per
@@ -40,6 +41,28 @@
 //!   damping `k = 2 − 2·reso·0.975` (Q 0.5..20). All four outputs come from
 //!   the same core: LP = v2, HP = x − k·v1 − v2, BP = k·v1 (unity peak gain),
 //!   Notch = x − k·v1.
+//! * **Diode (plan 17).** Three one-pole TPT stages, each driven through the
+//!   soft saturator ("tanh stages"), with global feedback `k = 12.8 × reso`
+//!   taken through a one-pole high-pass at half the stage frequency, and
+//!   solved with the same linear zero-delay-feedback estimate as the ladder
+//!   (`y3 = G³v + S`, feedback `k·(1 − Gh)·(y3 − sh)`).
+//!   * Resonance: three stages give the loop's −180° at 2.09 × the stage
+//!     frequency (the high-pass adds some lead), where the linear loop
+//!     reaches unity at k ≈ 12.85: reso 1 sits just below
+//!     self-oscillation, a long ring rather than a steady tone, and the
+//!     peak is softer and wider than LP24's.
+//!   * Stage tuning: the stages sit +0.385 oct above the cutoff at reso 0
+//!     (the knob marks the cascade's −6 dB point) and −1.066 oct at reso 1
+//!     (so the resonant peak lands on the knob), linear in between.
+//!   * Bass: the high-pass leaves the feedback open at DC, and a 3-pole loop
+//!     needs a lot of it, so as reso rises the passband falls (the bass
+//!     thins) toward the peak. The makeup scales only the high-passed part
+//!     of the output by `1 + 0.5·k`: at reso 0.9 and a 1 kHz cutoff the
+//!     30..200 Hz band sits ~3.5..6 dB down and the peak ~+10 dB, while the
+//!     sub-bass stays at unity (a whole-signal makeup would boost it).
+//!   * The stages' saturators keep the core bounded at any feedback; at
+//!     drive 1 a full-scale saw swept at reso 1 peaks just above the output
+//!     limiter's knee (≈2.1).
 //! * **Drive.** Input gain `D = 1 + 7·drive` (×1..×8) into the soft saturator
 //!   (inside the ladder's loop; before the SVF), then the output is scaled by
 //!   `1/√D`. Drive 0 means no *added* input saturation: the SVF modes are
@@ -57,10 +80,11 @@
 //!   0.3..0.9 peaks below ±2 (`lp24_never_hits_the_limiter`).
 //! * **Mode switches** crossfade the old and new outputs linearly over 2 ms.
 //!   The SVF modes share one state, so switching between them is seamless;
-//!   switching to or from LP24 starts the incoming core from zero state, and
-//!   the crossfade hides its start-up. At very low cutoffs (≲ 100 Hz) that
-//!   core takes longer than the 2 ms fade to charge up, so an LP24 <-> SVF
-//!   switch can dip in level briefly (no click, just a short swell back).
+//!   switching between cores (ladder, SVF, diode) starts the incoming core
+//!   from zero state, and the crossfade hides its start-up. At very low
+//!   cutoffs (≲ 100 Hz) that core takes longer than the 2 ms fade to charge
+//!   up, so a switch between cores can dip in level briefly (no click, just
+//!   a short swell back).
 //!   A switch requested mid-crossfade waits for the current one to finish
 //!   (≤ 2 ms).
 //! * **Safety.** Non-finite inputs (audio or cv) read as 0. After each
@@ -94,6 +118,8 @@ pub const LP12: u8 = 1;
 pub const HP: u8 = 2;
 pub const BP: u8 = 3;
 pub const NOTCH: u8 = 4;
+/// Appended in plan 17 (the ids above never change).
+pub const DIODE: u8 = 5;
 
 /// Lowest effective cutoff (Hz).
 pub const MIN_HZ: f32 = 20.0;
@@ -105,6 +131,21 @@ pub const XFADE_SECONDS: f32 = 0.002;
 pub const LADDER_K_MAX: f32 = 4.2;
 /// Ladder stage frequency above the cutoff at reso 0, in octaves (×1.5).
 pub const LADDER_OFFSET_OCT: f32 = 0.585;
+/// Diode feedback at reso 1 (`k = 12.8 × reso`). With the feedback
+/// high-pass the linear loop rings forever at k ≈ 12.85, so reso 1 sits just
+/// below self-oscillation: a long, singing ring that still dies away.
+pub const DIODE_K_MAX: f32 = 12.8;
+/// Diode makeup: the high-passed part of the output is scaled by
+/// `1 + 0.5·k` (see the module docs).
+const DIODE_MAKEUP: f32 = 0.5;
+/// Feedback high-pass corner as a fraction of the diode stage frequency.
+pub const DIODE_HP_RATIO: f32 = 0.5;
+/// Diode stage frequency relative to the cutoff, in octaves, at reso 0
+/// (+0.385: the knob marks the cascade's −6 dB point) and reso 1 (−1.066:
+/// the loop's phase crossing, 2.094 × the stage frequency, lands on the
+/// knob); linear in between.
+pub const DIODE_OFFSET_OCT_0: f32 = 0.385;
+pub const DIODE_OFFSET_OCT_1: f32 = -1.066;
 /// SVF resonance scale: `k = 2 − 2·reso·0.975`, so Q runs 0.5..20.
 const SVF_RESO_SCALE: f32 = 0.975;
 /// Saturator headroom: `sat(v) = 3·tanh(v/3)`.
@@ -203,6 +244,25 @@ struct Coefs {
     lg: f32,
     linv: f32,
     lk: f32,
+    /// Diode: stage `G`, `1/(1+g)`, feedback `k`, and the feedback
+    /// high-pass's `1 − Gh` (`Gh = gh/(1+gh)`).
+    dg: f32,
+    dinv: f32,
+    dk: f32,
+    dha: f32,
+    /// Diode makeup minus one, `DIODE_MAKEUP × k`.
+    dm: f32,
+}
+
+/// Which core a mode runs on: the ladder, the SVF or the diode. Switching
+/// between cores starts the incoming one from zero state.
+#[inline]
+fn core(mode: u8) -> u8 {
+    match mode {
+        LP24 => 0,
+        DIODE => 2,
+        _ => 1,
+    }
 }
 
 /// The filter module (see the module docs).
@@ -226,6 +286,8 @@ pub struct Filter {
     ladder: [[f32; 4]; MAX_POLY],
     /// SVF integrator states (ic1eq, ic2eq) per channel.
     svf: [[f32; 2]; MAX_POLY],
+    /// Diode states per channel: three stages, then the feedback high-pass.
+    diode: [[f32; 4]; MAX_POLY],
     /// Channel count of the previous sub-block.
     channels: usize,
 }
@@ -243,7 +305,7 @@ impl Filter {
     pub fn new(sr: f32) -> Filter {
         let sr = if sr.is_finite() && sr > 0.0 { sr } else { 48000.0 };
         let min_l2 = MIN_HZ.log2();
-        let mode = (default(K, MODE) as u8).min(NOTCH);
+        let mode = (default(K, MODE) as u8).min(DIODE);
         Filter {
             inv_sr: 1.0 / sr,
             min_l2,
@@ -259,6 +321,7 @@ impl Filter {
             drive: Smooth::new(sr, default(K, DRIVE)),
             ladder: [[0.0; 4]; MAX_POLY],
             svf: [[0.0; 2]; MAX_POLY],
+            diode: [[0.0; 4]; MAX_POLY],
             channels: 0,
         }
     }
@@ -267,13 +330,14 @@ impl Filter {
     pub fn reset(&mut self) {
         self.ladder = [[0.0; 4]; MAX_POLY];
         self.svf = [[0.0; 2]; MAX_POLY];
+        self.diode = [[0.0; 4]; MAX_POLY];
         self.fade = 0;
         self.prev = self.mode;
     }
 
     /// Coefficients for log2 cutoff `l2` (unclamped) and resonance `reso`.
     #[inline]
-    fn coefs(&self, l2: f32, reso: f32, svf: bool, ladder: bool) -> Coefs {
+    fn coefs(&self, l2: f32, reso: f32, svf: bool, ladder: bool, diode: bool) -> Coefs {
         let l2 = if l2.is_finite() { l2.max(self.min_l2).min(self.max_l2) } else { self.min_l2 };
         let pi_t = std::f32::consts::PI * self.inv_sr;
         let mut c = Coefs::default();
@@ -290,6 +354,17 @@ impl Filter {
             c.lg = g * c.linv;
             c.lk = LADDER_K_MAX * reso;
         }
+        if diode {
+            let off = DIODE_OFFSET_OCT_0 + (DIODE_OFFSET_OCT_1 - DIODE_OFFSET_OCT_0) * reso;
+            let fs = (l2 + off).min(self.max_l2).exp2();
+            let g = tan_fast(pi_t * fs);
+            c.dinv = 1.0 / (1.0 + g);
+            c.dg = g * c.dinv;
+            c.dk = DIODE_K_MAX * reso;
+            c.dm = DIODE_MAKEUP * c.dk;
+            let gh = tan_fast(pi_t * fs * DIODE_HP_RATIO);
+            c.dha = 1.0 / (1.0 + gh);
+        }
         c
     }
 
@@ -305,19 +380,20 @@ impl Filter {
         for ch in channels..self.channels.min(MAX_POLY) {
             self.ladder[ch] = [0.0; 4];
             self.svf[ch] = [0.0; 2];
+            self.diode[ch] = [0.0; 4];
         }
         self.channels = channels;
 
         // Mode switch: start a crossfade (one at a time).
         let want = param(params, K, MODE);
-        let want = if want.is_finite() { (want.round().max(0.0) as u8).min(NOTCH) } else { self.mode };
+        let want = if want.is_finite() { (want.round().max(0.0) as u8).min(DIODE) } else { self.mode };
         if self.fade == 0 && want != self.mode {
-            if (want == LP24) != (self.mode == LP24) {
+            if core(want) != core(self.mode) {
                 // The incoming core was idle: start it from zero state.
-                if want == LP24 {
-                    self.ladder = [[0.0; 4]; MAX_POLY];
-                } else {
-                    self.svf = [[0.0; 2]; MAX_POLY];
+                match core(want) {
+                    0 => self.ladder = [[0.0; 4]; MAX_POLY],
+                    2 => self.diode = [[0.0; 4]; MAX_POLY],
+                    _ => self.svf = [[0.0; 2]; MAX_POLY],
                 }
             }
             self.prev = self.mode;
@@ -341,18 +417,18 @@ impl Filter {
             let fading = self.fade > 0;
             // Weight of the outgoing mode (1 -> 0 over the crossfade).
             let w_old = self.fade as f32 / self.fade_len as f32;
-            let need_ladder = mode == LP24 || (fading && prev == LP24);
-            let need_svf = mode != LP24 || (fading && prev != LP24);
+            let uses = |c: u8| core(mode) == c || (fading && core(prev) == c);
+            let (need_ladder, need_svf, need_diode) = (uses(0), uses(1), uses(2));
             let shared = if cv_poly {
                 Coefs::default() // unused
             } else {
                 // cv_in.get reads 0 when unconnected.
-                self.coefs(base + finite_or_zero(cv_in.get(0, i)) * amt, reso, need_svf, need_ladder)
+                self.coefs(base + finite_or_zero(cv_in.get(0, i)) * amt, reso, need_svf, need_ladder, need_diode)
             };
 
             for ch in 0..channels {
                 let c = if cv_poly {
-                    self.coefs(base + finite_or_zero(cv_in.get(ch, i)) * amt, reso, need_svf, need_ladder)
+                    self.coefs(base + finite_or_zero(cv_in.get(ch, i)) * amt, reso, need_svf, need_ladder, need_diode)
                 } else {
                     shared
                 };
@@ -377,6 +453,35 @@ impl Filter {
                     }
                     lp24 = y;
                 }
+                let mut diode = 0.0;
+                if need_diode {
+                    let s = &mut self.diode[ch];
+                    let (g, kh) = (c.dg, c.dk * c.dha);
+                    // y3 = G³·v + S (S from the stage states); the feedback
+                    // is k·hp(y3) = k·(1 − Gh)·(y3 − sh). Solve for the loop
+                    // input v = x − k·hp(y3), linearly (zero-delay feedback).
+                    let sum = ((s[0] * g + s[1]) * g + s[2]) * c.dinv;
+                    let v = (x - kh * (sum - s[3])) / (1.0 + kh * g * g * g);
+                    // Three one-pole stages, each driven through the soft
+                    // saturator (the first one is the loop's).
+                    let mut y = v;
+                    for st in s[..3].iter_mut() {
+                        let d = (sat(y) - *st) * g;
+                        let o = d + *st;
+                        *st = o + d;
+                        y = o;
+                    }
+                    // The feedback high-pass's integrator (a TPT one-pole
+                    // low-pass of y3; the high-pass is y3 minus it).
+                    let gh = 1.0 - c.dha;
+                    let d = (y - s[3]) * gh;
+                    let lp = d + s[3];
+                    s[3] = lp + d;
+                    // Makeup on the high-passed part only: the passband
+                    // comes back up, the sub-bass (where the loop is open)
+                    // stays at unity instead of being boosted.
+                    diode = y + c.dm * (y - lp);
+                }
                 let (mut v0, mut v1, mut v2) = (0.0, 0.0, 0.0);
                 if need_svf {
                     v0 = sat(x);
@@ -387,6 +492,7 @@ impl Filter {
                     LP12 => v2,
                     HP => v0 - c.svf_k * v1 - v2,
                     BP => c.svf_k * v1,
+                    DIODE => diode,
                     _ => v0 - c.svf_k * v1,
                 };
                 let y = if fading { pick(mode) * (1.0 - w_old) + pick(prev) * w_old } else { pick(mode) };
@@ -401,6 +507,7 @@ impl Filter {
         for ch in 0..channels {
             flush(&mut self.ladder[ch]);
             flush(&mut self.svf[ch]);
+            flush(&mut self.diode[ch]);
         }
     }
 }
@@ -719,6 +826,90 @@ mod tests {
         let mut last = 0.0f32;
         let mut jump = 0.0f32;
         let seq = [LP24, HP, LP12, NOTCH, BP, LP24, BP, HP, LP24];
+        for (k, &mode) in seq.iter().enumerate() {
+            p[MODE] = mode as f32;
+            for b in 0..blocks(0.1) {
+                for i in 0..RACK_BLOCK {
+                    ins[0].data[0][i] = (std::f64::consts::TAU * ph).sin() as f32;
+                    ph = (ph + inc).fract();
+                }
+                f.process(&p, &ins, &mut outs);
+                for &y in &outs[0].data[0] {
+                    if k > 0 || b > blocks(0.05) {
+                        jump = jump.max((y - last).abs());
+                    }
+                    last = y;
+                }
+            }
+        }
+        assert!(jump < 0.08, "max step {jump}");
+    }
+
+    /// Plan 17: the `filter_stable_at_extremes` sweep (full-scale noise plus
+    /// a DC step, drive 1, the top and bottom cutoffs) in Diode mode, at reso
+    /// 0 and 1, at 44.1 and 96 kHz: finite, the output under the limiter's
+    /// ceiling and the diode core's own states bounded.
+    #[test]
+    fn diode_stable_all_cutoffs() {
+        let mut ins = [PortBuf::new(), PortBuf::new()];
+        ins[0].channels = 1;
+        let mut outs = [PortBuf::new()];
+        for sr in [44100.0f32, 96000.0] {
+            let blocks = |s: f32| (s * sr / RACK_BLOCK as f32).ceil() as usize;
+            for reso in [0.0, 1.0] {
+                for cutoff in [20000.0, 5000.0, 200.0, 20.0] {
+                    let mut p = params(DIODE, cutoff, reso);
+                    p[DRIVE] = 1.0;
+                    let mut f = Filter::new(sr);
+                    let mut x = 0x1234_5678u32;
+                    let mut peak = 0.0f32;
+                    for b in 0..blocks(2.0) {
+                        let dc = if b >= blocks(0.5) { 1.0 } else { 0.0 };
+                        for i in 0..RACK_BLOCK {
+                            x ^= x << 13;
+                            x ^= x >> 17;
+                            x ^= x << 5;
+                            ins[0].data[0][i] = (x >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0 + dc;
+                        }
+                        f.process(&p, &ins, &mut outs);
+                        for &y in &outs[0].data[0] {
+                            assert!(y.is_finite(), "sr {sr} reso {reso} cutoff {cutoff}: {y}");
+                            peak = peak.max(y.abs());
+                        }
+                        for &s in f.diode[0].iter() {
+                            assert!(s.is_finite() && s.abs() < 100.0, "sr {sr} reso {reso} cutoff {cutoff}: state {s}");
+                        }
+                    }
+                    assert!(peak < 4.0, "sr {sr} reso {reso} cutoff {cutoff}: peak {peak}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn diode_resonance_thins_bass() {
+        let (open, reso) = (gain_db(&params(DIODE, 1000.0, 0.0), 50.0, None), gain_db(&params(DIODE, 1000.0, 0.9), 50.0, None));
+        assert!(reso < open - 1.0, "50 Hz: reso 0 {open:.2} dB, reso 0.9 {reso:.2} dB");
+        // Still a low-pass: the bass passes at reso 0, 4 kHz does not.
+        assert!(open > -1.0, "50 Hz at reso 0: {open:.2} dB");
+        let top = gain_db(&params(DIODE, 1000.0, 0.0), 4000.0, None);
+        assert!(top < -20.0, "4 kHz: {top:.2} dB");
+    }
+
+    #[test]
+    fn mode_switch_to_diode_clickless() {
+        // As `mode_switch_is_click_free`: a 300 Hz sine through LP24 ->
+        // Diode (and on to the SVF modes and back), the same 0.08 bound.
+        let mut f = Filter::new(SR);
+        let mut ins = [PortBuf::new(), PortBuf::new()];
+        ins[0].channels = 1;
+        let mut outs = [PortBuf::new()];
+        let mut p = params(LP24, 1000.0, 0.2);
+        let inc = 300.0 / SR as f64;
+        let mut ph = 0.0f64;
+        let mut last = 0.0f32;
+        let mut jump = 0.0f32;
+        let seq = [LP24, DIODE, LP24, DIODE, HP, DIODE, LP12, DIODE];
         for (k, &mode) in seq.iter().enumerate() {
             p[MODE] = mode as f32;
             for b in 0..blocks(0.1) {

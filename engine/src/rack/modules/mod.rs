@@ -20,6 +20,7 @@
 //! * The Sample Player reads the engine's sample pool through the
 //!   [`SampleView`] `process` also gets (read-only; others ignore it).
 
+pub mod accent;
 pub mod adsr;
 pub mod attenuator;
 pub mod chorus;
@@ -97,6 +98,7 @@ pub enum Module {
     SamplePlayer(sample_player::SamplePlayer),
     Formant(formant::Formant),
     Scope(scope::Scope),
+    Accent(accent::Accent),
 }
 
 impl Module {
@@ -130,6 +132,7 @@ impl Module {
             ModuleKind::Lfo => Module::Lfo(lfo::Lfo::new(sr)),
             ModuleKind::Out => Module::Out(out::Out::new(sr)),
             ModuleKind::Scope => Module::Scope(scope::Scope::new(sr, slot)),
+            ModuleKind::Accent => Module::Accent(accent::Accent::new(sr)),
         }
     }
 
@@ -152,6 +155,7 @@ impl Module {
             Module::Attenuator(m) => m.snap(),
             Module::SamplePlayer(m) => m.snap(),
             Module::Formant(m) => m.snap(),
+            Module::Accent(m) => m.snap(),
         }
     }
 
@@ -176,6 +180,7 @@ impl Module {
             Module::SamplePlayer(_) => ModuleKind::SamplePlayer,
             Module::Formant(_) => ModuleKind::Formant,
             Module::Scope(_) => ModuleKind::Scope,
+            Module::Accent(_) => ModuleKind::Accent,
         }
     }
 
@@ -221,6 +226,7 @@ impl Module {
             Module::SamplePlayer(m) => m.process(params, ins, outs, smp),
             Module::Formant(m) => m.process(params, ins, outs),
             Module::Scope(m) => m.process(ctx, params, ins, fx),
+            Module::Accent(m) => m.process(params, ins, outs),
         }
     }
 
@@ -261,6 +267,7 @@ impl Module {
             Module::SamplePlayer(m) => m.reset(),
             Module::Formant(m) => m.reset(),
             Module::Scope(m) => m.reset(),
+            Module::Accent(m) => m.reset(),
         }
     }
 }

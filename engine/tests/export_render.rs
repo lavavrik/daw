@@ -102,7 +102,6 @@ fn fnv1a(h: u32, bytes: &[u8]) -> u32 {
 
 // SAFETY (whole body): `e` is the live pointer from `engine_new`, used
 // single-threaded and freed once at the end; the ffi exports are `unsafe fn`.
-#[allow(unused_unsafe)]
 fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
   unsafe {
     let e = engine_new(job.sample_rate);
@@ -111,7 +110,7 @@ fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
         let ptr = engine_sample_alloc(e, id, frames, channels);
         assert!(!ptr.is_null(), "sample {id} alloc");
         // SAFETY: the engine allocated frames * channels floats at `ptr`.
-        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len()) };
+        core::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
         assert_eq!(engine_sample_ready(e, id), 0, "sample {id} ready");
     }
     for (i, &(op, [a, b, c, d])) in job.commands.iter().enumerate() {
@@ -127,14 +126,13 @@ fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
         let n = (total - done).min(call);
         engine_process(e, n as u32);
         // SAFETY: the out buffers hold MAX_BLOCK (>= call) floats each.
-        let (l, r) = unsafe {
-            (core::slice::from_raw_parts(engine_out_left(e), n), core::slice::from_raw_parts(engine_out_right(e), n))
-        };
+        let (l, r) =
+            (core::slice::from_raw_parts(engine_out_left(e), n), core::slice::from_raw_parts(engine_out_right(e), n));
         left.extend_from_slice(l);
         right.extend_from_slice(r);
         done += n;
     }
-    drop(unsafe { Box::from_raw(e) });
+    drop(Box::from_raw(e));
     (left.split_off(latency), right.split_off(latency))
   }
 }

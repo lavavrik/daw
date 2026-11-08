@@ -14,6 +14,8 @@
 //! in `new`), so pink's RMS equals white's at every rate. Pink is not bounded
 //! to ±level like white: its peaks reach ~4× its RMS (≈ ±2.3 at level 1).
 //! All filter state lives in the struct (one per voice); nothing allocates.
+//! The filter runs under White too (its output unused), so switching to Pink
+//! mid-note has no stale state and no transient.
 
 use super::{default, param, Smooth};
 use crate::rack::catalog::ModuleKind;
@@ -115,7 +117,12 @@ impl Noise {
             self.state = x;
             // Top 24 bits -> [-1, 1).
             let white = (x >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0;
-            let y = if pink { self.pink(white) } else { white };
+            // The pink filter always runs (six one-poles: cheap), so a
+            // White -> Pink switch mid-note continues from state built on
+            // this very sequence: no stale sections, no transient. White's
+            // output does not read it (sample-identical to before plan 16).
+            let p = self.pink(white);
+            let y = if pink { p } else { white };
             out.data[0][i] = y * self.level.next(target);
         }
     }
@@ -282,6 +289,28 @@ mod tests {
             state ^= state >> 17;
             state ^= state << 5;
             assert_eq!(y, (state >> 8) as f32 * (2.0 / 16_777_216.0) - 1.0);
+        }
+    }
+
+    #[test]
+    fn white_to_pink_mid_note_has_no_stale_state() {
+        // The pink filter runs under White too, so switching to Pink mid-note
+        // continues exactly as a module that was Pink all along (no stale
+        // section state from before the switch, no transient).
+        let mut params = [0.0f32; MAX_PARAMS];
+        params[LEVEL] = 1.0;
+        let (mut sw, mut pk) = (Noise::new(48000.0), Noise::new(48000.0));
+        let (mut a, mut b) = ([PortBuf::new()], [PortBuf::new()]);
+        let mut pink = params;
+        pink[COLOR] = 1.0;
+        for _ in 0..50 {
+            sw.process(&params, &mut a); // White
+            pk.process(&pink, &mut b);
+        }
+        for _ in 0..10 {
+            sw.process(&pink, &mut a); // switched
+            pk.process(&pink, &mut b);
+            assert_eq!(a[0].data[0], b[0].data[0]);
         }
     }
 

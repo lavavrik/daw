@@ -175,6 +175,8 @@ impl Shape {
     }
 
     /// Value -> knob position 0..1 (clamped).
+    // `!(max > min)` is deliberate: unlike `max <= min` it also rejects a NaN bound.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn pos(&self, v: f64) -> f64 {
         let (min, max) = (self.min as f64, self.max as f64);
         if !(max > min) || v.is_nan() {

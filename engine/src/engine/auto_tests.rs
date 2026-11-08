@@ -565,7 +565,7 @@ fn auto_commands_validate() {
     assert_eq!(set(&mut e, 0.0, 2.0, 2.0, 0.0), ERR_BAD_VALUE, "rack target on an Audio slot");
     assert_eq!(set(&mut e, 0.0, 2.0, 5.0, 0.0), ERR_BAD_VALUE, "rack target on an empty slot");
     assert_eq!(set(&mut e, 0.0, 2.0, 0.0, (7 * 16) as f64), ERR_BAD_VALUE, "no module 7");
-    assert_eq!(set(&mut e, 0.0, 2.0, 0.0, (1 * 16 + 1) as f64), ERR_BAD_VALUE, "Out has 1 param");
+    assert_eq!(set(&mut e, 0.0, 2.0, 0.0, (16 + 1) as f64), ERR_BAD_VALUE, "Out has 1 param"); // module 1, param 1
     assert_eq!(set(&mut e, 0.0, 2.0, 0.0, 0.5), ERR_BAD_VALUE, "fractional");
     assert_eq!(set(&mut e, 0.0, 2.0, 0.0, (32 * 16) as f64), ERR_BAD_VALUE, "module 32");
     noise_track(&mut e, 3);

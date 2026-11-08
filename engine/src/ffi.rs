@@ -29,7 +29,8 @@ pub extern "C" fn engine_new(sample_rate: f32) -> *mut Host {
 }
 
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_out_left(e: *mut Host) -> *mut f32 {
     // SAFETY: see module contract; `as_mut` maps null to None.
@@ -40,7 +41,8 @@ pub unsafe extern "C" fn engine_out_left(e: *mut Host) -> *mut f32 {
 }
 
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_out_right(e: *mut Host) -> *mut f32 {
     // SAFETY: see module contract.
@@ -51,8 +53,10 @@ pub unsafe extern "C" fn engine_out_right(e: *mut Host) -> *mut f32 {
 }
 
 /// Renders `min(frames, MAX_BLOCK)` frames into the out buffers.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_process(e: *mut Host, frames: u32) {
     // SAFETY: see module contract.
@@ -64,7 +68,8 @@ pub unsafe extern "C" fn engine_process(e: *mut Host, frames: u32) {
 }
 
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_command(e: *mut Host, op: u32, a: f64, b: f64, c: f64, d: f64) -> i32 {
     // SAFETY: see module contract.
@@ -75,8 +80,10 @@ pub unsafe extern "C" fn engine_command(e: *mut Host, op: u32, a: f64, b: f64, c
 }
 
 /// Null on error; the code is recorded in `TELEMETRY_LAST_ERROR` by the engine.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_sample_alloc(e: *mut Host, id: u32, frames: u32, channels: u32) -> *mut f32 {
     // SAFETY: see module contract.
@@ -87,7 +94,8 @@ pub unsafe extern "C" fn engine_sample_alloc(e: *mut Host, id: u32, frames: u32,
 }
 
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_sample_ready(e: *mut Host, id: u32) -> i32 {
     // SAFETY: see module contract.
@@ -98,7 +106,8 @@ pub unsafe extern "C" fn engine_sample_ready(e: *mut Host, id: u32) -> i32 {
 }
 
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_telemetry(e: *mut Host) -> *const f64 {
     // SAFETY: see module contract.
@@ -112,8 +121,10 @@ pub unsafe extern "C" fn engine_telemetry(e: *mut Host) -> *const f64 {
 /// `engine_process` (track/return peaks post-fader, the master's the final
 /// output, gr = compressor / limiter gain reduction in dB). The pointer is
 /// stable for the instance lifetime.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_meters(e: *mut Host) -> *const f32 {
     // SAFETY: see module contract.
@@ -128,8 +139,10 @@ pub unsafe extern "C" fn engine_meters(e: *mut Host) -> *const f32 {
 /// of the last `engine_process`), `tap_ch` (−1 = off) and voice activity.
 /// Refreshed by every `engine_process`; the pointer is stable for the
 /// instance lifetime (offsets: `vis::VIS_*`, mirrored in visLayout.ts).
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_vis(e: *mut Host) -> *const f32 {
     // SAFETY: see module contract.
@@ -143,8 +156,10 @@ pub unsafe extern "C" fn engine_vis(e: *mut Host) -> *const f32 {
 /// A max, B min, B max per entry; slot `s` at `s × VIS_SCOPE_RING × 4`,
 /// entry `h` at `h mod VIS_SCOPE_RING`). Written by the Scope modules as
 /// their racks render; the pointer is stable for the instance lifetime.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_scopes(e: *mut Host) -> *const f32 {
     // SAFETY: see module contract.
@@ -157,8 +172,10 @@ pub unsafe extern "C" fn engine_scopes(e: *mut Host) -> *const f32 {
 /// The scope headers (`VIS_SCOPES × VIS_SCOPE_HDR` i32; fields
 /// `rack::modules::scope::HDR_*`: owner track (−1 free), owner module,
 /// head, decim, epoch, grid prev, grid last, flags). Stable pointer.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_scope_hdr(e: *mut Host) -> *const i32 {
     // SAFETY: see module contract.
@@ -171,8 +188,10 @@ pub unsafe extern "C" fn engine_scope_hdr(e: *mut Host) -> *const i32 {
 /// Output latency in frames (the master limiter's lookahead: 72 at 48 kHz);
 /// constant for the instance. The worklet adds it to `TELEMETRY_FRAME` so
 /// heard time matches what leaves the engine. 0 for a null handle.
+///
 /// # Safety
-/// `e` must be null or a live pointer from `engine_new` (module contract above).
+/// `e` must be null or a live pointer from `engine_new` (module contract above),
+/// with no other access to `*e` for the call's duration.
 #[no_mangle]
 pub unsafe extern "C" fn engine_latency(e: *mut Host) -> u32 {
     // SAFETY: see module contract.
@@ -185,8 +204,7 @@ pub unsafe extern "C" fn engine_latency(e: *mut Host) -> u32 {
 #[cfg(test)]
 mod tests {
     // The exports are `unsafe fn`; each test body is one unsafe block (the
-    // handle is valid or null by construction), so inner blocks are redundant.
-    #![allow(unused_unsafe)]
+    // handle is valid or null by construction, used single-threaded).
     use super::*;
     use crate::protocol::{OP_ADD_SYNTH_TRACK, OP_RACK_ADD_MODULE, OP_RACK_CONNECT};
     use crate::{MIX_CHANNELS, MIX_MASTER, MIX_METER_STRIDE};
@@ -201,14 +219,14 @@ mod tests {
         assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 0.0, 1.0, 8.0, 0.0), 0);
         assert_eq!(engine_command(e, OP_RACK_CONNECT, 0.0, 0.0, 16.0, 0.0), 0);
         engine_process(e, 128);
-        let left = unsafe { core::slice::from_raw_parts(engine_out_left(e), 128) };
+        let left = core::slice::from_raw_parts(engine_out_left(e), 128);
         assert!(left.iter().any(|&s| s != 0.0));
         let meters = engine_meters(e);
-        let m = unsafe { core::slice::from_raw_parts(meters, MIX_CHANNELS * MIX_METER_STRIDE) };
+        let m = core::slice::from_raw_parts(meters, MIX_CHANNELS * MIX_METER_STRIDE);
         assert!(m[0] > 0.0, "track 0 peak L");
         let master = MIX_MASTER * MIX_METER_STRIDE;
         assert_eq!(m[master], left.iter().fold(0.0f32, |p, x| p.max(x.abs())), "master = output peak");
-        let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
+        let t = core::slice::from_raw_parts(engine_telemetry(e), 8);
         assert_eq!(t[0], 1.0);
         engine_process(e, 100_000); // clamped, must not panic
         assert_eq!(engine_meters(e), meters, "stable pointer");
@@ -216,21 +234,21 @@ mod tests {
         // The visual block: stable, the tap channel -1 (off) at start.
         let vis = engine_vis(e);
         assert!(!vis.is_null());
-        assert_eq!(unsafe { *vis.add(crate::vis::VIS_TAP_CH) }, -1.0);
+        assert_eq!(*vis.add(crate::vis::VIS_TAP_CH), -1.0);
         engine_process(e, 128);
         assert_eq!(engine_vis(e), vis, "stable pointer");
         // The scope bank: a Scope (kind 18) at module 2 of track 0, fed by
         // the LFO, stamps its slot and writes entries.
         let (rings, hdr) = (engine_scopes(e), engine_scope_hdr(e));
         assert!(!rings.is_null() && !hdr.is_null());
-        let h = || unsafe { core::slice::from_raw_parts(engine_scope_hdr(e), crate::VIS_SCOPES * crate::VIS_SCOPE_HDR) };
+        let h = || core::slice::from_raw_parts(engine_scope_hdr(e), crate::VIS_SCOPES * crate::VIS_SCOPE_HDR);
         assert_eq!(h()[0], -1, "free");
         assert_eq!(engine_command(e, OP_RACK_ADD_MODULE, 0.0, 2.0, 18.0, 0.0), 0);
         assert_eq!(engine_command(e, OP_RACK_CONNECT, 0.0, 0.0, 32.0, 0.0), 0);
         assert_eq!((h()[0], h()[1]), (0, 2), "owner track 0, module 2");
         engine_process(e, 128);
         assert!(h()[2] > 0, "head moved");
-        let ring = unsafe { core::slice::from_raw_parts(rings, crate::VIS_SCOPES * crate::VIS_SCOPE_RING * 4) };
+        let ring = core::slice::from_raw_parts(rings, crate::VIS_SCOPES * crate::VIS_SCOPE_RING * 4);
         assert!(ring[..h()[2] as usize * 4].iter().any(|&x| x != 0.0), "entries written");
         assert_eq!((engine_scopes(e), engine_scope_hdr(e)), (rings, hdr), "stable pointers");
         // Each rack knows its track slot: a Scope on track 3 says so.
@@ -239,9 +257,9 @@ mod tests {
         let hd = crate::VIS_SCOPE_HDR;
         assert_eq!((h()[hd], h()[hd + 1]), (3, 5), "slot 1: track 3, module 5");
         assert!(engine_sample_alloc(e, 9999, 1, 1).is_null());
-        let t = unsafe { core::slice::from_raw_parts(engine_telemetry(e), 8) };
+        let t = core::slice::from_raw_parts(engine_telemetry(e), 8);
         assert_eq!(t[7], ERR_BAD_INDEX as f64);
-        drop(unsafe { Box::from_raw(e) });
+        drop(Box::from_raw(e));
       }
     }
 

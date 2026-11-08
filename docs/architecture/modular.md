@@ -254,13 +254,16 @@ smoothed) and `color` (appended in plan 16: White / Pink, default White).
   every rate (measured within 0.15 dB at 44.1/48/96 kHz). Pink is *not*
   bounded to ±level: its peaks run to about 4× its RMS (≈ ±2.3 at level 1).
 - The filter state (six sections and the delayed sample) lives in the
-  module, one per voice; nothing allocates. Switching color mid-note just
-  changes which sample is output; the pink sections only run while Pink is
-  selected and pick up from where they stopped.
+  module, one per voice; nothing allocates. The sections run under White
+  too (six one-poles a sample; White's output never reads them), so
+  switching color mid-note just changes which sample is output: a switch to
+  Pink continues exactly as a module that was Pink all along, with no stale
+  state from before and no transient.
 - Tests (`modules/noise.rs`): `pink_slope` (100 Hz–1 kHz vs 1–10 kHz within
   ±1 dB — white reads −10 dB — and one octave vs another, at 44.1 and
   96 kHz), `pink_rms_matches_white` (within 1 dB at 44.1/48/96 kHz),
-  `white_is_unchanged_by_the_color_param`.
+  `white_is_unchanged_by_the_color_param`,
+  `white_to_pink_mid_note_has_no_stale_state`.
 
 ## Effect modules and the FX pool
 

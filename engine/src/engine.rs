@@ -1436,7 +1436,7 @@ mod tests {
         let mut last_nz: Option<usize> = None;
         for (i, &x) in s.iter().enumerate() {
             if x != 0.0 {
-                if last_nz.map_or(true, |l| i - l > 200) {
+                if last_nz.is_none_or(|l| i - l > 200) {
                     v.push(i);
                 }
                 last_nz = Some(i);
@@ -1494,7 +1494,7 @@ mod tests {
         let s = render(&mut e, 128 * 400);
         let on = onsets(&s);
         let o = on[1];
-        assert!(o % 128 != 0 || on[2] % 128 != 0);
+        assert!(!o.is_multiple_of(128) || !on[2].is_multiple_of(128));
         assert!(s[o..o + 900].iter().filter(|&&x| x == 0.0).count() < 30);
     }
 
@@ -1557,9 +1557,9 @@ mod tests {
             assert!(w[1] - w[0] > 11000, "onsets too close: {on:?}");
         }
         // Exact positions: beat 2 at 48000, then 22500 samples per beat.
-        for k in 2..=8usize {
+        for (k, &at) in on.iter().enumerate().skip(2) {
             let want = 48000.0 + (k as f64 - 2.0) * 22500.0;
-            assert!((on[k] as f64 - want).abs() <= 1.0, "beat {k}: {} vs {want}", on[k]);
+            assert!((at as f64 - want).abs() <= 1.0, "beat {k}: {at} vs {want}");
         }
         // Playhead never jumped: 8.4 beats = 8064 ticks.
         assert!((e.telemetry()[2] - 8064.0).abs() < 1e-6);

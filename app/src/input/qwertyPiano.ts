@@ -1,6 +1,9 @@
 // Computer-keyboard piano: home row = white keys, row above = black keys
 // (like most DAWs). KeyA is C at the current octave; default octave 4 => 60.
 
+import { DRUM_BASE_NOTE } from '../audio/protocol';
+import { MAX_ROWS } from '../state/project.svelte';
+
 /** The octave at startup (KeyA = C4 = 60); Z / X move it within 0..8. The one definition. */
 export const DEFAULT_OCTAVE = 4;
 
@@ -19,14 +22,15 @@ export function keyToNote(code: string, octave: number): number | null {
 
 /**
  * A QWERTY note on a drum input track (plan 15 ruling G): note `n` played at
- * `octave` -> drum note 36 + (n - 12 * (octave + 1)), so the octave's C key
- * (KeyA) is row 1 (MIDI 36, like a MIDI keyboard's C2) and the next keys are
- * rows 2.. up the chromatic scale, at any octave. Null outside rows 1..16
- * (36..51). The piano has 15 keys (KeyA..KeyL), so rows 1..15 are reachable.
+ * `octave` -> drum note 36 + (n - 12 * (octave + 1)) (DRUM_BASE_NOTE), so
+ * the octave's C key (KeyA) is row 1 (MIDI 36, like a MIDI keyboard's C2)
+ * and the next keys are rows 2.. up the chromatic scale, at any octave. Null
+ * outside rows 1..16 (36..51). The piano has 15 keys (KeyA..KeyL), so the
+ * keyboard reaches rows 1..15; row 16 (note 51) is MIDI-only.
  */
 export function qwertyDrumNote(n: number, octave: number): number | null {
-  const d = 36 + n - 12 * (octave + 1);
-  return d >= 36 && d <= 51 ? d : null;
+  const d = DRUM_BASE_NOTE + n - 12 * (octave + 1);
+  return d >= DRUM_BASE_NOTE && d < DRUM_BASE_NOTE + MAX_ROWS ? d : null;
 }
 
 const OCTAVE_KEY = 'daw.octave';

@@ -56,13 +56,18 @@
 //   (status().takeEdits, undoTakeTitle). An edit before the first note is
 //   its own entry.
 // - Drum hits (plan 15): when the target is a drum track, a note-on with
-//   pitch 36 + r (r = a row the track has, 0..15) sets row r's step
-//   round(tick / STEP_TICKS) mod stepCount of the current pattern to the
-//   note's velocity at once (overwriting it; the step count is read at each
-//   hit). There is nothing to hold, so note-offs, the pedal and closing do
-//   nothing; other pitches are ignored. Same gates (armed, playing, Pattern
-//   mode, count-in, grace window) and the same pass / undo entry as notes.
-import { BAR_TICKS, MAX_NOTES, STEP_TICKS } from '../audio/protocol';
+//   pitch 36 + r (r = a row the track has, 0..15; velocity > 0) sets row
+//   r's nearest step of the current pattern to the note's velocity at once
+//   (overwriting it). "Nearest" is on the *swung* grid the engine plays
+//   (ruling I, drums.rs step_tick): step j sounds at j*STEP_TICKS, odd steps
+//   late by swing * 0.5 * STEP_TICKS; of k-1, k, k+1 (k = round(tick /
+//   STEP_TICKS)) the one sounding nearest the hit wins, then wraps mod
+//   stepCount. Step count and swing are read from the track's current
+//   pattern at each hit. There is nothing to hold, so note-offs, the pedal
+//   and closing do nothing; other pitches are ignored. Same gates (armed,
+//   playing, Pattern mode, count-in, grace window) and the same pass / undo
+//   entry as notes.
+import { BAR_TICKS, DRUM_BASE_NOTE, MAX_NOTES, STEP_TICKS } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
 import { liveInputTrack, setStep } from './actions';
 import type { CommandSink } from './actions';
@@ -88,8 +93,6 @@ const isPass = (key: string | null | undefined) => key?.startsWith('rec:') ?? fa
 export const REC_OFFSET_MAX = 200;
 /** Note-ons this many ticks before tick 0 still record (at 0): 1/64 note at 960 PPQ. */
 export const GRACE_TICKS = 60;
-/** MIDI note of drum row 0 (row r is DRUM_BASE_NOTE + r; the engine plays live drums the same way). */
-export const DRUM_BASE_NOTE = 36;
 
 /** The slice of AudioClock the recorder uses. */
 export interface RecorderClock {
@@ -151,6 +154,27 @@ interface Open {
   tick: number;
   /** Key released while the source's pedal was down: ends at pedal-up. */
   pedalHeld: boolean;
+}
+
+/**
+ * Tick at which (unwrapped) step `j` sounds with swing `swing` (0..1): odd
+ * steps are late by swing * 0.5 * STEP_TICKS (engine drums.rs step_tick).
+ * Step counts are even, so j's parity is the wrapped step's.
+ */
+const swungTick = (j: number, swing: number) => j * STEP_TICKS + (mod(j, 2) === 1 ? swing * 0.5 * STEP_TICKS : 0);
+
+/**
+ * The unwrapped step sounding nearest `tick` on the swung grid: of k-1, k,
+ * k+1 (k = round(tick / STEP_TICKS)) the nearest by distance to its swung
+ * tick (a tie keeps the earlier). Swing 0 gives k.
+ */
+export function nearestSwungStep(tick: number, swing: number): number {
+  const k = Math.round(tick / STEP_TICKS);
+  let best = k - 1;
+  for (const j of [k, k + 1]) {
+    if (Math.abs(swungTick(j, swing) - tick) < Math.abs(swungTick(best, swing) - tick)) best = j;
+  }
+  return best;
 }
 
 export class Recorder implements NoteListener {
@@ -257,7 +281,7 @@ export class Recorder implements NoteListener {
     }
     if (!this.#track) return; // no track to record into
     if (this.#track.kind === 'drum') {
-      this.#hit(this.#track, this.#pattern as DrumPattern, pitch, vel, tick);
+      this.#hit(this.#track, pitch, vel, tick);
       return;
     }
     const key = `${source}:${pitch}`;
@@ -320,10 +344,12 @@ export class Recorder implements NoteListener {
   }
 
   /** A drum hit at heard tick `tick` (>= 0): written now, nothing stays open. */
-  #hit(t: DrumTrack, pat: DrumPattern, pitch: number, vel: number, tick: number) {
+  #hit(t: DrumTrack, pitch: number, vel: number, tick: number) {
     const r = pitch - DRUM_BASE_NOTE;
     if (!Number.isInteger(r) || r < 0 || r >= t.rows.length || !(vel > 0)) return;
-    const step = mod(Math.round(tick / STEP_TICKS), pat.stepCount);
+    // Live, not the cached #pattern: a step-count or swing edit mid-pass applies.
+    const pat = currentPattern(t);
+    const step = mod(nearestSwungStep(tick, pat.swing), pat.stepCount);
     this.deps.setStep?.(t.id, pat.id, t.rows[r].id, step, vel, this.#pass);
   }
 

@@ -219,6 +219,11 @@ export const keyCode = (key: { slot: number; row?: number } | null): number =>
 export const BAR_TICKS = 3840;
 /** Ticks per drum step, a 1/16 note (lib.rs STEP_TICKS). */
 export const STEP_TICKS = 240;
+/**
+ * MIDI note of drum row 0: a live note 36 + r plays (and records into) row r,
+ * r = 0..15, i.e. notes 36..51 (engine drums.rs live hits; plan 15).
+ */
+export const DRUM_BASE_NOTE = 36;
 
 /** Automation lanes per project, and point slots per lane (lib.rs). */
 // Visual data path (lib.rs VIS_*; plan 12, docs/architecture/visuals.md).

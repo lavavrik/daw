@@ -501,6 +501,32 @@ describe('Recorder: drum hits (plan 15)', () => {
     expect(s.hits.at(-1)!.slice(0, 2)).toEqual(['r0', 16]);
   });
 
+  it('swing: a hit snaps to the nearest step of the swung grid (odd steps late by swing/2 step)', () => {
+    // Plan 15 ruling I. Swing 0.5: step 1 sounds at 240 + 60 = 300.
+    const s = drumSetup(4, 16);
+    s.drum.patterns[0].swing = 0.5;
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 370); // round -> 2, but 300 (step 1) is nearer than 480
+    s.rec.noteOn(36, 100, 420); // 480 (step 2) is nearer than 300
+    s.rec.noteOn(36, 100, 15 * 240 + 60 + 50); // 3770: nearer the swung last step (3720) than 3840: 15
+    s.rec.noteOn(36, 100, 15 * 240 + 60 + 150); // nearer the next loop's step 0 (3840): 0
+    s.rec.noteOn(36, 100, 3 * 16 * 240 + 300); // fourth loop, step 1 on the swung grid
+    expect(s.hits.map(([, st]) => st)).toEqual([1, 2, 15, 0, 1]);
+    // Swing 0: the plain grid (370 -> 2).
+    s.drum.patterns[0].swing = 0;
+    s.rec.noteOn(36, 100, 370);
+    expect(s.hits.at(-1)![1]).toBe(2);
+  });
+
+  it('a velocity-0 note-on is no hit (it would erase the step)', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 0, 240);
+    expect(s.hits).toEqual([]);
+  });
+
   it('only notes 36.. for rows the track has record; note-offs and the pedal change nothing', () => {
     const s = drumSetup(4);
     s.rec.toggleArm();

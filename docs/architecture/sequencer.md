@@ -113,19 +113,27 @@ re-adding a drum track over it drops the queue and keeps it the input.
 The computer keyboard plays rows too: while the input is a drum track,
 `input/shortcuts.ts` maps a QWERTY note `n` at octave `o` to
 `36 + (n - 12 * (o + 1))` (`qwertyPiano.ts` `qwertyDrumNote`), so the
-octave's C key (KeyA) is row 0 at any octave and the 14 keys above it rows
-1..14 (the piano has 15 keys, so row 15 is MIDI-only). The mapping happens
+octave's C key (KeyA) is row 1 at any octave and the 14 keys above it rows
+2–15: rows 1–15 from QWERTY (the piano has 15 keys), row 16 MIDI-only. The mapping happens
 where QWERTY notes enter, so the engine and the recorder both see the drum
 note, and the held-key map keeps the mapped pitch for its release.
 
 ### Recording drum hits
 Code: `app/src/state/recorder.ts` (`Recorder.#hit`, `recorderFor` `setStep`).
 The recorder's target is `liveInputTrack`, so a drum input track records
-hits into its current pattern. A note-on of `36 + r` (a row the track has)
-sets that row's step `round(tick / STEP_TICKS) mod stepCount` (240 ticks,
-a 1/16; the step count is read at each hit, so a hit past the middle of the
-last step wraps to step 0) to the note's velocity through `setStep`,
-overwriting what was there. Other pitches and rows the track lacks are
+hits into its current pattern. A note-on of `36 + r` (row `r + 1`, one the
+track has; velocity > 0) sets that row's nearest step to the note's
+velocity through `setStep`, overwriting what was there. Nearest is on the
+*swung* grid the engine plays (`drums.rs` `step_tick`; plan 15 ruling I):
+step `j` sounds at `j * 240` ticks, odd steps late by
+`swing * 0.5 * 240`. Of `k - 1`, `k`, `k + 1` (`k = round(tick / 240)`)
+the step sounding nearest the hit wins (`nearestSwungStep`), then wraps
+`mod stepCount`, so a hit just before the pattern's end lands on the first
+step. Step indices here are 0-based: with swing 0.5 a hit at tick 370 is
+step index 1 (sounding at 300), at 420 index 2 (480). Step count and swing are read from the track's current pattern at
+each hit (the app's `swing`; the engine latches a swing change at the next
+step pair, so a hit right after a swing edit may use the new value a pair
+early). Other pitches and rows the track lacks are
 ignored; note-offs and the pedal do nothing (a hit is written at note-on, so
 nothing is ever held open). The gates are the note recorder's: armed,
 playing, Pattern mode, heard tick >= 0 with the 60-tick grace window. Every

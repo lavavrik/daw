@@ -988,6 +988,22 @@ fn acid_line_accent_run_opens_further() {
 }
 
 #[test]
+fn acid_line_accent_release_matches_plain() {
+    // The accent's amp boost must not outlast the note: after note-off
+    // (amp release 60 ms) an accented note's tail is as short as a plain one's.
+    let tail = |vel: u8| {
+        let r = run(&mut load("Acid Line"), &[(0.0, Ev::On(36, vel)), (0.5, Ev::Off(36))], 1.0);
+        db(rms(r.span(0.6, 0.65)))
+    };
+    let (plain, accent) = (tail(80), tail(120));
+    eprintln!("Acid tail 100-150 ms after note-off: plain {plain:.1} dBFS, accent {accent:.1} dBFS");
+    // Both tails are inaudible (about -90 dBFS: the 1 dB comparison is of
+    // noise-floor residue), so anything under -80 dBFS passes too; the old
+    // raw-cv boost left -48.7 dBFS here.
+    assert!(accent <= (plain + 1.0).max(-80.0), "accented tail {accent:.1} dBFS vs plain {plain:.1}");
+}
+
+#[test]
 fn sub_bass_is_sub() {
     // C2, 0.2–1.0 s: the power below 200 Hz over the total.
     let r = play(&mut load("Sub Bass"), &[36], 100, 1.0, 0.0);

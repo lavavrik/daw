@@ -572,8 +572,11 @@ const ACID_LINE: Patch = {
     // decays in 0.3 s, so a run of accents climbs and opens the filter further.
     { idx: 9, id: 'accent', params: { threshold: 100 / 127, amount: 1, decay: 0.3 } },
     // Amp cv: the amp envelope (in1) plus a little accent (in2, 0.25): an
-    // accented note is a bit louder, without a second VCA.
+    // accented note is a bit louder.
     { idx: 10, id: 'mixer', params: { lvl1: 1, lvl2: 0.25 } },
+    // Accent x amp envelope: the boost into the amp cv follows the envelope,
+    // so it dies with the note's release (no ghost of the accent's decay).
+    { idx: 11, id: 'vca' },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -591,7 +594,9 @@ const ACID_LINE: Patch = {
     { from: [2, 'out'], to: [5, 'in'] },
     { from: [5, 'out'], to: [6, 'in'] },
     { from: [7, 'env'], to: [10, 'in1'] },
-    { from: [9, 'cv'], to: [10, 'in2'] },
+    { from: [9, 'cv'], to: [11, 'in'] },
+    { from: [7, 'env'], to: [11, 'cv'] },
+    { from: [11, 'out'], to: [10, 'in2'] },
     { from: [10, 'out'], to: [6, 'cv'] },
     { from: [6, 'out'], to: [8, 'l'] },
     { from: [6, 'out'], to: [8, 'r'] },

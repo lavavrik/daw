@@ -67,8 +67,11 @@ no-op: the base it captured stays.
 `Lane::value_at(t)` in the engine and `laneValueAt` in the app follow the
 same rules. They are pinned by `auto_eval.json`, compared in knob space to
 1e-6. Its points are `[tick, value, hold, curve?]` (the curve only when
-not 0), and three cases are curved: a rising / falling S, an exp cutoff,
-and curves on a hold point and on the last point. `curves_match_the_formula`
+not 0), and its `param.curve` is `lin`, `exp` or `fader`. Three cases are
+curved: a rising / falling S, an exp cutoff, and curves on a hold point and
+on the last point. Two are on the fader taper (plan 19): a volume fade from
+0 dB to −∞ and back up to +6 dB across every breakpoint of the law, and a
+send build-up with curves and a hold. `curves_match_the_formula`
 (engine) and `laneValueAt bends a segment by its left point's curve` (app)
 check `f` itself at x = 0.25 / 0.5 / 0.75 for curves −1, −0.5, 0.5, 1
 (1e-5).
@@ -78,8 +81,8 @@ check `f` itself at x = 0.25 / 0.5 / 0.75 for curves −1, −0.5, 0.5, 1
 - **Hold.** A hold point keeps its value up to the next point.
 - **Linear.** A linear point interpolates to the next point in **knob
   space**, through the catalog `curve`:
-  - `lin`: plain linear interpolation of the values. A fader ride is linear
-    in dB.
+  - `lin`: plain linear interpolation of the values (pan, EQ gains, the
+    compressor threshold, the limiter ceiling, ...).
   - `exp`: linear in the knob position `ln(v / min) / ln(max / min)`, which
     is logarithmic in the value. An EQ sweep from 200 Hz to 2 kHz is at
     632 Hz halfway.
@@ -87,6 +90,18 @@ check `f` itself at x = 0.25 / 0.5 / 0.75 for curves −1, −0.5, 0.5, 1
     bottom 2 % of travel is exactly 0; the rest is logarithmic from
     `max / 1000`. This is `ZERO_ZONE` / `EXP_FLOOR_RATIO`, the same mapping
     as `app/src/ui/rack/knobMath.ts`.
+  - `fader` (plan 19; the mixer `fader`, `send_a` and `send_b`): linear in
+    the **fader's travel**, the mixer's fader law `mixer::catalog::FADER_LAW`
+    (dB → position: −60 → 0, −40 → 0.14, −30 → 0.25, −20 → 0.38,
+    −10 → 0.55, 0 → 0.75, +6 → 1, piecewise linear in dB; at or below the
+    minimum is 0). Position → dB is the law's inverse, continuous (the
+    on-screen fader's drag snaps to 0.1 dB; knob space does not). So a volume
+    or send lane moves like its fader: a fade from 0 dB to −∞ is at −20.4 dB
+    half way (position 0.375), not at −30 dB. The points stay in dB, so
+    projects saved before plan 19 load with the same points; only the shape
+    between them changed. The catalog exports the law as `"faderLaw"`
+    (`engine/mixer_catalog.json`), and the app's fader, meter scale, send
+    knobs, lanes and MIDI-learn all read it from there.
 - **Curve** (plan 16). A linear point's `curve` (−1..1, 0 by default) bends
   its segment in that same knob space: at fraction `x` of the segment's
   time the value is `f(x) = x^(2^(−3·curve))` of the way (`bend` in both
@@ -245,8 +260,9 @@ export tests named in projects.md, history.md and export.md.
 ### Pure functions (`automation.ts`)
 
 - `laneValueAt(points, tick, param)`: the engine's `Lane::value_at`, in
-  float64. Lin params interpolate the values; exp params the knob position
-  through `knobMath` `toPos` / `fromPos` (zero zone included); the fraction
+  float64. Lin params interpolate the values; exp and fader params the knob
+  position through `knobMath` `toPos` / `fromPos` (zero zone included; the
+  fader law for the fader and sends, plan 19); the fraction
   bent by the left point's `curve` (`bend`); clamped to the range; null
   without points. Pinned by `auto_eval.json` (`laneValueAt
   matches the engine fixture`, knob space, 1e-6). The knob rings (Task 4)

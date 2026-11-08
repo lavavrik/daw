@@ -1,6 +1,6 @@
 // Mixer maths (pure; unit-tested in mixMath.test.ts): the fader law, fader
 // gestures, the dB readout, the meter scale, peak hold and the clip test.
-import { MIXER_CATALOG, mixParam } from '../../audio/mixerCatalog';
+import { MIXER_CATALOG, faderLaw, mixParam } from '../../audio/mixerCatalog';
 
 const FADER = mixParam('fader');
 
@@ -17,16 +17,14 @@ const FADER = mixParam('fader');
  * invertible, and its slope only changes at the ticks. The meter beside the
  * fader uses the same law (meterPos), so a −10 dBFS peak lines up with the
  * −10 tick.
+ *
+ * Defined once, in the engine (`mixer::catalog::FADER_LAW`, exported as the
+ * catalog's `faderLaw`; plan 19): −60 (= −∞), −40, −30, −20, −10, 0 and +6 dB
+ * at 0, 0.14, 0.25, 0.38, 0.55, 0.75 and 1. The fader and both sends have
+ * catalog curve 'fader', so their knobs, automation lanes (drawn and played)
+ * and MIDI-learn move along this same law (ui/rack/knobMath toPos / fromPos).
  */
-export const FADER_LAW: readonly (readonly [number, number])[] = [
-  [FADER.min, 0], // −60 = −∞
-  [-40, 0.14],
-  [-30, 0.25],
-  [-20, 0.38],
-  [-10, 0.55],
-  [0, 0.75],
-  [FADER.max, 1], // +6
-];
+export const FADER_LAW: readonly (readonly [number, number])[] = faderLaw;
 /** Tick labels beside the fader / meter (the breakpoints). */
 export const SCALE_TICKS: readonly number[] = FADER_LAW.map(([db]) => db);
 export const FADER_MIN_DB = FADER.min;
@@ -53,17 +51,26 @@ export function faderPos(db: number): number {
   return 1;
 }
 
-/** Fader position -> dB, clamped to the catalog range and snapped to 0.1 dB. */
-export function faderDb(pos: number): number {
+/**
+ * Fader position -> dB by the law, continuous (no snapping): the inverse of
+ * faderPos. Knob space for curve 'fader' (knobMath fromPos), where lanes and
+ * knobs need the exact value; the on-screen fader snaps it (faderDb).
+ */
+export function faderLawDb(pos: number): number {
   const p = clamp(pos, 0, 1);
   for (let i = 1; i < FADER_LAW.length; i++) {
     const [d1, p1] = FADER_LAW[i];
     if (p <= p1) {
       const [d0, p0] = FADER_LAW[i - 1];
-      return clamp(round1(d0 + ((p - p0) / (p1 - p0)) * (d1 - d0)), FADER.min, FADER.max);
+      return clamp(d0 + ((p - p0) / (p1 - p0)) * (d1 - d0), FADER.min, FADER.max);
     }
   }
   return FADER.max;
+}
+
+/** Fader position -> dB, clamped to the catalog range and snapped to 0.1 dB (the fader drag, MIDI CC). */
+export function faderDb(pos: number): number {
+  return clamp(round1(faderLawDb(pos)), FADER.min, FADER.max);
 }
 
 /** New position after a vertical drag of `dy` px on a fader `heightPx` tall (up = louder). */

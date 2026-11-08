@@ -601,7 +601,7 @@ impl Engine {
     fn auto_target(&mut self, target: Target) -> Result<(Shape, f32), i32> {
         let bad = protocol::ERR_BAD_VALUE;
         match target {
-            Target::None => Ok((Shape { min: 0.0, max: 0.0, exp: false }, 0.0)),
+            Target::None => Ok((Shape { min: 0.0, max: 0.0, curve: crate::mixer::catalog::Curve::Lin }, 0.0)),
             Target::Mix { ch, id } => {
                 let (ch, id) = (ch as usize, id as u32);
                 if ch < MAX_TRACKS && self.kind(ch) == SlotKind::Empty {

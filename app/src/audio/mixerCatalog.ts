@@ -6,6 +6,14 @@ import raw from '../../../engine/mixer_catalog.json';
 
 export type MixTarget = 'track' | 'return' | 'master';
 
+/**
+ * A param's knob space (the engine's `mixer::catalog::Curve`): `lin`, `exp`
+ * (logarithmic), or `fader` (plan 19: the fader and both sends), the mixer
+ * fader's law, `faderLaw`. Knobs, lanes and MIDI-learn all map through it
+ * (ui/rack/knobMath toPos / fromPos).
+ */
+export type MixCurve = 'lin' | 'exp' | 'fader';
+
 export interface MixParamDef {
   /** Wire id (MIX_SET b); equals the array index. */
   id: number;
@@ -15,7 +23,7 @@ export interface MixParamDef {
   max: number;
   default: number;
   unit: string;
-  curve: 'lin' | 'exp';
+  curve: MixCurve;
   integer: boolean;
   appliesTo: MixTarget[];
   group: string;
@@ -30,14 +38,22 @@ export interface MixerCatalog {
   channels: { tracks: number; reverb: number; delay: number; master: number };
   params: MixParamDef[];
   /**
+   * The fader law (engine `mixer::catalog::FADER_LAW`): (dB, position)
+   * breakpoints, piecewise linear in dB, position 0..1 the fader's travel.
+   */
+  faderLaw: readonly (readonly [number, number])[];
+  /**
    * Synced delay: each delay_time choice's length in quarter-note beats, and
    * the engine's maximum delay time (a longer division is clamped to it).
    */
   delay: { divisionBeats: number[]; maxSeconds: number };
 }
 
-export const MIXER_CATALOG = raw as MixerCatalog;
+// Through unknown: JSON imports type `faderLaw` as number[][], not as pairs.
+export const MIXER_CATALOG = raw as unknown as MixerCatalog;
 export const MIX_PARAMS: MixParamDef[] = MIXER_CATALOG.params;
+/** The fader law, as the engine exports it (ui/mixer/mixMath FADER_LAW). */
+export const faderLaw = MIXER_CATALOG.faderLaw;
 
 /** Look up by name ("fader"). Throws on unknown. */
 export function mixParam(name: string): MixParamDef {

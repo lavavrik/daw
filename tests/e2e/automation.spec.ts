@@ -84,8 +84,18 @@ async function lanePt(page: Page, testid: string, tick: number, pos: number) {
   const b = (await page.getByTestId(testid).boundingBox())!;
   return { x: b.x + (tick - v.scrollTick) / v.ticksPerPx, y: b.y + PAD + (1 - pos) * (H - 2 * PAD) };
 }
-/** Knob position of a fader value (dB): the fader is linear, -60..+6. */
-const faderPos = (db: number) => (db + 60) / 66;
+/**
+ * Knob position of a fader / send value (dB): the fader law (plan 19; engine
+ * mixer::catalog FADER_LAW, piecewise linear in dB), as the lane draws it.
+ */
+const FADER_LAW: [number, number][] = [[-60, 0], [-40, 0.14], [-30, 0.25], [-20, 0.38], [-10, 0.55], [0, 0.75], [6, 1]];
+const faderPos = (db: number) => {
+  if (db <= -60) return 0;
+  if (db >= 6) return 1;
+  const i = FADER_LAW.findIndex(([d]) => db <= d);
+  const [[d0, p0], [d1, p1]] = [FADER_LAW[i - 1], FADER_LAW[i]];
+  return p0 + ((db - d0) / (d1 - d0)) * (p1 - p0);
+};
 
 async function clickLane(page: Page, testid: string, tick: number, pos: number, opts: { button?: 'right' } = {}) {
   const p = await lanePt(page, testid, tick, pos);
@@ -725,7 +735,7 @@ test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({
   await expect.poll(() => savedLanes(page, slot)).toEqual(bent);
 
   // Heard: a quarter of the way the bent ride is at f(0.25) = 0.25^(2^-1.8) ≈ 0.67 of
-  // the travel (≈ −20 dB) where the straight one was at −45 dB.
+  // the travel (≈ −12.7 dB on the fader taper) where the straight one was at −35.7 dB.
   const rec = await playSong(page, 1200);
   const q0 = peakIn(rec, 100, BAR / 4);
   const q3 = peakIn(rec, (3 * BAR) / 4, BAR);

@@ -16,6 +16,8 @@ import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
 import { withAppendedParams } from './testdata/appendedParams';
 import { learnMidi } from '../state/midiMap';
+import { laneValueAt } from '../state/automation';
+import { mixParam } from '../audio/mixerCatalog';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -322,6 +324,30 @@ describe('loadProject', () => {
     expect(bad([lanes.cutoff.lane * 512 + 40, 0.5, 0, 0])).toHaveLength(1);
     expect(bad([lanes.cutoff.lane * 512, 1.5, 0, 0])).toHaveLength(1);
     expect(bad([lanes.cutoff.lane * 512 + 1, -1, 0, 0])).toEqual([]);
+  });
+
+  it('an old project\'s volume and send lanes load unchanged; only the in-between follows the fader taper (plan 19)', async () => {
+    // The frozen v3 file (before plan 19): a Drums send A fade-in and a Bass fader ride, in dB.
+    const v3 = JSON.parse(readFileSync(new URL('./testdata/v3-fixture.json', import.meta.url), 'utf8'));
+    const p = new Project();
+    const e = fakeEngine();
+    await loadProject(p, e, v3, new Map(), fakeDecoder); // its samples are not here: warnings only
+    const json = roundJson(serialize(p));
+    for (const name of ['Drums', 'Bass']) {
+      const was = v3.tracks.find((t: { name: string }) => t.name === name).automation;
+      expect(json.tracks.find((t) => t.name === name)!.automation, name).toEqual(was); // same points, same dB
+    }
+    // The engine gets the same dB values (no schema change, no conversion).
+    const bass = p.tracks.find((t) => t.name === 'Bass')!;
+    const fader = bass.automation.find((l) => l.target.kind === 'mix')!;
+    const sets = e.log.flatMap((x) => ('op' in x && x.op === Op.AUTO_POINT_SET && Math.floor(x.args[0] / 512) === fader.lane ? [x.args[2]] : []));
+    expect(sets).toEqual([-24, 0, -60]);
+    // In between: half way from -24 dB to 0 dB is half way in fader travel
+    // (0.328 -> 0.75: 0.539, -10.65 dB), not the -12 dB of a linear-dB line.
+    const mid = laneValueAt(fader.points, 1920, mixParam('fader'))!;
+    expect(mid).toBeCloseTo(-10 - (10 * (0.55 - (0.328 + 0.75) / 2)) / 0.17, 9);
+    const drums = p.tracks.find((t) => t.name === 'Drums')!;
+    expect(laneValueAt(drums.automation[0].points, 3840, mixParam('send_a'))).toBeCloseTo(-30 + (10 * 0.125) / 0.13, 9);
   });
 
   it('units() keeps each lane whole: AUTO_LANE_SET, its points, AUTO_LANE_ENABLE', async () => {

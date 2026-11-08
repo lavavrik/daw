@@ -21,7 +21,7 @@ const nullSink = { send: () => true };
 
 interface Case {
   name: string;
-  param: { min: number; max: number; curve: 'lin' | 'exp' };
+  param: { min: number; max: number; curve: 'lin' | 'exp' | 'fader' };
   /** [tick, value, hold, curve?]: the curve only when it is not 0 (as saved). */
   points: [number, number, number, number?][];
   queries: [number, number][];
@@ -34,6 +34,7 @@ describe('automation (pure)', () => {
     const fx = JSON.parse(readFileSync(new URL('../../../engine/tests/fixtures/auto_eval.json', import.meta.url), 'utf8')) as { cases: Case[] };
     expect(fx.cases.length).toBeGreaterThanOrEqual(10);
     expect(fx.cases.some((c) => c.points.some((pt) => (pt[3] ?? 0) !== 0)), 'curved cases').toBe(true);
+    expect(fx.cases.filter((c) => c.param.curve === 'fader').length, 'fader-taper cases (plan 19)').toBeGreaterThanOrEqual(2);
     for (const c of fx.cases) {
       const param = { ...c.param, default: c.param.min, integer: false };
       // The model keeps points sorted by tick; the fixture lists them in send order.
@@ -74,6 +75,23 @@ describe('automation (pure)', () => {
     for (const t of [1000, 1500, 1e9]) expect(laneValueAt(held, t, lin)).toBe(0.8);
     expect(laneValueAt([{ tick: 100, value: 0.3, hold: false, curve: 1 }], 50, lin)).toBe(0.3);
     expect(laneValueAt([{ tick: 100, value: 0.3, hold: false, curve: 1 }], 500, lin)).toBe(0.3);
+  });
+
+  it('volume and send lanes interpolate in fader travel (plan 19: curve "fader")', () => {
+    // A fade from 0 dB to -inf: half way in time is half way in travel,
+    // 0.75 -> 0: 0.375, which the law puts between (-30, 0.25) and (-20, 0.38).
+    for (const name of ['fader', 'send_a', 'send_b']) {
+      const def = MIX_PARAMS.find((p) => p.name === name)!;
+      const fade = [{ tick: 0, value: 0, hold: false }, { tick: 1000, value: -60, hold: false }];
+      expect(laneValueAt(fade, 500, def), name).toBeCloseTo(-30 + (10 * 0.125) / 0.13, 9); // -20.385 dB, not -30
+      expect(laneValueAt(fade, 0, def)).toBe(0);
+      expect(laneValueAt(fade, 1000, def)).toBe(-60);
+      // A curve bends the travel: f(0.5) = 0.5^(2^-1.5) of the way up from -inf.
+      const up = [{ tick: 0, value: -60, hold: false, curve: 0.5 }, { tick: 1000, value: 6, hold: false }];
+      const f = 0.5 ** (2 ** -1.5);
+      expect(toPos(def, laneValueAt(up, 500, def)!)).toBeCloseTo(f, 12);
+      expect(laneValueAt(up, 500, def)).toBeCloseTo((6 * (f - 0.75)) / 0.25, 9);
+    }
   });
 
   it('pointCommands: SET resets a curve, so a curved point is SET then CURVEd', () => {

@@ -4,9 +4,12 @@
 // "Position" is the knob's travel, 0..1 (bottom-left .. bottom-right). Every
 // gesture works in position space, so an Exp param (cutoff, envelope times)
 // moves logarithmically: each pixel of drag multiplies the value by the same
-// factor instead of adding Hz.
+// factor instead of adding Hz. A 'fader' param (the mixer fader and sends,
+// plan 19) moves along the fader law (mixMath FADER_LAW), like the fader.
 import { clampParam } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
+import type { MixCurve } from '../../audio/mixerCatalog';
+import { faderKeyStep, faderLawDb, faderPos } from '../mixer/mixMath';
 import { noteName } from '../noteName';
 
 /**
@@ -14,7 +17,9 @@ import { noteName } from '../noteName';
  * mixer params (mixerCatalog MixParamDef) both fit. `minLabel` is what the
  * minimum reads as ("Off", "-inf"), or absent/"" when it is just a number.
  */
-export type KnobDef = Pick<ParamDef, 'label' | 'min' | 'max' | 'default' | 'integer' | 'curve' | 'unit' | 'choices'> & {
+export type KnobDef = Pick<ParamDef, 'label' | 'min' | 'max' | 'default' | 'integer' | 'unit' | 'choices'> & {
+  /** Knob space: rack params are 'lin' / 'exp'; the mixer adds 'fader' (mixerCatalog MixCurve). */
+  curve: MixCurve;
   name?: string;
   minLabel?: string;
 };
@@ -45,10 +50,15 @@ export const EXP_FLOOR_RATIO = 1000;
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const zeroBased = (d: CurveDef) => d.curve === 'exp' && d.min <= 0;
 
-/** Value -> position 0..1 (clamped). */
+/**
+ * Value -> position 0..1 (clamped). 'fader': the fader law (faderPos; at or
+ * below the minimum, −∞ / Off, is 0), the same mapping as the engine's
+ * automation `Shape` for the fader and sends.
+ */
 export function toPos(d: CurveDef, v: number): number {
   if (Number.isNaN(v)) v = d.default;
   if (d.max <= d.min) return 0;
+  if (d.curve === 'fader') return v <= d.min ? 0 : faderPos(Math.min(v, d.max));
   if (d.curve !== 'exp') return clamp01((v - d.min) / (d.max - d.min));
   if (zeroBased(d)) {
     if (v <= 0) return 0;
@@ -60,11 +70,16 @@ export function toPos(d: CurveDef, v: number): number {
   return clamp01(Math.log(v / d.min) / Math.log(d.max / d.min));
 }
 
-/** Position 0..1 -> value, clamped to the range (integer params rounded). */
+/**
+ * Position 0..1 -> value, clamped to the range (integer params rounded).
+ * 'fader': the law's inverse, continuous (faderLawDb: no 0.1 dB snapping, so
+ * a lane or a knob drag lands exactly where the travel says).
+ */
 export function fromPos(d: CurveDef, pos: number): number {
   const p = clamp01(pos);
   let v: number;
-  if (d.curve !== 'exp') v = d.min + p * (d.max - d.min);
+  if (d.curve === 'fader') v = faderLawDb(p);
+  else if (d.curve !== 'exp') v = d.min + p * (d.max - d.min);
   else if (zeroBased(d)) {
     if (p < ZERO_ZONE) return clampParam(d, 0);
     const floor = d.max / EXP_FLOOR_RATIO;
@@ -78,9 +93,15 @@ export function dragPos(pos: number, dy: number, fine: boolean): number {
   return clamp01(pos - (dy / DRAG_PX) * (fine ? FINE : 1));
 }
 
-/** One keyboard step up (dir 1) or down (dir -1); `fine` = 0.1% of travel. */
+/**
+ * One keyboard step up (dir 1) or down (dir -1); `fine` = 0.1% of travel.
+ * A 'fader' param (a send knob) steps like the fader's keys instead: 1 dB
+ * (fine 0.1 dB) on the 0.1 dB grid (mixMath faderKeyStep; up from Off is
+ * −59 dB), so the keys land on exact values and up-then-down returns home.
+ */
 export function keyStep(d: KnobDef, v: number, dir: 1 | -1, fine = false): number {
   if (d.integer) return clampParam(d, Math.round(v) + dir);
+  if (d.curve === 'fader') return clampParam(d, faderKeyStep(v, dir, fine));
   // From "off", a step up must leave the zero zone (1% would land inside it
   // and stay 0): go straight to the floor, the smallest non-zero value.
   if (zeroBased(d) && v <= 0 && dir > 0) return fromPos(d, ZERO_ZONE);

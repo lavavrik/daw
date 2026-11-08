@@ -28,7 +28,9 @@
 //!   ([`Shape`]): plain linear interpolation of the values for a `lin`
 //!   param, linear in the knob position for an `exp` one (logarithmic in
 //!   the value; an exp param whose minimum is 0 uses the knob's zero zone,
-//!   `ZERO_ZONE` / `EXP_FLOOR_RATIO`, exactly as `app/src/ui/rack/knobMath.ts`);
+//!   `ZERO_ZONE` / `EXP_FLOOR_RATIO`, exactly as `app/src/ui/rack/knobMath.ts`),
+//!   and linear in the fader position for a `fader` one (the fader and the
+//!   sends, plan 19: `mixer::catalog::FADER_LAW`, piecewise linear in dB);
 //! * its **curve** (plan 16, `AUTO_POINT_CURVE`, −1..1, 0 linear) bends that
 //!   segment: at fraction `x` of the way it is `f(x) = x^(2^(−3·curve))` of
 //!   the way in the same knob space (curve 1: `x^(1/8)`, fast then slow;
@@ -73,7 +75,7 @@
 //! Everything here is fixed-size: commands and `frame` never allocate,
 //! block or panic.
 
-use crate::mixer::catalog as mixcat;
+use crate::mixer::catalog::{self as mixcat, Curve, FADER_LAW};
 use crate::protocol::ERR_BAD_VALUE;
 use crate::rack::catalog::{spec, Curve as RackCurve, ModuleKind};
 use crate::transport::Piece;
@@ -139,22 +141,51 @@ fn bend(x: f64, c: f32) -> f64 {
     }
 }
 
-/// A param's knob space: its range and curve (catalog `curve`).
+/// A param's knob space: its range and curve (catalog `curve`; a rack
+/// param's `lin` / `exp` map to the same [`Curve`]s).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shape {
     pub min: f32,
     pub max: f32,
-    /// Exponential knob (logarithmic in the value).
-    pub exp: bool,
+    pub curve: Curve,
+}
+
+/// dB -> fader position 0..1 by [`FADER_LAW`] (at or below its bottom: 0).
+fn fader_pos(db: f64) -> f64 {
+    let (lo, _) = FADER_LAW[0];
+    if db <= lo as f64 {
+        return 0.0;
+    }
+    for w in FADER_LAW.windows(2) {
+        let ((d0, p0), (d1, p1)) = (w[0], w[1]);
+        let (d0, p0, d1, p1) = (d0 as f64, p0 as f64, d1 as f64, p1 as f64);
+        if db <= d1 {
+            return p0 + (db - d0) / (d1 - d0) * (p1 - p0);
+        }
+    }
+    1.0
+}
+
+/// Fader position 0..1 -> dB, the inverse of [`fader_pos`] (continuous: no
+/// 0.1 dB snapping, unlike the on-screen fader's drag).
+fn fader_db(pos: f64) -> f64 {
+    for w in FADER_LAW.windows(2) {
+        let ((d0, p0), (d1, p1)) = (w[0], w[1]);
+        let (d0, p0, d1, p1) = (d0 as f64, p0 as f64, d1 as f64, p1 as f64);
+        if pos <= p1 {
+            return d0 + (pos - p0) / (p1 - p0) * (d1 - d0);
+        }
+    }
+    FADER_LAW[FADER_LAW.len() - 1].0 as f64
 }
 
 impl Shape {
-    const NONE: Shape = Shape { min: 0.0, max: 0.0, exp: false };
+    const NONE: Shape = Shape { min: 0.0, max: 0.0, curve: Curve::Lin };
 
     /// Mixer param `id`'s shape, if it is automatable on channel `ch`.
     pub fn mix(ch: usize, id: u32) -> Option<Shape> {
         let p = mixcat::param(id)?;
-        (p.accepts(ch) && !p.integer).then_some(Shape { min: p.min, max: p.max, exp: p.curve == mixcat::Curve::Exp })
+        (p.accepts(ch) && !p.integer).then_some(Shape { min: p.min, max: p.max, curve: p.curve })
     }
 
     /// Param `param` of a `kind` module, if it is automatable: not an
@@ -162,7 +193,11 @@ impl Shape {
     /// what it draws).
     pub fn rack(kind: ModuleKind, param: usize) -> Option<Shape> {
         let p = spec(kind).params.get(param)?;
-        (!p.integer && kind != ModuleKind::Scope).then_some(Shape { min: p.min, max: p.max, exp: p.curve == RackCurve::Exp })
+        let curve = match p.curve {
+            RackCurve::Lin => Curve::Lin,
+            RackCurve::Exp => Curve::Exp,
+        };
+        (!p.integer && kind != ModuleKind::Scope).then_some(Shape { min: p.min, max: p.max, curve })
     }
 
     /// Is `v` in the range?
@@ -171,7 +206,7 @@ impl Shape {
     }
 
     fn zero_based(&self) -> bool {
-        self.exp && self.min <= 0.0
+        self.curve == Curve::Exp && self.min <= 0.0
     }
 
     /// Value -> knob position 0..1 (clamped).
@@ -182,8 +217,15 @@ impl Shape {
         if !(max > min) || v.is_nan() {
             return 0.0;
         }
-        let p = if !self.exp {
+        let p = if self.curve == Curve::Lin {
             (v - min) / (max - min)
+        } else if self.curve == Curve::Fader {
+            // The law is absolute dB; the range only clamps.
+            if v <= min {
+                0.0
+            } else {
+                fader_pos(v.min(max))
+            }
         } else if self.zero_based() {
             let floor = max / EXP_FLOOR_RATIO;
             if v <= 0.0 {
@@ -205,8 +247,10 @@ impl Shape {
     pub fn value(&self, pos: f64) -> f64 {
         let (min, max) = (self.min as f64, self.max as f64);
         let p = if pos.is_nan() { 0.0 } else { pos.clamp(0.0, 1.0) };
-        let v = if !self.exp {
+        let v = if self.curve == Curve::Lin {
             min + p * (max - min)
+        } else if self.curve == Curve::Fader {
+            fader_db(p)
         } else if self.zero_based() {
             if p < ZERO_ZONE {
                 0.0
@@ -223,7 +267,7 @@ impl Shape {
     /// From `a` to `b` at fraction `f` (0..1) in knob space.
     fn lerp(&self, a: f32, b: f32, f: f64) -> f64 {
         let (a, b) = (a as f64, b as f64);
-        if self.exp {
+        if self.curve != Curve::Lin {
             let (pa, pb) = (self.pos(a), self.pos(b));
             self.value(pa + (pb - pa) * f)
         } else {
@@ -969,65 +1013,89 @@ mod tests {
 
     // ---- the fixture ------------------------------------------------------
 
-    /// `(name, (min, max, exp), points (tick, value, hold, curve), query ticks)`.
-    type Case = (&'static str, (f32, f32, bool), &'static [(u32, f32, bool, f32)], &'static [f64]);
+    /// `(name, (min, max, knob curve), points (tick, value, hold, curve), query ticks)`.
+    type Case = (&'static str, (f32, f32, Curve), &'static [(u32, f32, bool, f32)], &'static [f64]);
+
+    const LIN: Curve = Curve::Lin;
+    const EXP: Curve = Curve::Exp;
+    const FADER: Curve = Curve::Fader;
+
+    fn curve_name(c: Curve) -> &'static str {
+        match c {
+            Curve::Lin => "lin",
+            Curve::Exp => "exp",
+            Curve::Fader => "fader",
+        }
+    }
 
     /// The cases `auto_eval.json` was generated from (UPDATE_FIXTURE=1).
     const CASES: &[Case] = &[
         (
             "linear fader ride (dB)",
-            (-60.0, 6.0, false),
+            (-60.0, 6.0, LIN),
             &[(0, -24.0, false, 0.0), (3840, 0.0, false, 0.0), (7680, -6.0, false, 0.0)],
             &[0.0, 480.0, 1920.0, 1920.5, 3839.999, 3840.0, 5000.25, 7680.0, 9000.0],
         ),
         (
             "hold steps, before the first point and after the last",
-            (-60.0, 6.0, false),
+            (-60.0, 6.0, LIN),
             &[(960, -10.0, true, 0.0), (1920, -30.0, true, 0.0), (2880, 0.0, false, 0.0), (3840, 6.0, false, 0.0)],
             &[0.0, 959.9, 960.0, 1500.0, 1919.5, 1920.0, 2400.0, 2880.0, 3360.0, 3840.0, 4000.0],
         ),
         (
             "exponential mid frequency (halfway is the geometric mean)",
-            (200.0, 8000.0, true),
+            (200.0, 8000.0, EXP),
             &[(0, 200.0, false, 0.0), (3840, 2000.0, false, 0.0)],
             &[0.0, 960.0, 1920.0, 2880.0, 3840.0],
         ),
         (
             "exponential cutoff with a hold",
-            (20.0, 20000.0, true),
+            (20.0, 20000.0, EXP),
             &[(0, 20000.0, false, 0.0), (1920, 100.0, true, 0.0), (3840, 5000.0, false, 0.0), (5760, 20.0, false, 0.0)],
             &[0.0, 960.0, 1919.0, 1920.0, 3000.0, 3840.0, 4800.0, 5760.0, 6000.0],
         ),
         (
             "exponential from zero (the knob's zero zone)",
-            (0.0, 2.0, true),
+            (0.0, 2.0, EXP),
             &[(0, 0.0, false, 0.0), (1000, 2.0, false, 0.0), (2000, 0.001, false, 0.0)],
             &[0.0, 10.0, 15.0, 100.0, 500.0, 900.0, 1000.0, 1500.0, 1999.0, 2000.0],
         ),
-        ("a single point", (0.0, 1.0, false), &[(1000, 0.3, false, 0.0)], &[0.0, 1000.0, 999999.0]),
+        ("a single point", (0.0, 1.0, LIN), &[(1000, 0.3, false, 0.0)], &[0.0, 1000.0, 999999.0]),
         (
             "points sent out of order",
-            (-1.0, 1.0, false),
+            (-1.0, 1.0, LIN),
             &[(3840, 1.0, false, 0.0), (0, -1.0, true, 0.0), (1920, 0.5, false, 0.0), (960, 0.0, false, 0.0)],
             &[0.0, 500.0, 960.0, 1440.0, 1920.0, 2880.0, 3840.0, 5000.0],
         ),
         (
             "curved segments (plan 16): rising, falling, an S of two curves",
-            (-60.0, 6.0, false),
+            (-60.0, 6.0, LIN),
             &[(0, -60.0, false, 1.0), (1000, 6.0, false, -1.0), (2000, -60.0, false, 0.5), (3000, 0.0, false, -0.5), (4000, -30.0, false, 0.25)],
             &[0.0, 250.0, 500.0, 750.0, 1000.0, 1250.0, 1500.0, 1750.0, 2250.0, 2500.0, 2750.0, 3250.0, 3500.0, 3750.0, 4000.0, 5000.0],
         ),
         (
             "a curved exponential cutoff (the curve shapes the knob position)",
-            (20.0, 20000.0, true),
+            (20.0, 20000.0, EXP),
             &[(0, 20.0, false, 0.75), (3840, 20000.0, false, -0.375), (7680, 200.0, false, 0.0)],
             &[0.0, 480.0, 960.0, 1920.0, 2880.0, 3840.0, 4800.0, 5760.0, 7680.0],
         ),
         (
             "curves on a hold point and on the last point are ignored",
-            (0.0, 1.0, false),
+            (0.0, 1.0, LIN),
             &[(0, 0.2, true, 1.0), (1000, 0.8, false, 0.0), (2000, 0.4, false, -1.0)],
             &[0.0, 500.0, 999.0, 1000.0, 1500.0, 2000.0, 3000.0],
+        ),
+        (
+            "fader taper (plan 19): a volume fade from 0 dB to -inf, then up to +6 across every breakpoint",
+            (-60.0, 6.0, FADER),
+            &[(0, 0.0, false, 0.0), (3840, -60.0, false, 0.0), (7680, 6.0, false, 0.0)],
+            &[0.0, 480.0, 960.0, 1440.0, 1920.0, 2400.0, 2880.0, 3360.0, 3839.5, 3840.0, 4000.0, 4800.0, 5760.0, 6720.0, 7600.0, 7680.0, 9000.0],
+        ),
+        (
+            "fader taper with curves and a hold (a send build-up)",
+            (-60.0, 6.0, FADER),
+            &[(0, -60.0, false, 0.5), (1920, -10.0, true, 0.0), (2880, -20.0, false, -0.5), (3840, -3.5, false, 0.0), (4800, -45.0, false, 0.0)],
+            &[0.0, 240.0, 480.0, 960.0, 1440.0, 1919.0, 1920.0, 2400.0, 2880.0, 3120.0, 3360.0, 3600.0, 3840.0, 4320.0, 4800.0, 6000.0],
         ),
     ];
 
@@ -1052,7 +1120,7 @@ mod tests {
         let x = (t - a.0 as f64) / (b.0 as f64 - a.0 as f64);
         // The segment's curve: f(x) = x^(2^(-3 curve)), written out here.
         let f = x.powf(2f64.powf(-3.0 * a.3 as f64));
-        if shape.exp {
+        if shape.curve != Curve::Lin {
             let (pa, pb) = (shape.pos(a.1 as f64), shape.pos(b.1 as f64));
             shape.value(pa + (pb - pa) * f)
         } else {
@@ -1064,8 +1132,8 @@ mod tests {
         let mut o = String::from(
             "{\n  \"version\": 1,\n  \"about\": \"Automation lane evaluation (engine/src/automation.rs, Lane::value_at; app laneValueAt). Points are [tick, value, hold 0/1, curve (optional, default 0: f(x) = x^(2^(-3 curve)))] in the order they are sent; queries are [tick, expected value]. Compare in knob space (the param's min/max/curve) to 1e-6.\",\n  \"cases\": [",
         );
-        for (i, (name, (min, max, exp), points, queries)) in CASES.iter().enumerate() {
-            let shape = Shape { min: *min, max: *max, exp: *exp };
+        for (i, (name, (min, max, curve), points, queries)) in CASES.iter().enumerate() {
+            let shape = Shape { min: *min, max: *max, curve: *curve };
             // `[tick, value, hold]`, and the curve as a 4th element when it is not 0 (as saved).
             let pts: Vec<String> = points
                 .iter()
@@ -1083,7 +1151,7 @@ mod tests {
                 "\n      \"name\": \"{name}\",\n      \"param\": {{\"min\": {}, \"max\": {}, \"curve\": \"{}\"}},\n      \"points\": [{}],\n      \"queries\": [{}]\n    }}",
                 *min as f64,
                 *max as f64,
-                if *exp { "exp" } else { "lin" },
+                curve_name(*curve),
                 pts.join(", "),
                 qs.join(", ")
             ));
@@ -1113,10 +1181,10 @@ mod tests {
             lane.value_at(500.0).unwrap() as f64
         };
         // Zero zone (min 0): the half-way knob position of 0 -> 2 is 0.058941.
-        let z = at(Shape { min: 0.0, max: 2.0, exp: true }, 0.0, 2.0);
+        let z = at(Shape { min: 0.0, max: 2.0, curve: EXP }, 0.0, 2.0);
         assert!((z - 0.058941).abs() < 1e-5, "{z}");
         // Plain exponential: half-way from 200 to 2000 is the geometric mean, sqrt(200 * 2000).
-        let e = at(Shape { min: 20.0, max: 20000.0, exp: true }, 200.0, 2000.0);
+        let e = at(Shape { min: 20.0, max: 20000.0, curve: EXP }, 200.0, 2000.0);
         assert!((e - 632.456).abs() < 1e-2, "{e}");
     }
 
@@ -1129,8 +1197,8 @@ mod tests {
         // Hand values: curve 1 is x^(1/8), -1 is x^8, 0.5 is x^(1/2^1.5), -0.5 is x^(2^1.5).
         assert!((f(0.5, 1.0) - 0.917004).abs() < 1e-6);
         assert!((f(0.5, -1.0) - 0.00390625).abs() < 1e-9);
-        let lin = Shape { min: 0.0, max: 1.0, exp: false };
-        let exp = Shape { min: 20.0, max: 20000.0, exp: true };
+        let lin = Shape { min: 0.0, max: 1.0, curve: LIN };
+        let exp = Shape { min: 20.0, max: 20000.0, curve: EXP };
         for c in [-1.0f32, -0.5, 0.5, 1.0] {
             for (shape, a, b) in [(lin, 0.0f32, 1.0f32), (lin, 1.0, 0.0), (exp, 20.0, 20000.0), (exp, 20000.0, 20.0)] {
                 let mut lane = Lane::new();
@@ -1148,9 +1216,80 @@ mod tests {
         }
     }
 
+    /// Plan 19: a volume lane fading 0 dB -> -inf moves like the fader, so
+    /// halfway in time is halfway in fader travel (0.75 -> 0: 0.375), which
+    /// the law puts between (-30 dB, 0.25) and (-20 dB, 0.38):
+    /// -30 + 10 * 0.125 / 0.13 = -20.3846 dB, not the -30 dB of a linear-dB fade.
+    #[test]
+    fn fader_lane_midpoint() {
+        for (ch, id) in [(0, mixcat::P_FADER), (crate::MIX_MASTER, mixcat::P_FADER), (3, mixcat::P_SEND_A), (3, mixcat::P_SEND_B)] {
+            let shape = Shape::mix(ch, id).unwrap();
+            assert_eq!(shape.curve, Curve::Fader, "{ch}/{id}");
+            let mut lane = Lane::new();
+            lane.set_shape(shape);
+            assert_eq!(lane.set_point(0, 0, 0.0, false), Ok(()));
+            assert_eq!(lane.set_point(1, 1000, -60.0, false), Ok(()));
+            let mid = lane.value_at(500.0).unwrap() as f64;
+            assert!((mid - (-30.0 + 10.0 * 0.125 / 0.13)).abs() < 1e-4, "{ch}/{id}: {mid}");
+            assert!((mid + 20.384615).abs() < 1e-4, "{mid}");
+            // The ends are the points' own values.
+            assert_eq!(lane.value_at(0.0), Some(0.0));
+            assert_eq!(lane.value_at(1000.0), Some(-60.0));
+        }
+        // Other mixer params keep their curves: pan is still linear.
+        assert_eq!(Shape::mix(0, mixcat::P_PAN).unwrap().curve, Curve::Lin);
+        assert_eq!(Shape::mix(0, mixcat::P_EQ_MID_FREQ).unwrap().curve, Curve::Exp);
+    }
+
+    /// Plan 19: the law both ways, worked by hand at and between its
+    /// breakpoints; at or below the minimum is position 0.
+    #[test]
+    fn fader_shape_follows_the_law() {
+        let s = Shape { min: -60.0, max: 6.0, curve: Curve::Fader };
+        for (db, pos) in mixcat::FADER_LAW {
+            assert!((s.pos(db as f64) - pos as f64).abs() < 1e-7, "{db}");
+            assert!((s.value(pos as f64) - db as f64).abs() < 1e-5, "{pos}");
+        }
+        assert!((s.pos(-50.0) - 0.07).abs() < 1e-7);
+        assert!((s.pos(-3.0) - 0.69).abs() < 1e-7);
+        assert!((s.value(0.875) - 3.0).abs() < 1e-5);
+        assert_eq!(s.pos(-60.0), 0.0);
+        assert_eq!(s.pos(-100.0), 0.0);
+        assert_eq!(s.pos(f64::NEG_INFINITY), 0.0);
+        assert_eq!(s.pos(f64::NAN), 0.0);
+        assert_eq!(s.pos(99.0), 1.0);
+        assert_eq!(s.value(-1.0), -60.0);
+        assert_eq!(s.value(2.0), 6.0);
+        // Continuous: no 0.1 dB snapping.
+        let v = s.value(0.5);
+        assert!((v - (-20.0 + 10.0 * 0.12 / 0.17)).abs() < 1e-5, "{v}");
+    }
+
+    /// Plan 19: a segment's curve bends it in fader space: at fraction `x` of
+    /// the way it is `f(x)` of the fader travel, not of the dB range.
+    #[test]
+    fn fader_curve_segment() {
+        let shape = Shape::mix(0, mixcat::P_SEND_A).unwrap();
+        let mut lane = Lane::new();
+        lane.set_shape(shape);
+        assert_eq!(lane.set_point(0, 0, -60.0, false), Ok(()));
+        assert_eq!(lane.set_point(1, 1000, 6.0, false), Ok(()));
+        assert_eq!(lane.set_curve(0, 0.5), Ok(()));
+        // f(0.5) = 0.5^(2^-1.5) = 0.782654: past 0 dB (0.75), so
+        // 6 * (0.782654 - 0.75) / 0.25 = +0.783 dB.
+        let f = 0.5f64.powf(2f64.powf(-1.5));
+        assert!((f - 0.782654).abs() < 1e-6);
+        let v = lane.value_at(500.0).unwrap() as f64;
+        assert!((v - 6.0 * (f - 0.75) / 0.25).abs() < 1e-4, "{v}");
+        for x in [0.25, 0.75] {
+            let pos = shape.pos(lane.value_at(1000.0 * x).unwrap() as f64);
+            assert!((pos - x.powf(2f64.powf(-1.5))).abs() < 1e-6, "{x}: {pos}");
+        }
+    }
+
     #[test]
     fn curve_edge_cases() {
-        let shape = Shape { min: 0.0, max: 1.0, exp: false };
+        let shape = Shape { min: 0.0, max: 1.0, curve: LIN };
         let mut lane = Lane::new();
         lane.set_shape(shape);
         // A curve on an inactive point, or out of range: refused.
@@ -1199,11 +1338,8 @@ mod tests {
         for case in cases {
             let name = case.get("name").str();
             let param = case.get("param");
-            let shape = Shape {
-                min: param.get("min").num() as f32,
-                max: param.get("max").num() as f32,
-                exp: param.get("curve").str() == "exp",
-            };
+            let curve = [LIN, EXP, FADER].into_iter().find(|&c| curve_name(c) == param.get("curve").str()).expect("a known curve");
+            let shape = Shape { min: param.get("min").num() as f32, max: param.get("max").num() as f32, curve };
             let mut lane = Lane::new();
             lane.set_shape(shape);
             for (idx, p) in case.get("points").arr().iter().enumerate() {

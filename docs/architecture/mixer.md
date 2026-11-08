@@ -105,6 +105,33 @@ constant power, while the strip's pan keeps a centred mix at unity. They
 stack (gains multiply): row and strip both centred = 0.707 x 1 (-3 dB per
 side); both hard left = 1.0 x sqrt2 (+3 dB on L).
 
+## Fader law (the fader and the sends)
+
+The fader's travel is not linear in dB. `mixer::catalog::FADER_LAW` maps
+dB to a position 0..1, piecewise linear in dB between (−60, 0), (−40, 0.14),
+(−30, 0.25), (−20, 0.38), (−10, 0.55), (0, 0.75) and (+6, 1): 0 dB at 3/4
+of the travel, the range near unity spread out, the bottom 14 % for −40 dB
+down to −∞ (the −60 dB minimum, gain exactly 0). The catalog exports it as
+`"faderLaw"`; the app reads it there (`app/src/ui/mixer/mixMath.ts`
+`FADER_LAW`, rationale in its comment).
+
+Since plan 19 it is also a param **curve**, `fader`, beside `lin` and
+`exp`. The `fader`, `send_a` and `send_b` params have it (the −60 minimum
+still reads "−∞" on the fader and "Off" on a send). So:
+
+- **Send knobs** turn along the fader law (`knobMath` `toPos` / `fromPos`,
+  continuous: no 0.1 dB snapping). Typed values are stored as typed, and
+  double-click resets to the default (Off). The arrow keys step like the
+  fader's: 1 dB, Shift 0.1 dB, on the 0.1 dB grid (`faderKeyStep`).
+- **Volume and send lanes** are drawn and played in fader travel, the same
+  in the engine and the app (automation.md, *Evaluation*).
+- **MIDI-learn** on the fader or a send follows the law as the fader's drag
+  does, snapped to 0.1 dB (`midiMap` `ccValue` → `faderDb`).
+
+The on-screen fader keeps its own gestures (`faderDb` snaps a drag to
+0.1 dB); the curve only adds the law to everything else that maps a value
+to a travel.
+
 ## Limiter and latency
 
 The master limiter is a brickwall lookahead limiter: **1.5 ms** of

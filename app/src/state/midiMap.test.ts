@@ -85,6 +85,21 @@ describe('MIDI mappings', () => {
     expect(synth.modules.find((m) => m.idx === 4)!.params[CUTOFF]).toBe(fromPos(def, 64 / 127));
   });
 
+  it('a mapped send follows the fader law too (plan 19: curve "fader")', async () => {
+    const { p, drums, sink } = await rig();
+    const send: AutoTarget = { kind: 'mix', param: 'send_a' };
+    expect(learnMidi(p, 12, drums.id, send)).toBe(true);
+    const db = () => p.mixer.channels[drums.id].params[mixParam('send_a').id];
+    applyCc(p, sink, 12, 64);
+    expect(db()).toBe(faderDb(64 / 127));
+    expect(ccValue(mixParam('send_a'), 64)).toBe(faderDb(64 / 127));
+    expect(ccValue(mixParam('fader'), 64)).toBe(faderDb(64 / 127));
+    applyCc(p, sink, 12, 0);
+    expect(db()).toBe(-60);
+    applyCc(p, sink, 12, 127);
+    expect(db()).toBe(6);
+  });
+
   it('integer knobs are learnable (rounded)', async () => {
     const { p, synth, sink } = await rig();
     const osc = synth.modules.find((m) => moduleDef(m.kind).id === 'osc')!;

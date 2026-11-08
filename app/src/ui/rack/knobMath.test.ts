@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { mixParam } from '../../audio/mixerCatalog';
+import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
 import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, parseValue, toPos, ZERO_ZONE } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
@@ -68,6 +69,57 @@ describe('toPos / fromPos', () => {
   });
 });
 
+// Plan 19: the fader and both sends have curve 'fader', the mixer fader's
+// law (mixMath FADER_LAW, from the catalog). Their knob space is the fader's
+// travel, continuous both ways (no 0.1 dB snapping, unlike the fader drag).
+describe('toPos / fromPos: the fader taper', () => {
+  const send = mixParam('send_a');
+  const fader = mixParam('fader');
+  it('the fader and both sends use it; nothing else does', () => {
+    expect([fader.curve, send.curve, mixParam('send_b').curve]).toEqual(['fader', 'fader', 'fader']);
+    expect(mixParam('pan').curve).toBe('lin');
+    expect(mixParam('comp_threshold').curve).toBe('lin');
+  });
+  it('round-trips at each breakpoint and between them', () => {
+    for (const d of [fader, send]) {
+      for (const [db, pos] of FADER_LAW) {
+        expect(toPos(d, db)).toBeCloseTo(pos, 12);
+        expect(fromPos(d, pos)).toBeCloseTo(db, 9);
+      }
+      for (let i = 1; i < FADER_LAW.length; i++) {
+        const [d0, p0] = FADER_LAW[i - 1];
+        const [d1, p1] = FADER_LAW[i];
+        for (const f of [0.1, 0.5, 0.83]) {
+          const db = d0 + f * (d1 - d0);
+          expect(toPos(d, db), `${db} dB`).toBeCloseTo(p0 + f * (p1 - p0), 12);
+          expect(fromPos(d, toPos(d, db))).toBeCloseTo(db, 9);
+          expect(toPos(d, db)).toBe(faderPos(db)); // the fader's own law
+        }
+      }
+    }
+  });
+  it('position -> dB is continuous: no 0.1 dB snapping', () => {
+    // Half way is between (-20, 0.38) and (-10, 0.55): -20 + 10 * 0.12 / 0.17.
+    expect(fromPos(send, 0.5)).toBeCloseTo(-20 + (10 * 0.12) / 0.17, 12);
+    expect(faderDb(0.5)).toBe(-12.9); // the on-screen fader drag still snaps
+    expect(fromPos(send, 0.4)).not.toBe(Math.round(fromPos(send, 0.4) * 10) / 10);
+  });
+  it('at or below the minimum is position 0; the ends clamp', () => {
+    for (const v of [-60, -61, -Infinity]) expect(toPos(send, v)).toBe(0);
+    expect(toPos(send, 6)).toBe(1);
+    expect(toPos(send, 40)).toBe(1);
+    expect(fromPos(send, 0)).toBe(-60);
+    expect(fromPos(send, -1)).toBe(-60);
+    expect(fromPos(send, 2)).toBe(6);
+    expect(toPos(send, NaN)).toBe(0); // the default (Off)
+    expect(toPos(fader, NaN)).toBe(0.75); // the default (0 dB)
+  });
+  it('a drag moves like the fader: the bottom 14% of travel is -60..-40 dB', () => {
+    expect(fromPos(send, dragPos(0, -0.14 * DRAG_PX, false))).toBeCloseTo(-40, 9);
+    expect(fromPos(send, dragPos(toPos(send, 0), -0.25 * DRAG_PX, false))).toBeCloseTo(6, 9);
+  });
+});
+
 describe('dragPos', () => {
   it('150 px upward covers the full range; Shift is x0.1', () => {
     expect(DRAG_PX).toBe(150);
@@ -92,6 +144,22 @@ describe('keyStep', () => {
     expect(keyStep(glide, 0, 1, true)).toBeGreaterThan(0);
     expect(keyStep(glide, keyStep(glide, 0, 1), -1)).toBe(0); // and back off
     expect(keyStep(glide, 0, -1)).toBe(0);
+  });
+  it('fader-taper params (fader, sends) step like the fader: 1 dB, Shift 0.1 dB, on exact values', () => {
+    const send = mixParam('send_a');
+    expect(keyStep(send, -12.3, 1)).toBe(-11.3);
+    expect(keyStep(send, -12.3, -1, true)).toBe(-12.4);
+    expect(keyStep(send, -60, 1)).toBe(-59); // up from Off
+    expect(keyStep(send, -60, -1)).toBe(-60);
+    expect(keyStep(send, 6, 1)).toBe(6);
+    // Up and back down returns to the same value, no drift.
+    let v = -12.3;
+    for (let i = 0; i < 25; i++) v = keyStep(send, v, 1, true);
+    for (let i = 0; i < 25; i++) v = keyStep(send, v, -1, true);
+    expect(v).toBe(-12.3);
+    for (const db of [-60, -33.3, -0.1, 0, 5.5]) {
+      for (const dir of [1, -1] as const) expect(keyStep(mixParam('fader'), db, dir)).toBe(faderKeyStep(db, dir, false));
+    }
   });
   it('ten steps up from 300 Hz is clearly higher', () => {
     let v = 300;
@@ -180,6 +248,13 @@ describe('formatValue: mixer params', () => {
     expect(formatValue(mixParam('rev_size'), 0.6)).toBe('60%');
     expect(formatValue(mixParam('delay_time'), 6)).toBe('3/16');
   });
+  it('fader-taper params read like the fader (formatDb)', () => {
+    for (const db of [-60, -59.95, -40, -12.34, -0.04, 0, 0.05, 3, 6]) {
+      expect(formatValue(mixParam('fader'), db), `${db}`).toBe(formatDb(db));
+    }
+    expect(formatValue(mixParam('send_b'), -60)).toBe('Off');
+    expect(formatValue(mixParam('send_b'), 3)).toBe('+3.0 dB');
+  });
   it('mixer exp params map like rack ones', () => {
     const r = mixParam('comp_ratio');
     expect(toPos(r, 1)).toBe(0);
@@ -225,6 +300,12 @@ describe('parseValue (typed entry)', () => {
     expect(parseValue(pan, 'L30')).toBeCloseTo(-0.3);
     expect(parseValue(pan, 'r 100')).toBe(1);
   });
+  it('a typed send value is stored as typed: no 0.1 dB snapping, no taper round trip', () => {
+    expect(parseValue(mixParam('send_a'), '-12.3')).toBe(-12.3);
+    expect(parseValue(mixParam('send_a'), '−12.34 dB')).toBe(-12.34);
+    expect(parseValue(mixParam('send_b'), 'off')).toBe(-60);
+    expect(parseValue(mixParam('send_b'), '9')).toBe(6);
+  });
   it('rejects junk and wrong units', () => {
     expect(parseValue(cutoff, '')).toBeNull();
     expect(parseValue(cutoff, 'abc')).toBeNull();
@@ -232,7 +313,7 @@ describe('parseValue (typed entry)', () => {
     expect(parseValue(attack, '5 Hz')).toBeNull();
   });
   it('round-trips every readout it formats', () => {
-    for (const d of [cutoff, glide, reso, octave, attack, mixParam('fader'), mixParam('pan')]) {
+    for (const d of [cutoff, glide, reso, octave, attack, mixParam('fader'), mixParam('send_a'), mixParam('pan')]) {
       for (const pos of [0, 0.13, 0.5, 0.77, 1]) {
         const v = fromPos(d, pos);
         const back = parseValue(d, formatValue(d, v), formatValue(d, v));

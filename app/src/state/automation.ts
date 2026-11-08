@@ -74,7 +74,8 @@ function upperBound(points: readonly { tick: number }[], t: number): number {
  * before the first point, the first value; after the last, the last; a hold
  * point keeps its value up to the next point; a linear one interpolates to
  * it in KNOB space -- the values themselves for a `lin` param, the knob
- * position (knobMath toPos/fromPos, zero zone included) for an `exp` one --
+ * position (knobMath toPos/fromPos) for an `exp` one (zero zone included)
+ * and for a `fader` one (the fader and sends: the fader law's travel) --
  * bent by its `curve` (bend; absent = 0; a hold point and the last point
  * ignore theirs). The result is clamped to the range.
  */
@@ -94,7 +95,7 @@ export function laneValueAt(
     else {
       const span = b.tick - a.tick;
       const f = bend(span > 0 ? Math.min(1, Math.max(0, (tick - a.tick) / span)) : 1, a.curve ?? 0);
-      if (param.curve === 'exp') {
+      if (param.curve !== 'lin') {
         const pa = toPos(param, a.value);
         const pb = toPos(param, b.value);
         v = fromPos(param, pa + (pb - pa) * f);

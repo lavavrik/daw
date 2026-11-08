@@ -22,6 +22,9 @@
 //!   fader and sends at their −60 dB minimum are silent ("-inf" / "Off"), and
 //!   the EQ high-pass at its 20 Hz minimum is off (the DSP parks it at 5 Hz,
 //!   see `dsp/eq.rs`). The UI shows that label instead of the number.
+//! * `curve` is the param's knob space: `lin`, `exp`, or `fader` (the fader
+//!   and both sends, plan 19), the mixer's [`FADER_LAW`], which is exported
+//!   as `"faderLaw"` alongside the params.
 
 use crate::{MAX_TRACKS, MIX_DELAY, MIX_MASTER, MIX_REVERB};
 #[cfg(test)]
@@ -81,11 +84,17 @@ impl Group {
     }
 }
 
-/// Knob mapping hint for the UI (`Exp` for frequencies, times, ratios).
+/// Knob mapping ("knob space"): how a value maps to a control's travel and
+/// how an automation lane interpolates it (`automation::Shape`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Curve {
+    /// Linear in the value.
     Lin,
+    /// Logarithmic in the value (frequencies, times, ratios).
     Exp,
+    /// The mixer fader's taper, [`FADER_LAW`] (plan 19): the fader and both
+    /// sends, so a knob, a lane and MIDI-learn move like the fader does.
+    Fader,
 }
 
 /// One mixer param (see the module docs).
@@ -144,6 +153,17 @@ const MASTER: &[ChannelKind] = &[M];
 pub const FADER_MIN_DB: f32 = -60.0;
 /// Fader / send maximum (dB).
 pub const FADER_MAX_DB: f32 = 6.0;
+
+/// The fader law (plan 19; was app/src/ui/mixer/mixMath.ts' own table):
+/// `(dB, position)` breakpoints, piecewise linear in dB between them. Position
+/// 0..1 is the fader's travel. 0 dB sits at 3/4 of the travel, the top
+/// quarter is +6 dB of boost, the range near unity (where mixing happens) is
+/// spread out, and the bottom 14 % covers −40 dB down to the −60 dB minimum
+/// (silent). Exported as `"faderLaw"`; the UI draws its fader, meter scale,
+/// send knobs and volume / send lanes with it, and automation interpolates
+/// [`Curve::Fader`] params in this position space.
+pub const FADER_LAW: [(f32, f32); 7] =
+    [(FADER_MIN_DB, 0.0), (-40.0, 0.14), (-30.0, 0.25), (-20.0, 0.38), (-10.0, 0.55), (0.0, 0.75), (FADER_MAX_DB, 1.0)];
 
 /// Delay time choices (note lengths) and their length in quarter-note beats.
 pub const DELAY_DIVISIONS: &[&str] =
@@ -230,10 +250,11 @@ const fn with_min_label(mut m: MixParam, label: &'static str) -> MixParam {
 
 const L: Curve = Curve::Lin;
 const E: Curve = Curve::Exp;
+const F: Curve = Curve::Fader;
 
 /// Every param, indexed by id (`PARAMS[id].id == id`).
 pub static PARAMS: [MixParam; MIX_PARAMS] = [
-    with_min_label(p(P_FADER, "fader", "Volume", FADER_MIN_DB, FADER_MAX_DB, 0.0, "dB", L, ALL, Group::Fader), "-inf"),
+    with_min_label(p(P_FADER, "fader", "Volume", FADER_MIN_DB, FADER_MAX_DB, 0.0, "dB", F, ALL, Group::Fader), "-inf"),
     p(P_PAN, "pan", "Pan", -1.0, 1.0, 0.0, "", L, TRACK_RETURN, Group::Fader),
     flag(P_MUTE, "mute", "Mute", 0.0, TRACK_RETURN, Group::Fader),
     flag(P_SOLO, "solo", "Solo", 0.0, TRACK, Group::Fader),
@@ -250,9 +271,9 @@ pub static PARAMS: [MixParam; MIX_PARAMS] = [
     p(P_COMP_ATTACK, "comp_attack", "Attack", 0.1, 100.0, 5.0, "ms", E, TRACK, Group::Comp),
     p(P_COMP_RELEASE, "comp_release", "Release", 10.0, 1000.0, 120.0, "ms", E, TRACK, Group::Comp),
     p(P_COMP_MAKEUP, "comp_makeup", "Makeup", 0.0, 24.0, 0.0, "dB", L, TRACK, Group::Comp),
-    with_min_label(p(P_SEND_A, "send_a", "Reverb", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", L, TRACK, Group::Send), "Off"),
+    with_min_label(p(P_SEND_A, "send_a", "Reverb", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
     flag(P_SEND_A_PRE, "send_a_pre", "Reverb pre", 0.0, TRACK, Group::Send),
-    with_min_label(p(P_SEND_B, "send_b", "Delay", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", L, TRACK, Group::Send), "Off"),
+    with_min_label(p(P_SEND_B, "send_b", "Delay", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
     flag(P_SEND_B_PRE, "send_b_pre", "Delay pre", 0.0, TRACK, Group::Send),
     p(P_REV_SIZE, "rev_size", "Size", 0.0, 1.0, 0.6, "", L, RETURN, Group::Reverb),
     p(P_REV_DECAY, "rev_decay", "Decay", 0.2, 20.0, 2.2, "s", E, RETURN, Group::Reverb),
@@ -324,6 +345,7 @@ fn param_json(p: &MixParam) -> String {
         string(match p.curve {
             Curve::Lin => "lin",
             Curve::Exp => "exp",
+            Curve::Fader => "fader",
         }),
         p.integer,
         applies.join(","),
@@ -344,7 +366,9 @@ pub fn mixer_catalog_json() -> String {
         o.push_str(if i == 0 { "\n    " } else { ",\n    " });
         o.push_str(&param_json(p));
     }
-    o.push_str("\n  ],\n  \"delay\": {\"divisionBeats\": [");
+    let law: Vec<String> = FADER_LAW.iter().map(|&(db, pos)| format!("[{},{}]", num(db), num(pos))).collect();
+    o.push_str(&format!("\n  ],\n  \"faderLaw\": [{}],", law.join(",")));
+    o.push_str("\n  \"delay\": {\"divisionBeats\": [");
     let beats: Vec<String> = DELAY_DIVISION_BEATS.iter().map(|&b| num(b)).collect();
     o.push_str(&beats.join(","));
     // The engine clamps a synced time to this (dsp::delay::MAX_SECONDS); the
@@ -387,6 +411,9 @@ mod tests {
             if p.curve == Curve::Exp {
                 assert!(p.min > 0.0, "{}: exp needs min > 0", p.name);
             }
+            if p.curve == Curve::Fader {
+                assert!(p.min == FADER_LAW[0].0 && p.max == FADER_LAW[FADER_LAW.len() - 1].0, "{}: fader needs the law's range", p.name);
+            }
             assert!(!p.applies_to.is_empty(), "{}", p.name);
         }
         assert_eq!(DELAY_DIVISIONS.len(), DELAY_DIVISION_BEATS.len());
@@ -415,6 +442,29 @@ mod tests {
         assert!(!fader.valid(6.01) && !fader.valid(f64::NAN) && !fader.valid(f64::NEG_INFINITY));
         assert!(!fader.valid(1e300) && !fader.valid(-1e300));
         assert!(param(P_DELAY_FEEDBACK).unwrap().valid(0.95), "the f64 of the catalog max");
+    }
+
+    /// Plan 19: the fader law is pinned here (it was `FADER_LAW` in
+    /// app/src/ui/mixer/mixMath.ts), exported verbatim as `"faderLaw"`, and
+    /// the fader and both sends use it as their curve.
+    #[test]
+    fn fader_law_matches_catalog_export() {
+        let want: [(f32, f32); 7] = [(-60.0, 0.0), (-40.0, 0.14), (-30.0, 0.25), (-20.0, 0.38), (-10.0, 0.55), (0.0, 0.75), (6.0, 1.0)];
+        assert_eq!(FADER_LAW, want);
+        let json = mixer_catalog_json();
+        assert!(
+            json.contains("\"faderLaw\": [[-60,0],[-40,0.14],[-30,0.25],[-20,0.38],[-10,0.55],[0,0.75],[6,1]]"),
+            "faderLaw export: {json}"
+        );
+        for p in &PARAMS {
+            let fader = matches!(p.name, "fader" | "send_a" | "send_b");
+            assert_eq!(p.curve == Curve::Fader, fader, "{}", p.name);
+            if fader {
+                assert_eq!((p.min, p.max), (FADER_LAW[0].0, FADER_LAW[6].0), "{}: the law spans the range", p.name);
+                assert!(json.contains(&format!("\"name\":\"{}\",", p.name)));
+            }
+        }
+        assert_eq!(json.matches("\"curve\":\"fader\"").count(), 3);
     }
 
     #[test]

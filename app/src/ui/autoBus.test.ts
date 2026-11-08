@@ -60,7 +60,9 @@ describe('autoBus', () => {
     p.songPosition = BAR / 2;
     clock.heard = NaN;
     bus.frame();
-    expect(last(views)).toMatchObject({ status: 'on', value: -30 });
+    // Half way from -40 to -20 dB in fader travel (plan 19): 0.14 -> 0.38 is 0.26, just above -30 dB (0.25).
+    expect(last(views).status).toBe('on');
+    expect(last(views).value).toBeCloseTo(-30 + (10 * 0.01) / 0.13, 9);
     // A control without a lane is told so once, and nothing per frame after that.
     const other: AutoView[] = [];
     bus.register(p.tracks[0].id, { kind: 'mix', param: 'pan' }, (v) => other.push(v));

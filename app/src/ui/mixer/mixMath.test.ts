@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mixParam } from '../../audio/mixerCatalog';
+import { faderLaw, mixParam } from '../../audio/mixerCatalog';
 import {
   FADER_FINE, FADER_LAW, PEAK_HOLD_MS, faderDb, faderDrag, faderKeyStep, faderPos, formatDb, delayClampNote, holdStep, isClip, masterLight, worseLight,
   linToDb, meterPos,
 } from './mixMath';
 
 describe('fader law', () => {
+  it('is the catalog\'s (engine mixer::catalog::FADER_LAW, plan 19)', () => {
+    expect(FADER_LAW).toBe(faderLaw);
+  });
   it('covers the catalog range: min (−∞) at the bottom, max at the top', () => {
     expect(FADER_LAW[0][0]).toBe(mixParam('fader').min);
     expect(FADER_LAW[FADER_LAW.length - 1][0]).toBe(mixParam('fader').max);

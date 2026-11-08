@@ -1,7 +1,7 @@
 import { clampParam } from './catalog';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MIXER_CATALOG, MIX_PARAMS, defaultMixParams, mixParam } from './mixerCatalog';
+import { MIXER_CATALOG, MIX_PARAMS, defaultMixParams, faderLaw, mixParam } from './mixerCatalog';
 
 describe('mixer catalog', () => {
   it('loads the golden verbatim', () => {
@@ -31,6 +31,18 @@ describe('mixer catalog', () => {
     expect(MIXER_CATALOG.delay.divisionBeats).toHaveLength(d.choices.length);
     expect(MIXER_CATALOG.delay.divisionBeats[d.default]).toBe(0.75);
     expect(MIXER_CATALOG.delay.maxSeconds).toBe(2);
+  });
+  it('faderLaw is the fader law the mixer used to hard-code (plan 19)', () => {
+    // The literal table from app/src/ui/mixer/mixMath.ts before plan 19.
+    expect(faderLaw).toEqual([[-60, 0], [-40, 0.14], [-30, 0.25], [-20, 0.38], [-10, 0.55], [0, 0.75], [6, 1]]);
+    expect(faderLaw).toBe(MIXER_CATALOG.faderLaw);
+    // The fader and both sends use it as their knob curve, over its range.
+    for (const name of ['fader', 'send_a', 'send_b']) {
+      const d = mixParam(name);
+      expect(d.curve, name).toBe('fader');
+      expect([d.min, d.max]).toEqual([faderLaw[0][0], faderLaw[faderLaw.length - 1][0]]);
+    }
+    expect(MIX_PARAMS.filter((p) => p.curve === 'fader').map((p) => p.name)).toEqual(['fader', 'send_a', 'send_b']);
   });
   it('mixParam throws on unknown', () => {
     expect(() => mixParam('nope')).toThrow();

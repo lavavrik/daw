@@ -188,7 +188,8 @@ describe('automation actions', () => {
     expect(l.points[3].value).toBe(6);
     movePoints(p, sink, l.id, [l.points[0].id, l.points[1].id], 0, -2);
     expect(l.points.map((x) => x.value)).toEqual([-60, -60, before[2], 6]);
-    movePoints(p, sink, l.id, [l.points[2].id], 0, 6 / 66); // the travel is 66 dB: -6 dB + 6 dB
+    // The fader's travel is its law (plan 19): -6 dB sits at 0.63, 0 dB at 0.75.
+    movePoints(p, sink, l.id, [l.points[2].id], 0, 0.12);
     expect(l.points[2].value).toBeCloseTo(0, 9);
     agrees();
   });
@@ -202,7 +203,8 @@ describe('automation actions', () => {
     const origin = new Map(l.points.map((x) => [x.id, { tick: x.tick, value: x.value }]));
     const shape = pts(l);
     // A drag past the top edge (cumulative deltas, as each pointermove sends them) squashes the group there ...
-    for (const dv of [0.05, 0.1, 0.2, 0.4]) movePoints(p, sink, l.id, group, 0, dv, origin);
+    // (-12 dB is at 0.516 of the fader travel: half the travel takes it past the top.)
+    for (const dv of [0.05, 0.1, 0.2, 0.5]) movePoints(p, sink, l.id, group, 0, dv, origin);
     expect(l.points[1].value).toBe(6);
     expect(l.points[2].value).toBe(6);
     // ... and back to the start restores its shape exactly (the squash is not baked in).

@@ -155,10 +155,13 @@ export function dropRackMappings(p: Project, trackId: string) {
 /**
  * CC value 0..127 -> param value: the knob's own taper (knobMath fromPos).
  * Clamping and integer rounding happen in the action's clampParam
- * (setParam / setMix), as for a drag.
+ * (setParam / setMix), as for a drag. A 'fader'-curve param (the fader and
+ * both sends, plan 19) follows the fader law as the on-screen fader's drag
+ * does, snapped to 0.1 dB (faderDb; plan 14 ruling G: the hardware fader and
+ * the on-screen fader must match, and a send knob now moves like a fader).
  */
 export function ccValue(def: KnobDef, v: number): number {
-  return fromPos(def, v / 127);
+  return def.curve === 'fader' ? faderDb(v / 127) : fromPos(def, v / 127);
 }
 
 /**
@@ -180,8 +183,7 @@ export function applyCc(
   if (!m) return false;
   const def = mappingDef(p, m.owner, m.target);
   if (!def) return false;
-  // The fader is not a linear/exp knob: CC travel follows its own law (FADER_LAW), as a drag does.
-  const value = m.target.kind === 'mix' && m.target.param === 'fader' ? faderDb(v / 127) : ccValue(def, v);
+  const value = ccValue(def, v);
   const opts = { coalesce, label: `Set ${def.label} (MIDI)` };
   if (m.target.kind === 'rack') {
     const t = p.tracks.find((x) => x.id === m.owner);

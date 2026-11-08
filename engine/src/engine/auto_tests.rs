@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::automation::Target;
-use crate::mixer::catalog::{P_EQ_MID_FREQ, P_FADER, P_MUTE, P_PAN, P_SEND_A};
+use crate::mixer::catalog::{FADER_LAW, P_EQ_MID_FREQ, P_FADER, P_MUTE, P_PAN, P_SEND_A};
 use crate::protocol::*;
 use crate::{MAX_AUTO_LANES, MAX_AUTO_POINTS, MIX_REVERB, MAX_SONG_TICKS};
 
@@ -112,6 +112,23 @@ fn db(x: f32, level: f64) -> f64 {
     20.0 * (x as f64 / (level * 0.8)).log10()
 }
 
+/// Plan 19: fader and send lanes interpolate in fader travel (the law,
+/// `FADER_LAW`, piecewise linear in dB), not in dB. The dB at fraction `f`
+/// of the travel from `a` dB to `b` dB, worked out from the law table here
+/// (independently of `automation::Shape`).
+fn fader_line(a: f64, b: f64, f: f64) -> f64 {
+    let law: Vec<(f64, f64)> = FADER_LAW.iter().map(|&(d, p)| (d as f64, p as f64)).collect();
+    let pos = |db: f64| {
+        let i = (1..law.len()).find(|&i| db <= law[i].0).unwrap_or(law.len() - 1);
+        let ((d0, p0), (d1, p1)) = (law[i - 1], law[i]);
+        p0 + (db - d0) / (d1 - d0) * (p1 - p0)
+    };
+    let p = pos(a) + (pos(b) - pos(a)) * f.clamp(0.0, 1.0);
+    let i = (1..law.len()).find(|&i| p <= law[i].1).unwrap_or(law.len() - 1);
+    let ((d0, p0), (d1, p1)) = (law[i - 1], law[i]);
+    d0 + (p - p0) / (p1 - p0) * (d1 - d0)
+}
+
 /// Max sample-to-sample step of `xs`, starting from `prev`.
 fn max_step(prev: f32, xs: &[f32]) -> f32 {
     let mut last = prev;
@@ -175,9 +192,10 @@ fn linear_lane_follows_the_line() {
     for _ in 0..96000 / BLOCK {
         e.process(&mut l, &mut r);
         out.extend_from_slice(&l);
-        // The send gain at the block end sits on the line (linear in dB).
+        // The send gain at the block end sits on the line (linear in fader
+        // travel, plan 19).
         let t = ticks(&e);
-        let want = -40.0 + 36.0 * (t / 3840.0).min(1.0);
+        let want = fader_line(-40.0, -4.0, t / 3840.0);
         let send = e.mixer().ramps(0)[2] as f64;
         let got = 20.0 * send.log10();
         assert!((got - want).abs() <= 0.1, "send at tick {t}: {got:.3} dB, want {want:.3}");
@@ -188,7 +206,7 @@ fn linear_lane_follows_the_line() {
     // (sample f carries the gain of frame f + 1).
     let mut worst = 0.0f64;
     for f in (0..96000).step_by(32) {
-        let want = -24.0 + 24.0 * ((f + 1) as f64 / FPT) / 3840.0;
+        let want = fader_line(-24.0, 0.0, ((f + 1) as f64 / FPT) / 3840.0);
         let got = db(out[f], 0.5);
         assert!((got - want).abs() <= 0.1, "frame {f}: {got:.3} dB, want {want:.3}");
         if f >= 64 {
@@ -222,17 +240,20 @@ fn curved_lane_follows_the_curve() {
     song(&mut e, true);
     render(&mut e, 9600);
     cmd(&mut e, OP_PLAY, 0.0, 0.0, 0.0, 0.0);
-    let ideal = |t: f64| -36.0 + 36.0 * (t / 3840.0).clamp(0.0, 1.0).powf(2f64.powf(1.5));
+    // The curve bends the fader travel (plan 19), as it bends a knob's.
+    let ideal = |t: f64| fader_line(-36.0, 0.0, (t / 3840.0).clamp(0.0, 1.0).powf(2f64.powf(1.5)));
     follow(&mut e, 96000 / BLOCK, 0.5, 0, ideal);
-    // A quarter of the way: far below the straight line's -27 dB.
+    // A quarter of the way: far below the straight line's -24.2 dB (a
+    // quarter of the fader travel from -36 to 0 dB).
     cmd(&mut e, OP_SEEK, 960.0, 0.0, 0.0, 0.0);
     follow(&mut e, 8, 0.5, 0, ideal);
     let q = db(render(&mut e, BLOCK)[0], 0.5);
-    assert!(q < -35.0, "{q}");
+    assert!((fader_line(-36.0, 0.0, 0.25) + 24.2).abs() < 0.05);
+    assert!(q < -34.0, "{q}");
     // SET on the point again: linear.
     ok(point(&mut e, 0, 0, 0.0, -36.0, false));
     cmd(&mut e, OP_SEEK, 960.0, 0.0, 0.0, 0.0);
-    follow(&mut e, 8, 0.5, 0, |t| -36.0 + 36.0 * t / 3840.0);
+    follow(&mut e, 8, 0.5, 0, |t| fader_line(-36.0, 0.0, t / 3840.0));
 }
 
 #[test]
@@ -279,7 +300,7 @@ fn lane_chases_on_seek_wrap_and_play() {
     ok(lane_mix(&mut e, 0, 0, P_FADER));
     ok(point(&mut e, 0, 0, 0.0, -40.0, false));
     ok(point(&mut e, 0, 1, 7680.0, 0.0, false));
-    let ideal = |t: f64| -40.0 + 40.0 * (t / 7680.0).clamp(0.0, 1.0);
+    let ideal = |t: f64| fader_line(-40.0, 0.0, t / 7680.0);
     song(&mut e, true);
     render(&mut e, 1280);
     cmd(&mut e, OP_PLAY, 0.0, 0.0, 0.0, 0.0);

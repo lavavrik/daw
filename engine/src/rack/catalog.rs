@@ -286,8 +286,13 @@ static NOISE: ModuleSpec = ModuleSpec {
     category: "source",
     inputs: &[],
     outputs: &[port("out", Signal::Audio)],
-    params: &[lin("level", "Level", 0.0, 1.0, 1.0, true)],
+    // `color` appended in plan 16 (Pink: Paul Kellet's −3 dB/oct filter,
+    // RMS-matched to White; see `modules::noise`).
+    params: &[lin("level", "Level", 0.0, 1.0, 1.0, true), choice("color", "Color", NOISE_COLORS, 0.0)],
 };
+
+/// Noise `color` choices (ids 0..1; see `modules::noise`).
+pub const NOISE_COLORS: &[&str] = &["White", "Pink"];
 
 /// Filter `mode` choices (ids 0..4; see `modules::filter`).
 pub const FILTER_MODES: &[&str] = &["LP24", "LP12", "HP", "BP", "Notch"];
@@ -779,6 +784,15 @@ mod tests {
             }
         }
         assert_eq!(ModuleKind::from_id(99), None);
+    }
+
+    #[test]
+    fn noise_color_is_appended() {
+        let s = spec(ModuleKind::Noise);
+        let ps: Vec<_> = s.params.iter().map(|p| (p.name, p.label, p.min, p.max, p.default, p.integer, p.smooth)).collect();
+        // `color` appended in plan 16 (never reordered: `level` stays index 0).
+        assert_eq!(ps, [("level", "Level", 0.0, 1.0, 1.0, false, true), ("color", "Color", 0.0, 1.0, 0.0, true, false)]);
+        assert_eq!(s.params[1].choices, ["White", "Pink"]);
     }
 
     #[test]

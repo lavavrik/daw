@@ -433,6 +433,17 @@ const GARAGE_ORGAN: Patch = {
  * just under it (the strong 2nd harmonic is the sound) and a touch of
  * square for edge, through an LP12 a click envelope flicks open at each note;
  * a short decay to a mid sustain.
+ *
+ * Depth (plan 16 Task 1; the owner: "good, missing some depth, but it
+ * probably shouldn't be too deep"): a quiet sine an octave below (16') under
+ * the drawbars adds low end without turning it into a sub bass; the octave
+ * sine is still the sound, nudged 0.55 → 0.5 so the sub (0.3, ~8.5 dB
+ * under the fundamental) reads. Measured on the bass phrase (C2 then C3,
+ * vel 100; 44.1/48/96 kHz within 0.02 dB): power below 120 Hz −3.7 dB of
+ * the total (was −4.5; Sub Bass −1.8), loudness −15.7 dBFS (unchanged),
+ * h2 still 2 dB from h1. At the brief's 0.2 alone it moved only +0.3 dB.
+ * The sub is idx 4, right after the other oscillators, so the wrapped rack
+ * reads in signal-flow order.
  */
 const ORGAN_BASS: Patch = {
   name: 'Organ Bass',
@@ -445,35 +456,40 @@ const ORGAN_BASS: Patch = {
     { idx: 2, id: 'osc', params: { wave: 3, octave: 1 } },
     // Edge: a quiet square an octave up.
     { idx: 3, id: 'osc', params: { wave: 1, octave: 1 } },
-    // Drawbars: fundamental, octave a little under it, a touch of square.
-    { idx: 4, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.55, lvl3: 0.12 } },
+    // Depth: a sine an octave down (16').
+    { idx: 4, id: 'osc', params: { wave: 3, octave: -1 } },
+    // Drawbars: fundamental, octave a little under it, a touch of square, a
+    // little sub (much more and it is a Sub Bass).
+    { idx: 5, id: 'mixer', params: { lvl1: 0.8, lvl2: 0.5, lvl3: 0.12, lvl4: 0.3 } },
     // LP12: tames the square; the click envelope opens it 3 oct for a moment.
-    { idx: 5, id: 'filter', params: { mode: 1, cutoff: 500, reso: 0.1, cv_amt: 3 } },
+    { idx: 6, id: 'filter', params: { mode: 1, cutoff: 500, reso: 0.1, cv_amt: 3 } },
     // Key click: 40 ms.
-    { idx: 6, id: 'adsr', params: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.05 } },
+    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.05 } },
     // Amp.
-    { idx: 7, id: 'vca' },
+    { idx: 8, id: 'vca' },
     // Amp envelope: a short decay to a mid sustain, quick release; velocity → level.
-    { idx: 8, id: 'adsr', params: { attack: 0.002, decay: 0.35, sustain: 0.6, release: 0.08, vel_amt: 0.3 } },
+    { idx: 9, id: 'adsr', params: { attack: 0.002, decay: 0.35, sustain: 0.6, release: 0.08, vel_amt: 0.3 } },
     // Out: sets the house level.
-    { idx: 9, id: 'out', params: { level: 0.45 } },
+    { idx: 10, id: 'out', params: { level: 0.45 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
     { from: [0, 'pitch'], to: [2, 'pitch'] },
     { from: [0, 'pitch'], to: [3, 'pitch'] },
-    { from: [0, 'gate'], to: [6, 'gate'] },
-    { from: [0, 'gate'], to: [8, 'gate'] },
-    { from: [0, 'vel'], to: [8, 'vel'] },
-    { from: [1, 'out'], to: [4, 'in1'] },
-    { from: [2, 'out'], to: [4, 'in2'] },
-    { from: [3, 'out'], to: [4, 'in3'] },
-    { from: [4, 'out'], to: [5, 'in'] },
-    { from: [6, 'env'], to: [5, 'cv'] },
-    { from: [5, 'out'], to: [7, 'in'] },
-    { from: [8, 'env'], to: [7, 'cv'] },
-    { from: [7, 'out'], to: [9, 'l'] },
-    { from: [7, 'out'], to: [9, 'r'] },
+    { from: [0, 'pitch'], to: [4, 'pitch'] },
+    { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'gate'], to: [9, 'gate'] },
+    { from: [0, 'vel'], to: [9, 'vel'] },
+    { from: [1, 'out'], to: [5, 'in1'] },
+    { from: [2, 'out'], to: [5, 'in2'] },
+    { from: [3, 'out'], to: [5, 'in3'] },
+    { from: [4, 'out'], to: [5, 'in4'] },
+    { from: [5, 'out'], to: [6, 'in'] },
+    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [6, 'out'], to: [8, 'in'] },
+    { from: [9, 'env'], to: [8, 'cv'] },
+    { from: [8, 'out'], to: [10, 'l'] },
+    { from: [8, 'out'], to: [10, 'r'] },
   ],
 };
 

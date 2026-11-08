@@ -234,6 +234,34 @@ then run `cargo test -p daw-engine --test house_patches` and read the
 numbers. Tune the patch, never the test band; any band change is recorded
 in `docs/followups/plan-11.md`.
 
+## Noise (2)
+
+A *Source* with one mono `out` (one per voice) and params `level` (0..1,
+smoothed) and `color` (appended in plan 16: White / Pink, default White).
+
+- **White**: a fixed-seed xorshift32, uniform in −level..level (the same
+  sequence every load, so renders are deterministic). Color White is the
+  pre-plan-16 module sample for sample, so saved patches (the Sax's breath)
+  are unchanged.
+- **Pink**: the same white through Paul Kellet's refined pink filter
+  (−3 dB/oct, six parallel one-poles plus a direct and a one-sample-delayed
+  path). The coefficients are for 44.1 kHz; at other rates each positive
+  pole `p` becomes `p^(44100/sr)` and its gain is scaled by
+  `(1 − p')/(1 − p)`, so the corners stay put in Hz (the negative,
+  near-Nyquist section and the delayed path are kept). The output is
+  divided by the root of the filter's impulse-response energy (closed form,
+  computed when the module is created), so pink's RMS equals white's at
+  every rate (measured within 0.15 dB at 44.1/48/96 kHz). Pink is *not*
+  bounded to ±level: its peaks run to about 4× its RMS (≈ ±2.3 at level 1).
+- The filter state (six sections and the delayed sample) lives in the
+  module, one per voice; nothing allocates. Switching color mid-note just
+  changes which sample is output; the pink sections only run while Pink is
+  selected and pick up from where they stopped.
+- Tests (`modules/noise.rs`): `pink_slope` (100 Hz–1 kHz vs 1–10 kHz within
+  ±1 dB — white reads −10 dB — and one octave vs another, at 44.1 and
+  96 kHz), `pink_rms_matches_white` (within 1 dB at 44.1/48/96 kHz),
+  `white_is_unchanged_by_the_color_param`.
+
 ## Effect modules and the FX pool
 
 Plan 6 added Delay (9), Reverb (10), Chorus (11), EQ (12), Compressor (13),

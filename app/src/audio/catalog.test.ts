@@ -42,6 +42,12 @@ describe('catalog', () => {
     expect([sample.min, sample.max, sample.default, sample.integer]).toEqual([-1, 255, -1, true]);
     expect(sp.params[paramIndex(sp, 'root')].default).toBe(60);
   });
+  it('the noise has an appended White/Pink color choice (plan 16), default White', () => {
+    const n = moduleDef('noise');
+    expect(n.params.map((p) => p.name)).toEqual(['level', 'color']);
+    const color = n.params[paramIndex(n, 'color')];
+    expect([color.label, color.min, color.max, color.default, color.integer, color.choices]).toEqual(['Color', 0, 1, 0, true, ['White', 'Pink']]);
+  });
   it('puts the stereo effects under Effect, with the FX-pool slot counts', () => {
     const effects = CATALOG.modules.filter((m) => m.category === 'effect').map((m) => m.id);
     expect(effects).toEqual(['delay', 'reverb', 'chorus', 'eq', 'compressor']);

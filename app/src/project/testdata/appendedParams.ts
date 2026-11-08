@@ -11,6 +11,8 @@ export const APPENDED_PARAMS: Record<string, Record<string, number>> = {
   midi_in: { glide_mode: 0 },
   // Plan 15.
   sample_player: { end: 1, loop: 0, loopStart: 0, fine: 0 },
+  // Plan 16.
+  noise: { color: 0 },
 };
 
 type FixtureModule = { id: string; params?: Record<string, number> };

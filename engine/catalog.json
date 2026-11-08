@@ -32,7 +32,8 @@
       "inputs":[],
       "outputs":[{"name":"out","signal":"audio"}],
       "params":[
-        {"name":"level","label":"Level","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true}
+        {"name":"level","label":"Level","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
+        {"name":"color","label":"Color","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["White","Pink"],"smooth":false}
       ]},
     {"kind":3,"id":"filter","name":"Filter","category":"shaping",
       "inputs":[{"name":"in","signal":"audio"},{"name":"cv","signal":"cv"}],

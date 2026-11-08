@@ -366,21 +366,27 @@ const BIN_HZ: f32 = SR / FFT_N as f32;
 /// Welch power spectrum between `a` and `b` s: the mean of |FFT|² over
 /// Hann frames of 4096 (hop 1024). Bin i is at `i × BIN_HZ`.
 fn spectrum(r: &Render, a: f32, b: f32) -> Vec<f64> {
+    welch(r, a, b, FFT_N)
+}
+
+/// [`spectrum`] with Hann frames of `n` (a power of two, hop n/4). Bin i is
+/// at `i × SR / n`.
+fn welch(r: &Render, a: f32, b: f32, n: usize) -> Vec<f64> {
     let x = r.span(a, b);
-    assert!(x.len() >= FFT_N, "span too short for a spectrum");
-    let w = hann(FFT_N);
-    let mut acc = vec![0.0f64; FFT_N / 2];
+    assert!(x.len() >= n, "span too short for a spectrum");
+    let w = hann(n);
+    let mut acc = vec![0.0f64; n / 2];
     let mut frames = 0;
     let mut s = 0;
-    while s + FFT_N <= x.len() {
-        let mut re: Vec<f64> = (0..FFT_N).map(|i| x[s + i] as f64 * w[i]).collect();
-        let mut im = vec![0.0f64; FFT_N];
+    while s + n <= x.len() {
+        let mut re: Vec<f64> = (0..n).map(|i| x[s + i] as f64 * w[i]).collect();
+        let mut im = vec![0.0f64; n];
         fft(&mut re, &mut im);
-        for i in 0..FFT_N / 2 {
+        for i in 0..n / 2 {
             acc[i] += re[i] * re[i] + im[i] * im[i];
         }
         frames += 1;
-        s += 1024;
+        s += n / 4;
     }
     acc.iter_mut().for_each(|v| *v /= frames as f64);
     acc
@@ -1161,6 +1167,19 @@ fn low_share_db(r: &Render) -> f32 {
     (10.0 * (low / total).log10()) as f32
 }
 
+/// Power below `hz` over the total (dB), Welch spectrum of the whole render
+/// with frames scaled to the rate (4096 at 44.1/48 kHz, 8192 at 96 kHz), so
+/// the bins stay ~11 Hz wide and a 131 Hz partial's Hann main lobe (±2 bins)
+/// stays above a 120 Hz edge at every rate.
+fn share_below_db(r: &Render, hz: f32) -> f32 {
+    let n = ((FFT_N as f32 * SR / 48000.0).round() as usize).next_power_of_two();
+    let p = welch(r, 0.0, r.m.len() as f32 / SR, n);
+    let bin = SR / n as f32;
+    let low: f64 = p.iter().enumerate().filter(|(i, _)| (*i as f32) * bin < hz).map(|x| *x.1).sum();
+    let total: f64 = p.iter().sum();
+    (10.0 * (low / total).log10()) as f32
+}
+
 #[test]
 fn piano_stab_has_body() {
     // Plan 13 Task 4 (the user: "good, but missing some depth"; depth =
@@ -1171,6 +1190,33 @@ fn piano_stab_has_body() {
     let s = low_share_db(&r);
     eprintln!("Piano Stab: below 300 Hz {s:.1} dB of the total (before: {PIANO_STAB_LOW_SHARE_BEFORE} dB)");
     assert!(s >= PIANO_STAB_LOW_SHARE_BEFORE + 3.0, "low share {s:.1} dB, want ≥ {:.1}", PIANO_STAB_LOW_SHARE_BEFORE + 3.0);
+}
+
+/// Organ Bass's share of power below 120 Hz before plan 16 Task 1
+/// ([`organ_bass_depth`]): −4.49 dB at 48 kHz, −4.47 at 44.1 kHz, −4.50 at
+/// 96 kHz; the highest (44.1 kHz) is kept, so the +0.5 dB holds at every rate.
+/// Only C2's 65 Hz fundamental lay below 120 Hz. (Sub Bass: −1.8 dB.)
+const ORGAN_BASS_DEEP_SHARE_BEFORE: f32 = -4.47;
+
+/// A patch's bass phrase as the level test plays it (C2 then C3, vel 100,
+/// each held 1.5 s, 0.5 s release): its share of power below 120 Hz (dB).
+/// Below 120 Hz is the sub/fundamental region: C2's 65 Hz fundamental, and
+/// (with Organ Bass's sub sine) C1's 33 Hz and C3's sub at 65 Hz.
+fn organ_bass_depth(name: &str) -> f32 {
+    let r = play_phrase(&mut load(name), Phrase::Bass, 100, 1.5, 0.5);
+    share_below_db(&r, 120.0)
+}
+
+#[test]
+fn organ_bass_has_a_little_more_depth() {
+    // Plan 16 Task 1 (the owner: "good, missing some depth, but it probably
+    // shouldn't be too deep"): a little more of the power below 120 Hz than
+    // before (≥ +0.5 dB), but still clearly less than the Sub Bass (≥ 1 dB
+    // under it).
+    let (organ, sub) = (organ_bass_depth("Organ Bass"), organ_bass_depth("Sub Bass"));
+    eprintln!("below 120 Hz: Organ Bass {organ:.2} dB (before: {ORGAN_BASS_DEEP_SHARE_BEFORE} dB), Sub Bass {sub:.2} dB");
+    assert!(organ >= ORGAN_BASS_DEEP_SHARE_BEFORE + 0.5, "Organ Bass below 120 Hz {organ:.2} dB, want ≥ {:.2}", ORGAN_BASS_DEEP_SHARE_BEFORE + 0.5);
+    assert!(organ <= sub - 1.0, "Organ Bass below 120 Hz {organ:.2} dB is as deep as the Sub Bass's {sub:.2} dB");
 }
 
 #[test]

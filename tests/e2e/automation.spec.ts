@@ -703,3 +703,31 @@ test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({
   console.log('curved ride first/last quarter', q0.toFixed(4), q3.toFixed(4));
   expect(q0).toBeGreaterThan(0.05 * q3);
 });
+
+test('Alt-click on a line adds a free point; it bends nothing (plan 16, Ruling P)', async ({ page }) => {
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2);
+  const lane = await addLane(page, slot, 'Fader');
+  await clickLane(page, lane, 0, 0.2);
+  await clickLane(page, lane, BAR, 0.8);
+  // On the straight line, off the 1/16 grid (240 ticks), with a 1 px jitter: still a click.
+  const tick = BAR / 2 + 100;
+  const at = await lanePt(page, lane, tick, 0.2 + (0.6 * tick) / BAR);
+  await page.keyboard.down('Alt');
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.down();
+  await page.mouse.move(at.x, at.y + 1);
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  const [l] = await savedLanes(page, slot);
+  expect(l.points).toHaveLength(3);
+  for (const pt of l.points) expect(pt).toHaveLength(3); // no curve anywhere
+  const { ticksPerPx } = await view(page);
+  expect(Math.abs(l.points[1][0] - tick)).toBeLessThanOrEqual(ticksPerPx);
+  expect(l.points[1][0] % 240).not.toBe(0);
+  await expect(page.getByTestId(lane)).toHaveAttribute('data-selected', '1');
+  // One undo entry: the point goes again.
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await savedLanes(page, slot))[0].points.length).toBe(2);
+});

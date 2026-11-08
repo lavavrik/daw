@@ -424,8 +424,8 @@ function curveSamples(x0: number, x1: number, dy: number, curve: number, W: numb
   if (hi < 1) out.push(hi);
   const nx = Math.ceil(((hi - lo) * span) / 2);
   for (let k = 1; k < nx; k++) out.push(lo + ((hi - lo) * k) / nx);
-  // Even steps of y: the inverse of bend, x = y^(2^(3 curve)).
-  const ny = Math.min(4096, Math.ceil(Math.abs(dy)));
+  // Even steps of y: the inverse of bend, x = y^(2^(3 curve)). |dy| is at most the row's height.
+  const ny = Math.ceil(Math.abs(dy));
   const inv = 2 ** (3 * curve);
   for (let k = 1; k < ny; k++) {
     const u = (k / ny) ** inv;

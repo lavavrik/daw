@@ -244,9 +244,11 @@ export function bindingCommands(p: Project, id: number): [number, number, number
 
 /**
  * `cmds` grouped into what must be sent together: an audio clip's SOURCE,
- * GAIN, SET; an automation lane's AUTO_LANE_SET with its AUTO_POINT_SETs and
+ * GAIN, SET; an automation lane's AUTO_LANE_SET with its AUTO_POINT_SETs,
+ * the AUTO_POINT_CURVE after a curved point's SET (plan 16) and
  * AUTO_LANE_ENABLE (commands.ts laneCommands: a point needs its lane's
- * target, so a lane is never split); any other command alone.
+ * target and a curve its point, so a lane is never split); any other
+ * command alone.
  */
 export function units(cmds: EngineCommand[]): EngineCommand[][] {
   const out: EngineCommand[][] = [];
@@ -259,7 +261,8 @@ export function units(cmds: EngineCommand[]): EngineCommand[][] {
     } else if (c[0] === Op.AUTO_LANE_SET) {
       const lane = c[1];
       let j = i + 1;
-      while (j < cmds.length && cmds[j][0] === Op.AUTO_POINT_SET && Math.floor(cmds[j][1]! / MAX_AUTO_POINTS) === lane) j++;
+      const point = (op: number) => op === Op.AUTO_POINT_SET || op === Op.AUTO_POINT_CURVE;
+      while (j < cmds.length && point(cmds[j][0]) && Math.floor(cmds[j][1]! / MAX_AUTO_POINTS) === lane) j++;
       if (j < cmds.length && cmds[j][0] === Op.AUTO_LANE_ENABLE && cmds[j][1] === lane) j++;
       out.push(cmds.slice(i, j));
       i = j - 1;

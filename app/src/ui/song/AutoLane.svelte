@@ -31,7 +31,9 @@
   //   point's flat run) bends it (plan 16): the curve of its left point,
   //   -1..1, tlMath.curveDrag: dragging up bends the line up, CURVE_PX
   //   (100 px) of travel is the full range, setPointCurve at most once per
-  //   frame, one undo entry. Alt-click off the line still adds a free point;
+  //   frame, one undo entry. Nothing bends before DRAG_SLOP px of vertical
+  //   travel, and an Alt-press that bent nothing is an Alt-click: a free
+  //   point at that tick, on the line or off it (Ruling P);
   // - Cmd/Ctrl-drag draws freehand: the stroke is previewed, and on release
   //   drawPoints thins it (Ramer–Douglas–Peucker, ½ % of the travel) and
   //   replaces the points in its tick range: one edit;
@@ -236,7 +238,8 @@
       }
     | { kind: 'box'; base: Set<string> }
     /** Alt-drag on point `id`'s segment: its curve from `c0` (plan 16). */
-    | { kind: 'curve'; id: string; c0: number; y0: number; rises: boolean; last: number }
+    /** `moved`: past DRAG_SLOP vertically; an Alt-click that never got there adds a free point at x0 instead. */
+    | { kind: 'curve'; id: string; c0: number; x0: number; y0: number; rises: boolean; last: number; moved: boolean }
     | { kind: 'draw'; samples: { tick: number; value: number }[] };
   let drag: Drag | null = null;
   let pending: (() => void) | null = null;
@@ -305,7 +308,7 @@
         const k = lane.points.findIndex((q) => q.id === id);
         const a = lane.points[k];
         const b = lane.points[k + 1];
-        drag = { kind: 'curve', id, c0: a.curve, y0: y, rises: toPos(def, b.value) >= toPos(def, a.value), last: a.curve };
+        drag = { kind: 'curve', id, c0: a.curve, x0: x, y0: y, rises: toPos(def, b.value) >= toPos(def, a.value), last: a.curve, moved: false };
         cursor = 'ns-resize';
       } else {
         const raw = xToTick(x, v);
@@ -343,6 +346,9 @@
       return;
     }
     if (d.kind === 'curve') {
+      // Vertical travel only, and not before DRAG_SLOP: a jittery Alt-click stays a click.
+      if (!d.moved && Math.abs(y - d.y0) < DRAG_SLOP) return;
+      d.moved = true;
       const c = curveDrag(d.c0, y - d.y0, d.rises);
       tip = { x, y, text: curveText(c) };
       if (c === d.last) return;
@@ -386,7 +392,17 @@
     laneView.gesture = false;
     flush();
     if (d.kind === 'box') box = null;
-    else if (d.kind === 'curve') cursor = 'crosshair';
+    else if (d.kind === 'curve') {
+      cursor = 'crosshair';
+      // Ruling P: an Alt-press on a line that bent nothing is the old Alt-click,
+      // a point at that exact tick and the value under the pointer (same gesture,
+      // so the same single undo entry).
+      if (!d.moved && d.last === d.c0) {
+        const pt = addPoint(p, engine, lane.id, { tick: Math.max(0, Math.round(xToTick(d.x0, view))), value: valueAt(d.y0) });
+        if (pt) selected = new Set([pt.id]);
+        else if (lane.points.length >= MAX_AUTO_POINTS) onhint(`${label}: ${MAX_AUTO_POINTS} points is the most a lane holds`);
+      }
+    }
     else if (d.kind === 'draw') {
       stroke = null;
       // Refused: nothing usable drawn, or too many points. Only the second says so (it is

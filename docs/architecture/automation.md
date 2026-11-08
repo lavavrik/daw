@@ -317,7 +317,7 @@ changes nothing and sends nothing.
   then CURVE), `AUTO_LANE_ENABLE`. So
   load, export, the audio restart and undo's whole-track rebuilds have no
   automation path of their own. `load.ts units()` keeps a lane's commands
-  in one unit.
+  in one unit, its CURVEs included.
 - **Undo** (history.md, `diffApply` step 3b): lanes by engine lane; clear,
   then re-target; points by idx with `pointCommands`. The point UI objects
   (ids) are matched by tick first, then by idx for a point whose old tick
@@ -364,8 +364,10 @@ changes nothing and sends nothing.
   curve on a rising segment, negative on a falling one; a flat segment
   counts as rising). `setPointCurve` on the left point at most once per
   frame; the tooltip shows "Curve +0.60"; one gesture, one undo entry;
-  Escape puts the old curve back. Alt-click off the line still adds a free
-  point. Click adds a point (1/16, Alt free) and keeps dragging it;
+  Escape puts the old curve back. Nothing bends before 3 px of vertical
+  travel (`DRAG_SLOP`), and an Alt-press on a line that bent nothing is an
+  Alt-click (Ruling P): a free point at that tick and the value under the
+  pointer, added on release, in the same undo entry. Click adds a point (1/16, Alt free) and keeps dragging it;
   a point drag calls `movePoints` with the gesture's `origin` and the
   cumulative deltas, at most once per animation frame; Cmd/Ctrl-drag
   previews a stroke and calls `drawPoints` once on release; right-click:

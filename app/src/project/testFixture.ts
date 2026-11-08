@@ -349,6 +349,13 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         else l.ticks.set(idx, b);
         break;
       }
+      // Plan 16: a curve -1..1 on an active point (the engine refuses anything else).
+      case Op.AUTO_POINT_CURVE: {
+        const l = lanes.get(Math.floor(a / MAX_AUTO_POINTS));
+        if (!int(a, 0, MAX_AUTO_LANES * MAX_AUTO_POINTS - 1) || !l?.ticks.has(a % MAX_AUTO_POINTS)) bad('curve on an inactive point');
+        else if (!inR(b, -1, 1)) bad('curve');
+        break;
+      }
       case Op.AUTO_POINT_REMOVE: lanes.get(Math.floor(a / MAX_AUTO_POINTS))?.ticks.delete(a % MAX_AUTO_POINTS); break;
       case Op.AUTO_LANE_CLEAR: lanes.delete(a); break;
       case Op.AUTO_LANE_ENABLE: if (!int(a, 0, MAX_AUTO_LANES - 1) || (b !== 0 && b !== 1)) bad('lane enable'); break;

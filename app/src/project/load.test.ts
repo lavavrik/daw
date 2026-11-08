@@ -303,10 +303,32 @@ describe('loadProject', () => {
       .toEqual(auto.map((x) => [x.op, ...x.args]));
   });
 
+  it('a curved lane loads through the checked engine: SET, then CURVE (plan 16)', async () => {
+    const { p: src } = await buildFixture();
+    const lanes = addAutomationFixture(src);
+    lanes.cutoff.points[0].curve = -0.25;
+    const json = roundJson(serialize(src));
+    const p = new Project();
+    const e = fakeEngine();
+    expect(await loadProject(p, e, json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    expect(checkLog(e.log).errors).toEqual([]);
+    expect(serialize(p)).toEqual(json);
+    const ops = e.log.flatMap((x) => ('op' in x ? [x] : []));
+    const k = ops.findIndex((x) => x.op === Op.AUTO_POINT_CURVE);
+    expect(ops[k - 1]).toEqual({ op: Op.AUTO_POINT_SET, args: [lanes.cutoff.lane * 512, 0, 200, 0] });
+    expect(ops[k].args).toEqual([lanes.cutoff.lane * 512, -0.25, 0, 0]);
+    // The checker refuses what the engine refuses: a curve on an inactive point, or past -1..1.
+    const bad = (args: number[]) => checkLog([...e.log, { op: Op.AUTO_POINT_CURVE, args }]).errors;
+    expect(bad([lanes.cutoff.lane * 512 + 40, 0.5, 0, 0])).toHaveLength(1);
+    expect(bad([lanes.cutoff.lane * 512, 1.5, 0, 0])).toHaveLength(1);
+    expect(bad([lanes.cutoff.lane * 512 + 1, -1, 0, 0])).toEqual([]);
+  });
+
   it('units() keeps each lane whole: AUTO_LANE_SET, its points, AUTO_LANE_ENABLE', async () => {
     const { p: src } = await buildFixture();
     await addAudioFixture(src);
-    addAutomationFixture(src);
+    const fx = addAutomationFixture(src);
+    fx.fader.points[0].curve = 0.5; // plan 16: a curved point replays SET, then CURVE, inside its lane's unit
     const json = roundJson(serialize(src));
     const cmds = projectCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands;
     const us = units(cmds);
@@ -314,17 +336,21 @@ describe('loadProject', () => {
     const lanes = us.filter((u) => u[0][0] === Op.AUTO_LANE_SET);
     expect(lanes.map((u) => u.map((c) => c[0]))).toEqual([
       [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
-      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
+      [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_CURVE, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
       [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
       [Op.AUTO_LANE_SET, Op.AUTO_POINT_SET, Op.AUTO_POINT_SET, Op.AUTO_LANE_ENABLE],
     ]);
-    for (const u of lanes) for (const c of u.slice(1)) expect(Math.floor((c[0] === Op.AUTO_POINT_SET ? c[1]! / 512 : c[1]!))).toBe(u[0][1]);
+    const perPoint = (op: number) => op === Op.AUTO_POINT_SET || op === Op.AUTO_POINT_CURVE;
+    for (const u of lanes) for (const c of u.slice(1)) expect(Math.floor((perPoint(c[0]) ? c[1]! / 512 : c[1]!))).toBe(u[0][1]);
     // No lane command is left outside its lane's unit; an audio clip's triple stays one unit too.
-    expect(us.filter((u) => u.length === 1 && u[0][0] >= Op.AUTO_POINT_SET && u[0][0] <= Op.AUTO_LANE_ENABLE)).toEqual([]);
+    const laneOp = (op: number) => (op >= Op.AUTO_POINT_SET && op <= Op.AUTO_LANE_ENABLE) || op === Op.AUTO_POINT_CURVE;
+    expect(us.filter((u) => u.length === 1 && laneOp(u[0][0]))).toEqual([]);
     expect(us.filter((u) => u[0][0] === Op.AUDIO_CLIP_SOURCE).every((u) => u.map((c) => c[0]).join() === [Op.AUDIO_CLIP_SOURCE, Op.AUDIO_CLIP_GAIN, Op.AUDIO_CLIP_SET].join())).toBe(true);
     // A lane without points is one unit of SET + ENABLE; two lanes in a row never merge.
     expect(units([[Op.AUTO_LANE_SET, 0, 1, 0, 0], [Op.AUTO_LANE_ENABLE, 0, 1], [Op.AUTO_LANE_SET, 1, 1, 1, 0], [Op.AUTO_POINT_SET, 512, 0, 0, 0], [Op.AUTO_LANE_ENABLE, 1, 0]]))
       .toEqual([[[Op.AUTO_LANE_SET, 0, 1, 0, 0], [Op.AUTO_LANE_ENABLE, 0, 1]], [[Op.AUTO_LANE_SET, 1, 1, 1, 0], [Op.AUTO_POINT_SET, 512, 0, 0, 0], [Op.AUTO_LANE_ENABLE, 1, 0]]]);
+    // Another lane's CURVE ends the unit (never seen in a replay, but a lane never takes a foreign point).
+    expect(units([[Op.AUTO_LANE_SET, 0, 1, 0, 0], [Op.AUTO_POINT_SET, 0, 0, 0, 0], [Op.AUTO_POINT_CURVE, 512, 0.5, 0, 0]]).map((u) => u.length)).toEqual([2, 1]);
   });
 
   it('bindingCommands re-sends a SamplePlayer\'s sample, never the lanes on its track', async () => {

@@ -16,6 +16,9 @@
   //   and the hint is remembered for the next start. Apply with the same
   //   hint is allowed: a new context also picks up a changed default output
   //   device.
+  //
+  // Look (plan 20 Task 5): tokens only; it sits in the top bar's --panel
+  // popover. The select and the buffer field are the theme's skins.
   import { onMount, untrack } from 'svelte';
   import type { AudioEngine, LatencyInfo } from '../audio/engine';
   import { BT_LATENCY_MS, CUSTOM_HINT_MAX_S, CUSTOM_HINT_MIN_S, customHint, hintLabel } from '../audio/restart';
@@ -69,7 +72,7 @@
 </script>
 
 <div class="settings" data-testid="settings" role="group" aria-label="Audio settings">
-  <div class="title">AUDIO</div>
+  <div class="title lbl">Audio</div>
   <label class="field">
     <span>Latency</span>
     <select data-testid="latency-hint" bind:value={choice} disabled={busy}>
@@ -103,7 +106,7 @@
     {:else}Bluetooth headphones add 100–300 ms that no setting here removes: play live with wired output.{/if}
   </p>
   <div class="actions">
-    <button class="ok" data-testid="settings-apply" disabled={busy || blocked !== null || wanted === null} onclick={() => void apply()}>
+    <button class="btn primary" data-testid="settings-apply" disabled={busy || blocked !== null || wanted === null} onclick={() => void apply()}>
       {busy ? 'Restarting…' : 'Apply'}
     </button>
     <span class="note">Restarts audio and stops playback; the project stays as it is.</span>
@@ -114,22 +117,20 @@
 </div>
 
 <style>
-  .settings { display: flex; flex-direction: column; gap: 6px; white-space: normal; }
-  .title { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
+  .settings { display: flex; flex-direction: column; gap: 8px; white-space: normal; color: var(--text); }
   .field { display: flex; align-items: center; gap: 6px; }
-  .field > span { width: 52px; color: #9a9da8; font-size: 11px; }
-  select { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 3px 4px; flex: 1; }
-  .readout { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 2px 0 0; font-size: 11px; font-variant-numeric: tabular-nums; }
-  .readout dt { color: #7d808c; }
-  .readout dd { margin: 0; text-align: right; color: #c9cbd3; }
-  .readout .total { font-weight: 600; }
-  .readout .total.bad { color: #f0a23a; }
-  .bt { margin: 0; font-size: 11px; color: #7d808c; }
-  .bt.on { color: #f0a23a; }
+  .field > span { width: 52px; color: var(--text-2); font-size: 11px; }
+  select { flex: 1; }
+  .readout { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 2px 0 0; padding: 6px 8px; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); font-size: 11px; }
+  .readout dt { color: var(--text-dim); }
+  .readout dd { margin: 0; text-align: right; color: var(--text); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .readout .total { font-weight: 700; }
+  .readout .total.bad { color: var(--accent); }
+  .bt { margin: 0; font-size: 11px; color: var(--text-2); }
+  .bt.on { color: var(--accent); }
   .actions { display: flex; align-items: center; gap: 8px; }
-  .actions .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
-  .note { font-size: 10px; color: #7d808c; }
-  .applies { font-size: 10px; color: #7d808c; }
-  .applies.bad { color: #f0a23a; }
-  .status { margin: 0; font-size: 11px; color: #f0a23a; }
+  .note { font-size: var(--fs-lbl); color: var(--text-2); }
+  .applies { font-size: var(--fs-lbl); color: var(--text-2); }
+  .applies.bad { color: var(--accent); }
+  .status { margin: 0; font-size: 11px; color: var(--accent); }
 </style>

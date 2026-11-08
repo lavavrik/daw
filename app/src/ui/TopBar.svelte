@@ -1,53 +1,110 @@
 <script lang="ts">
-  // The song transport + live engine readouts. Telemetry refreshes at 4 Hz.
-  // If the engine dies after start, a red "Audio engine stopped — reload"
-  // alert replaces the readouts (AudioEngine.onError / failure).
+  // The top bar (plan 20 Task 5; spec §4 "Top bar"; the approved canvas board
+  // "Song view"). One 64 px row, left to right:
   //
-  // Song transport (plan 20): Play sets Song mode and plays the timeline,
-  // stopping the pattern transport first; it reads "■ Stop" while the song
-  // plays (not while the pattern plays). It goes through the App
-  // (onToggleSong) so the recorder's stop tick is handled in one place. There
-  // is no PAT/SONG switch any more: the pattern transport, with Rec and
-  // Count-in, is in the bottom panel's header (PatternTransport.svelte). The
-  // Rec offset and "↶ Take" stay here; the offset persists in localStorage
-  // (state/recorder.ts).
+  //   project name + hint line · ⋯ menu · ↶ ↷ | ▶ ■ Loop · Tempo LCD ·
+  //   BIG TIMER · metronome · Master slider · mini spectrum · (spacer) ·
+  //   [Keys → track, octave / MIDI, CPU, ⚙ latency] (two stacked pill rows)
   //
-  // Undo / redo (↶ ↷): the history's newest entries, named in the tooltips
+  // PROJECT NAME (`project-name`, inside the `project-menu` button) with a
+  // "●" when unsaved (the word "unsaved" is there for screen readers and
+  // tests, visually hidden). A click on it opens the ⋯ menu, as the ⋯ does.
+  //
+  // HINT LINE (`hint-line`, under the name; spec: "the last tooltip or status
+  // message"). In order: the app's flashed hint (banners.hint: flashHint(),
+  // the MIDI-learn hint), else the title (or aria-label) of the control the
+  // pointer last went over anywhere in the app (one `mouseover` listener on
+  // the document; bigTimer.ts hintText walks up to the nearest titled
+  // element), else a static tip. It is aria-hidden: the titles and the
+  // bottom panel's role="status" flash already reach screen readers.
+  //
+  // ⋯ MENU (`topbar-more`): the rarely used controls, so the bar fits one row
+  // at 1280 px: New, Open… (⌘O), Save (⌘S), Save As… (⇧⌘S), Export WAV…,
+  // Undo take (`undo-take`) and the recording offset (`rec-offset`). Their
+  // test ids are unchanged. New / Open — from the menu or ⌘O, which opens the
+  // menu through `request` — ask inline in the menu (no confirm()) when
+  // something would be lost: unsaved changes, or an open "Restore last
+  // session" offer (project/discard.ts). Results and errors are banners
+  // (project/session.ts). Export WAV… (export/exportFlow.ts) opens the save
+  // dialog inside the click, then renders in a Worker; its progress and
+  // Cancel are a banner in the bottom panel. Undo take and the offset keep
+  // the menu open (they are often used twice in a row); the rest close it,
+  // and so do Escape and a press outside. The offset persists in
+  // localStorage (state/recorder.ts).
+  //
+  // UNDO / REDO (↶ ↷): the history's newest entries, named in the tooltips
   // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
   //
-  // Project menu (left): the project name with a "● unsaved" mark, and New,
-  // Open…, Save (⌘S), Save As… (⇧⌘S). New / Open — from the menu or ⌘O,
-  // which opens the menu through `request` — ask inline in the menu (no
-  // confirm()) when something would be lost: unsaved changes, or an open
-  // "Restore last session" offer (project/discard.ts). Results and errors are
-  // banners (project/session.ts). Export WAV… (export/exportFlow.ts) opens
-  // the save dialog inside the click, then renders in a Worker; its progress
-  // and Cancel are a banner in the bottom panel.
+  // SONG TRANSPORT (44 px; spec §4): Play (`play`) toggles the song like
+  // Space outside the bottom panel: it sets Song mode and plays, stopping the
+  // pattern transport first. While the SONG plays it glows brighter and its
+  // name is "Stop" (what a click does; the icon stays ▶, so the bar never
+  // shows two ■ side by side). It
+  // goes through the App (onToggleSong) so the recorder's stop tick is
+  // handled in one place. Stop (`song-stop`) stops whichever transport runs
+  // (onStop), so it is also the one-click "stop everything". Loop
+  // (`loop-toggle`) belongs to the song transport, whichever ran last. The
+  // pattern transport, with Rec and Count-in, is in the bottom panel's
+  // header (PatternTransport.svelte).
   //
-  // Audio settings: the latency readout at the right end is the ⚙ button
-  // ("⚙ 29 ms"); it opens the Settings panel (ui/Settings.svelte: latency
-  // hint, sample rate / base / output / total latency, the Bluetooth hint,
-  // Apply = engine restart via App). The "BT?" badge that used to follow the
-  // readout moved into the panel (that freed the room for the ⚙); the
-  // readout itself turns orange above 40 ms instead.
+  // TEMPO: NumberField's LCD variant (`aria-label` "BPM"; scrub, wheel,
+  // arrows, ▲▼; one undo entry per commit). Enter commits and then releases
+  // the focus (so Space and the piano work again): the field commits on
+  // Enter itself, the wrapper's bubbling keydown then blurs it, and the blur
+  // finds nothing left to commit (SET_TEMPO is sent once).
   //
-  // Master spectrum: a 64 × 18 px, 20-band view of the master (ui/vis/
-  // Spectrum.svelte on the analyser bus, no labels) before the CPU pill; a
+  // BIG TIMER: BigTimer.svelte (the song position, bar:beat:tick + seconds).
+  //
+  // MASTER (`master-volume`): the master channel's fader, the mixer's own
+  // value and action (setMix 'fader' on 'master'), drawn as the slider
+  // variant of Knob.svelte. The catalog's fader param has curve 'fader', so
+  // the track IS the fader law (0 dB at 3/4). Knob gives it everything the
+  // mixer's controls have: one undo entry per drag, a click on the track
+  // jumps, double-click 0 dB, typed entry, arrows, Esc / Cmd+Z cancel, the
+  // automation follow (registered on the auto bus as the Master strip's
+  // Fader is: a master fader lane moves it while it plays, and a drag
+  // overrides it) and the Automate / MIDI-learn menu.
+  //
+  // MINI SPECTRUM (`topbar-spectrum`): a 20-band view of the master on the
+  // analyser bus (ui/vis/Spectrum.svelte, no labels) on an --lcd well; a
   // click opens the Mixer tab, where the full analyser is.
   //
-  // Layout: one row that never wraps at 1280 px (tight since the Project menu:
-  // 4 px gaps, "Metro", narrow BPM field, compact ↶ ↷ and "↶ Take"). Every control is nowrap;
-  // readouts are compact (latency "29 ms", CPU + dropouts in one pill) with
-  // the full text in their tooltips.
+  // RIGHT: two rows of pills (as on the canvas): Keys → track and the octave
+  // (wheel steps it); then MIDI (opens MidiPopover), CPU + dropouts, and the
+  // ⚙ latency pill, which opens Settings (ui/Settings.svelte: latency hint,
+  // sample rate / base / output / total latency, the Bluetooth hint, Apply =
+  // engine restart via App). The latency turns orange above 40 ms. Telemetry
+  // refreshes at 4 Hz. If the engine dies after start, a red "Audio engine
+  // stopped — reload" alert appears before the pills.
+  //
+  // LAYOUT: one row that never wraps at ≥ 1280 px (e2e layout.spec.ts /
+  // topbar.spec.ts measure it, playing, unsaved and with a 3-digit dropout
+  // tail). Fixed widths where text changes (the name and hint, Play/Stop,
+  // the timer's digits, the master readout), so playback never re-flows the
+  // bar; the long readouts (Keys target, MIDI device, project name, hint)
+  // ellipsize with the full text in their tooltips. Below 1400 px CPU's
+  // "· N drop" tail is hidden while there are none, and with dropouts the
+  // red pill reads "1% · 123" (the words are in the tooltip). The widest
+  // state at 1280 px (playing, unsaved, 123 dropouts) leaves ~40 px.
+  // overflow-x: clip is the last guard: it never becomes a scroll container,
+  // so the popovers can drop below.
   import { onMount, untrack } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
+  import type { AudioClock } from '../audio/audioClock';
+  import { mixParam } from '../audio/mixerCatalog';
   import { BT_LATENCY_MS } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
   import Settings from './Settings.svelte';
   import Spectrum from './vis/Spectrum.svelte';
+  import NumberField from './NumberField.svelte';
+  import BigTimer from './BigTimer.svelte';
+  import Knob from './rack/Knob.svelte';
+  import { THEME } from './theme';
+  import { hintText } from './bigTimer';
   import { setLoop, transportPlaying } from '../state/song-actions';
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
+  import { setMix } from '../state/mixer-actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
   import MidiPopover from './MidiPopover.svelte';
@@ -71,6 +128,7 @@
   let {
     p,
     engine,
+    clock = null,
     octave = DEFAULT_OCTAVE,
     onOctave = () => {},
     midi = { state: 'no-devices', devices: [] },
@@ -78,6 +136,7 @@
     recorder,
     rec,
     onToggleSong,
+    onStop,
     session,
     restoreOffer = null,
     undoLabels = { undo: null, redo: null },
@@ -89,6 +148,8 @@
   }: {
     p: Project;
     engine: AudioEngine;
+    /** The heard-time clock (the big timer); null before the engine starts. */
+    clock?: AudioClock | null;
     octave?: number;
     /** Octave buttons / wheel: ask the App to change the octave (0..8). */
     onOctave?: (o: number) => void;
@@ -100,6 +161,8 @@
     rec: RecStatus;
     /** Song Play / Stop (App: playSong / stop with the recorder hooks). */
     onToggleSong: () => void;
+    /** Stop whichever transport runs (App: stopAny). */
+    onStop: () => void;
     session: ProjectSession;
     /** The "Restore last session" offer, while it is open (New / Open would discard it). */
     restoreOffer?: { name: string } | null;
@@ -118,8 +181,10 @@
   /** The Settings panel mounts while open (its readout polls only then). */
   let settingsOpen = $state(false);
 
-  // ---- Project menu --------------------------------------------------------
+  // ---- ⋯ menu --------------------------------------------------------------
   let menu = $state<HTMLDetailsElement | null>(null);
+  let projEl = $state<HTMLElement | null>(null);
+  let menuOpen = $state(false);
   /** New/Open waiting for "Discard and …" (only asked when something would be lost). */
   let confirming = $state<'new' | 'open' | null>(null);
   const warning = $derived(discardWarning(p, restoreOffer));
@@ -141,6 +206,25 @@
     else if (cmd === 'export') void runExport(p, engine.context);
     else void session.saveAs();
   }
+  function menuToggled() {
+    menuOpen = !!menu?.open;
+    if (!menuOpen) confirming = null;
+  }
+  function menuKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !menu?.open) return;
+    e.stopPropagation(); // not also "cancel learn" etc.
+    closeMenu();
+    menu.querySelector('summary')?.focus();
+  }
+  // A press outside the name and the menu closes it.
+  $effect(() => {
+    if (!menuOpen) return;
+    const outside = (e: PointerEvent) => {
+      if (!projEl?.contains(e.target as Node)) closeMenu();
+    };
+    window.addEventListener('pointerdown', outside, true);
+    return () => window.removeEventListener('pointerdown', outside, true);
+  });
 
   /**
    * ⌘O / Ctrl+O (App's shortcut): the same as the menu item, so it asks the
@@ -153,26 +237,43 @@
     run(cmd);
   }
 
+  // ---- recording (in the menu) ---------------------------------------------
   // Mirror of the recorder's persisted offset (the Recorder is not reactive).
   // Seeded once on purpose: the recorder is created once per session and this
-  // field is its only writer, so untrack() states "initial value only" (and
-  // silences state_referenced_locally).
+  // field is its only writer, so untrack() states "initial value only".
   let offsetMs = $state(untrack(() => recorder.offsetMs));
-  const songPlaying = $derived(transportPlaying(p, 'song'));
-
-  function persist() {
+  function setOffset(v: number) {
+    recorder.offsetMs = v;
+    offsetMs = recorder.offsetMs;
     saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
   }
-  /** Commit on change (clamped; Enter blurs, which fires it), then release focus so Space / R / the piano work again. */
-  function commitOffset(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    recorder.offsetMs = input.valueAsNumber;
-    offsetMs = recorder.offsetMs;
-    input.value = String(offsetMs);
-    persist();
-    input.blur();
-  }
 
+  // ---- hint line -----------------------------------------------------------
+  const TIP = 'Tip: point at a control to see what it does';
+  /** The title of the control the pointer last went over (anywhere in the app). */
+  let hovered = $state<string | null>(null);
+  onMount(() => {
+    const over = (e: MouseEvent) => {
+      const t = hintText(e.target instanceof Element ? e.target : null);
+      if (t) hovered = t;
+    };
+    document.addEventListener('mouseover', over);
+    return () => document.removeEventListener('mouseover', over);
+  });
+  const hint = $derived(banners.hint ?? hovered ?? TIP);
+
+  // ---- transport / tempo / master ------------------------------------------
+  const songPlaying = $derived(transportPlaying(p, 'song'));
+  /** Enter committed (NumberField's own keydown ran first): release the focus. */
+  function blurAfterEnter(e: KeyboardEvent) {
+    if (e.key === 'Enter' && e.target instanceof HTMLElement) e.target.blur();
+  }
+  /** The master fader as the top bar's slider: the catalog param with a shorter label. */
+  const MASTER_DEF = { ...mixParam('fader'), label: 'Master' };
+  const MASTER_AUTO = { owner: 'master', target: { kind: 'mix', param: 'fader' } } as const;
+  const masterDb = $derived(p.mixer.master.params[MASTER_DEF.id] ?? MASTER_DEF.default);
+
+  // ---- pills ---------------------------------------------------------------
   // Reactive: follows track selection (project state is $state).
   const keysTrack = $derived(liveInputTrack(p));
   let midiOpen = $state(false);
@@ -191,7 +292,7 @@
       ? 'MIDI access is blocked. Enable it in Chrome site settings (lock icon > Site settings > MIDI devices), then reload.'
       : midi.state === 'unsupported'
         ? 'This browser has no Web MIDI. Use Chrome.'
-        : midi.devices.join(', '),
+        : midi.state === 'connected' ? `MIDI: ${midi.devices.join(', ')}` : 'MIDI: no device connected',
   );
   const BT_TIP = 'High output latency — Bluetooth headphones? Use wired output for playing live.';
 
@@ -223,260 +324,293 @@
       e.onError = undefined;
     };
   });
-
-  /**
-   * Enter in a number field only blurs it: the blur commits through
-   * `change` (once -- calling the commit here as well sent SET_TEMPO twice).
-   */
-  function blurOnEnter(e: KeyboardEvent) {
-    if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
-  }
-  /** Commit on change (Enter blurs, see above), then release focus so Space and the piano work again. */
-  function commitTempo(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    setTempo(p, engine, input.valueAsNumber);
-    input.value = String(p.tempo); // show the clamped result
-    input.blur();
-  }
 </script>
 
 <header class="bar">
-  <details class="pop proj" bind:this={menu} ontoggle={() => !menu?.open && (confirming = null)}>
-    <summary data-testid="project-menu" title="Project: New, Open, Save">
-      <span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">●<span class="long">{' '}unsaved</span></span>{/if}</span>
-    </summary>
-    <div class="panel menu" role="menu">
-      {#if confirming}
-        <p class="warn" data-testid="project-discard-warning">{warning}</p>
-        <div class="row">
-          <button class="danger" data-testid="project-discard" onclick={() => run(confirming!)}>
-            Discard and {confirming === 'new' ? 'start new' : 'open…'}
-          </button>
-          <button data-testid="project-discard-cancel" onclick={() => (confirming = null)}>Cancel</button>
-        </div>
-      {:else}
-        <button role="menuitem" data-testid="project-new" onclick={() => run('new')}>New</button>
-        <button role="menuitem" data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
-        <button role="menuitem" data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
-        <button role="menuitem" data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
-        <button
-          role="menuitem" data-testid="project-export" disabled={banners.exporting !== null || p.loading}
-          title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
-          onclick={() => run('export')}
-        >Export WAV…</button>
-      {/if}
+  <div class="proj" bind:this={projEl}>
+    <div class="id">
+      <button
+        class="name" data-testid="project-menu" title="Project: New, Open, Save, Export" aria-haspopup="menu" aria-expanded={menuOpen}
+        onclick={() => menu && (menu.open = !menu.open)}
+      ><span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">●<span class="sr-only">{' '}unsaved</span></span>{/if}</span></button>
+      <span class="hint" data-testid="hint-line" aria-hidden="true">{hint}</span>
     </div>
-  </details>
-  <span class="seg hist" role="group" aria-label="Undo and redo">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <details class="more" bind:this={menu} ontoggle={menuToggled} onkeydown={menuKey}>
+      <summary class="ib" data-testid="topbar-more" aria-label="More: open, save, export, takes" title="New, Open, Save, Export WAV, Undo take, Rec offset">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5" fill="currentColor" /><circle cx="8" cy="8" r="1.5" fill="currentColor" /><circle cx="12.5" cy="8" r="1.5" fill="currentColor" /></svg>
+      </summary>
+      <div class="panel menu" role="menu">
+        {#if confirming}
+          <p class="discard" data-testid="project-discard-warning">{warning}</p>
+          <div class="row">
+            <button class="btn danger" data-testid="project-discard" onclick={() => run(confirming!)}>
+              Discard and {confirming === 'new' ? 'start new' : 'open…'}
+            </button>
+            <button class="btn" data-testid="project-discard-cancel" onclick={() => (confirming = null)}>Cancel</button>
+          </div>
+        {:else}
+          <button role="menuitem" data-testid="project-new" onclick={() => run('new')}>New</button>
+          <button role="menuitem" data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
+          <button role="menuitem" data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
+          <button role="menuitem" data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
+          <button
+            role="menuitem" data-testid="project-export" disabled={banners.exporting !== null || p.loading}
+            title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
+            onclick={() => run('export')}
+          >Export WAV…</button>
+          <hr />
+          <button
+            role="menuitem" data-testid="undo-take" disabled={!rec.canUndoTake}
+            title={undoTakeTitle(rec.takeEdits)} onclick={() => recorder.undoLastTake()}
+          >Undo take</button>
+          <div class="offset">
+            <span class="olbl">Rec offset</span>
+            <NumberField
+              testid="rec-offset" ariaLabel="Recording offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
+              value={offsetMs} onchange={setOffset}
+            />
+          </div>
+          <p class="note">Recorded notes land where you heard the beat. If they still land late, raise the offset (positive = earlier).</p>
+        {/if}
+      </div>
+    </details>
+  </div>
+
+  <span class="grp" role="group" aria-label="Undo and redo">
     <button
-      data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
+      class="ib" data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
       title={undoLabels.undo ? `Undo ${undoLabels.undo} (${mod}Z)` : 'Nothing to undo'}
-    >↶</button>
+    ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4 2 7l3 3" /><path d="M2.5 7H10a4 4 0 0 1 0 8H7" /></svg></button>
     <button
-      data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
+      class="ib" data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
       title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
-    >↷</button>
+    ><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11 4 3 3-3 3" /><path d="M13.5 7H6a4 4 0 0 0 0 8h3" /></svg></button>
   </span>
-  <button class="play" class:on={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
-    {songPlaying ? '■ Stop' : '▶ Play'}
-  </button>
-  <!-- Loop belongs to the song transport; usable whichever transport ran last. -->
-  <button
-    class="small"
-    class:on={p.loop.on}
-    aria-pressed={p.loop.on}
-    data-testid="loop-toggle"
-    onclick={() => setLoop(p, engine, { on: !p.loop.on })}
-    title="Loop the loop range while playing the song"
-  >Loop</button>
-  <details class="pop">
-    <summary title="Recording timing offset">Offset {offsetMs} ms</summary>
-    <div class="panel">
-      <label>
-        <span class="lbl">REC OFFSET</span>
-        <input
-          type="number"
-          min={REC_OFFSET_MIN}
-          max={REC_OFFSET_MAX}
-          step="1"
-          value={offsetMs}
-          data-testid="rec-offset"
-          onchange={commitOffset}
-          onkeydown={blurOnEnter}
-        /> ms
-      </label>
-      <p>Recorded notes are placed where you heard the beat. If they still land late, raise this (positive = earlier). −200…200.</p>
-    </div>
-  </details>
-  <button
-    class="small"
-    disabled={!rec.canUndoTake}
-    data-testid="undo-take"
-    onclick={() => recorder.undoLastTake()}
-    aria-label="Undo take"
-    title={undoTakeTitle(rec.takeEdits)}
-  >↶ Take</button>
-  <label class="bpm">
-    <span class="lbl">BPM</span>
-    <input
-      type="number"
-      min="20"
-      max="300"
-      step="1"
-      value={p.tempo}
-      onchange={commitTempo}
-      onkeydown={blurOnEnter}
+  <span class="sep" aria-hidden="true"></span>
+
+  <span class="grp" role="group" aria-label="Song transport">
+    <button class="tp play" class:on={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
+      <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor" /></svg><span class="sr-only">{songPlaying ? 'Stop' : 'Play'}</span>
+    </button>
+    <button class="tp" data-testid="song-stop" aria-label="Stop" title="Stop (the song or the pattern)" disabled={!p.playing} onclick={onStop}>
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
+    </button>
+    <button
+      class="tp" class:on={p.loop.on} aria-pressed={p.loop.on} aria-label="Loop" data-testid="loop-toggle"
+      onclick={() => setLoop(p, engine, { on: !p.loop.on })} title="Loop the loop range while playing the song"
+    ><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V6a2 2 0 0 1 2-2h7l-2-2" /><path d="M13 9v1a2 2 0 0 1-2 2H4l2 2" /></svg></button>
+  </span>
+
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="tempo" onkeydown={blurAfterEnter}>
+    <NumberField
+      variant="lcd" label="Tempo" ariaLabel="BPM" testid="tempo" min={20} max={300} step={1} decimals={1}
+      title="Tempo (BPM): drag up/down, wheel or arrows (Shift = 0.1), or type" value={p.tempo}
+      onchange={(v) => setTempo(p, engine, v)}
     />
-  </label>
-  <button class="metro" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome" aria-label="Metronome">
-    Metro
+  </div>
+
+  <BigTimer {p} {clock} />
+
+  <button class="ib" class:on={p.metronome} aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)} title="Metronome" aria-label="Metronome">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h4l3 12H3z" /><path d="m8 10 4-6" /></svg>
   </button>
-  <span class="pill keys" data-testid="keys-target" title="Computer keyboard and MIDI play this track">
-    Keys →
-    {#if keysTrack}
-      <span class="sw" style:background={keysTrack.color}></span>{keysTrack.name}
-    {:else}
-      (no track)
-    {/if}
-  </span>
-  <!-- mousedown is cancelled so a click never moves focus onto the button: Space keeps meaning play/stop (not "click the focused button") and the piano roll keeps its keyboard focus. -->
-  <span class="octave" onwheel={onOctaveWheel}>
-    <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
-      onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave - 1)}>−</button>
-    <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
-    <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
-      onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
-  </span>
-  <span class="midiwrap">
-    <button class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
-      aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => (midiOpen = !midiOpen)}>MIDI: {midiLabel}</button>
-    {#if midiOpen}
-      <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
-    {/if}
-  </span>
+
+  <div class="master">
+    <Knob variant="slider" def={MASTER_DEF} value={masterDb} color="var(--accent)" testid="master-volume" auto={MASTER_AUTO} onchange={(v) => setMix(p, engine, 'master', 'fader', v)} />
+  </div>
+
+  <button class="mini" data-testid="topbar-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
+    <Spectrum need="mini" width={58} height={30} color={THEME.play} />
+  </button>
+
   <span class="spacer"></span>
   {#if engineError}
     <span class="fatal" role="alert" data-testid="engine-error" title={engineError}>
       Audio engine stopped — <button onclick={() => location.reload()}>reload</button>
     </span>
   {/if}
-  <button class="mini" data-testid="topbar-spectrum" title="Master spectrum — click for the mixer" aria-label="Master spectrum — click for the mixer" onclick={() => (p.mixerOpen = true)}>
-    <Spectrum need="mini" width={64} height={18} />
-  </button>
-  <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-    <span class="cpuw">CPU </span>{cpu}%<span class="long">{' '}· {dropouts} drop</span>
-  </span>
-  <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
-    <summary
-      data-testid="settings-button" aria-label="Audio settings" class:bad={latencyMs > BT_LATENCY_MS}
-      title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
-    >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
-    <div class="panel">
-      {#if settingsOpen}
-        <Settings
-          {engine} hint={latencyHint} busy={restarting || p.loading}
-          blocked={banners.exporting ? 'Wait for the export to finish' : null}
-          onApply={onApplyAudio}
-        />
-      {/if}
+
+  <div class="io">
+    <div class="row">
+      <span class="pill keys" data-testid="keys-target" title="Computer keyboard and MIDI play this track">
+        {#if keysTrack}
+          <span class="sw" style:background={keysTrack.color}></span>Keys → {keysTrack.name}
+        {:else}
+          Keys → (no track)
+        {/if}
+      </span>
+      <!-- mousedown is cancelled so a click never moves focus onto the button: Space keeps meaning play/stop (not "click the focused button") and the piano roll keeps its keyboard focus. -->
+      <span class="pill octave" onwheel={onOctaveWheel}>
+        <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
+          onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave - 1)}>−</button>
+        <span data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
+        <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
+          onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
+      </span>
     </div>
-  </details>
+    <div class="row small">
+      <span class="midiwrap">
+        <button class="pill midi" data-testid="midi-status" class:ok={midi.state === 'connected'} class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
+          aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => (midiOpen = !midiOpen)}
+        >{#if midi.state === 'connected'}<span class="led"></span>{/if}MIDI: {midiLabel}</button>
+        {#if midiOpen}
+          <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
+        {/if}
+      </span>
+      <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
+        <span class="cpuw">CPU{' '}</span>{cpu}%<span class="long">{' '}· {dropouts}<span class="dropw">{' '}drop</span></span>
+      </span>
+      <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
+        <summary
+          class="pill" data-testid="settings-button" aria-label="Audio settings" class:warn={latencyMs > BT_LATENCY_MS}
+          title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
+        >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
+        <div class="panel">
+          {#if settingsOpen}
+            <Settings
+              {engine} hint={latencyHint} busy={restarting || p.loading}
+              blocked={banners.exporting ? 'Wait for the export to finish' : null}
+              onApply={onApplyAudio}
+            />
+          {/if}
+        </div>
+      </details>
+    </div>
+  </div>
 </header>
 
 <style>
-  /* Narrow windows degrade in steps, never clipping a control (e2e
-     layout.spec.ts at 1440 / 1280 / 1024): the long readouts (Keys target,
-     MIDI device) are capped with an ellipsis (full text in the tooltip);
-     below 1400 px they shrink further, CPU drops its "· N drop" tail (kept
-     while there are dropouts) and "● unsaved" becomes "●" (tooltip: Unsaved
-     changes), leaving ~20 px of slack at 1280 px in the widest state
-     (playing, unsaved) since the 66 px master spectrum came in; to make
-     room, below 1460 px the gaps are 3 px and the small and segmented
-     buttons, the BPM field and Metro have less padding, and below 1400 px
-     the Keys / MIDI caps are tighter and with dropouts the red pill drops
-     its "CPU " word ("1% · 123 drop", full text in the tooltip), so even a
-     3-digit dropout tail fits on one row at 1400 and 1280 px (a wrap
-     mid-session would move everything under the bar); Play/Stop has a fixed
-     width so starting playback
-     never re-flows the bar. If it still doesn't fit, the bar wraps
-     onto a second row. overflow-x: clip (not hidden) stays as the last guard:
-     it never becomes a scroll container, so the popovers can drop below. */
-  .bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 10px; background: #1f2026; border-bottom: 1px solid #2a2c33; white-space: nowrap; overflow-x: clip; position: relative; z-index: 5; }
-  .pill.keys, .pill.midi { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
-  /* Below 1460 px: tighter gaps and padding, so the widest state (playing,
-     unsaved, a 3-digit "· 123 drop" tail, the master spectrum) stays on one
-     row down to 1400 px (e2e layout.spec.ts). */
-  @media (max-width: 1459px) {
-    .bar { gap: 3px; }
-    .small, .seg button:not(.hist button) { padding: 4px 6px; }
-    input { padding: 4px 6px; }
-    .metro { padding: 4px 7px; }
-    /* Room for the octave -/+ buttons; a long track name ellipsizes. */
-    .pill.keys { max-width: 125px; }
+  /* Tokens only (spec §2; the canvas board "Song view"). Widths: see LAYOUT
+     in the header comment; layout.spec.ts measures the bar at 1440 / 1400 /
+     1280 / 1024 px. Below 1280 px the bar may wrap onto a second row. */
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 64px; box-sizing: border-box; padding: 0 12px;
+    background: var(--top); border-bottom: 1px solid var(--line); white-space: nowrap; overflow-x: clip;
+    position: relative; z-index: 5; font: var(--fs-ctl) var(--font-ui); color: var(--text);
   }
-  @media (max-width: 1399px) {
-    /* 90 / 72: room for the 64 px master spectrum at 1280 px. */
-    .pill.keys { max-width: 80px; }
-    .pill.midi { max-width: 72px; }
-    .pill:not(.bad) .long, .unsaved .long { display: none; }
-    .proj summary { max-width: 160px; }
-    /* With dropouts the red pill drops its "CPU " word (tooltip unchanged). */
-    .pill.bad .cpuw { display: none; }
+  .bar > :global(*) { flex: none; }
+  .bar > .spacer { flex: 1; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
+  .sep { width: 1px; height: 36px; background: var(--line); }
+  .grp { display: inline-flex; align-items: center; gap: 4px; }
+
+  /* Name + hint: fixed width, both ellipsized. */
+  .proj { position: relative; display: flex; align-items: center; gap: 4px; }
+  .id { display: flex; flex-direction: column; gap: 2px; width: 128px; min-width: 0; }
+  .name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 700 14px/18px var(--font-ui); text-align: left; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .name:hover .pname { text-decoration: underline; text-decoration-color: var(--text-2); }
+  .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  .unsaved { margin-left: 6px; color: var(--accent); font-size: 10px; vertical-align: 2px; }
+  .hint { overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 14px; color: var(--text-2); }
+
+  /* Icon buttons (32 px) and transport buttons (44 px): raised, with the gloss. */
+  .ib, .tp {
+    display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; cursor: pointer;
+    background: var(--raised) var(--gloss); color: var(--text); box-shadow: var(--raised-shadow); font: inherit;
   }
+  .ib { width: 32px; height: 32px; border-radius: var(--r-md); }
+  .tp { width: 44px; height: 44px; border-radius: var(--r-lg); }
+  .ib:hover:not(:disabled), .tp:hover:not(:disabled) { filter: brightness(1.08); }
+  .ib:active:not(:disabled), .tp:active:not(:disabled) { translate: 0 1px; }
+  .ib:disabled, .tp:disabled { opacity: 0.45; cursor: default; }
+  .ib:focus-visible, .tp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ib.on, .tp.on { background-color: var(--accent); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .tp.play { background-color: var(--play); color: var(--on-color); box-shadow: var(--raised-shadow), 0 2px 10px color-mix(in srgb, var(--play) 50%, transparent); }
+  .tp.play.on { box-shadow: var(--raised-shadow), 0 0 16px color-mix(in srgb, var(--play) 80%, transparent); }
+
+  /* ⋯ menu */
+  .more { position: static; }
+  .more summary { list-style: none; }
+  .more summary::-webkit-details-marker { display: none; }
+  .more[open] summary { background-color: var(--text); color: var(--on-color); }
+  .panel {
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 10; padding: 8px; white-space: normal;
+    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
+  }
+  .menu { width: 240px; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
+  .menu > button { display: flex; justify-content: space-between; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; cursor: pointer; }
+  .menu > button:hover:not(:disabled) { background: var(--raised); }
+  .menu > button:disabled { opacity: 0.45; cursor: default; }
+  .menu > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .menu kbd { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text-2); }
+  .menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
+  .offset { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; }
+  .olbl { color: var(--text-2); }
+  .note { margin: 2px 8px 4px; font-size: 11px; color: var(--text-2); }
+  .discard { margin: 2px 2px 6px; color: var(--accent); }
+  .row { display: flex; gap: 6px; }
+  .btn.danger { background-color: var(--rec); color: var(--on-color); }
+
+  /* NumberField's LCD is sized for 3 digits + label; 58 px holds "124.5" at 18 px. */
+  .tempo { display: flex; }
+  .tempo :global(input) { width: 58px; }
+  /* Knob's slider has a 112 px minimum (the rack's grid); the bar has less room. */
+  .master { width: 104px; }
+  .master :global(.slider) { min-width: 0; }
+
+  .mini { display: flex; align-items: center; justify-content: center; width: 66px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
+  .mini:hover { filter: brightness(1.15); }
+  .mini:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Right: two rows of raised pills. */
+  .io { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .io .row { gap: 4px; align-items: center; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; padding: 0 8px; border: 0;
+    border-radius: var(--r-md); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow);
+    color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); font-variant-numeric: tabular-nums;
+  }
+  .small .pill { height: 22px; font-size: 11px; padding: 0 6px; }
+  button.pill, summary.pill { cursor: pointer; }
+  button.pill:hover, summary.pill:hover { filter: brightness(1.08); }
+  .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pill.keys { display: block; line-height: 26px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .pill.midi { display: block; line-height: 22px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+  .pill.bad { color: var(--rec); font-weight: 700; }
+  .pill.midi.ok { background-color: color-mix(in srgb, var(--play) 30%, var(--raised)); }
+  .led { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--play); vertical-align: 1px; }
+  .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+  .octave { padding: 0 2px; gap: 0; }
+  .octave > span { padding: 0 2px; }
+  button.oct { position: relative; width: 18px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
+  button.oct:disabled { opacity: 0.4; cursor: default; }
+  /* Bigger hit area without changing the layout width. */
+  button.oct::before { content: ''; position: absolute; inset: -6px -2px; }
   .midiwrap { position: relative; display: inline-flex; }
-  .spacer { flex: 1; }
-  button, .pill, input, summary { white-space: nowrap; flex: none; }
-  button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }
-  button { cursor: pointer; }
-  button:hover { background: #33353e; }
-  button.on { background: #f0a23a; color: #111; border-color: #f0a23a; }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  /* Not the theme's .seg well (yet): its padding would push the bar onto two
-     rows at 1280 px. Plan 20's top-bar task replaces this group. */
-  .seg { display: inline-flex; flex: none; padding: 0; gap: 0; background: none; box-shadow: none; }
-  .seg button { border-radius: 0; font-size: 11px; padding: 4px 8px; }
-  .seg button:first-child { border-radius: 4px 0 0 4px; }
-  .seg button:last-child { border-radius: 0 4px 4px 0; }
-  .small { font-size: 11px; padding: 4px 8px; }
-  .hist button { padding: 4px 5px; }
-  .play { min-width: 68px; }
   .pop { position: relative; }
-  .pop summary { list-style: none; cursor: pointer; font-size: 11px; color: #9a9da8; padding: 4px 6px; border-radius: 4px; }
+  /* Block-level flex: no line box (and its strut) around the summary. */
+  .pop summary.pill { display: flex; }
+  .pop summary { list-style: none; }
   .pop summary::-webkit-details-marker { display: none; }
-  .pop summary:hover { background: #2a2c33; }
-  .pop .panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; width: 240px; padding: 8px 10px; background: #24262c; border: 1px solid #34363e; border-radius: 4px; box-shadow: 0 4px 14px #0008; }
-  .pop .panel label { display: flex; align-items: center; gap: 6px; }
-  .pop .panel p { margin: 6px 0 0; font-size: 11px; color: #9a9da8; }
-  .proj summary { color: #e4e5ea; font-size: 12px; font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-  .proj .unsaved { color: #f0a23a; font-weight: 400; font-size: 11px; margin-left: 6px; }
-  .proj .menu { width: 230px; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
-  .proj .menu > button { display: flex; justify-content: space-between; text-align: left; background: transparent; border-color: transparent; }
-  .proj .menu > button:hover { background: #33353e; }
-  .proj .menu > button:disabled { background: transparent; }
-  .proj kbd { font: inherit; font-size: 10px; color: #7d808c; }
-  .proj .warn { margin: 2px 2px 6px; color: #f0a23a; white-space: normal; }
-  .proj .row { display: flex; gap: 6px; }
-  .proj .danger { background: #c92a2a; border-color: #c92a2a; color: #fff; }
-  .bpm { display: flex; align-items: center; gap: 6px; }
-  .lbl { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
-  input { width: 48px; }
-  button.pill { cursor: pointer; }
-  .pill { padding: 4px 6px; background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
-  /* Compact: the bar has to stay on one row at 1280 px (layout.spec). */
-  .octave { display: inline-flex; align-items: center; flex: none; }
-  .octave .pill { padding: 4px 1px; }
-  button.oct { padding: 2px; line-height: 1; border-color: transparent; position: relative; }
-  /* Bigger hit area (~24 px) without changing the layout width. */
-  button.oct::before { content: ''; position: absolute; inset: -6px -4px; }
-  .pill.bad { color: #ff6b6b; font-weight: 600; }
-  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 3px; vertical-align: -1px; }
-  .pill.keys { color: #c9cbd3; }
-  .settings summary { color: #9a9da8; font-size: 12px; font-variant-numeric: tabular-nums; }
-  .settings summary.bad { color: #f0a23a; }
+  .settings summary.warn { color: var(--accent); font-weight: 700; }
   /* At the right edge: the panel opens leftwards. */
-  .settings .panel { left: auto; right: 0; width: 270px; }
-  .mini { padding: 0; line-height: 0; border-color: #2a2c33; background: #15161a; }
-  .mini:hover { border-color: #4a4f63; background: #15161a; }
-  .fatal { background: #c92a2a; color: #fff; font-weight: 700; padding: 4px 10px; border-radius: 4px; }
-  .fatal button { background: #fff; color: #c92a2a; border-color: #fff; font-weight: 700; padding: 1px 8px; }
+  .settings .panel { left: auto; right: 0; width: 270px; padding: 10px 12px; }
+  @media (max-width: 1399px) {
+    .pill:not(.bad) .long { display: none; }
+    .pill.keys { max-width: 120px; }
+    .pill.midi { max-width: 88px; }
+    /* With dropouts the red pill drops its "CPU " and "drop" words: "1% · 123" (tooltip unchanged). */
+    .pill.bad .cpuw, .pill.bad .dropw { display: none; }
+  }
+  /* Short windows (< 760 px tall): a 40 px bar, so the piano roll keeps
+     C2..C5 at 9 px rows at 1280×720 (pianoroll.spec.ts): 36 px transport
+     buttons, tempo LCD and timer (BigTimer.svelte), shorter pills. The
+     approved 64 px look from 760 px up. */
+  @media (max-height: 759px) {
+    .bar { min-height: 40px; padding-block: 2px; }
+    .tp { width: 36px; height: 36px; border-radius: var(--r-md); }
+    .sep { height: 28px; }
+    .tempo :global(.nf.lcd) { height: 36px; }
+    .tempo :global(.nf.lcd input) { padding-top: 9px; }
+    .mini { height: 32px; }
+    .io { gap: 2px; }
+    .pill { height: 17px; font-size: 11px; }
+    .small .pill { height: 17px; }
+    .pill.keys { line-height: 17px; }
+    .pill.midi { line-height: 17px; }
+  }
+  .fatal { padding: 4px 10px; border-radius: var(--r-sm); background: var(--rec); color: var(--on-color); font-weight: 700; }
+  .fatal button { padding: 1px 8px; border: 0; border-radius: var(--r-sm); background: var(--text); color: var(--on-color); font: inherit; cursor: pointer; }
 </style>

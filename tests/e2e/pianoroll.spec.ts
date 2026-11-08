@@ -225,7 +225,7 @@ test('layout at 1280×720: C2..C5 at >= 9 px rows, top bar on one line', async (
     const mid = (r: DOMRect) => r.top + r.height / 2;
     return {
       overflow: el.scrollWidth > el.clientWidth,
-      oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4 && r.height < 34), // nothing wrapped
+      oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4), // nothing wrapped (plan 20: the 40 px short-window bar)
     };
   });
   expect(bar).toEqual({ overflow: false, oneLine: true });

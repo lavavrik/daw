@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
+import { openMore } from './topbar';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
 // engine.wasm. showSaveFilePicker is replaced (before the app loads) by a
@@ -73,7 +74,7 @@ async function oneBarSong(page: Page) {
 }
 
 async function exportFromMenu(page: Page) {
-  await page.getByTestId('project-menu').click();
+  await openMore(page);
   await page.getByTestId('project-export').click();
 }
 
@@ -110,7 +111,7 @@ test('export produces a non-silent WAV of the right length', async ({ page }) =>
   expect(r.length).toBe(r.want);
   expect(r.peak).toBeGreaterThan(0.05);
   // The live engine was never touched: the transport is still stopped and alive.
-  await expect(page.getByTestId('play')).toHaveText('▶ Play');
+  await expect(page.getByTestId('play')).toHaveText('Play');
   await expect(page.getByTestId('engine-error')).toHaveCount(0);
 });
 

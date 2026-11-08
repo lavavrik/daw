@@ -4,6 +4,8 @@
   // Examples popover: Esc, a pointer press outside, or focus moving away
   // closes it (`onclose`). Three sections: Devices, Last CC, Mappings (with
   // a forget button per row: one undo entry, "Forget MIDI CC n").
+  // Look (plan 20 Task 5): a --panel card with --lift; it opens leftwards
+  // from the pill (right-aligned), as the pill is at the bar's right end.
   import { tick } from 'svelte';
   import type { MidiStatus } from '../input/midi';
   import { forgetMidi, mappingLabel } from '../state/midiMap';
@@ -82,15 +84,16 @@
 </div>
 
 <style>
-  .pop { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 240px; max-width: 360px; max-height: 60vh; overflow-y: auto; padding: 6px 8px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; text-align: left; white-space: normal; font-size: 12px; color: #c9cbd3; outline: none; }
-  h4 { margin: 8px 0 3px; font-size: 10px; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: #8d90a0; border-bottom: 1px solid #3a3d48; padding-bottom: 1px; }
+  .pop { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; min-width: 240px; max-width: 360px; max-height: 60vh; overflow-y: auto; padding: 8px 10px; background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); text-align: left; white-space: normal; font: var(--fs-ctl) var(--font-ui); color: var(--text); outline: none; }
+  h4 { margin: 8px 0 3px; padding-bottom: 2px; border-bottom: 1px solid var(--line); font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); }
   h4:first-child { margin-top: 0; }
   p { margin: 2px 0; }
-  .dim { color: #8d90a0; }
+  .dim { color: var(--text-2); }
   ul { list-style: none; margin: 0; padding: 0; }
   li { padding: 1px 0; }
   .maps li { display: flex; align-items: center; gap: 6px; }
   .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .maps button { flex: none; padding: 0 5px; font: inherit; line-height: 1.4; color: #c9cbd3; background: transparent; border: 1px solid #34363e; border-radius: 3px; cursor: pointer; }
-  .maps button:hover { background: #2a2c33; }
+  .maps button { flex: none; padding: 0 6px; font: inherit; line-height: 1.5; color: var(--text); background: var(--raised) var(--gloss); border: 0; border-radius: var(--r-sm); box-shadow: var(--raised-shadow); cursor: pointer; }
+  .maps button:hover { filter: brightness(1.08); }
+  .maps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 </style>

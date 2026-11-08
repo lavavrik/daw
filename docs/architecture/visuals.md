@@ -174,7 +174,7 @@ entries, decimation, the sync grid, the bank of 8 — is in
 The mixer's analyser and the top bar's master spectrum (plan 12 Task 3).
 
 ```
- master ring ─┐                               ┌─► top bar: 64 × 18, 20 bands
+ master ring ─┐                               ┌─► top bar: 58 × 30, 20 bands
  tap ring  ───┼─► analyserBus (ONE 30 Hz ─────┼─► AnalyserPanel spectrum:
  SAB [3]   ───┘    frame-loop consumer)       │     320 × 140, 60 bands
                    newest frames → (L+R)/2 →  └─► Goniometer + correlation
@@ -188,9 +188,9 @@ scrolls with the strips): a header "Analyser · Master" or "· <strip>" in the
 strip's colour, the spectrum, and for the Master a 120 × 120 goniometer and
 a correlation bar. Each track and return strip has a "∿" toggle (*Show in
 analyser*): one strip at a time, pressing it again goes back to the Master.
-The choice is view state (not saved, not an edit). The top bar's 64 × 18
-master spectrum (20 bands, no labels) sits before the CPU pill; a click
-opens the Mixer tab.
+The choice is view state (not saved, not an edit). The top bar's 58 × 30
+master spectrum (20 bands, no labels, on an --lcd well) sits after the
+Master slider; a click opens the Mixer tab.
 
 **Analysis** (`spectrum.ts`, `fft.ts`):
 

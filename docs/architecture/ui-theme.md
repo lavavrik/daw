@@ -135,8 +135,6 @@ of these class names keeps its own box when it sets its own padding and font.
   Body text opts into `--fs-body` as each component is restyled.
 - The skinned `<select>` drops base-select's 24 px minimum height
   (`min-block-size: 0`): dense toolbars would otherwise grow.
-- `TopBar.svelte`'s old undo/redo group uses the class `.seg`;
-  it resets the theme's well padding until the top-bar task replaces it.
 
 ## The hex guard
 `noHexColors.test.ts` fails when a `.svelte` file outside its `ALLOWED` list
@@ -154,3 +152,30 @@ clean, so the list only shrinks. Hex values belong in `theme.css`,
 - A scrub starts after 3 px of vertical travel (a click still focuses the input), moves 1 step per 4 px, Shift = step / 10. Only the display moves; `onchange` fires once on release, so a scrub is one undo entry. Esc or Cmd/Ctrl+Z mid-scrub drops it (`registerDragCancel`).
 - Arrows step; the wheel steps only while the field is focused (so scrolling a panel never edits a field under the cursor). Enter/blur commits, Esc reverts. `oninput` reports the raw text for live validation (Settings' buffer field).
 - Do not wrap a NumberField in a `<label>`: a click on label text would forward to the first button (the − step). Use a `div`.
+
+## Top bar
+
+`ui/TopBar.svelte` (plan 20 Task 5; spec §4; the canvas board "Song view"),
+one 64 px `--top` row. The header comment has the details; in short:
+
+| Part | What | Test id |
+|---|---|---|
+| Name + hint line | project name, `●` when unsaved; under it the flashed hint (`banners.hint`), else the title / aria-label of the control last pointed at anywhere in the app (one `mouseover` listener on the document, `bigTimer.ts` `hintText`), else a static tip | `project-menu`, `project-name`, `hint-line` |
+| ⋯ menu | New, Open…, Save, Save As…, Export WAV…, Undo take, Rec offset (moved here so the bar fits 1280 px; the name opens it too) | `topbar-more` (+ the old ids) |
+| ↶ ↷ | 32 px raised icon buttons | `undo`, `redo` |
+| Song transport | Play (toggles, like Space; glows and is named "Stop" while the song plays), Stop (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
+| Tempo | `NumberField variant="lcd"`, aria-label "BPM", 0.1 BPM steps with Shift | `tempo` |
+| Big timer | `ui/BigTimer.svelte`: bar:beat:tick (32 px mono) + seconds; the heard song position per frame while the song plays, else the parked song position | `timer`, `timer-pos`, `timer-seconds` |
+| Metronome | 32 px icon toggle (`--accent` when on) | — |
+| Master | Knob's slider variant on the master channel's `fader` param (curve `fader` = the fader law; `setMix`); automation, MIDI learn and undo as every Knob | `master-volume` |
+| Mini spectrum | the master spectrum on an `--lcd` well; opens the Mixer | `topbar-spectrum` |
+| Pills | Keys → track and octave; MIDI, CPU, ⚙ latency (opens Settings) | `keys-target`, `octave`, `midi-status`, `cpu`, `settings-button` |
+
+Fit: one row at ≥ 1280 px in the widest state (playing, unsaved, 123
+dropouts) with ~40 px to spare, also with the web fonts blocked
+(`tests/e2e/topbar.spec.ts`, `layout.spec.ts`). Text that changes has a
+fixed box (name, hint, timer digits up to 2-digit bars, the master
+readout) or ellipsizes (Keys, MIDI). Below 1280 px the bar may wrap.
+Windows under 760 px tall get a 40 px bar (36 px transport, tempo and
+timer): the piano roll must still show C2..C5 at 9 px rows at 1280×720
+(`pianoroll.spec.ts`).

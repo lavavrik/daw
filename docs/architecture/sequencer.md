@@ -268,7 +268,7 @@ late hit (step already sounded) is written at once. The gates are the
 note recorder's: armed,
 playing, Pattern mode, heard tick >= 0 with the 60-tick grace window. Every
 hit of a pass goes through the history with that pass's coalesce key, so a
-pass is one "Record" entry and **↶ Take** undoes its hits (and its absorbed
+pass is one "Record" entry and **Undo take** (top bar ⋯ menu) undoes its hits (and its absorbed
 edits) like notes.
 
 ## Song timeline (arrangement)

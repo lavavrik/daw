@@ -141,9 +141,9 @@ const peakIn = (rec: { t: number; peak: number }[], from: number, to: number) =>
 /** Song mode, stopped (the song transport ran last): song Play, then Stop. */
 async function songMode(page: Page) {
   await page.getByTestId('play').click();
-  await expect(page.getByTestId('play')).toHaveText('■ Stop');
+  await expect(page.getByTestId('play')).toHaveText('Stop');
   await page.getByTestId('play').click();
-  await expect(page.getByTestId('play')).toHaveText('▶ Play');
+  await expect(page.getByTestId('play')).toHaveText('Play');
 }
 
 /** Song mode, from tick 0: play (song Play) and record `ms`, then stop. */

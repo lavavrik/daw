@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { openMore } from './topbar';
 
 // Minimal shape of what App.svelte exposes on window for tests.
 type DawWindow = {
@@ -860,6 +861,7 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
   await expect(rec).toHaveAttribute('data-state', 'armed');
   const undo = page.getByTestId('undo-take');
   await expect(undo).toBeEnabled();
+  await openMore(page);
   await undo.click();
   await expect.poll(takeLen(page)).toBe(0);
   await expect(undo).toBeDisabled();
@@ -981,6 +983,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   expect(n.start).toBeLessThan(rawBefore - 300);
   expect(n.len).toBeGreaterThan(200); // ~200 ms ~ 400 ticks
 
+  await openMore(page);
   await page.getByTestId('undo-take').click();
   await expect(page.getByTestId('pr-readout')).toContainText('0 notes');
 });

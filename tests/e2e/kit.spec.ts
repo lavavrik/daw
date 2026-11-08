@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { openMore } from './topbar';
 
 // The built-in starter kit (plan 8 Task 4): a fresh session — first start
 // and Project ▸ New — starts with the default drum track filled from the
@@ -89,7 +90,7 @@ test('Project ▸ New starts from the kit again', async ({ page }) => {
   await startAudio(page);
   await expectKit(page);
   await page.getByTestId('step-0-4').click(); // an edit, so New asks first
-  await page.getByTestId('project-menu').click();
+  await openMore(page);
   await page.getByTestId('project-new').click();
   await page.getByTestId('project-discard').click();
   await expectKit(page);
@@ -197,7 +198,7 @@ test('Project ▸ New deletes the old autosave and never autosaves the untouched
     }), { timeout: 15_000 })
     .not.toBeNull();
   expect(await hasAutosave()).toBe(true);
-  await page.getByTestId('project-menu').click();
+  await openMore(page);
   await page.getByTestId('project-new').click();
   await page.getByTestId('project-discard').click();
   await expectKit(page);
@@ -293,6 +294,7 @@ test('a selected drum track plays its rows from the computer keyboard and record
   expect(after[1]).toBe(1);
   expect(after.reduce((a, b) => a + b, 0)).toBe(1);
   await expect(page.getByTestId('undo-take')).toBeEnabled();
+  await openMore(page);
   await page.getByTestId('undo-take').click();
   expect((await steps()).every((n) => n === 0)).toBe(true);
 });

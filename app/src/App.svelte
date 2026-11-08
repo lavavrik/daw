@@ -874,7 +874,7 @@
       <TopBar
         bind:this={topBar}
         p={project} {engine} {octave} onOctave={(o) => changeOctave(o)} {midi} {midiCc} {recorder} {rec} {session} {restoreOffer} {undoLabels}
-        onToggleSong={toggleSong}
+        {clock} onToggleSong={toggleSong} onStop={stopAny}
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
       />

@@ -20,10 +20,7 @@ const ALLOWED: string[] = [
   'ui/BottomPanel.svelte',
   'ui/ClipPanel.svelte',
   'ui/InlineConfirm.svelte',
-  'ui/MidiPopover.svelte',
-  'ui/Settings.svelte',
   'ui/StartOverlay.svelte',
-  'ui/TopBar.svelte',
   'ui/acid/AcidSteps.svelte',
   'ui/pianoroll/PianoRoll.svelte',
 ];

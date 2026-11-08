@@ -4,6 +4,7 @@
   import { addClip, playPattern, playSong, seek, setMode, stopTransport, transportPlaying } from './state/song-actions';
   import type { TransportHooks } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
+  import Tooltip from './ui/Tooltip.svelte';
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
   import BottomPanel from './ui/BottomPanel.svelte';
@@ -913,6 +914,7 @@
 {#if !engine}
   <StartOverlay {onstarted} note={autosaveOff ? AUTOSAVE_OFF : null} />
 {/if}
+<Tooltip />
 {#if project.loading}
   <!-- A New / Open is replacing the session: no clicks, drags or drops reach
        the editors until it is done (keys are ignored in shortcuts.ts). -->

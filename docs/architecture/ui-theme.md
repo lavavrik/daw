@@ -296,8 +296,31 @@ Icons come from `phosphor-svelte` (MIT, Svelte 5), drawn through
 - **Sizes:** 16 in the 32 px icon buttons, 20 in the 44 px transport
   buttons, 12 inside the 22 px pattern transport.
 - **Icon-only buttons:** the button needs an `aria-label` (or visually hidden
-  text, as the song Play's `.sr-only` "Play song") and a tooltip (`title`
-  until the tooltip component lands). The icon itself stays decorative
+  text, as the song Play's `.sr-only` "Play song") and a tooltip (a plain `title`;
+  the global layer below shows it). The icon itself stays decorative
   (`aria-hidden`, no `label`). Give `Icon` a `label` only when it stands
   alone with no labelled control around it (`role="img"`).
 - Tests find controls by test id or accessible name, never by a glyph.
+
+## Tooltips
+
+One global layer, `ui/Tooltip.svelte`, mounted once in `App.svelte`. Components
+do nothing special: any element with a `title` (or `data-tip`) gets the custom
+tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
+
+- **Claim / release.** When the pointer enters such an element (or it gets
+  keyboard focus, `:focus-visible` only) the layer moves `title` into
+  `data-tip` (so the native tip never fires) and sets `aria-describedby` to the
+  layer. When the tip hides, `title` and the old `aria-describedby` are put
+  back, so code and tests that read `title` still work.
+- **Timing.** 250 ms delay; 0 ms while a tip is showing or within 600 ms of one
+  hiding (moving along a toolbar). 13 px (`--fs-body`), `--lcd` background,
+  max 320 px, flips above the element near the bottom edge, clamped to the
+  viewport.
+- **Hides on** pointerdown, Esc (not swallowed), scroll (capture), window blur,
+  pointer leaving, focus leaving. After a click/Esc/scroll dismissal the same
+  element does not re-show until the pointer has left it.
+- **Live.** A `title`/`data-tip` change while shown updates the text; the
+  element being removed or hidden (a menu closing, a re-rendered cell) hides
+  the tip (one connected/visible check per animation frame while shown).
+- Touch pointers are ignored. `data-tip` alone (no `title`) also works.

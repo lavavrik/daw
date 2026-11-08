@@ -6,6 +6,7 @@ import { createHistory, debugStacks } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
 import { buildFixture } from '../project/testFixture';
+import { faderDb } from '../ui/mixer/mixMath';
 import { fromPos } from '../ui/rack/knobMath';
 import { removeTrack } from './actions';
 import {
@@ -63,6 +64,25 @@ describe('MIDI mappings', () => {
     expect(learnMidi(p, 10, 'reverb', { kind: 'mix', param: 'rev_size' })).toBe(true);
     applyCc(p, sink, 10, 0);
     expect(p.mixer.reverb.params[mixParam('rev_size').id]).toBe(mixParam('rev_size').min);
+  });
+
+  it('mapped fader follows the fader law; a knob still uses ccValue', async () => {
+    const { p, drums, synth, sink } = await rig();
+    learnMidi(p, 7, drums.id, fader);
+    const db = () => p.mixer.channels[drums.id].params[mixParam('fader').id];
+    applyCc(p, sink, 7, 95);
+    expect(db()).toBe(faderDb(95 / 127));
+    expect(Math.abs(db())).toBeLessThan(0.5); // ~0 dB
+    applyCc(p, sink, 7, 0);
+    expect(db()).toBe(-60);
+    applyCc(p, sink, 7, 127);
+    expect(db()).toBe(6);
+    applyCc(p, sink, 7, 64);
+    expect(db()).toBe(faderDb(64 / 127));
+    const def = moduleDef('filter').params[CUTOFF];
+    learnMidi(p, 74, synth.id, cutoff);
+    applyCc(p, sink, 74, 64);
+    expect(synth.modules.find((m) => m.idx === 4)!.params[CUTOFF]).toBe(fromPos(def, 64 / 127));
   });
 
   it('integer knobs are learnable (rounded)', async () => {

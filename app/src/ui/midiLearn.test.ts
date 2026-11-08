@@ -7,7 +7,7 @@ import { createHistory, debugStacks } from '../history/history';
 import { serialize } from '../project/serialize';
 import { addLane, addPoint } from '../state/automation-actions';
 import { addAudioTrack } from '../state/audio-actions';
-import { banners } from '../state/banners.svelte';
+import { banners, flashHint } from '../state/banners.svelte';
 import { commandEdits } from '../state/edits';
 import { learnMidi } from '../state/midiMap';
 import { Project } from '../state/project.svelte';
@@ -264,5 +264,51 @@ describe('MIDI learn', () => {
     expect(canLearn(p, 'reverb', { kind: 'mix', param: 'rev_size' })).toBe(true);
     expect(canLearn(p, 'master', fader)).toBe(true);
     expect(canLearn(p, 'nope', fader)).toBe(false);
+  });
+
+  it('ignores CCs while the project is loading; learn mode stays on; applies after', async () => {
+    const { p, synth, router, sent, frame, frames } = await rig();
+    startLearn(synth.id, cutoff, 'Filter Cutoff');
+    p.loading = true;
+    router.onCc(74, 10);
+    expect(p.midiMap).toEqual([]);
+    expect(learning()).not.toBeNull();
+    p.loading = false;
+    cancelLearn();
+    learnMidi(p, 74, synth.id, cutoff);
+    p.loading = true;
+    router.onCc(74, 127);
+    expect(frames.length).toBe(0);
+    frame();
+    expect(sent).toEqual([]);
+    p.loading = false;
+    router.onCc(74, 127);
+    frame();
+    expect(sent.length).toBe(1);
+  });
+
+  it('MIDI learn again on the same control cancels; on another it replaces', async () => {
+    const { synth } = await rig();
+    startLearn(synth.id, cutoff, 'Filter Cutoff');
+    startLearn(synth.id, cutoff, 'Filter Cutoff');
+    expect(learning()).toBeNull();
+    expect(banners.hint).toBeNull();
+    startLearn(synth.id, cutoff, 'Filter Cutoff');
+    startLearn(synth.id, reso, 'Filter Reso');
+    expect(isLearning(synth.id, reso)).toBe(true);
+    expect(isLearning(synth.id, cutoff)).toBe(false);
+  });
+
+  it('an expiring flashHint restores the learn hint while learning, not after', async () => {
+    vi.useFakeTimers();
+    const { synth } = await rig();
+    startLearn(synth.id, cutoff, 'Filter Cutoff');
+    flashHint('Recording works in Pattern mode');
+    vi.advanceTimersByTime(2500);
+    expect(banners.hint).toBe(LEARN_HINT);
+    cancelLearn();
+    flashHint('x');
+    vi.advanceTimersByTime(2500);
+    expect(banners.hint).toBeNull();
   });
 });

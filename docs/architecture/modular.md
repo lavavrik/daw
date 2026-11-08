@@ -298,27 +298,32 @@ Params: `sample` (pool id 0..255, −1 = none), `gain` (0..2, smoothed),
 default 1), `loop` (Off/On), `loopStart` (0..1) and `fine` (−100..+100 ct).
 
 - A rising gate starts the voice at `s = floor(start · frames)`. Loop off it
-  is a one-shot (follow it with an ADSR + VCA for gated notes); loop on, the
-  gate also ends the loop. A gate with no
-  playable sample starts nothing.
-- **Region** (`end`, `loop`, `loopStart` are read live, so markers and
-  automation act on sounding voices; `start` only at trigger): the voice
-  plays `[s, e)`, `e = max(floor(end · frames), s + 1)` clamped to
-  `frames` (so `start ≥ end` plays one frame; nothing outside the sample is ever read). Loop off: at
-  `e` the last value is held and faded out over 2 ms.
-- **Loop** on (a *sustain* loop): the loop region is `[ls, e)`,
-  `ls = max(floor(loopStart · frames), s)`; the voice repeats it only while
-  its gate is high. Gate low: it stops looping, plays on to `e` and stops
-  with the 2 ms fade, so a looping voice always ends (the ADSR/VCA shapes
-  the release meanwhile). A release (or `loop` off) during a seam
+  is a one-shot (follow it with an ADSR + VCA for gated notes); loop on, a
+  falling gate also starts the loop's release window (below). A gate with
+  no playable sample starts nothing.
+- **Region** (`end`, `loop`, `loopStart` are read live, once per rack
+  sub-block, so markers and automation act on sounding voices; `start`
+  only at trigger): the voice plays `[s, e)`,
+  `e = max(floor(end · frames), s + 1)` clamped to `frames` (so
+  `start ≥ end` plays one frame; nothing outside the sample is ever read).
+  Loop off: at `e` the last value is held and faded out over 2 ms.
+- **Loop** on (a *sustain* loop with a release window, plan 15 ruling K):
+  the loop region is `[ls, e)`, `ls = max(floor(loopStart · frames), s)`;
+  the voice repeats it while its gate is high **and for
+  `LOOP_RELEASE_SECONDS` = 10 s (the ADSR's longest release) after the
+  gate falls**, so the ADSR/VCA after it is heard releasing on the loop
+  rather than the sample running out under it. Then it stops looping,
+  plays on to `e` and stops with the 2 ms fade, so a looping voice always
+  ends (within 10 s + `e − ls` frames of the gate falling, at rate 1): CPU
+  stays bounded. The end of the window (or `loop` off) during a seam
   crossfade finishes that seam first, so it never steps. The seam has a
-  fixed 10 ms (`xf`) equal-power crossfade inside the region: over the last
-  `xf` frames the tail fades out (cos) while the head `[ls, ls + xf)` fades
-  in (sin), then the read jumps to `ls + xf` — so after the first pass a
-  loop lasts `e − ls − xf` frames. A loop region shorter than `2 · xf`
-  plays as loop off. Overshoot past `e` (high rates, `end` moved under the
-  position) wraps modulo the loop, so the position stays in the region at
-  any pitch.
+  fixed 10 ms (`xf`) equal-power crossfade inside the region: over the
+  last `xf` frames the tail fades out (cos) while the head `[ls, ls + xf)`
+  fades in (sin), then the read jumps to `ls + xf` — so after the first
+  pass a loop lasts `e − ls − xf` frames. A loop region shorter than
+  `2 · xf` plays as loop off. Overshoot past `e` (high rates, `end` moved
+  under the position) wraps modulo the loop, so the position stays in the
+  region at any pitch.
 - **Rate** `2^(pitch − (root − 60)/12 + fine/1200)` with `pitchTrack` on
   (per sample: bends follow), `2^(fine/1200)` off; exponent clamped to
   ±11 octaves. Reads use 4-point, 3rd-order Hermite (Catmull-Rom)
@@ -332,6 +337,48 @@ default 1), `loop` (Off/On), `loopStart` (0..1) and `fine` (−100..+100 ct).
 - Modules get the pool read-only as a `SampleView`, passed next to the FX
   pool down `Synths::render_add` → `Rack::render_add` → `Module::process`.
 
+### Panel (plan 15)
+
+The Sample Player's panel (`app/src/ui/rack/ModulePanel.svelte`) shows its
+sample under the sample dropdown in `SampleStrip.svelte` (maths in
+`sampleStrip.ts`, unit-tested):
+
+- **Strip**, 220 × 48 px (`data-testid="sample-strip-<module idx>"`): the
+  whole file from its peaks (`waveMath.columns` over `waveBase`, the Clip
+  tab's helpers; no zoom), redrawn only when the sample's `SampleMeta`
+  changes. Outside `[start, end)` is dimmed, the loop region tinted while
+  Loop is On — hatched, titled "Loop too short (< 20 ms): plays once",
+  when it is shorter than the engine loops (`loopTooShort`). No sample
+  assigned: "Drop a sample here" (the panel is the drop target); an
+  assigned id the session does not know: "Sample not loaded".
+- **Markers** as the engine plays them (see above): Start green, End red
+  (never drawn left of Start + 1 px), Loop start yellow (only with Loop
+  On, drawn inside [Start, End]). Each has a small flag that is a
+  `role="slider"` (`aria-label` "Start" / "End" / "Loop start", value
+  0..1): Start's and End's flags at the top (pointing right / left), Loop
+  start's at the bottom, so coinciding markers stay grabbable. A drag
+  moves the value by dx / 220 from where the marker is *drawn* when
+  grabbed (`drawnValue`: on a degenerate region, e.g. End set left of
+  Start from the knobs, no jump). Keys: arrows ±0.01 (Shift ±0.001),
+  PageUp / PageDown ±0.1, Home / End the lowest / highest allowed value.
+  Drags and keys keep `start ≤ end − 1 px`, `end ≥ start + 1 px` and
+  `start ≤ loopStart ≤ end − loopMin`, where `loopMin` is two 10 ms seam
+  crossfades plus a frame (the shortest loop the engine loops; from the
+  file's frames and the sample rate). Dragging or stepping End left past
+  `loopStart + loopMin` with Loop On pushes Loop start back with it (never
+  before Start; if that is still too short, the tint is hatched). The
+  knobs can still set anything; the engine copes. Every change goes
+  through the panel's `onparam` → `setParam`, like the knobs (End + Loop
+  start together through `onparams` → `setParams`: one undo entry); a
+  drag is one undo entry (pointer gestures, `history/gestures.ts`);
+  Escape / pointercancel mid-drag restores the grabbed values.
+- **Root** reads and types as a note name (`knobMath.isNoteParam`: "C4" =
+  60, "C#4", "C-1" = 0; "E4", "Db4" or the number typed).
+  **Root ← last note** (`data-testid="root-from-last-<idx>"`) sets `root`
+  to the last live note (QWERTY or MIDI note-on, kept by App from the note
+  bus's `onNoteOn` in `input/lastNote.svelte.ts`); disabled until a note
+  has arrived since the page loaded.
+
 ### Sampler patch
 
 `SAMPLER_PATCH` (`app/src/state/patches.ts`, menu group "Sampler" after
@@ -339,7 +386,11 @@ Starter): `midi_in` (8 voices) -> `sample_player` (sample -1 = silent until
 one is assigned) -> `vca` <- `adsr` (attack 2 ms, decay 0.2 s, sustain 1,
 release 0.25 s, vel_amt 0.7), VCA to `out` l and r. The gate drives both the
 Sample Player and the ADSR; velocity reaches the ADSR. It is not in the
-engine patch fixtures: without a sample it renders silence.
+engine patch fixtures: without a sample it renders silence; the engine test
+`sampler_patch_sustains_a_short_loop_and_releases` (`engine.rs`) builds
+the same rack with a looped 0.1 s sample: a held note outlasts the sample,
+and after the note-off the ADSR release is heard and the track is silent
+within 3 × release.
 "+ Sampler track" (`state/sampler-actions.ts`, `addSamplerTrack`) adds a
 synth track on it; a sample dropped on that button is imported first, then
 the track is created named after the file and the sample assigned, in one
@@ -462,8 +513,10 @@ Modules are enum-dispatched (no trait objects, no allocation):
 
 ## Live input routing
 
-Keyboard and MIDI notes go to the *input track*: the selected synth track,
-else the last-selected one (selecting drums keeps the previous synth).
+Keyboard and MIDI notes go to the *input track*: the selected synth or drum
+track takes the keys (a drum track plays its rows from notes 36 + r; see
+`docs/architecture/sequencer.md`); with an Audio track or nothing selected,
+the last-selected synth track.
 `SET_INPUT_TRACK` sends pedal-up, an Off per live-held pitch (keys down or
 pedal-held) and bend 0 to the old track, never AllOff, so its sequenced notes
 keep playing (a pitch held both live and by the pattern ends on the pattern's
@@ -483,35 +536,3 @@ Rack effects (plan 6, `fx_chain_track_renders_under_budget`): one track
 running MIDI In → Osc → Filter (8 voices) → Chorus → Delay → Reverb → Out
 measured 0.65% of real time natively. The effects run once, on the summed
 stereo signal.
-
-## Sample Player panel (plan 15)
-
-The Sample Player's panel (`app/src/ui/rack/ModulePanel.svelte`) shows its
-sample under the sample dropdown in `SampleStrip.svelte` (maths in
-`sampleStrip.ts`, unit-tested):
-
-- **Strip**, 220 × 48 px (`data-testid="sample-strip-<module idx>"`): the
-  whole file from its peaks (`waveMath.columns` over `waveBase`, the Clip
-  tab's helpers; no zoom), redrawn only when the sample's `SampleMeta`
-  changes. Outside `[start, end)` is dimmed, the loop region tinted while
-  Loop is On. No sample: "Drop a sample here" (the panel is the drop
-  target).
-- **Markers** as the engine plays them (see *Sample Player* above): Start
-  green, End red (never drawn left of Start + 1 px), Loop start yellow
-  (only with Loop On, drawn inside [Start, End]). Each has a small flag
-  that is a `role="slider"` (`aria-label` "Start" / "End" / "Loop start",
-  value 0..1): Start's and End's flags at the top (pointing right / left),
-  Loop start's at the bottom, so coinciding markers stay grabbable.
-  A drag moves the value by dx / 220 from where it was grabbed; arrow keys
-  ±0.01 (Shift ±0.001). Drags and keys keep `start ≤ end − 1 px`,
-  `end ≥ start + 1 px`, `start ≤ loopStart ≤ end − 1 px` (the knobs can
-  still set anything; the engine copes). Every change goes through the
-  panel's `onparam` → `setParam`, like the knobs; a drag is one undo entry
-  (pointer gestures, `history/gestures.ts`); Escape / pointercancel
-  mid-drag restores the grabbed value.
-- **Root** reads and types as a note name (`knobMath.isNoteParam`: "C4" =
-  60, "C#4", "C-1" = 0; "E4", "Db4" or the number typed).
-  **Root ← last note** (`data-testid="root-from-last-<idx>"`) sets `root`
-  to the last live note (QWERTY or MIDI note-on, kept by App from the note
-  bus's `onNoteOn` in `input/lastNote.svelte.ts`); disabled until a note
-  has arrived since the page loaded.

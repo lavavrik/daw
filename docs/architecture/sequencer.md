@@ -134,8 +134,22 @@ step index 1 (sounding at 300), at 420 index 2 (480). Step count and swing are r
 each hit (the app's `swing`; the engine latches a swing change at the next
 step pair, so a hit right after a swing edit may use the new value a pair
 early). Other pitches and rows the track lacks are
-ignored; note-offs and the pedal do nothing (a hit is written at note-on, so
-nothing is ever held open). The gates are the note recorder's: armed,
+ignored; note-offs and the pedal do nothing (there is no note to hold
+open).
+
+A hit *before* its step (plan 15 ruling J: the step's swung, unwrapped tick
+is ahead of the hit's heard tick, by at most half a step) is held, not
+written: written at once, the engine would also play the freshly set step
+a moment later, a flam with the live hit just heard. It is written (same
+pass, same undo entry) once the heard clock reaches that tick:
+`Recorder.onHeard`, called by App's per-frame `transportSync` while the
+engine plays (so at most a frame after the step, when the engine's
+playhead, ahead by the output latency, is past it). A later hit first
+writes the held ones due by its tick, so writes keep step order. Stop,
+disarm, Undo take, an input switch and a pattern switch (before the
+engine switches: into the old pattern) write every held hit at once. A
+late hit (step already sounded) is written at once. The gates are the
+note recorder's: armed,
 playing, Pattern mode, heard tick >= 0 with the 60-tick grace window. Every
 hit of a pass goes through the history with that pass's coalesce key, so a
 pass is one "Record" entry and **↶ Take** undoes its hits (and its absorbed

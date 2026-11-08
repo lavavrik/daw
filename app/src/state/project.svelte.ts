@@ -133,6 +133,14 @@ export interface DrumTrack {
   automation: AutomationLane[];
 }
 
+/**
+ * Where a module's panel sits in the rack view (UI layout only; the engine
+ * never sees it). `row` is an integer 0..31, `x` an integer 0..1000 in grid
+ * units (GRID = 10 px). A rack where no module has a pos uses the flex-wrap
+ * flow; any pos makes the rack positioned.
+ */
+export type RackPos = { row: number; x: number };
+
 /** One module in a synth track's rack; `idx` is the engine module slot (0..31). */
 export interface RackModule {
   idx: number;
@@ -140,6 +148,8 @@ export interface RackModule {
   kind: number;
   /** Full param array in catalog order (defaults filled in). */
   params: number[];
+  /** Panel position in the rack view; absent = flow / "unpositioned" (see RackPos). */
+  pos?: RackPos;
 }
 
 /** A cable from output `from.port` of module `from.m` to input `to.port` of `to.m`. */

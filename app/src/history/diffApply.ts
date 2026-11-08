@@ -376,12 +376,16 @@ function diffSynth(p: Project, sink: CommandSink, t: SynthTrack, tj: SynthTrackJ
       sink.send(Op.RACK_ADD_MODULE, slot, wm.idx, wm.kind);
       const defs = moduleDef(wm.kind).params;
       wm.params.forEach((v, i) => v !== defs[i].default && sink.send(Op.RACK_SET_PARAM, slot, wm.idx, i, v));
-      return { idx: wm.idx, kind: wm.kind, params: [...wm.params] };
+      return wm.pos ? { idx: wm.idx, kind: wm.kind, params: [...wm.params], pos: { ...wm.pos } }
+        : { idx: wm.idx, kind: wm.kind, params: [...wm.params] };
     }
     wm.params.forEach((v, i) => {
       if (m.params[i] !== v) sink.send(Op.RACK_SET_PARAM, slot, m.idx, i, v);
     });
     m.params = [...wm.params];
+    // Layout only: no engine command.
+    if (wm.pos) m.pos = { ...wm.pos };
+    else delete m.pos;
     return m;
   });
   const into = (c: { to: { m: number; port: number } }) => packPort(c.to.m, c.to.port);

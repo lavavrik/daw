@@ -5,7 +5,7 @@ import { Project } from './project.svelte';
 import { addDrumTrack, liveInputTrack, removeTrack, selectTrack } from './actions';
 import {
   addModule, addSynthTrack, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule,
-  rollbackRefusedAdd, setParam, setParams,
+  rollbackRefusedAdd, setParam, setParams, setRackLayout,
 } from './rack-actions';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -261,5 +261,98 @@ describe('input track selection', () => {
     expect(rollbackRefusedAdd(p, 31, 0, delay.kind)).toBeNull();
     expect(fxPoolFullText(moduleDef('chorus'))).toBe('All 16 choruses in use');
     expect(fxPoolFullText(moduleDef('eq'))).toBe('');
+  });
+});
+
+describe('rack layout (pos)', () => {
+  function rig() {
+    const p = new Project();
+    const { sink } = fake();
+    const t = addSynthTrack(p, sink, 'S', { name: 'e', modules: [], cables: [] })!;
+    const a = addModule(p, sink, t.id, 'osc')!;
+    const b = addModule(p, sink, t.id, 'adsr')!;
+    const c = addModule(p, sink, t.id, 'filter')!;
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    return { p, sink, t, a, b, c };
+  }
+  const L = [(a: number, b: number) => [{ idx: a, pos: { row: 0, x: 0 } }, { idx: b, pos: { row: 1, x: 12 } }]][0];
+
+  it('set_layout_one_entry', () => {
+    const { p, t, a, b, c } = rig();
+    expect(setRackLayout(p, t.id, L(a, b), 'Move module')).toBe(true);
+    expect(t.modules.find((m) => m.idx === a)!.pos).toEqual({ row: 0, x: 0 });
+    expect(t.modules.find((m) => m.idx === b)!.pos).toEqual({ row: 1, x: 12 });
+    expect(t.modules.find((m) => m.idx === c)!.pos).toBeUndefined();
+    expect(p.history!.labels.undo).toBe('Move module');
+    expect(p.dirty).toBe(true);
+    p.history!.undo();
+    expect(t.modules.every((m) => m.pos === undefined)).toBe(true);
+    expect(p.history!.canUndo).toBe(false); // the layout was the only entry
+    p.history!.redo();
+    expect(t.modules.find((m) => m.idx === b)!.pos).toEqual({ row: 1, x: 12 });
+  });
+
+  it('set_layout_noop_no_entry', () => {
+    const { p, t, a, b } = rig();
+    expect(setRackLayout(p, t.id, [], 'Move module')).toBe(false); // nothing positioned, nothing to clear
+    expect(setRackLayout(p, t.id, null, 'Tidy rack')).toBe(false);
+    expect(p.history!.canUndo).toBe(false);
+    setRackLayout(p, t.id, L(a, b), 'Move module');
+    const labels = p.history!.labels.undo;
+    expect(setRackLayout(p, t.id, L(a, b), 'Move module')).toBe(false);
+    expect(p.history!.labels.undo).toBe(labels);
+    p.history!.undo();
+    expect(p.history!.canUndo).toBe(false); // only one layout entry existed
+  });
+
+  it('tidy_clears', () => {
+    const { p, t, a, b } = rig();
+    setRackLayout(p, t.id, L(a, b), 'Move module');
+    expect(setRackLayout(p, t.id, null, 'Tidy rack')).toBe(true);
+    expect(t.modules.every((m) => m.pos === undefined && !('pos' in m))).toBe(true);
+    expect(p.history!.labels.undo).toBe('Tidy rack');
+    p.history!.undo();
+    expect(t.modules.find((m) => m.idx === a)!.pos).toEqual({ row: 0, x: 0 });
+  });
+
+  it('coalesces moves with the same key', () => {
+    const { p, t, a } = rig();
+    setRackLayout(p, t.id, [{ idx: a, pos: { row: 0, x: 1 } }], 'Move module', 'rackmove:k');
+    setRackLayout(p, t.id, [{ idx: a, pos: { row: 0, x: 2 } }], 'Move module', 'rackmove:k');
+    p.history!.undo();
+    expect(t.modules.find((m) => m.idx === a)!.pos).toBeUndefined();
+  });
+
+  it('sends no engine command', () => {
+    const { p, t, a, b } = rig();
+    const { sink, sent } = fake();
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    setRackLayout(p, t.id, L(a, b), 'Move module');
+    p.history!.undo();
+    p.history!.redo();
+    expect(sent).toEqual([]);
+  });
+
+  it('undo_restores_pos', () => {
+    const { p, sink, t, a, b } = rig();
+    setRackLayout(p, t.id, L(a, b), 'Move module');
+    removeModule(p, sink, t.id, b);
+    expect(t.modules.some((m) => m.idx === b)).toBe(false);
+    p.history!.undo();
+    expect(t.modules.find((m) => m.idx === b)!.pos).toEqual({ row: 1, x: 12 });
+    expect(t.modules.find((m) => m.idx === a)!.pos).toEqual({ row: 0, x: 0 });
+  });
+
+  it('load_patch_keeps_pos', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const t = addSynthTrack(p, sink)!;
+    const patch = JSON.parse(JSON.stringify(STARTER_PATCHES[0]));
+    patch.modules[0].pos = { row: 3, x: 40 };
+    loadPatch(p, sink, t.id, patch);
+    expect(t.modules.find((m) => m.idx === patch.modules[0].idx)!.pos).toEqual({ row: 3, x: 40 });
+    expect(t.modules.filter((m) => m.pos)).toHaveLength(1);
+    loadPatch(p, sink, t.id, STARTER_PATCHES[0]); // a patch without positions clears them
+    expect(t.modules.some((m) => m.pos)).toBe(false);
   });
 });

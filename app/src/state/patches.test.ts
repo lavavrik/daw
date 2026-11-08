@@ -252,3 +252,45 @@ describe('validatePatch', () => {
     expect(sent.some((s) => s[0] === Op.RACK_ADD_MODULE && s[1] === t2.slot)).toBe(false);
   });
 });
+
+describe('rack module pos', () => {
+  const base = (pos: unknown[]) => ({
+    name: 'x',
+    modules: pos.map((p, i) => ({ idx: i, id: 'osc', ...(p === undefined ? {} : { pos: p }) })),
+    cables: [],
+  });
+
+  it('validate_keeps_pos', () => {
+    const { patch, warnings } = validatePatch(base([{ row: 0, x: 0 }, { row: 31, x: 1000 }, undefined]));
+    expect(patch.modules.map((m) => m.pos)).toEqual([{ row: 0, x: 0 }, { row: 31, x: 1000 }, undefined]);
+    expect(warnings).toEqual([]);
+  });
+
+  it.each([
+    ['row 32', { row: 32, x: 0 }],
+    ['x -1', { row: 0, x: -1 }],
+    ['x 1.5', { row: 0, x: 1.5 }],
+    ['x 1001', { row: 0, x: 1001 }],
+    ['not an object', 'a'],
+  ])('invalid_pos_drops_all (%s)', (_n, bad) => {
+    const { patch, warnings } = validatePatch(base([{ row: 1, x: 5 }, bad]));
+    expect(patch.modules).toHaveLength(2);
+    expect(patch.modules.every((m) => m.pos === undefined)).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(validatePatch(patch).warnings).toEqual([]); // fixed point
+  });
+
+  it('serialize_round_trip_pos', () => {
+    const p = new Project();
+    const sink = { send: () => true };
+    const t = addSynthTrack(p, sink)!;
+    expect(trackPatch(t, () => -1).modules.every((m) => !('pos' in m))).toBe(true);
+    t.modules[0].pos = { row: 2, x: 7 };
+    const saved = trackPatch(t, () => -1);
+    expect(saved.modules[0].pos).toEqual({ row: 2, x: 7 });
+    const q = new Project();
+    const t2 = addSynthTrack(q, sink, 'B', JSON.parse(JSON.stringify(saved)))!;
+    expect(t2.modules[0].pos).toEqual({ row: 2, x: 7 });
+    expect(t2.modules[1].pos).toBeUndefined();
+  });
+});

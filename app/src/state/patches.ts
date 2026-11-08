@@ -27,7 +27,7 @@ import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef } from '../audio/cat
 import type { ModuleDef } from '../audio/catalog';
 import { MAX_MODULES } from '../audio/protocol';
 import { HOUSE_GROUPS } from './housePatches';
-import type { SynthTrack } from './project.svelte';
+import type { RackPos, SynthTrack } from './project.svelte';
 
 /**
  * A rack patch by name: module kinds by catalog id, params by catalog name,
@@ -37,11 +37,14 @@ import type { SynthTrack } from './project.svelte';
  */
 export interface Patch {
   name: string;
-  modules: { idx: number; id: string; params?: Record<string, number> }[];
+  modules: { idx: number; id: string; params?: Record<string, number>; pos?: RackPos }[];
   cables: { from: [number, string]; to: [number, string] }[];
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isPos = (v: unknown): v is RackPos =>
+  isObj(v) && Number.isInteger(v.row) && Number.isInteger(v.x) &&
+  (v.row as number) >= 0 && (v.row as number) <= 31 && (v.x as number) >= 0 && (v.x as number) <= 1000;
 const isEnd = (v: unknown): v is [number, string] =>
   Array.isArray(v) && v.length === 2 && Number.isInteger(v[0]) && typeof v[1] === 'string';
 
@@ -56,6 +59,10 @@ const isEnd = (v: unknown): v is [number, string] =>
  *     pool), with the "All 8 delays in use" text;
  *   - unknown or non-numeric params (the default is used); out-of-range ones
  *     are clamped (clampParam: integer params round);
+ *   - `pos` (panel position, state/project.svelte.ts RackPos): kept when
+ *     row is an integer 0..31 and x an integer 0..1000; ONE invalid pos
+ *     drops the pos of every module of the rack (a half-valid layout would
+ *     place panels on top of each other). Modules without a pos are fine;
  *   - malformed cables, cables whose module or port does not exist; a second
  *     cable into the same input replaces the first (one cable per input).
  * The result is a fixed point: validating it again gives no warnings.
@@ -72,6 +79,7 @@ export function validatePatch(
 
   const byIdx = new Map<number, ModuleDef>();
   const pooled = new Map<string, number>(); // pooled module id -> kept so far
+  let badPos = false;
   for (const raw of Array.isArray(o.modules) ? o.modules : []) {
     if (!isObj(raw)) {
       warn('Dropped a malformed module');
@@ -118,8 +126,16 @@ export function validatePatch(
       }
       m.params = params;
     }
+    if (raw.pos !== undefined) {
+      if (isPos(raw.pos)) m.pos = { row: raw.pos.row, x: raw.pos.x };
+      else badPos = true;
+    }
     patch.modules.push(m);
     byIdx.set(idx, def);
+  }
+  if (badPos) {
+    for (const m of patch.modules) delete m.pos;
+    warn('Dropped the module positions: one was invalid');
   }
 
   for (const raw of Array.isArray(o.cables) ? o.cables : []) {
@@ -170,7 +186,7 @@ export function trackPatch(t: SynthTrack, sample: (id: number) => number): Patch
       const params: Record<string, number> = {};
       def.params.forEach((pd, i) => (params[pd.name] = m.params[i]));
       if (def.id === 'sample_player') params.sample = sample(params.sample);
-      return { idx: m.idx, id: def.id, params };
+      return m.pos ? { idx: m.idx, id: def.id, params, pos: { row: m.pos.row, x: m.pos.x } } : { idx: m.idx, id: def.id, params };
     }),
     cables: t.cables.map((c) => ({
       from: [c.from.m, defAt(c.from.m).outputs[c.from.port].name],

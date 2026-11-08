@@ -63,6 +63,25 @@ describe('project schema', () => {
     expect(r.project).toEqual(json);
   });
 
+  it('module pos survives serialize -> JSON -> validate; an old project without pos loads', async () => {
+    const { p, synth } = await buildFixture();
+    const t = p.tracks.find((x) => x.id === synth.id)!;
+    if (t.kind !== 'synth') throw new Error('kind');
+    const first = serialize(p);
+    const old = first.tracks.find((x) => x.kind === 'synth');
+    if (old?.kind !== 'synth') throw new Error('kind');
+    expect(old.patch.modules.every((m) => !('pos' in m))).toBe(true);
+    const loadedOld = ok(validate(roundJson(first)));
+    expect(loadedOld.warnings).toEqual([]);
+    t.modules[0].pos = { row: 1, x: 3 };
+    const json = serialize(p);
+    const r = ok(validate(roundJson(json)));
+    const st = r.project.tracks.find((x) => x.kind === 'synth' && x.slot === t.slot);
+    if (st?.kind !== 'synth') throw new Error('kind');
+    expect(st.patch.modules.find((m) => m.idx === t.modules[0].idx)!.pos).toEqual({ row: 1, x: 3 });
+    expect(r.warnings).toEqual([]);
+  });
+
   it('sample file names carry a content hash (fix 7)', async () => {
     const { p } = await buildFixture();
     const before = serialize(p).samples[0].file;

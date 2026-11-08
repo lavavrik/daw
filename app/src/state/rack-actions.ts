@@ -3,10 +3,10 @@
 import { clampParam, fxPoolFullText, fxPoolSlots, moduleDef, portIndex } from '../audio/catalog';
 import { MAX_MODULES, Op, packPort } from '../audio/protocol';
 import { DEFAULT_PATTERN_BARS, MAX_TRACKS, TRACK_COLORS, newChannel, synthTrack } from './project.svelte';
-import type { Project, RackCable, RackModule, SynthTrack } from './project.svelte';
+import type { Project, RackCable, RackModule, RackPos, SynthTrack } from './project.svelte';
 import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
-import { edit } from './edits';
+import { edit, markEdited } from './edits';
 import { dropModuleMappings, dropRackMappings } from './midiMap';
 import { STARTER_PATCHES, validatePatch } from './patches';
 import { makeNotePattern } from './pattern-actions';
@@ -102,7 +102,7 @@ export function patchRack(slot: number, v: Patch): { modules: RackModule[]; cabl
       params[i] = value; // validated: known and in range
       if (value !== def.params[i].default) sets.push([Op.RACK_SET_PARAM, slot, pm.idx, i, value]);
     }
-    modules.push({ idx: pm.idx, kind: def.kind, params });
+    modules.push(pm.pos ? { idx: pm.idx, kind: def.kind, params, pos: { ...pm.pos } } : { idx: pm.idx, kind: def.kind, params });
   }
   commands.push(...sets);
   for (const c of v.cables) {
@@ -114,6 +114,36 @@ export function patchRack(slot: number, v: Patch): { modules: RackModule[]; cabl
     commands.push([Op.RACK_CONNECT, slot, packPort(from.idx, fp), packPort(to.idx, tp)]);
   }
   return { modules, cables, commands };
+}
+
+const samePos = (a: RackPos | undefined, b: RackPos | undefined) => (a && b ? a.row === b.row && a.x === b.x : !a && !b);
+
+/**
+ * Write the rack view's layout: `positions` lists the modules (by idx) that
+ * get a pos; every module not listed ends up with none (the call carries the
+ * whole rack's layout), and `null` clears all (Tidy: back to flow). Pure UI
+ * state, so no engine command: it marks the project edited itself. Returns
+ * false, with no undo entry, when nothing would change (unknown track, or
+ * the same layout). `coalesce` merges consecutive moves (keyboard nudges).
+ */
+export function setRackLayout(
+  p: Project, trackId: string, positions: { idx: number; pos: RackPos }[] | null,
+  label: 'Move module' | 'Tidy rack', coalesce?: string,
+): boolean {
+  const t = synthTrack(p, trackId);
+  if (!t) return false;
+  const want = new Map((positions ?? []).map((x) => [x.idx, x.pos]));
+  // Check first: an edit() that changes nothing could still open an entry.
+  if (t.modules.every((m) => samePos(m.pos, want.get(m.idx)))) return false;
+  return edit(p, label, () => {
+    for (const m of t.modules) {
+      const pos = want.get(m.idx);
+      if (pos) m.pos = { row: pos.row, x: pos.x };
+      else delete m.pos;
+    }
+    markEdited(p); // no engine command, so mark it here
+    return true;
+  }, coalesce ? { coalesce } : undefined);
 }
 
 /**

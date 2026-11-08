@@ -414,8 +414,8 @@ changes nothing and sends nothing.
   48 px, when absent); `setLaneHeight(id, h)` rounds to whole px and clamps
   to `LANE_MIN_H` 32 .. `LANE_MAX_H` 240 (a non-finite `h` is 48). It is not
   part of the project: not saved, never an undo entry, never dirty. A stale
-  id (a removed lane) matches nothing; undo brings a lane back with its old
-  id, so it gets its height back.
+  id (a removed lane) matches nothing. A lane that an undo brings back may
+  get a new id (history/diffApply.ts) and then shows at the default height.
 - **Layout.** `rowLayout(tracks, open, masterRow, laneH)` asks `laneH(laneId)`
   for each lane row's `h` (the timeline passes `laneHeight`); the empty
   "+ Lane" row is always `AUTO_H`. The header column and the lane overlays

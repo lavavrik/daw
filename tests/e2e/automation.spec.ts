@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import mixerCatalog from '../../engine/mixer_catalog.json' with { type: 'json' };
 
 // Automation lanes on the timeline (plan 10 Task 3): the A toggle opens a
 // track's lanes under its clip row, "+ Lane" picks a target, clicks add
@@ -88,7 +89,7 @@ async function lanePt(page: Page, testid: string, tick: number, pos: number) {
  * Knob position of a fader / send value (dB): the fader law (plan 19; engine
  * mixer::catalog FADER_LAW, piecewise linear in dB), as the lane draws it.
  */
-const FADER_LAW: [number, number][] = [[-60, 0], [-40, 0.14], [-30, 0.25], [-20, 0.38], [-10, 0.55], [0, 0.75], [6, 1]];
+const FADER_LAW = mixerCatalog.faderLaw as [number, number][]; // the engine's own table
 const faderPos = (db: number) => {
   if (db <= -60) return 0;
   if (db >= 6) return 1;

@@ -34,7 +34,7 @@ export type CurveDef = Pick<KnobDef, 'min' | 'max' | 'default' | 'integer' | 'cu
 export const DRAG_PX = 150;
 /** Fine-drag factor while Shift is held. */
 export const FINE = 0.1;
-/** Keyboard step: 1% of travel (integer params step 1 unit instead). */
+/** Keyboard step: 1% of travel (integer params step 1 unit; fader-taper params 1 dB, see keyStep). */
 export const KEY_STEP = 0.01;
 
 /**

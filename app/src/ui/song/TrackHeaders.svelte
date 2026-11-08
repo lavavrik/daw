@@ -129,7 +129,12 @@
     return true;
   }
   // Cmd/Ctrl+Z or redo mid-drag cancels it like Escape (history/gestures.ts).
-  onDestroy(registerDragCancel(resizeCancel));
+  const unregisterResize = registerDragCancel(resizeCancel);
+  // Unmounting mid-resize (leaving the Song view) puts the height back too.
+  onDestroy(() => {
+    resizeCancel();
+    unregisterResize();
+  });
   function resizeKey(e: KeyboardEvent, laneId: string) {
     const take = () => {
       e.preventDefault();

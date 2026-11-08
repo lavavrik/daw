@@ -19,8 +19,9 @@ import { AUTO_H, LANE_MAX_H, LANE_MIN_H } from './tlMath';
 //              Only heights other than AUTO_H are stored. Not part of the
 //              project, so a resize is never an undo entry and never makes
 //              the project dirty.
-// A stale id (a removed track or lane) just matches nothing; a lane that an
-// undo brings back (same id) gets its height back.
+// A stale id (a removed track or lane) just matches nothing. A lane that an
+// undo brings back may come back with a new id (history/diffApply.ts), and
+// then at the default height.
 export const laneView = $state<{ open: Set<string>; master: boolean; suspended: Set<string>; gesture: boolean; heights: Map<string, number> }>({
   open: new Set(),
   master: false,

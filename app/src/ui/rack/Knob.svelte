@@ -5,16 +5,17 @@
   // guess what a control is or what it is set to).
   //
   // Knob gestures (maths in knobMath.ts, unit-tested):
-  // - vertical drag, 150 px = full range in the param's curve space (log for
-  //   Exp params; Exp params with min 0, like glide, have a 2% "off" zone at
+  // - vertical drag, 150 px = full range in the param's curve space (the
+  //   fader law for fader-taper params like the sends; log for Exp params; Exp params with min 0, like glide, have a 2% "off" zone at
   //   the bottom, then go log from max/1000); Shift = 10x finer;
   // - double-click resets to the default;
   // - typed entry: click the readout (or press Enter on the focused knob),
   //   type a value ("1.2k", "250 ms", "-6", "45%", "L30" — knobMath
   //   parseValue), Enter applies, Esc cancels, clicking away applies;
   //   something that doesn't read as a value turns the field red and stays;
-  // - ArrowUp/Right +1% of travel, ArrowDown/Left -1% (integers: 1 unit),
-  //   Shift = 0.1%; Home/End = min/max.
+  // - ArrowUp/Right +1% of travel, ArrowDown/Left -1% (integers: 1 unit;
+  //   fader-taper params such as the mixer sends: 1 dB, like the fader),
+  //   Shift = 0.1% (0.1 dB); Home/End = min/max.
   //
   // Cancel (pointercancel, lost capture without pointerup, Escape mid-drag)
   // puts the pre-drag value back.

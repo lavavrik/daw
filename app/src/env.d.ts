@@ -25,6 +25,8 @@ declare global {
       engine: AudioEngine | null; Op: typeof Op; clock: AudioClock | null; recorder: Recorder | null; project: Project; actions: DawActions;
       /** The visuals' e2e hooks (ui/vis/visHooks.ts): frame-loop cost, want mask, scope heads, analyser. */
       vis: VisHooks;
+      /** Test hook (set once audio starts): feeds raw MIDI bytes through the same handler as a real input. */
+      midi?: { inject(bytes: number[]): void };
       /** Project ▸ Save / Open with any directory handle (e2e: OPFS). */
       saveTo: (dir: FileSystemDirectoryHandle) => Promise<void>;
       /** Resolves with the load warnings. */

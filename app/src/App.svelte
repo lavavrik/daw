@@ -23,7 +23,7 @@
   import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
   import { BUILTIN_PATCHES } from './state/patches';
   import { installShortcuts, setShortcutOctave, type PanelTab } from './input/shortcuts';
-  import { connectMidi } from './input/midi';
+  import { connectMidi, createMidiHandler } from './input/midi';
   import { loadOctave, saveOctave } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
@@ -72,6 +72,14 @@
     saveOctave(n);
   }
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
+  /** The last CC received (shown by TopBar, Task 4). */
+  let midiCc = $state<{ cc: number; v: number } | null>(null);
+  /** Where CCs go after `midiCc`; MIDI learn (Task 3) replaces it. */
+  let ccSink: (cc: number, v: number) => void = () => {};
+  const onCc = (cc: number, v: number) => {
+    midiCc = { cc, v };
+    ccSink(cc, v);
+  };
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
   let noteInput = $state.raw<NoteInput | null>(null);
@@ -593,7 +601,10 @@
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     // Bound to `live`, so it outlives an audio restart as is.
-    void connectMidi(live, input, (s) => (midi = s)).then((d) => (uninstallMidi = d));
+    void connectMidi(live, input, (s) => (midi = s), onCc).then((d) => (uninstallMidi = d));
+    // Test hook: same sink / input / onCc as a real input, source `midi:inject`.
+    const injector = createMidiHandler(live, input, onCc);
+    window.__daw.midi = { inject: (bytes) => injector.handle('midi:inject', Uint8Array.from(bytes), performance.now()) };
     // Not awaited either: rows fill as the kit's samples land. A restore
     // accepted meanwhile replaces the session and ends it (Project.generation).
     if (kitTrack) void loadDefaultKit(project, live, kitTrack.id, kitDeps);

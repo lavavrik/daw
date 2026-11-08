@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
-import { connectMidi, parseMidi } from './midi';
+import { connectMidi, createMidiHandler, parseMidi } from './midi';
 import { createNoteInput } from './noteInput';
 import type { MidiStatus } from './midi';
 
@@ -8,31 +8,35 @@ const u = (...b: number[]) => new Uint8Array(b);
 
 describe('parseMidi', () => {
   it('note on / off', () => {
-    expect(parseMidi(u(0x90, 60, 100))).toEqual({ t: 'on', note: 60, vel: 100 });
-    expect(parseMidi(u(0x80, 60, 0))).toEqual({ t: 'off', note: 60 });
+    expect(parseMidi(u(0x90, 60, 100))).toEqual([{ t: 'on', note: 60, vel: 100 }]);
+    expect(parseMidi(u(0x80, 60, 0))).toEqual([{ t: 'off', note: 60 }]);
   });
-  it('velocity-0 note-on is note-off', () => expect(parseMidi(u(0x90, 60, 0))).toEqual({ t: 'off', note: 60 }));
+  it('velocity-0 note-on is note-off', () => expect(parseMidi(u(0x90, 60, 0))).toEqual([{ t: 'off', note: 60 }]));
   it('pitch bend min / centre / max', () => {
-    expect(parseMidi(u(0xe0, 0, 0))).toEqual({ t: 'bend', v: -1 });
-    expect(parseMidi(u(0xe0, 0, 64))).toEqual({ t: 'bend', v: 0 });
-    expect(parseMidi(u(0xe0, 127, 127))).toEqual({ t: 'bend', v: 8191 / 8192 });
+    expect(parseMidi(u(0xe0, 0, 0))).toEqual([{ t: 'bend', v: -1 }]);
+    expect(parseMidi(u(0xe0, 0, 64))).toEqual([{ t: 'bend', v: 0 }]);
+    expect(parseMidi(u(0xe0, 127, 127))).toEqual([{ t: 'bend', v: 8191 / 8192 }]);
   });
-  it('mod wheel CC1', () => expect(parseMidi(u(0xb0, 1, 127))).toEqual({ t: 'mod', v: 1 }));
+  it('mod wheel CC1', () => expect(parseMidi(u(0xb0, 1, 127))).toEqual([{ t: 'mod', v: 1 }, { t: 'cc', cc: 1, v: 127 }]));
   it('sustain CC64', () => {
-    expect(parseMidi(u(0xb0, 64, 127))).toEqual({ t: 'sustain', on: true });
-    expect(parseMidi(u(0xb0, 64, 0))).toEqual({ t: 'sustain', on: false });
+    expect(parseMidi(u(0xb0, 64, 127))).toEqual([{ t: 'sustain', on: true }, { t: 'cc', cc: 64, v: 127 }]);
+    expect(parseMidi(u(0xb0, 64, 0))).toEqual([{ t: 'sustain', on: false }, { t: 'cc', cc: 64, v: 0 }]);
   });
-  it('other CCs, sysex, running status, short data -> null', () => {
-    expect(parseMidi(u(0xb0, 7, 100))).toBeNull();
-    expect(parseMidi(u(0xf0, 0x7e, 0xf7))).toBeNull();
-    expect(parseMidi(u(60, 100))).toBeNull();
-    expect(parseMidi(u(0x90, 60))).toBeNull();
+  it('other CCs -> cc (channel ignored)', () => {
+    expect(parseMidi(u(0xb3, 74, 100))).toEqual([{ t: 'cc', cc: 74, v: 100 }]);
+    expect(parseMidi(u(0xb0, 7, 100))).toEqual([{ t: 'cc', cc: 7, v: 100 }]);
+  });
+  it('sysex, clock, running status, short data -> []', () => {
+    expect(parseMidi(u(0xf0, 0x7e, 0xf7))).toEqual([]);
+    expect(parseMidi(u(0xf8))).toEqual([]);
+    expect(parseMidi(u(60, 100))).toEqual([]);
+    expect(parseMidi(u(0x90, 60))).toEqual([]);
   });
   it('CC120 All Sound Off / CC123 All Notes Off -> panic (any value)', () => {
-    expect(parseMidi(u(0xb0, 120, 0))).toEqual({ t: 'panic' });
-    expect(parseMidi(u(0xbf, 123, 0))).toEqual({ t: 'panic' });
+    expect(parseMidi(u(0xb0, 120, 0))).toEqual([{ t: 'panic' }]);
+    expect(parseMidi(u(0xbf, 123, 0))).toEqual([{ t: 'panic' }]);
   });
-  it('accepts channel 10 (omni)', () => expect(parseMidi(u(0x99, 36, 90))).toEqual({ t: 'on', note: 36, vel: 90 }));
+  it('accepts channel 10 (omni)', () => expect(parseMidi(u(0x99, 36, 90))).toEqual([{ t: 'on', note: 36, vel: 90 }]));
 });
 
 type Fake = { id: string; name: string; state: string; onmidimessage: ((e: { data: Uint8Array; timeStamp?: number }) => void) | null };
@@ -150,5 +154,35 @@ describe('connectMidi', () => {
     dispose();
     expect(sink.sent).toEqual([[Op.NOTE_OFF, 50]]);
     expect(c.onmidimessage).toBeNull();
+  });
+});
+
+describe('createMidiHandler', () => {
+  it('a CC calls onCc and sends no engine op', () => {
+    const s = mkSink();
+    const ccs: number[][] = [];
+    const h = createMidiHandler(s, s.input, (cc, v) => void ccs.push([cc, v]));
+    h.handle('a', u(0xb2, 74, 100), 1);
+    expect(ccs).toEqual([[74, 100]]);
+    expect(s.sent).toEqual([]);
+  });
+  it('CC1 sends MOD_WHEEL and is also reported', () => {
+    const s = mkSink();
+    const ccs: number[][] = [];
+    createMidiHandler(s, s.input, (cc, v) => void ccs.push([cc, v])).handle('a', u(0xb0, 1, 127), 1);
+    expect(s.sent).toEqual([[Op.MOD_WHEEL, 1]]);
+    expect(ccs).toEqual([[1, 127]]);
+  });
+  it('a note-on still reaches the sink; release sends the note-off', () => {
+    const s = mkSink();
+    const h = createMidiHandler(s, s.input);
+    h.handle('a', u(0x90, 60, 100), 1);
+    expect(s.sent.length).toBe(1);
+    h.release('a');
+    expect(s.sent.at(-1)).toEqual([Op.NOTE_OFF, 60]);
+  });
+  it('works without onCc', () => {
+    const s = mkSink();
+    expect(() => createMidiHandler(s, s.input).handle('a', u(0xb0, 74, 1), 1)).not.toThrow();
   });
 });

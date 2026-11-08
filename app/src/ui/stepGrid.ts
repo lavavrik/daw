@@ -29,7 +29,7 @@ export interface StepCellLook {
   playing: boolean;
   /** The step is in an odd group of four (steps 4–7, 12–15, …): off cells a shade lighter. */
   alt: boolean;
-  /** Fill height in percent of the cell: the velocity, capped at 100 (0 when off). */
+  /** Fill height in percent of the cell: velocity / 127 (0 when off). */
   fill: number;
 }
 
@@ -37,11 +37,10 @@ export interface StepCellLook {
  * How one step cell looks. `vel` is the stored step velocity (0..127, 0 =
  * off); `playing` comes from the grid's playhead (the heard step).
  *
- * The fill height reads the velocity as a percent (spec §4 "the fill height
- * is the velocity"; the board draws velocity 50 half full): the grid's own
- * values are 100 (click) and 60 (Alt-click ghost), so those read 100 % and
- * 60 %. Recorded steps above 100 are full height; from 110 they also get the
- * accent ring, so a loud hit still stands out.
+ * The fill height is the velocity over the stored range 0..127 (spec §4
+ * "the fill height is the velocity"; controller ruling, plan 20 Task 8 fix
+ * round 1): 127 fills the cell, the grid's click (100) fills ~79 % and its
+ * Alt-click ghost (60) ~47 %. From 110 the accent ring is added.
  */
 export function stepCellStyle(vel: number, step: number, playing: boolean): StepCellLook {
   const on = vel > 0;
@@ -50,7 +49,7 @@ export function stepCellStyle(vel: number, step: number, playing: boolean): Step
     accent: on && vel >= ACCENT_MIN_VEL,
     playing,
     alt: Math.floor(step / 4) % 2 === 1,
-    fill: on ? Math.min(100, vel) : 0,
+    fill: on ? (Math.min(127, vel) / 127) * 100 : 0,
   };
 }
 

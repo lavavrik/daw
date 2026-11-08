@@ -18,14 +18,14 @@ function fillRatio(page: Page, id: string) {
   });
 }
 
-test('a cell fill is as tall as its velocity; 110 and up gets the accent ring', async ({ page }) => {
+test('a cell fill is velocity / 127 of its height; 110 and up gets the accent ring', async ({ page }) => {
   await start(page);
-  // Click = velocity 100 (full); Alt+click = the 60 ghost.
+  // Click = velocity 100; Alt+click = the 60 ghost. Fill = velocity / 127.
   await page.getByTestId('step-0-0').click();
   await page.getByTestId('step-0-1').click({ modifiers: ['Alt'] });
   await expect(page.getByTestId('step-0-1')).toHaveAttribute('aria-pressed', 'true');
-  expect(await fillRatio(page, 'step-0-0')).toBeCloseTo(1, 2);
-  expect(await fillRatio(page, 'step-0-1')).toBeCloseTo(0.6, 2);
+  expect(await fillRatio(page, 'step-0-0')).toBeCloseTo(100 / 127, 2);
+  expect(await fillRatio(page, 'step-0-1')).toBeCloseTo(60 / 127, 2); // ~47 %
   expect(await fillRatio(page, 'step-0-2')).toBe(0);
   await expect(page.getByTestId('step-0-0')).not.toHaveClass(/\baccent\b/); // 100 reads plain
 
@@ -36,7 +36,7 @@ test('a cell fill is as tall as its velocity; 110 and up gets the accent ring', 
     pat.steps[0][2] = 120;
   });
   await expect(page.getByTestId('step-0-2')).toHaveClass(/\baccent\b/);
-  expect(await fillRatio(page, 'step-0-2')).toBeCloseTo(1, 2);
+  expect(await fillRatio(page, 'step-0-2')).toBeCloseTo(120 / 127, 2);
 });
 
 test('rows walk the palette from the track slot', async ({ page }) => {

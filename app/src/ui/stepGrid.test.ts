@@ -8,11 +8,13 @@ describe('stepCellStyle', () => {
     expect(stepCellStyle(0, 0, false)).toEqual({ on: false, accent: false, playing: false, alt: false, fill: 0 });
   });
 
-  it('on: the fill height is the velocity in percent, capped at 100', () => {
-    expect(stepCellStyle(100, 0, false)).toMatchObject({ on: true, fill: 100 });
-    expect(stepCellStyle(60, 0, false)).toMatchObject({ on: true, fill: 60 });
-    expect(stepCellStyle(1, 0, false)).toMatchObject({ on: true, fill: 1 });
+  it('on: the fill height is velocity / 127 of the cell', () => {
     expect(stepCellStyle(127, 0, false)).toMatchObject({ on: true, fill: 100 });
+    expect(stepCellStyle(64, 0, false).fill).toBeCloseTo(50.39, 2);
+    expect(stepCellStyle(100, 0, false).fill).toBeCloseTo(78.74, 2); // a click
+    expect(stepCellStyle(60, 0, false).fill).toBeCloseTo(47.24, 2); // an Alt-click ghost
+    expect(stepCellStyle(1, 0, false)).toMatchObject({ on: true });
+    expect(stepCellStyle(1, 0, false).fill).toBeGreaterThan(0);
   });
 
   it('accent from the Acid rule (velocity >= 110), never on an off cell', () => {
@@ -25,7 +27,7 @@ describe('stepCellStyle', () => {
 
   it('playing passes through, on or off', () => {
     expect(stepCellStyle(0, 3, true)).toMatchObject({ on: false, playing: true });
-    expect(stepCellStyle(80, 3, true)).toMatchObject({ on: true, playing: true, fill: 80 });
+    expect(stepCellStyle(80, 3, true)).toMatchObject({ on: true, playing: true });
   });
 
   it('group shading: every other group of four is a shade lighter', () => {

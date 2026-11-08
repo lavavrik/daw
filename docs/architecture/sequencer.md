@@ -87,9 +87,9 @@ and custom properties, and its CSS draws them with theme tokens.
   tracks carry old palette colours still get palette row colours. The row's
   tag, gain/pan fills, cells and waveform strip use it; the footer's swing
   uses the track colour.
-- **Cells** (`stepCellStyle(vel, step, playing)`): the fill is as tall as
-  the velocity read as a percent, capped at 100 (the grid writes 100 on
-  click and 60 on Alt-click, so those read full and 60 %); off cells are
+- **Cells** (`stepCellStyle(vel, step, playing)`): the fill is velocity /
+  127 of the cell (the stored range; a click writes 100, ~79 %, an
+  Alt-click 60, ~47 %, a full-scale recorded hit 127 fills it); off cells are
   recessed, every other group of four a shade lighter; velocity ≥
   `ACCENT_MIN_VEL` (110, shared with the Acid tab, `state/acidSteps.ts`)
   adds the `accent` class: a 2 px ring in the row colour and a glow. The

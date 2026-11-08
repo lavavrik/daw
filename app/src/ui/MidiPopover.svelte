@@ -6,18 +6,23 @@
   // a forget button per row: one undo entry, "Forget MIDI CC n").
   // Look (plan 20 Task 5): a --panel card with --lift; it opens leftwards
   // from the pill (right-aligned), as the pill is at the bar's right end.
+  // Options ▸ MIDI… (MenuBar.svelte, plan 21) opens it too, still under the
+  // pill; then Esc gives the focus back to the Options menu button
+  // (`returnFocus`) instead of the pill.
   import { tick } from 'svelte';
   import type { MidiStatus } from '../input/midi';
   import { forgetMidi, mappingLabel } from '../state/midiMap';
   import type { Project } from '../state/project.svelte';
 
-  let { p, status, cc, anchor, onclose }: {
+  let { p, status, cc, anchor, returnFocus = null, onclose }: {
     p: Project;
     status: MidiStatus;
     /** The last CC received (any channel), or null before the first. */
     cc: { cc: number; v: number } | null;
     /** The pill that opened it: presses on it are its own toggle, not "outside". */
     anchor: HTMLElement | null;
+    /** Where Esc puts the focus (what opened it); default the pill. */
+    returnFocus?: HTMLElement | null;
     onclose: () => void;
   } = $props();
 
@@ -34,7 +39,7 @@
     if (e.key !== 'Escape') return;
     e.stopPropagation(); // not also "cancel learn" etc.
     onclose();
-    anchor?.focus();
+    (returnFocus ?? anchor)?.focus();
   }
   /** Focus left the popover (Tab out): close. Focus to the pill is its own toggle; null = window blur / non-focusable click (the pointer handler decides). */
   function focusOut(e: FocusEvent) {

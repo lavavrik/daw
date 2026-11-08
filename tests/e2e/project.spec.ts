@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { withAppendedParams } from '../../app/src/project/testdata/appendedParams';
 import { makeWav } from './wav';
-import { closeMore, openMore } from './topbar';
+import { closeMenu, openMenu } from './topbar';
 
 // Project save/load through OPFS (an origin-private folder: no picker). The
 // app's debug hooks __daw.saveTo(handle) / __daw.openFrom(handle) run the
@@ -222,7 +222,7 @@ test('Project menu: New asks inline before discarding unsaved changes', async ({
   await expect(page.getByTestId('project-name')).toHaveText('Untitled');
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
   await expect(page.getByTestId('project-name')).toContainText('● unsaved');
-  await openMore(page);
+  await openMenu(page, 'File');
   await page.getByTestId('project-new').click();
   await expect(page.getByTestId('project-discard')).toBeVisible();
   await page.getByTestId('project-discard').click();
@@ -305,7 +305,7 @@ test('restore banner appears and restores', async ({ page }) => {
   await page.keyboard.press('ControlOrMeta+O');
   await expect(page.getByTestId('project-discard-warning')).toContainText('Discard the unrestored session "Night Drive"?');
   await page.getByTestId('project-discard-cancel').click();
-  await closeMore(page);
+  await closeMenu(page, 'File');
   await expect(offer).toBeVisible();
   await offer.getByRole('button', { name: 'Restore last session' }).click();
   await expect(offer).toBeHidden();

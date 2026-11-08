@@ -29,8 +29,9 @@
   // Rec: "Rec" with a red LED arms (R key); red while armed, "Count-in…"
   // during the count-in, "REC" (pulsing) while notes are being recorded. While the
   // song plays it can't arm (Song mode never records). Count-in persists in
-  // localStorage (state/recorder.ts saveRecSettings), with the Rec offset
-  // that stays in the top bar.
+  // localStorage (state/recorder.ts saveRecSettings), with the recording
+  // offset (Options ▸ Recording offset); Options ▸ Count-in is the same
+  // setting (state/recPrefs.svelte.ts).
   import { untrack } from 'svelte';
   import type { AudioClock } from '../audio/audioClock';
   import { patternLength, currentPattern } from '../state/project.svelte';
@@ -39,7 +40,7 @@
   import Icon from './Icon.svelte';
   import Play from 'phosphor-svelte/lib/Play';
   import Stop from 'phosphor-svelte/lib/Stop';
-  import { saveRecSettings } from '../state/recorder';
+  import { recPrefs, seedRecPrefs, setCountIn } from '../state/recPrefs.svelte';
   import type { Recorder, RecStatus } from '../state/recorder';
   import { noPatternReason, patternReadout } from './patternReadout';
 
@@ -83,14 +84,13 @@
     return () => cancelAnimationFrame(raf);
   });
 
-  // Mirror of the recorder's persisted Count-in (the Recorder is not
-  // reactive). Seeded once on purpose: the recorder lives for the session and
-  // this toggle is its only writer.
-  let countIn = $state(untrack(() => recorder.countIn));
-  function toggleCountIn() {
-    recorder.countIn = countIn = !countIn;
-    saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
-  }
+  // Count-in: the reactive mirror shared with Options ▸ Count-in (the
+  // Recorder is not reactive; state/recPrefs.svelte.ts), seeded from the
+  // session's recorder.
+  seedRecPrefs(untrack(() => recorder));
+  $effect(() => seedRecPrefs(recorder));
+  const countIn = $derived(recPrefs.countIn);
+  const toggleCountIn = () => setCountIn(recorder, !recPrefs.countIn);
   const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? 'REC' : 'Rec');
   const recTitle = $derived(
     songPlaying && !rec.armed ? 'Recording works with the pattern transport: stop the song first'

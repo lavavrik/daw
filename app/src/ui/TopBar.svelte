@@ -1,14 +1,25 @@
 <script lang="ts">
   // The top bar (plan 20 Task 5; spec §4 "Top bar"; the approved canvas board
-  // "Song view"). One 64 px row, left to right:
+  // "Song view"; plan 21 Task 3 the menu bar). One 64 px row, left to right:
   //
-  //   project name + hint line · ⋯ menu · ↶ ↷ | ▶ ■ Loop · Tempo LCD ·
+  //   [menu row / project name + hint line · ↶ ↷] | ▶ ■ Loop · Tempo LCD ·
   //   BIG TIMER · metronome · Master slider · mini spectrum · (spacer) ·
   //   [Keys → track, octave / MIDI, CPU, ⚙ latency] (two stacked pill rows)
   //
-  // PROJECT NAME (`project-name`, inside the `project-menu` button) with a
-  // "●" when unsaved (the word "unsaved" is there for screen readers and
-  // tests, visually hidden). A click on it opens the ⋯ menu, as the ⋯ does.
+  // LEFT BLOCK (plan 21): the MENU ROW on top — File · Edit · Add · Patterns
+  // · View · Options · Help (MenuBar.svelte, which holds the menus, their
+  // keyboard model and plan 20's ⋯ items under their old test ids) — and
+  // under it the name + hint stack with ↶ ↷ beside it. ↶ ↷ moved in from
+  // the bar's row: the menu row (252 px) is wider than the old name stack
+  // and the ⋯ together, and the bar must still fit one row at 1280 px.
+  // Short windows (< 740 px, the 40 px bar): two lines, the 16 px menu row,
+  // then name · hint · ↶ ↷ (18 px) on one line. (Plan 21's ruling put the
+  // name after the menus on line 1; at 1280 px that line would be ~380 px
+  // and the bar could not stay one row, so the name went to line 2.)
+  //
+  // PROJECT NAME (`project-menu` button, `project-name` inside) with a "●"
+  // when unsaved (the word "unsaved" is there for screen readers and tests,
+  // visually hidden). A click opens the File menu.
   //
   // HINT LINE (`hint-line`, under the name; spec: "the last tooltip or status
   // message"). In order: the app's flashed hint (banners.hint: flashHint(),
@@ -18,24 +29,10 @@
   // element), else a static tip. It is aria-hidden: the titles and the
   // bottom panel's role="status" flash already reach screen readers.
   //
-  // ⋯ MENU (`topbar-more`): the rarely used controls, so the bar fits one row
-  // at 1280 px: New, Open… (⌘O), Save (⌘S), Save As… (⇧⌘S), Export WAV…,
-  // Undo take (`undo-take`) and the recording offset (`rec-offset`). Their
-  // test ids are unchanged. New / Open — from the menu or ⌘O, which opens the
-  // menu through `request` — ask inline in the menu (no confirm()) when
-  // something would be lost: unsaved changes, or an open "Restore last
-  // session" offer (project/discard.ts). Results and errors are banners
-  // (project/session.ts). Export WAV… (export/exportFlow.ts) opens the save
-  // dialog inside the click, then renders in a Worker; its progress and
-  // Cancel are a banner in the bottom panel. Undo take and the offset keep
-  // the menu open (they are often used twice in a row); the rest close it,
-  // and so do Escape (anywhere, while open) and a press outside. Closing by
-  // a command or Escape puts the focus back on the opener: the name button,
-  // the ⋯, or what had the focus before ⌘O. An Escape a field inside used
-  // itself (the offset reverting its typed text) does not close it. It is a
-  // plain group of buttons and a labelled field, not an ARIA menu (it holds
-  // a number field and the discard question). The offset persists in
-  // localStorage (state/recorder.ts).
+  // ⌘O (App) calls `request`, which hands it to MenuBar.request (the File
+  // menu's inline "Discard and open…" question). Options ▸ MIDI… opens the
+  // MIDI popover under its pill (Esc then returns the focus to Options);
+  // Options ▸ Audio settings… opens the ⚙ panel.
   //
   // UNDO / REDO (↶ ↷): the history's newest entries, named in the tooltips
   // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
@@ -88,10 +85,11 @@
   // ellipsize with the full text in their tooltips. Below 1400 px CPU's
   // "· N drop" tail is hidden while there are none, and with dropouts the
   // red pill reads "1% · 123" (the words are in the tooltip). The widest
-  // state at 1280 px (playing, unsaved, 123 dropouts) leaves ~40 px.
+  // state at 1280 px (playing, unsaved, 123 dropouts) leaves ~25 px (~13 px
+  // with the web fonts blocked).
   // overflow-x: clip is the last guard: it never becomes a scroll container,
   // so the popovers can drop below.
-  import { onMount, tick, untrack } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
@@ -118,12 +116,12 @@
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
   import MidiPopover from './MidiPopover.svelte';
+  import MenuBar from './MenuBar.svelte';
+  import type { PanelTab } from '../input/shortcuts';
+  import { IS_MAC } from '../input/shortcutList';
   import { DEFAULT_OCTAVE, wheelOctaveSteps } from '../input/qwertyPiano';
-  import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings, undoTakeTitle } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
-  import { discardWarning } from '../project/discard';
-  import { runExport } from '../export/exportFlow';
   import { banners } from '../state/banners.svelte';
 
   // Wheel over the octave pill: accumulated (see wheelOctaveSteps). Svelte's
@@ -155,6 +153,7 @@
     latencyHint = 'interactive',
     restarting = false,
     onApplyAudio = async () => null,
+    onTab,
   }: {
     p: Project;
     engine: AudioEngine;
@@ -186,110 +185,36 @@
     restarting?: boolean;
     /** Settings ▸ Apply: restart audio with this hint (App); resolves with why it did not run, or null. */
     onApplyAudio?: (hint: LatencyHint) => Promise<string | null>;
+    /** View ▸ an editor tab (App: BottomPanel.pickTab). */
+    onTab?: (t: PanelTab) => void;
   } = $props();
 
   /** The Settings panel mounts while open (its readout polls only then). */
   let settingsOpen = $state(false);
 
-  // ---- ⋯ menu --------------------------------------------------------------
-  let menu = $state<HTMLDetailsElement | null>(null);
-  let projEl = $state<HTMLElement | null>(null);
-  let menuOpen = $state(false);
+  // ---- menu bar (MenuBar.svelte) -------------------------------------------
+  const mod = IS_MAC ? '⌘' : 'Ctrl+';
   let nameBtn = $state<HTMLElement | null>(null);
-  /** What opened the menu (the name button, the ⋯, or what had the focus before ⌘O): the focus goes back there. */
-  let opener: HTMLElement | null = null;
-  /** New/Open waiting for "Discard and …" (only asked when something would be lost). */
-  let confirming = $state<'new' | 'open' | null>(null);
-  const warning = $derived(discardWarning(p, restoreOffer));
-  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-  const mod = isMac ? '⌘' : 'Ctrl+';
-  function closeMenu() {
-    confirming = null;
-    if (menu) menu.open = false;
-  }
-  /** Close and give the focus back to the opener (after a command, Escape), never to <body>. */
-  function closeToOpener() {
-    const back = opener;
-    closeMenu();
-    (back?.isConnected ? back : nameBtn)?.focus();
-  }
-  function run(cmd: 'new' | 'open' | 'save' | 'saveAs' | 'export') {
-    if ((cmd === 'new' || cmd === 'open') && discardWarning(p, restoreOffer) !== null && confirming !== cmd) {
-      confirming = cmd;
-      return;
-    }
-    closeToOpener();
-    if (cmd === 'new') void session.newProject();
-    else if (cmd === 'open') void session.open();
-    else if (cmd === 'save') void session.save();
-    else if (cmd === 'export') void runExport(p, engine.context);
-    else void session.saveAs();
-  }
-  function menuToggled() {
-    menuOpen = !!menu?.open;
-    if (!menuOpen) confirming = null;
-  }
-  // While open: a press outside the name and the menu closes it; Escape
-  // anywhere closes it and puts the focus back on the opener. An Escape a
-  // control inside already used (NumberField reverting a typed offset:
-  // preventDefault) is left alone, so the menu stays open. The listeners
-  // stay attached and read `menu.open` itself: the `toggle` event comes a
-  // task later, and an Escape pressed right after opening must still close.
-  // The key listener is on `document` (bubble): after any control inside,
-  // before the window's listeners, so its stopPropagation really keeps the
-  // App's Esc-ends-MIDI-learn (and the shortcuts) from also acting.
-  onMount(() => {
-    const outside = (e: PointerEvent) => {
-      if (menu?.open && !projEl?.contains(e.target as Node)) closeMenu();
-    };
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || !menu?.open) return;
-      e.stopPropagation(); // not also "cancel learn" etc.
-      e.preventDefault();
-      closeToOpener();
-    };
-    window.addEventListener('pointerdown', outside, true);
-    document.addEventListener('keydown', key);
-    return () => {
-      window.removeEventListener('pointerdown', outside, true);
-      document.removeEventListener('keydown', key);
-    };
-  });
-  /** The name button: toggles the menu, as the ⋯ does. */
-  function toggleFromName() {
-    if (!menu) return;
-    opener = nameBtn;
-    menu.open = !menu.open;
-  }
-  /** Cancel on the discard question: back to the list, the focus on its first item. */
-  async function cancelDiscard() {
-    confirming = null;
-    await tick();
-    menu?.querySelector<HTMLElement>('[data-testid="project-new"]')?.focus();
-  }
-
-  /**
-   * ⌘O / Ctrl+O (App's shortcut): the same as the menu item, so it asks the
-   * same question — the menu opens on the "Discard and open…" prompt when
-   * something would be lost, else the folder picker opens at once (still
-   * inside the key press, as the picker needs a user gesture).
-   */
+  let menuBar = $state<{ toggle(m: 'File', from: HTMLElement): void; request(cmd: 'new' | 'open'): void } | null>(null);
+  /** The open menu (MenuBar binds it): the name button shows File's state. */
+  let menuOpen = $state<string | null>(null);
+  /** ⌘O / Ctrl+O (App's shortcut): MenuBar.request (the File menu's discard question). */
   export function request(cmd: 'new' | 'open') {
-    const active = document.activeElement;
-    opener = active instanceof HTMLElement && active !== document.body ? active : nameBtn;
-    if (discardWarning(p, restoreOffer) !== null && menu) menu.open = true;
-    run(cmd);
+    menuBar?.request(cmd);
   }
-
-  // ---- recording (in the menu) ---------------------------------------------
-  // Mirror of the recorder's persisted offset (the Recorder is not reactive).
-  // Seeded once on purpose: the recorder is created once per session and this
-  // field is its only writer, so untrack() states "initial value only".
-  let offsetMs = $state(untrack(() => recorder.offsetMs));
-  function setOffset(v: number) {
-    recorder.offsetMs = v;
-    offsetMs = recorder.offsetMs;
-    saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
+  /** Options ▸ MIDI…: the popover under the pill; Esc returns the focus to `back` (the Options button). */
+  let midiReturn = $state<HTMLElement | null>(null);
+  function openMidi(back: HTMLElement) {
+    midiReturn = back;
+    midiOpen = true;
+  }
+  /** Options ▸ Audio settings…: open the ⚙ panel and focus its first control. */
+  let settingsEl = $state<HTMLDetailsElement | null>(null);
+  async function openSettings() {
+    if (!settingsEl) return;
+    settingsEl.open = true;
+    await tick();
+    settingsEl.querySelector<HTMLElement>('.panel select, .panel button, .panel input')?.focus();
   }
 
   // ---- hint line -----------------------------------------------------------
@@ -371,67 +296,33 @@
 </script>
 
 <header class="bar">
-  <div class="proj" bind:this={projEl}>
+  <div class="proj">
+    <div class="menus">
+      <MenuBar
+        bind:this={menuBar} bind:open={menuOpen} alsoInside={nameBtn}
+        {p} {engine} {session} {restoreOffer} {recorder} {rec} {undoLabels} {onUndo} {onRedo} {octave} {onOctave} {onTab}
+        onOpenMidi={openMidi} onOpenSettings={() => void openSettings()}
+      />
+    </div>
     <div class="id">
       <button
-        class="name" data-testid="project-menu" title="Project: New, Open, Save, Export" aria-expanded={menuOpen} aria-controls="topbar-more-panel"
-        bind:this={nameBtn} onclick={toggleFromName}
+        class="name" data-testid="project-menu" title="Project: New, Open, Save, Export (the File menu)" aria-expanded={menuOpen === 'File'} aria-controls="menu-file-panel"
+        bind:this={nameBtn} onclick={() => nameBtn && menuBar?.toggle('File', nameBtn)}
       ><span data-testid="project-name"><span class="pname">{p.name}</span>{#if p.dirty}<span class="unsaved" title="Unsaved changes">●<span class="sr-only">{' '}unsaved</span></span>{/if}</span></button>
       <span class="hint" data-testid="hint-line" aria-hidden="true">{hint}</span>
     </div>
-    <details class="more" bind:this={menu} ontoggle={menuToggled}>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <summary class="ib" onclick={(e) => (opener = e.currentTarget)} data-testid="topbar-more" aria-label="More: open, save, export, takes" title="New, Open, Save, Export WAV, Undo take, Rec offset">
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5" fill="currentColor" /><circle cx="8" cy="8" r="1.5" fill="currentColor" /><circle cx="12.5" cy="8" r="1.5" fill="currentColor" /></svg>
-      </summary>
-      <!-- A plain group of buttons and a labelled field (no menu role: it holds a number field and a question). -->
-      <div class="panel menu" id="topbar-more-panel" role="group" aria-label="Project and recording">
-        {#if confirming}
-          <p class="discard" data-testid="project-discard-warning">{warning}</p>
-          <div class="row">
-            <button class="btn danger" data-testid="project-discard" onclick={() => run(confirming!)}>
-              Discard and {confirming === 'new' ? 'start new' : 'open…'}
-            </button>
-            <button class="btn" data-testid="project-discard-cancel" onclick={() => void cancelDiscard()}>Cancel</button>
-          </div>
-        {:else}
-          <button data-testid="project-new" onclick={() => run('new')}>New</button>
-          <button data-testid="project-open" onclick={() => run('open')}>Open… <kbd>{mod}O</kbd></button>
-          <button data-testid="project-save" onclick={() => run('save')}>Save <kbd>{mod}S</kbd></button>
-          <button data-testid="project-save-as" onclick={() => run('saveAs')}>Save As… <kbd>⇧{mod}S</kbd></button>
-          <button
-            data-testid="project-export" disabled={banners.exporting !== null || p.loading}
-            title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
-            onclick={() => run('export')}
-          >Export WAV…</button>
-          <hr />
-          <button
-            data-testid="undo-take" disabled={!rec.canUndoTake}
-            title={undoTakeTitle(rec.takeEdits)} onclick={() => recorder.undoLastTake()}
-          >Undo take</button>
-          <div class="offset">
-            <span class="olbl" aria-hidden="true">Rec offset</span>
-            <NumberField
-              testid="rec-offset" ariaLabel="Rec offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
-              value={offsetMs} onchange={setOffset}
-            />
-          </div>
-          <p class="note">Recorded notes land where you heard the beat. If they still land late, raise the offset (positive = earlier).</p>
-        {/if}
-      </div>
-    </details>
+    <span class="grp undo" role="group" aria-label="Undo and redo">
+      <button
+        class="ib" data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
+        title={undoLabels.undo ? `Undo ${undoLabels.undo} (${mod}Z)` : 'Nothing to undo'}
+      ><Icon icon={ArrowCounterClockwise} /></button>
+      <button
+        class="ib" data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
+        title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
+      ><Icon icon={ArrowClockwise} /></button>
+    </span>
   </div>
 
-  <span class="grp" role="group" aria-label="Undo and redo">
-    <button
-      class="ib" data-testid="undo" aria-label="Undo" disabled={!undoLabels.undo || p.loading} onclick={onUndo}
-      title={undoLabels.undo ? `Undo ${undoLabels.undo} (${mod}Z)` : 'Nothing to undo'}
-    ><Icon icon={ArrowCounterClockwise} /></button>
-    <button
-      class="ib" data-testid="redo" aria-label="Redo" disabled={!undoLabels.redo || p.loading} onclick={onRedo}
-      title={undoLabels.redo ? `Redo ${undoLabels.redo} (⇧${mod}Z)` : 'Nothing to redo'}
-    ><Icon icon={ArrowClockwise} /></button>
-  </span>
   <span class="sep" aria-hidden="true"></span>
 
   <span class="grp" role="group" aria-label="Song transport">
@@ -498,16 +389,16 @@
     <div class="row small">
       <span class="midiwrap">
         <button class="pill midi" data-testid="midi-status" class:ok={midi.state === 'connected'} class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
-          aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => (midiOpen = !midiOpen)}
+          aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => { midiReturn = null; midiOpen = !midiOpen; }}
         >{#if midi.state === 'connected'}<span class="led"></span>{/if}<span class="ell">MIDI: {midiLabel}</span></button>
         {#if midiOpen}
-          <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
+          <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} returnFocus={midiReturn} onclose={() => (midiOpen = false)} />
         {/if}
       </span>
       <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
         <span class="cpuw">CPU{' '}</span>{cpu}%<span class="long">{' '}· {dropouts}<span class="dropw">{' '}drop</span></span>
       </span>
-      <details class="pop settings" ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
+      <details class="pop settings" bind:this={settingsEl} ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
         <summary
           class="pill" data-testid="settings-button" aria-label="Audio settings" class:warn={latencyMs > BT_LATENCY_MS}
           title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
@@ -531,7 +422,7 @@
      in the header comment; layout.spec.ts measures the bar at 1440 / 1400 /
      1280 / 1024 px. Below 1280 px the bar may wrap onto a second row. */
   .bar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 64px; box-sizing: border-box; padding: 0 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 64px; box-sizing: border-box; padding: 0 12px;
     background: var(--top); border-bottom: 1px solid var(--line); white-space: nowrap; overflow-x: clip;
     position: relative; z-index: 5; font: var(--fs-ctl) var(--font-ui); color: var(--text);
   }
@@ -541,9 +432,16 @@
   .sep { width: 1px; height: 36px; background: var(--line); }
   .grp { display: inline-flex; align-items: center; gap: 4px; }
 
-  /* Name + hint: fixed width, both ellipsized. */
-  .proj { position: relative; display: flex; align-items: center; gap: 4px; }
-  .id { display: flex; flex-direction: column; gap: 2px; width: 128px; min-width: 0; }
+  /* The left block (plan 21): the menu row on top; under it the name + hint
+     stack and ↶ ↷ (they moved in from the bar's row so the wider block still
+     fits one row at 1280 px). Short windows: see the media query below. */
+  .proj {
+    position: relative; display: grid; grid-template-columns: 128px auto; grid-template-areas: "menu menu" "id undo";
+    align-items: center; column-gap: 8px; row-gap: 1px;
+  }
+  .menus { grid-area: menu; }
+  .id { grid-area: id; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .undo { grid-area: undo; justify-self: start; }
   .name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 700 14px/18px var(--font-ui); text-align: left; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .name:hover .pname { text-decoration: underline; text-decoration-color: var(--text-2); }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
@@ -572,28 +470,12 @@
   .tp.play { color: color-mix(in srgb, var(--play) 55%, var(--text)); }
   .tp.play.on { background-color: var(--play); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 16px color-mix(in srgb, var(--play) 80%, transparent); }
 
-  /* ⋯ menu */
-  .more { position: static; }
-  .more summary { list-style: none; }
-  .more summary::-webkit-details-marker { display: none; }
-  .more[open] summary { background-color: var(--text); color: var(--on-color); }
+  /* Popover panel (the ⚙ Settings). */
   .panel {
     position: absolute; top: calc(100% + 8px); left: 0; z-index: 10; padding: 8px; white-space: normal;
     background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
   }
-  .menu { width: 240px; display: flex; flex-direction: column; gap: 2px; padding: 6px; }
-  .menu > button { display: flex; justify-content: space-between; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; cursor: pointer; }
-  .menu > button:hover:not(:disabled) { background: var(--raised); }
-  .menu > button:disabled { opacity: 0.45; cursor: default; }
-  .menu > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .menu kbd { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text-2); }
-  .menu hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
-  .offset { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; }
-  .olbl { color: var(--text-2); }
-  .note { margin: 2px 8px 4px; font-size: 11px; color: var(--text-2); }
-  .discard { margin: 2px 2px 6px; color: var(--accent); }
   .row { display: flex; gap: 6px; }
-  .btn.danger { background-color: var(--rec); color: var(--on-color); }
 
   /* NumberField's LCD is sized for 3 digits + label; 58 px holds "124.5" at 18 px. */
   .tempo { display: flex; }
@@ -655,6 +537,16 @@
      approved 64 px look from 740 px up. */
   @media (max-height: 739px) {
     .bar { min-height: 40px; padding-block: 2px; }
+    /* The left block in two lines: the menus, then the name, the hint and
+       ↶ ↷ as 18 px buttons (a 24 px hit area) — 32 px ones would not fit
+       under the menu row, and beside it the bar would not fit 1280 px. */
+    .proj { grid-template-columns: minmax(0, 1fr) auto; column-gap: 6px; }
+    /* contain: the hint's length never widens the block (the menu row sets its width). */
+    .id { flex-direction: row; align-items: baseline; gap: 8px; contain: inline-size; }
+    .name { flex: none; max-width: 112px; font-size: 13px; line-height: 17px; }
+    .hint { flex: 1; min-width: 0; white-space: nowrap; }
+    .undo .ib { position: relative; width: 24px; height: 18px; border-radius: var(--r-sm); }
+    .undo .ib::after { content: ''; position: absolute; inset: -3px -1px; }
     .tp { width: 36px; height: 36px; border-radius: var(--r-md); }
     .sep { height: 28px; }
     .tempo { --nf-lcd-h: 36px; --nf-lcd-pad: 9px; }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { closeMore, openMore } from './topbar';
+import { closeMenu, openMenu } from './topbar';
 
 // The FL-style top bar (plan 20 Task 5; spec §4 "Top bar"; TopBar.svelte,
 // BigTimer.svelte). layout.spec.ts measures it at more widths; this file
@@ -43,7 +43,7 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   expect(out.rows).toBe(1);
   expect(out.height).toBeLessThanOrEqual(65);
   expect(out.docWidth).toBeLessThanOrEqual(1280);
-  for (const id of ['project-menu', 'topbar-more', 'undo', 'play', 'song-stop', 'loop-toggle', 'timer', 'master-volume', 'topbar-spectrum', 'keys-target', 'cpu', 'settings-button']) {
+  for (const id of ['project-menu', 'menu-file', 'menu-help', 'undo', 'redo', 'play', 'song-stop', 'loop-toggle', 'timer', 'master-volume', 'topbar-spectrum', 'keys-target', 'cpu', 'settings-button']) {
     await expect(page.getByTestId(id)).toBeInViewport();
   }
   // The timer's box already fits bar 999: a 3-digit bar moves nothing.
@@ -198,32 +198,35 @@ test('master slider: the master fader, on the fader law, one undo entry per drag
   await expect.poll(async () => Number(await vol.getAttribute('aria-valuenow'))).toBeCloseTo(-12, 1);
 });
 
-test('⋯ menu: the moved controls keep their test ids; Escape and a press outside close it', async ({ page }) => {
+test('menu bar: the ⋯ controls moved to File / Options with their test ids; Escape and a press outside close it', async ({ page }) => {
   await start(page);
-  for (const id of ['project-new', 'project-open', 'project-save', 'project-save-as', 'project-export', 'undo-take', 'rec-offset']) {
-    await expect(page.getByTestId(id)).toBeHidden();
-  }
-  await openMore(page);
-  for (const id of ['project-new', 'project-open', 'project-save', 'project-save-as', 'project-export', 'undo-take', 'rec-offset']) {
-    await expect(page.getByTestId(id)).toBeVisible();
-  }
+  const FILE = ['project-new', 'project-open', 'project-save', 'project-save-as', 'project-export', 'undo-take'];
+  for (const id of [...FILE, 'rec-offset']) await expect(page.getByTestId(id)).toBeHidden();
+  await openMenu(page, 'File');
+  for (const id of FILE) await expect(page.getByTestId(id)).toBeVisible();
   await expect(page.getByTestId('undo-take')).toBeDisabled(); // no take yet
-  // The recording offset persists (localStorage), as before.
+  // Escape closes it; the focus goes back to File.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('project-new')).toBeHidden();
+  await expect(page.getByTestId('menu-file')).toBeFocused();
+  // The recording offset is in Options and persists (localStorage), as before.
+  await openMenu(page, 'Options');
   await page.getByTestId('rec-offset').fill('25');
   await page.getByTestId('rec-offset').press('Enter');
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.recorder.offsetMs)).toBe(25);
   // Escape inside the offset only reverts the typed text: the menu stays open.
   await page.getByTestId('rec-offset').fill('40');
   await page.getByTestId('rec-offset').press('Escape');
-  await expect(page.getByTestId('project-new')).toBeVisible();
+  await expect(page.getByTestId('rec-offset')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.recorder.offsetMs)).toBe(25);
-  // Escape again (focus now outside any field) closes it; the focus goes back to the ⋯.
+  // Escape again closes it and gives the focus back to Options.
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('project-new')).toBeHidden();
-  await expect(page.getByTestId('topbar-more')).toBeFocused();
-  // The project name opens the same menu; Escape returns the focus to it.
+  await expect(page.getByTestId('rec-offset')).toBeHidden();
+  await expect(page.getByTestId('menu-options')).toBeFocused();
+  // The project name opens File; Escape returns the focus to it.
   await page.getByTestId('project-menu').click();
   await expect(page.getByTestId('project-new')).toBeVisible();
+  await expect(page.getByTestId('project-menu')).toHaveAttribute('aria-expanded', 'true');
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('project-new')).toBeHidden();
   await expect(page.getByTestId('project-menu')).toBeFocused();
@@ -231,7 +234,7 @@ test('⋯ menu: the moved controls keep their test ids; Escape and a press outsi
   await page.getByTestId('project-menu').click();
   await page.getByTestId('timer').click();
   await expect(page.getByTestId('project-new')).toBeHidden();
-  await closeMore(page); // no-op: already closed
+  await closeMenu(page, 'File'); // no-op: already closed
   // A command closes it and gives the focus back to the opener (clean project: New runs at once).
   await page.getByTestId('project-menu').click();
   await page.getByTestId('project-new').click();

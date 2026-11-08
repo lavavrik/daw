@@ -828,7 +828,7 @@
     // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
     // (stopPropagation: an open menu, a typed knob value, a mid-drag cancel)
     // is that widget's and leaves learn mode on. So is one another listener
-    // already handled (defaultPrevented; the top bar's ⋯ / project menu
+    // already handled (defaultPrevented; an open menu-bar menu, MenuBar.svelte,
     // closes on a document keydown and also stops it).
     const escLearn = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && !e.defaultPrevented && learning()) cancelLearn();
@@ -883,6 +883,7 @@
         {clock} onToggleSong={toggleSong} onStop={stopAny}
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}
+        onTab={(t) => bottomPanel?.pickTab(t)}
       />
     {/if}
     {#if autosaveOff}

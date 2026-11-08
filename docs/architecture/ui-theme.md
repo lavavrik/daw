@@ -254,9 +254,9 @@ one 64 px `--top` row. The header comment has the details; in short:
 
 | Part | What | Test id |
 |---|---|---|
-| Name + hint line | project name, `●` when unsaved; under it the flashed hint (`banners.hint`), else the title / aria-label of the control last pointed at anywhere in the app (one `mouseover` listener on the document, `bigTimer.ts` `hintText`), else a static tip | `project-menu`, `project-name`, `hint-line` |
-| ⋯ menu | New, Open…, Save, Save As…, Export WAV…, Undo take, Rec offset (moved here so the bar fits 1280 px; the name opens it too). A plain group (no ARIA menu); Escape or a command closes it and returns the focus to the opener | `topbar-more` (+ the old ids) |
-| ↶ ↷ | 32 px raised icon buttons | `undo`, `redo` |
+| Menu bar | `ui/MenuBar.svelte` (plan 21): File · Edit · Add · Patterns · View · Options · Help, 12 px text buttons on top of the left block. Each is a button (`aria-expanded`, `aria-controls`) over a popover of plain buttons (no ARIA menu): ↓ / ↑ open it on the first / last item, ↑ ↓ Home End move inside, ← → open the neighbour, Esc closes it and returns the focus to its opener (a document listener that stops the key: MIDI learn stays on), a press outside or Tab out closes it; one open at a time, pointing at another menu button switches. Items show their shortcut and an icon. plan 20's ⋯ items live in File (New … Export WAV…, Undo take, the discard question) and Options (Rec offset) under their old test ids. Help ▸ Keyboard shortcuts is `ui/ShortcutsSheet.svelte`, built from `input/shortcutList.ts` (a unit test keeps it in sync with `shortcuts.ts`). Every popover stays in the DOM, `hidden` while closed | `menu-file` … `menu-help`, `menu-<name>-panel` (+ the old ids); e2e helper `openMenu(page, 'File')` (`tests/e2e/topbar.ts`) |
+| Name + hint line | under the menus: project name, `●` when unsaved (a click opens File); under it the flashed hint (`banners.hint`), else the title / aria-label of the control last pointed at anywhere in the app (one `mouseover` listener on the document, `bigTimer.ts` `hintText`), else a static tip | `project-menu`, `project-name`, `hint-line` |
+| ↶ ↷ | 32 px raised icon buttons beside the name, under the menus (18 px in the short bar) | `undo`, `redo` |
 | Song transport | "Play song" (an aria-pressed toggle, like Space; pressed and glowing while the song plays), "Stop all" (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
 | Tempo | `NumberField variant="lcd"`, aria-label "BPM", 0.1 BPM steps with Shift | `tempo` |
 | Big timer | `ui/BigTimer.svelte`: bar:beat:tick (32 px mono) + seconds; the heard song position per frame while the song plays, the position inside the shown pattern (label "Pattern") while the pattern transport plays, else the parked song position | `timer`, `timer-pos`, `timer-seconds` |
@@ -266,12 +266,14 @@ one 64 px `--top` row. The header comment has the details; in short:
 | Pills | Keys → track and octave; MIDI, CPU, ⚙ latency (opens Settings) | `keys-target`, `octave`, `midi-status`, `cpu`, `settings-button` |
 
 Fit: one row at ≥ 1280 px in the widest state (playing, unsaved, 123
-dropouts) with ~40 px to spare, also with the web fonts blocked
+dropouts) with ~25 px to spare (~13 px with the web fonts blocked; the
+menu row, 252 px, sets the left block's width), also with the web fonts blocked
 (`tests/e2e/topbar.spec.ts`, `layout.spec.ts`). Text that changes has a
 fixed box (name, hint, timer digits up to bar 999, the master
 readout) or ellipsizes (Keys, MIDI). Below 1280 px the bar may wrap.
 Windows under 740 px tall get a 40 px bar (36 px transport, tempo and
-timer; the short pills keep 24 px hit areas): the piano roll must still
+timer; the short pills keep 24 px hit areas; the left block is two lines:
+the 16 px menu row, then the name, the hint and 18 px ↶ ↷ on one line): the piano roll must still
 show C2..C5 at 9 px rows at 1280×720 (`pianoroll.spec.ts`).
 
 Sizing hooks for other components (custom properties, not `:global`):

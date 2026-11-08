@@ -368,8 +368,8 @@ swept as above, everything else stays).
 Restore run one at a time (`session.ts` `once`; a second one is ignored —
 `restore` resolves `null` then). Restore reads the autosave *inside* that
 guard with `p.loading` set, so ⌘O cannot start an Open while big samples are
-read. New, Open… and ⌘O / Ctrl+O all go through the top bar's ⋯ menu
-(`TopBar.request`; the project name opens it too), which asks inline "Discard and start new / open…"
+read. New, Open… and ⌘O / Ctrl+O all go through the menu bar's File menu
+(`MenuBar.request` via `TopBar.request`; the project name opens it too), which asks inline "Discard and start new / open…"
 whenever `discardWarning` (`project/discard.ts`) says something would be
 lost: unsaved changes, or an open "Restore last session" offer ("Discard
 the unrestored session …? Its autosave will be deleted." — the fresh session

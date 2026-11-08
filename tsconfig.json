@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["svelte", "node"]

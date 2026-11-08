@@ -133,11 +133,11 @@ test('MIDI learn a mixer fader; Esc cancels learning', async ({ page }) => {
   await expect(page.getByTestId('auto-ctl-midi')).toHaveCount(0);
   await expect(page.getByTestId('flash-hint')).toHaveText(LEARN_HINT);
   await expect(ceiling).toHaveClass(/learning/);
-  // So does the Esc that closes the top bar's ⋯ menu (a window listener: defaultPrevented).
-  await page.getByTestId('topbar-more').click();
-  await expect(page.locator('#topbar-more-panel')).toBeVisible();
+  // So does the Esc that closes a menu-bar menu (a document listener that stops it).
+  await page.getByTestId('menu-file').click();
+  await expect(page.locator('#menu-file-panel')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.locator('#topbar-more-panel')).toBeHidden();
+  await expect(page.locator('#menu-file-panel')).toBeHidden();
   await expect(ceiling).toHaveClass(/learning/);
   // Esc during learn: the hint goes, nothing is bound.
   await page.keyboard.press('Escape');

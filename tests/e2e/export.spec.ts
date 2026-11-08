@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
-import { openMore } from './topbar';
+import { openMenu } from './topbar';
 import { addTrack } from './addTrack';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
@@ -75,7 +75,7 @@ async function oneBarSong(page: Page) {
 }
 
 async function exportFromMenu(page: Page) {
-  await openMore(page);
+  await openMenu(page, 'File');
   await page.getByTestId('project-export').click();
 }
 

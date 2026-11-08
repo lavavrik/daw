@@ -91,20 +91,22 @@
     else p.mixerOpen = false; // Step grid / Clip: the track's only editor
   }
 
-  // Song-mode hint: shown while the edited pattern is not playing at the
-  // playhead (no clip of it under the playhead, or stopped). It flips on and
-  // off during playback, so it is an overlay pill just under the header's
-  // right end (toggled with visibility, clicks pass through): the editor
-  // below must never move because of it (a jumping grid causes misclicks).
-  // Since the pattern transport (plan 20) the header has no room for it.
+  // Song-mode hint: shown only while the song transport plays and no clip of
+  // the edited pattern is under the playhead (the editor shows no playhead
+  // then). It flips on and off during playback, so it is an overlay pill just
+  // under the header's right end (toggled with visibility, clicks pass
+  // through): the editor below must never move because of it (a jumping grid
+  // causes misclicks). Stopped it never shows: the pill overlays the top of
+  // the editor (the piano roll's status, the rack's legend), and with nothing
+  // playing there is nothing to explain. Since the pattern transport (plan 20)
+  // the header has no room for it.
   let songIdle = $state(false);
   onMount(() => {
     let raf = 0;
     const loop = () => {
       let idle = false;
-      if (p.mode === 'song' && ptrack) {
-        const t = clock && p.playing ? clock.heardTicks() : NaN;
-        idle = patternPosAt(ptrack, ptrack.currentPatternId, t) === null;
+      if (clock && p.playing && p.mode === 'song' && ptrack) {
+        idle = patternPosAt(ptrack, ptrack.currentPatternId, clock.heardTicks()) === null;
       }
       if (idle !== songIdle) songIdle = idle;
       raf = requestAnimationFrame(loop);

@@ -22,6 +22,17 @@ export function timerParts(ticks: number): { bar: string; beat: string; tick: st
   };
 }
 
+/**
+ * The position inside a pattern of `len` ticks while the pattern transport
+ * plays: the heard tick modulo the length (Pattern mode loops the pattern
+ * from tick 0, as patternReadout.ts). No length (no pattern track shown):
+ * the heard tick itself. Negative (a count-in) or unreadable: 0.
+ */
+export function patternTicks(heard: number, len: number | null): number {
+  const t = safe(heard);
+  return len && len > 0 ? t % len : t;
+}
+
 /** `ticks` as time at `bpm`: "m:ss.cc". */
 export function timerSeconds(ticks: number, bpm: number): string {
   const s = bpm > 0 ? (safe(ticks) / PPQ) * (60 / bpm) : 0;

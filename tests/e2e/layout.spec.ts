@@ -17,8 +17,8 @@ for (const width of [1440, 1280, 1024]) {
     await page.getByRole('button', { name: 'Click to start audio' }).click();
     await expect(page.getByTestId('play')).toBeVisible();
     // No tracks: Keys shows "(no track)" (synth or drum: a selected drum
-    // track takes the keys since plan 15); plus an unsaved project (song
-    // Play switches to Song mode, an edit) and playing.
+    // track takes the keys since plan 15); plus an unsaved project (the
+    // removal is an edit) and playing.
     await page.getByTestId('track-0').hover();
     await page.getByRole('button', { name: 'Remove track Drums' }).click();
     await page.getByTestId('inline-confirm-ok').click();
@@ -64,6 +64,11 @@ for (const width of [1440, 1400, 1280]) {
     await expect(page.getByTestId('play')).toBeVisible();
     await page.getByTestId('play').click();
     await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
+    // An edit makes it unsaved (Play alone does not: a transport switch is no edit).
+    await page.evaluate(() => {
+      const d = window.__daw as unknown as { project: { tracks: { id: string }[] }; actions: { setMix: (t: string, p: string, v: number) => void } };
+      d.actions.setMix(d.project.tracks[0].id, 'pan', 0.25);
+    });
     await expect(page.getByTestId('project-name')).toContainText('unsaved');
     // The top bar polls engine.dropouts() at 4 Hz.
     await page.evaluate(() => {

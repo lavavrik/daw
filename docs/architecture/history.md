@@ -24,7 +24,9 @@ edit is undoable as long as it is in the saved project.
   never undone, like the selection: `setMode` (the transports, Rec) is not
   wrapped in `edit()` and calls `settle()` first; `sameUndoState` ignores
   `mode` and `selection`, and `diffApply` does not restore it, so Cmd+Z never
-  switches what is playing. SET_MODE still marks the project unsaved.
+  switches what is playing. SET_MODE never marks the project unsaved either
+  (`NON_EDIT_OPS`; `fingerprintOf` ignores `mode`): the mode is written
+  silently with the next save, so Play / Stop leave a saved project clean.
 - Selecting a pattern is not an entry either (`selectPattern` is not
   wrapped), but the current pattern is saved, so it is part of the next
   entry's "before": undoing an edit made before a pattern switch also

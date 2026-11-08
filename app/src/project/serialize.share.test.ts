@@ -46,6 +46,10 @@ describe('snapshot sharing', () => {
     const sel = { ...serialize(p), selection: { track: null, synth: null } };
     expect(sameProject(a, sel)).toBe(fingerprintOf(a) === fingerprintOf(sel));
     expect(sameProject(a, sel)).toBe(true);
+    // The mode (which transport ran last) is no change either (plan 20 ruling).
+    const song = { ...serialize(p), mode: 'song' as const };
+    expect(sameProject(a, song)).toBe(fingerprintOf(a) === fingerprintOf(song));
+    expect(sameProject(a, song)).toBe(true);
     setTempo(p, sink, 77);
     const b = serialize(p);
     expect(sameProject(a, b)).toBe(fingerprintOf(a) === fingerprintOf(b));

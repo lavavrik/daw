@@ -56,6 +56,7 @@
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { patternPosAt } from '../../state/song-actions';
   import { NOTE_NAMES, noteName } from '../noteName';
+  import { releaseSelect, selectKey } from '../selectKey';
 
   let { p, engine, clock, track, noteInput = null, capturing = () => false }: {
     p: Project;
@@ -320,17 +321,17 @@
       <button data-testid="acid-base-up" disabled={!canBase(base + 12)} aria-label="Base octave up" onclick={() => (base += 12)}>+</button>
     </span>
     <label title="Pattern length in bars (notes past the end are kept, silent)">Length
-      <select data-testid="acid-length" value={pat.bars} onchange={(e) => setLength(Number(e.currentTarget.value))}>
+      <select data-testid="acid-length" value={pat.bars} onkeydown={selectKey} onchange={(e) => { setLength(Number(e.currentTarget.value)); releaseSelect(e.currentTarget); }}>
         {#each lengths as b (b)}<option value={b}>{b} {b === 1 ? 'bar' : 'bars'}</option>{/each}
       </select>
     </label>
     <label>Root
-      <select data-testid="acid-root" bind:value={root}>
+      <select data-testid="acid-root" bind:value={root} onkeydown={selectKey} onchange={(e) => releaseSelect(e.currentTarget)}>
         {#each NOTE_NAMES as n, k (k)}<option value={k}>{n}</option>{/each}
       </select>
     </label>
     <label>Scale
-      <select data-testid="acid-scale" bind:value={scale}>
+      <select data-testid="acid-scale" bind:value={scale} onkeydown={selectKey} onchange={(e) => releaseSelect(e.currentTarget)}>
         {#each Object.keys(SCALES) as s (s)}<option value={s}>{s}</option>{/each}
       </select>
     </label>

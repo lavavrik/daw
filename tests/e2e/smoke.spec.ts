@@ -13,7 +13,7 @@ type DawWindow = {
       failure: string | null;
     } | null;
     Op: Record<string, number>;
-    recorder?: { armed: boolean } | null;
+    recorder?: { armed: boolean; playing: boolean } | null;
     clock?: { heardTicks(): number } | null;
     project: {
       tempo: number; arenaFloats: number; tracks: { patterns: { notes?: { pitch: number; start: number; len: number }[] }[] }[] };
@@ -849,7 +849,7 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
   expect(await slot(page, 1)()).toBe(0); // arming did not start the transport
   await page.getByTestId('pattern-play').click();
   await expect(rec).toHaveAttribute('data-state', 'recording');
-  await expect(rec).toHaveText('● REC');
+  await expect(rec).toHaveText('REC');
   await page.keyboard.down('KeyA');
   await page.waitForTimeout(150);
   await page.keyboard.up('KeyA');
@@ -865,6 +865,29 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
   await undo.click();
   await expect.poll(takeLen(page)).toBe(0);
   await expect(undo).toBeDisabled();
+});
+
+test('record: Space stops through the recorder (held notes close at the heard tick, at once)', async ({ page }) => {
+  await startAudio(page);
+  await page.getByTestId('add-synth-track').click();
+  const rec = page.getByTestId('rec-button');
+  await page.keyboard.press('KeyR');
+  await page.getByTestId('pattern-play').click();
+  await expect(rec).toHaveAttribute('data-state', 'recording');
+  await page.keyboard.down('KeyD'); // held through Stop
+  await page.waitForTimeout(150);
+  // Space stops via the App's stopAny (beforeStop): the recorder's pass ends in
+  // the same task, not a frame later through the transport safety net.
+  const stoppedAtOnce = await page.evaluate(() => {
+    const d = (window as unknown as DawWindow).__daw!;
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
+    return d.recorder!.playing === false;
+  });
+  expect(stoppedAtOnce).toBe(true);
+  await page.keyboard.up('KeyD');
+  await expect.poll(takeLen(page)).toBe(1);
+  const [n] = await page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patterns[0].notes!);
+  expect(n.len).toBeGreaterThan(0);
 });
 
 test('count-in: Play while armed counts one bar in, then records; the setting persists', async ({ page }) => {

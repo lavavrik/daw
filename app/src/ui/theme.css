@@ -249,8 +249,8 @@
 :where(input[type='checkbox']:disabled) { opacity: 0.5; cursor: default; }
 
 /* ----------------------------------------------------------- text inputs --
-   Recessed --well fields. Number inputs share the look until NumberField
-   (spec §3) replaces their spinners. */
+   Recessed --well fields. Number inputs are NumberField's core (spec §3),
+   which hides the native spinners (steppers and a scrub replace them). */
 :where(input:not([type]), input[type='text'], input[type='search'], input[type='number'], input[type='url'], input[type='email'], textarea) {
   border: 0;
   border-radius: var(--r-md);

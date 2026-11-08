@@ -25,6 +25,12 @@
   // End +6 dB; double-click 0 dB. Chrome aligns pointer moves to frames, so
   // a drag sends at most one value per frame without the Fader's own
   // coalescing.
+  //
+  // Right-click, the ContextMenu key or Shift+F10 (as the Fader): the control
+  // menu, "Automate" / "Show automation" and "MIDI learn" / "Forget MIDI"
+  // (AutoMenu.svelte). The learn target pulses (`data-learning`), as the
+  // Fader; both are the same target (the track's fader), so learning or
+  // mapping one shows on the other.
   import { onDestroy, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
@@ -32,6 +38,8 @@
   import { setMix } from '../../state/mixer-actions';
   import { mixParam } from '../../audio/mixerCatalog';
   import { ariaThrottle, useAutoBus } from '../autoBus';
+  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { isLearning } from '../midiLearn.svelte';
   import type { AutoStatus } from '../autoBus';
   import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
   import { rangeFill } from '../rangeFill';
@@ -87,6 +95,23 @@
     void el;
     paint();
   });
+
+  // ---- control menu: Automate / MIDI learn (as Fader.svelte) --------------------
+  const learningMe = $derived(isLearning(track.id, FADER));
+  /** The control menu at (x, y), or under the slider (keyboard); false when it would have no item. */
+  function menuAt(x: number | null, y: number | null): boolean {
+    if (!bus) return false;
+    const items = menuItems(bus, track.id, FADER);
+    if (!items.automate && !items.midi) return false;
+    const r = el?.getBoundingClientRect();
+    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: track.id, target: FADER, label: `${track.name} volume`, from: el });
+    return true;
+  }
+  function context(e: MouseEvent) {
+    // A keyboard-made contextmenu event has no pointer position: place it at the slider.
+    const kbd = e.clientX === 0 && e.clientY === 0;
+    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
+  }
 
   // ---- edits ---------------------------------------------------------------------
   function setVol(v: number) {
@@ -163,6 +188,8 @@
   type="range"
   class="vol"
   class:auto-susp={autoStatus === 'suspended'}
+  class:learning={learningMe}
+  data-learning={learningMe ? '' : undefined}
   min="0"
   max="1"
   step="0.001"
@@ -177,6 +204,7 @@
   oninput={input}
   onkeydown={key}
   ondblclick={() => setVol(0)}
+  oncontextmenu={context}
 />
 
 <style>
@@ -186,4 +214,8 @@
   .vol::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -3px; }
   /* A suspended lane (a manual move overrides it until its next point): a grey fill, as the Fader's grey cap. */
   .vol.auto-susp { --c: var(--text-dim); }
+  /* The MIDI learn target: the Fader's pulsing outline. */
+  .vol.learning { outline: 2px solid var(--sig-cv); outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { .vol.learning { animation: none; } }
 </style>

@@ -1,5 +1,8 @@
-// Keys and focus for the app's <select>s (rack patch and sample pickers,
-// choice params, the mixer's sidechain picker).
+// Keys and focus for the app's <select>s: every one takes
+// `onkeydown={selectKey}` and calls releaseSelect after a pick (rack patch and
+// sample pickers, choice params, the mixer's sidechain picker, the pattern
+// picker, the step grid's steps, the piano roll's grid / length, the Acid
+// tab's length / root / scale, the track headers' "+ Lane", Settings).
 //
 // A focused <select> type-aheads on printable keys: "a" jumps to the first
 // option starting with A. Here letters and digits are the QWERTY piano and
@@ -22,19 +25,20 @@ export function selectKey(e: KeyboardEvent): void {
 export const RELEASE_WINDOW_MS = 200;
 
 /**
- * Give the keys back to the piano after a pick: blur the select. With
+ * Give the keys back to the piano after a pick: blur the select (or focus
+ * `to`, e.g. the piano roll's stage, which takes the keys itself). With
  * `appearance: base-select` (theme.css) the picker hands focus back to its
  * select as it closes, after the change event, so a plain blur() is undone.
  * For RELEASE_WINDOW_MS a focus coming back is blurred again (one-shot
  * listener), and on the next frame the select is checked once more in case
  * focus never left while the picker was open (no focus event to catch).
  */
-export function releaseSelect(sel: HTMLSelectElement): void {
-  const again = () => sel.blur();
-  sel.addEventListener('focus', again);
-  setTimeout(() => sel.removeEventListener('focus', again), RELEASE_WINDOW_MS);
-  sel.blur();
+export function releaseSelect(sel: HTMLSelectElement, to: HTMLElement | null = null): void {
+  const away = () => (to ? to.focus({ preventScroll: true }) : sel.blur());
+  sel.addEventListener('focus', away);
+  setTimeout(() => sel.removeEventListener('focus', away), RELEASE_WINDOW_MS);
+  away();
   requestAnimationFrame(() => {
-    if (document.activeElement === sel) sel.blur();
+    if (document.activeElement === sel) away();
   });
 }

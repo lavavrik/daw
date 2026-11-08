@@ -21,10 +21,14 @@
   //     typing); in a field that already has focus, after 6 px, and a press
   //     that goes sideways first is a text selection and never scrubs
   //     (numberField.ts pressIntent). Then 1 step per 4 px, Shift = step /
-  //     10. While scrubbing only the display moves; onchange fires ONCE, on
+  //     10. While scrubbing only the display moves, plus `onpreview`
+  //     (optional) with each new live value so the caller can make it heard
+  //     without an edit (the tempo: previewTempo); onchange fires ONCE, on
   //     release, so the whole scrub is one undo entry (history/gestures.ts
-  //     brackets every pointer press anyway). Esc, or Cmd/Ctrl+Z mid-scrub (registerDragCancel),
-  //     drops the scrub: the value never changed, so there is nothing to undo.
+  //     brackets every pointer press anyway). Esc, or Cmd/Ctrl+Z mid-scrub
+  //     (registerDragCancel), drops the scrub: the value never changed, so
+  //     there is nothing to undo (`onpreview` gets the committed value back,
+  //     as it does when a scrub ends where it started or is cancelled).
   //   - double-click selects the text.
   import { onDestroy, tick } from 'svelte';
   import { registerDragCancel } from '../history/gestures';
@@ -46,6 +50,7 @@
     disabled = false,
     onchange,
     oninput,
+    onpreview,
   }: {
     /** The committed value (null: show an empty field). */
     value: number | null;
@@ -67,6 +72,8 @@
     disabled?: boolean;
     onchange: (v: number) => void;
     oninput?: (v: number | null) => void;
+    /** A scrub's live value (not committed: no undo entry), then the committed one if the scrub ends without a change. */
+    onpreview?: (v: number) => void;
   } = $props();
 
   const dec = $derived(decimals ?? decimalsOf(step));
@@ -148,12 +155,12 @@
   // ---- scrub ---------------------------------------------------------------
   let areaEl = $state<HTMLElement | null>(null);
   /** A press on the value that has not travelled far enough yet, or is scrubbing. */
-  let press: { pointerId: number; x: number; y: number; v0: number; fine: boolean; scrubbing: boolean; wasFocused: boolean } | null = null;
+  let press: { pointerId: number; x: number; y: number; v0: number; fine: boolean; scrubbing: boolean; wasFocused: boolean; previewed: boolean } | null = null;
   let scrubbing = $state(false);
 
   function onDown(e: PointerEvent) {
     if (disabled || !e.isPrimary || e.button !== 0) return;
-    press = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, v0: current(), fine: e.shiftKey, scrubbing: false, wasFocused: document.activeElement === inputEl };
+    press = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, v0: current(), fine: e.shiftKey, scrubbing: false, wasFocused: document.activeElement === inputEl, previewed: false };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
@@ -184,15 +191,29 @@
       press.y = e.clientY;
       press.fine = fine;
     }
-    live = scrubValue(press.v0, e.clientY - press.y, step, fine, bounds);
+    const next = scrubValue(press.v0, e.clientY - press.y, step, fine, bounds);
+    if (next !== live && onpreview) {
+      press.previewed = true;
+      onpreview(next);
+    }
+    live = next;
+  }
+  /** After previews, put the committed value back (a scrub that changed nothing, or was dropped). */
+  function unpreview(p: { previewed: boolean }) {
+    if (p.previewed && value !== null) onpreview?.(value);
   }
   function onUp(e: PointerEvent) {
     if (!press || e.pointerId !== press.pointerId) return;
     const p = press;
     const v = live;
     endPress();
-    if (p.scrubbing && v !== null && e.type === 'pointerup') commitValue(v);
-    else void resync();
+    if (p.scrubbing && v !== null && e.type === 'pointerup') {
+      if (v === value) unpreview(p);
+      commitValue(v);
+    } else {
+      unpreview(p);
+      void resync();
+    }
   }
   function endPress() {
     press = null;
@@ -207,7 +228,9 @@
   /** Drop the scrub and keep the old value. True when there was a scrub to drop. */
   function cancelScrub(): boolean {
     if (!press?.scrubbing) return false;
+    const p = press;
     endPress();
+    unpreview(p);
     void resync();
     return true;
   }

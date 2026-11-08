@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hintText, timerParts, timerSeconds } from './bigTimer';
+import { hintText, patternTicks, timerParts, timerSeconds } from './bigTimer';
 
 const BAR = 3840;
 
@@ -20,6 +20,22 @@ describe('timerParts (bar:beat:tick, 4/4 at 960 PPQ)', () => {
     expect(timerParts(960.9)).toEqual({ bar: '1', beat: '02', tick: '000' });
     expect(timerParts(-500)).toEqual({ bar: '1', beat: '01', tick: '000' });
     expect(timerParts(NaN)).toEqual({ bar: '1', beat: '01', tick: '000' });
+  });
+});
+
+describe('patternTicks (the pattern transport: the position inside the shown pattern)', () => {
+  it('wraps the heard tick at the pattern length', () => {
+    expect(patternTicks(960, 2 * BAR)).toBe(960);
+    expect(patternTicks(2 * BAR + 960 + 288, 2 * BAR)).toBe(960 + 288);
+    expect(patternTicks(5 * BAR, BAR)).toBe(0);
+  });
+  it('no pattern length: the heard tick itself', () => {
+    expect(patternTicks(5 * BAR + 7, null)).toBe(5 * BAR + 7);
+    expect(patternTicks(5 * BAR + 7, 0)).toBe(5 * BAR + 7);
+  });
+  it('count-in (negative) or unreadable: 0', () => {
+    expect(patternTicks(-960, BAR)).toBe(0);
+    expect(patternTicks(NaN, BAR)).toBe(0);
   });
 });
 

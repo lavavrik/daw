@@ -54,6 +54,7 @@
   import { mod } from '../../audio/audioClock';
   import type { NoteInput } from '../../input/noteInput';
   import { releaseHeldKeys } from '../../input/shortcuts';
+  import { releaseSelect, selectKey } from '../selectKey';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { THEME } from '../theme';
   import { MAX_PATTERNS } from '../../audio/protocol';
@@ -928,12 +929,12 @@
 <div class="roll" data-testid="pianoroll" style:--c={track.color}>
   <div class="bar">
     <label title="Grid: snap and default note length">Grid
-      <select data-testid="pr-grid" value={gridKey} onchange={(e) => setGrid(e.currentTarget.value as GridKey)}>
+      <select data-testid="pr-grid" value={gridKey} onkeydown={selectKey} onchange={(e) => { setGrid(e.currentTarget.value as GridKey); releaseSelect(e.currentTarget, stage); }}>
         {#each Object.keys(GRID_TICKS) as k (k)}<option value={k}>{k}</option>{/each}
       </select>
     </label>
     <label title="Pattern length in bars (notes past the end are kept, silent)">Length
-      <select data-testid="pr-length" value={pat.bars} onchange={(e) => setLength(Number(e.currentTarget.value))}>
+      <select data-testid="pr-length" value={pat.bars} onkeydown={selectKey} onchange={(e) => { setLength(Number(e.currentTarget.value)); releaseSelect(e.currentTarget, stage); }}>
         {#each lengths as b (b)}<option value={b}>{b} {b === 1 ? 'bar' : 'bars'}</option>{/each}
       </select>
     </label>

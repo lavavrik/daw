@@ -31,6 +31,7 @@
   import type { AudioClock } from '../audio/audioClock';
   import { MAX_ROWS, currentPattern } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
+  import { releaseSelect, selectKey } from './selectKey';
   import { deferSampleLoad } from '../state/sampleLoads';
   import { importSample } from '../state/sampleImport';
   import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
@@ -336,8 +337,8 @@
     >+ Add row</button>
     <label><span class="lbl">Steps</span>
       <select
-        data-testid="step-count" value={pat.stepCount}
-        onchange={(e) => setStepCount(p, engine, track.id, Number(e.currentTarget.value) as 16 | 32 | 64)}
+        data-testid="step-count" value={pat.stepCount} onkeydown={selectKey}
+        onchange={(e) => { setStepCount(p, engine, track.id, Number(e.currentTarget.value) as 16 | 32 | 64); releaseSelect(e.currentTarget); }}
       >
         <option value={16}>16</option><option value={32}>32</option><option value={64}>64</option>
       </select>

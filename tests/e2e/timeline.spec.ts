@@ -339,6 +339,40 @@ test('ruler click seeks (beat snap, Alt = free); keys bubble from the timeline',
   await expect.poll(() => page.evaluate(() => (window as any).__daw.project.playing)).toBe(false);
 });
 
+test('stopped after the pattern transport, the playlist is the song: loop live, parked marker, next song Play starts there', async ({ page }) => {
+  await start(page);
+  const ruler = page.getByTestId('tl-ruler');
+  const d = () => page.evaluate(() => {
+    const p = (window as any).__daw.project;
+    return { mode: p.mode, playing: p.playing, pos: p.songPosition };
+  });
+  await page.getByTestId('loop-toggle').click(); // loop on (bars 1-4)
+  await expect(ruler).toHaveAttribute('data-loop-live', '1');
+  // The pattern transport plays: the song's loop and marker step back.
+  await page.getByTestId('pattern-play').click();
+  await expect(ruler).toHaveAttribute('data-loop-live', '0');
+  await expect(ruler).toHaveAttribute('data-marker', 'none');
+  await page.getByTestId('pattern-stop').click();
+  // Stopped (Pattern ran last): drawn as the song again.
+  expect(await d()).toMatchObject({ mode: 'pattern', playing: false });
+  await expect(ruler).toHaveAttribute('data-loop-live', '1');
+  await expect(ruler).toHaveAttribute('data-marker', 'parked');
+  await expect(page.getByTestId('tl-readout')).not.toContainText('pattern transport');
+  // A ruler click parks the song position, without the "play the song" hint.
+  const r = (await ruler.boundingBox())!;
+  const p = await at(page, 0, 2 * BAR + 100);
+  await page.mouse.click(p.x, r.y + 10);
+  expect((await d()).pos).toBe(2 * BAR);
+  await expect(page.getByTestId('tl-readout')).not.toContainText('Song position set');
+  // The next song Play starts from the parked marker.
+  await page.getByTestId('play').click();
+  await expect.poll(async () => (await d()).mode).toBe('song');
+  await expect.poll(() => page.evaluate(() => (window as any).__daw.clock.heardTicks()), { timeout: 3000 }).toBeGreaterThan(2 * BAR);
+  expect(await page.evaluate(() => (window as any).__daw.clock.heardTicks())).toBeLessThan(4 * BAR);
+  await expect(ruler).toHaveAttribute('data-marker', 'live');
+  await page.getByTestId('song-stop').click();
+});
+
 test('timeline screenshot', async ({ page }) => {
   test.setTimeout(40_000);
   await start(page);

@@ -217,8 +217,10 @@ and notes are silent. The song transport is unchanged.
 nothing (`Timeline::pattern_plays`): a drum track just latches its swing, a
 synth track builds no events. A *new* focus sends `Off` for every note the
 pattern of any other track holds (`Synths::release_patterns_except`), so
-nothing sticks; the same focus again changes nothing. Drum hits already
-ringing ring out. Live input (the input track), the metronome and the
+nothing sticks, and fades every other drum track's ringing hits over 2 ms
+(`Drums::fade_all_except`, the fade track removal uses): only the focused
+track is heard from the switch on. The same focus again changes nothing.
+Live input (the input track), the metronome and the
 count-in are unaffected. Song mode ignores the focus, so export (which
 renders the song) does too. The focus is transport state: `RESET_ALL` (project
 load) puts it back to none, the engine default (= the old every-track
@@ -234,7 +236,11 @@ patternFocusSlot` / `syncPatternFocus`):
   path that changes it sends the new slot (`selectTrack`, `removeTrack` when
   the selection moves, undo/redo restoring it in `diffApply`). Selecting an
   Audio track (or the selection becoming none) keeps the last focus. Stopped
-  or in Song mode nothing is sent.
+  or in Song mode nothing is sent. `p.patternFocus` remembers the slot sent
+  (`sendPatternFocus`; transport state, not saved): removing the focused
+  track while the selection ends on an Audio track or none **stops** the
+  pattern transport (nothing of it is left to play, and the slot could be
+  reused by the next new track).
 - `SET_PATTERN_FOCUS` is in `NON_EDIT_OPS`: not saved, not undoable, never
   marks the project dirty, never in `projectCommands`.
 - No chase (see "No note chase" below): a synth focused mid-note is silent

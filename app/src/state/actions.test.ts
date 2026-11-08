@@ -3,7 +3,7 @@ import { Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { DrumPattern } from './project.svelte';
 import {
-  addDrumTrack, addRow, liveInputTrack, play, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
+  addDrumTrack, addRow, liveInputTrack, play, previewTempo, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
   setTempo, stop, togglePlay, toggleStep,
 } from './actions';
 import { addSynthTrack } from './rack-actions';
@@ -104,6 +104,17 @@ describe('actions', () => {
     expect(p.tempo).toBe(300);
     setTempo(p, sink, NaN);
     expect(sent).toHaveLength(1);
+  });
+
+  it('previewTempo (a tempo scrub) is heard but is no edit: p.tempo and the history stay', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const t0 = p.tempo;
+    previewTempo(sink, 133.33);
+    previewTempo(sink, 900);
+    previewTempo(sink, NaN);
+    expect(sent).toEqual([[Op.SET_TEMPO, 133.3, 0, 0, 0], [Op.SET_TEMPO, 300, 0, 0, 0]]);
+    expect(p.tempo).toBe(t0);
   });
 
   it('addRow stops at 16', () => {

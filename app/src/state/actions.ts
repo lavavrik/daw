@@ -2,7 +2,7 @@
 // Each exported edit runs its body inside edit() (state/edits.ts): one undo
 // step, nested calls included (docs/architecture/history.md). Same in
 // pattern-, song-, audio-, mixer- and rack-actions.ts.
-import { BAR_TICKS, Op } from '../audio/protocol';
+import { BAR_TICKS, Op, PATTERN_FOCUS_NONE } from '../audio/protocol';
 import { MAX_ROWS, MAX_STEPS, MAX_TRACKS, TRACK_COLORS, currentPattern, isPatternTrack, newChannel } from './project.svelte';
 import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
@@ -177,6 +177,18 @@ export function setTempo(p: Project, sink: CommandSink, bpm: number) {
   });
 }
 
+/**
+ * The tempo a scrub is passing through (NumberField onpreview): heard at
+ * once, but not an edit. `p.tempo` and the undo history are untouched; the
+ * scrub's release commits once with setTempo (one undo entry), and a dropped
+ * scrub previews `p.tempo` back. (SET_TEMPO still marks the project unsaved
+ * for a moment; the dirty check clears it if the scrub ends where it began.)
+ */
+export function previewTempo(sink: CommandSink, bpm: number) {
+  if (Number.isNaN(bpm)) return;
+  sink.send(Op.SET_TEMPO, Math.round(clamp(bpm, 20, 300) * 10) / 10);
+}
+
 export function setMetronome(p: Project, sink: CommandSink, on: boolean) {
   return edit(p, 'Metronome', () => {
     p.metronome = on;
@@ -238,6 +250,12 @@ export function patternFocusSlot(p: Project): number | null {
   return t && isPatternTrack(t) ? t.slot : null;
 }
 
+/** SET_PATTERN_FOCUS(slot, or 255 for none), remembered in `p.patternFocus`. */
+export function sendPatternFocus(p: Project, sink: CommandSink, slot: number | null) {
+  p.patternFocus = slot;
+  sink.send(Op.SET_PATTERN_FOCUS, slot ?? PATTERN_FOCUS_NONE);
+}
+
 /**
  * While the pattern transport plays, move the focus to the selected track:
  * SET_PATTERN_FOCUS(slot) for a drum or synth track. An Audio track or no
@@ -248,7 +266,7 @@ export function patternFocusSlot(p: Project): number | null {
 export function syncPatternFocus(p: Project, sink: CommandSink) {
   if (!p.playing || p.mode !== 'pattern') return;
   const slot = patternFocusSlot(p);
-  if (slot !== null) sink.send(Op.SET_PATTERN_FOCUS, slot);
+  if (slot !== null) sendPatternFocus(p, sink, slot);
 }
 
 export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
@@ -287,6 +305,12 @@ export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
       p.lastSynthTrackId = p.tracks.find((t) => t.kind === 'synth')?.id ?? null;
     }
     syncInput(p, sink, before);
-    syncPatternFocus(p, sink); // the pattern transport follows the new selection
+    // The pattern transport follows the new selection. If it was playing the
+    // removed track and the selection is now an Audio track or none, there
+    // is nothing left to play ("nothing else should be playing", and the
+    // slot may be reused by the next new track): stop it. The App's
+    // transport safety net closes a recording pass on the next frame.
+    if (p.playing && p.mode === 'pattern' && p.patternFocus === slot && patternFocusSlot(p) === null) stop(p, sink);
+    else syncPatternFocus(p, sink);
   });
 }

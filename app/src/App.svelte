@@ -691,6 +691,9 @@
       onRedo: redo,
       pointerDown: () => gestures.pointerDown(),
       onTab: (t) => bottomPanel?.pickTab(t),
+      // Space while playing: stop through the recorder hooks (beforeStop
+      // closes held recorded notes at the heard tick), as the Stop buttons.
+      onStop: stopAny,
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     // Bound to `live`, so it outlives an audio restart as is.
@@ -823,9 +826,11 @@
     window.addEventListener('keydown', wake, true);
     // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
     // (stopPropagation: an open menu, a typed knob value, a mid-drag cancel)
-    // is that widget's and leaves learn mode on.
+    // is that widget's and leaves learn mode on. So is one another listener
+    // already handled (defaultPrevented; the top bar's ⋯ / project menu
+    // closes on a document keydown and also stops it).
     const escLearn = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && learning()) cancelLearn();
+      if (e.key === 'Escape' && !e.defaultPrevented && learning()) cancelLearn();
     };
     window.addEventListener('keydown', escLearn);
     return () => {

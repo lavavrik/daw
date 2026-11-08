@@ -3,9 +3,10 @@
 //
 // The readout:
 // "beat / bars" of the selected track's current pattern, e.g. "1.3 / 2" =
-// bar 1, beat 3 of a 2-bar pattern. Pattern mode loops every track's current
-// pattern from tick 0, so the position is the heard tick modulo the pattern
-// length (as the step grid's playhead). Stopped, counting in (negative
+// bar 1, beat 3 of a 2-bar pattern. Pattern mode loops the shown track's
+// current pattern from tick 0 (the other tracks are silent: pattern focus),
+// so the position is the heard tick modulo the pattern length (as the step
+// grid's playhead). Stopped, counting in (negative
 // ticks) or not finite: "– / 2".
 import { BAR_TICKS } from '../audio/protocol';
 

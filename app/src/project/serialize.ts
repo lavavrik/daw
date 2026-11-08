@@ -164,7 +164,10 @@ export function projectFingerprint(p: Project): string {
 
 /** projectFingerprint of an already serialized project (no second serialize). */
 export function fingerprintOf(json: ProjectJson): string {
-  return JSON.stringify({ ...json, selection: null });
+  // Neither the selection nor the mode (which transport ran last) counts as
+  // a change: both are saved, but switching them never makes the project
+  // "unsaved" (plan 20 ruling: Play / Stop leave a saved project clean).
+  return JSON.stringify({ ...json, selection: null, mode: null });
 }
 
 /** The sample files a save writes: project path -> original bytes. */
@@ -203,9 +206,9 @@ export function jsonEqual(a: Json, b: Json): boolean {
   return true;
 }
 
-/** fingerprintOf(a) === fingerprintOf(b), without building the strings: equal but for the selection. */
+/** fingerprintOf(a) === fingerprintOf(b), without building the strings: equal but for the selection and the mode. */
 export function sameProject(a: ProjectJson, b: ProjectJson): boolean {
-  return equalExcept(a, b, ['selection']);
+  return equalExcept(a, b, ['selection', 'mode']);
 }
 
 /**

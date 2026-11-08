@@ -8,12 +8,12 @@ import { commandEdits, edit, markEdited } from './edits';
 describe('edit tracking (fix 5)', () => {
   it('edit commands mark the project dirty and bump its version; transport and live notes do not', () => {
     const p = new Project();
-    for (const op of [Op.NOTE_ON, Op.NOTE_OFF, Op.PLAY, Op.STOP, Op.SEEK, Op.SET_INPUT_TRACK, Op.PITCH_BEND, Op.MOD_WHEEL, Op.SUSTAIN, Op.RESET_ALL, Op.AUTO_OVERRIDE]) {
+    for (const op of [Op.NOTE_ON, Op.NOTE_OFF, Op.PLAY, Op.STOP, Op.SEEK, Op.SET_INPUT_TRACK, Op.PITCH_BEND, Op.MOD_WHEEL, Op.SUSTAIN, Op.RESET_ALL, Op.AUTO_OVERRIDE, Op.SET_MODE]) {
       commandEdits(p, op);
     }
     expect([p.dirty, p.version]).toEqual([false, 0]);
-    for (const op of [Op.SET_STEP, Op.RACK_SET_PARAM, Op.MIX_SET, Op.SET_TEMPO, Op.SET_MODE, Op.CLIP_SET, Op.AUTO_POINT_SET]) commandEdits(p, op);
-    expect([p.dirty, p.version]).toEqual([true, 7]);
+    for (const op of [Op.SET_STEP, Op.RACK_SET_PARAM, Op.MIX_SET, Op.SET_TEMPO, Op.CLIP_SET, Op.AUTO_POINT_SET]) commandEdits(p, op);
+    expect([p.dirty, p.version]).toEqual([true, 6]);
   });
 
   it('VIS_TAP is not an edit', () => {

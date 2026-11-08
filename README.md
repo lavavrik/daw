@@ -39,8 +39,10 @@ start audio from a click). The screen has four parts:
   built-in **Starter kit**;
 - the **timeline** at the top: one lane per track, with **+ Drum track** and
   **+ Synth track** under the track list. Each track header has **M** (mute
-  the track) and **S** (solo: play only this track, plus any other soloed
-  ones) — the same switches as the track's mixer strip;
+  the track) and **S** (solo: play only this track; it un-solos the others,
+  **⌘-click** / **Shift-click** on a Mac, **Ctrl-click** / **Shift-click**
+  elsewhere adds it to the soloed ones) — the same switches as the track's
+  mixer strip;
 - the **bottom panel**: the selected track's editor (**Step grid** for drums;
   **Piano roll**, **Acid** or **Instrument** for synths) and the **Mixer** tab.
 
@@ -255,8 +257,11 @@ Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.m
   track's *current* pattern.
 - **Two transports.** The top bar's **▶ Play** plays the song (the
   timeline). The **pattern transport** in the bottom panel's header (▶, ■,
-  Rec, Count-in and the position "beat / bars", e.g. "1.3 / 2") loops each
-  track's current pattern. Starting one stops the other. **Space** plays /
+  Rec, Count-in and the position "beat / bars", e.g. "1.3 / 2") loops the
+  current pattern of the track the bottom panel shows; the other tracks are
+  silent (select another drum or synth track and it plays that one instead).
+  While it plays, the big timer shows the position in the pattern
+  ("Pattern"). Starting one transport stops the other. **Space** plays /
   stops the pattern while the bottom panel has focus, the song otherwise.
 - **Clips.** Click an empty spot in a track's lane to place its current
   pattern there. Drag a clip's body to move it (beat snap, **Alt** = free),

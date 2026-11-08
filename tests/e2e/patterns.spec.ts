@@ -123,7 +123,7 @@ test('song and pattern transports: starting either stops the other; the readout 
   const pos = page.getByTestId('pattern-pos');
   await expect(page.getByTestId('mode-toggle')).toHaveCount(0); // the PAT/SONG switch is gone
   await expect(pos).toHaveText('– / 1'); // the default kit's pattern: 16 steps = 1 bar
-  await expect(page.getByTestId('pattern-stop')).toBeDisabled();
+  await expect(page.getByTestId('pattern-stop')).toBeEnabled(); // idle, not disabled (a no-op while stopped)
 
   // Pattern Play: Pattern mode, the readout runs (bar.beat / bars).
   await patPlay.click();
@@ -150,7 +150,8 @@ test('song and pattern transports: starting either stops the other; the readout 
   await expect(song).toHaveAttribute('aria-pressed', 'false');
   await page.getByTestId('pattern-stop').click();
   await expect.poll(state).toBe('pattern:stopped');
-  await expect(page.getByTestId('pattern-stop')).toBeDisabled();
+  await page.getByTestId('pattern-stop').click(); // stopped: a no-op
+  await expect.poll(state).toBe('pattern:stopped');
 
   // The song ran last (mode Song), stopped: arming switches to Pattern mode, so the next pattern Play records.
   await song.click();
@@ -272,12 +273,15 @@ test('Song mode playhead only shows while a clip of the pattern plays', async ({
   // Song Play then Stop: Song mode, stopped.
   await page.getByTestId('play').click();
   await page.getByTestId('play').click();
-  await expect(page.getByTestId('song-hint')).toBeVisible(); // stopped: nothing plays this pattern
-  // The hint lives in the header's fixed status line: toggling it must never move the editor.
+  // Stopped, the hint never shows (it would overlay the editor's top for nothing).
+  await expect(page.getByTestId('song-hint')).toBeHidden();
+  // The hint is an overlay: toggling it must never move the editor.
   const gridTop = () => page.locator('.cell').first().evaluate((el) => el.getBoundingClientRect().top);
   const top = await gridTop();
   await page.getByTestId('play').click();
-  // Bar 1 is empty: no column; then the clip starts and the playhead appears.
+  // Bar 1 is empty: no column and the hint shows; then the clip starts and the playhead appears.
+  await expect(page.getByTestId('song-hint')).toBeVisible();
+  expect(await gridTop()).toBe(top);
   await expect(page.locator('.cell.playhead').first()).toBeVisible({ timeout: 6000 });
   await expect(page.getByTestId('song-hint')).toBeHidden();
   expect(await gridTop()).toBe(top);

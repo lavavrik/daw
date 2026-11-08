@@ -613,11 +613,12 @@ describe('transport switches and the mode', () => {
     expect(s.step(3)).toBeGreaterThan(0);
     expect(s.p.mode).toBe('pattern');
   });
-  it('a mode switch still marks the project unsaved (it is saved), through the SET_MODE command', () => {
+  it('a mode switch never marks the project unsaved (the mode is saved silently with the next save; plan 20 ruling)', () => {
     const p = new Project();
     const sink = { send(op: number) { commandEdits(p, op); return true; } };
     expect(p.dirty).toBe(false);
     playSong(p, sink);
-    expect(p.dirty).toBe(true);
+    expect(p.mode).toBe('song');
+    expect([p.dirty, p.version]).toEqual([false, 0]);
   });
 });

@@ -382,8 +382,14 @@ export class Project {
    * track/module/patch removals call). At most one per CC and per control.
    */
   midiMap = $state<MidiMapping[]>([]);
-  /** 'pattern': each track loops its current pattern; 'song': clips play on the timeline. */
+  /** 'pattern': the shown track loops its current pattern (pattern focus); 'song': clips play on the timeline. */
   mode = $state<'pattern' | 'song'>('pattern');
+  /**
+   * The slot the last SET_PATTERN_FOCUS named (null: none, 255), i.e. which
+   * track the pattern transport plays while it runs (actions.ts
+   * sendPatternFocus). Transport state: not saved, not reactive.
+   */
+  patternFocus: number | null = null;
   /** Song-mode loop range in ticks (sent to the engine only while `on`). */
   loop = $state({ on: false, start: 0, end: DEFAULT_LOOP_END });
   /** Where Song mode is parked (last seek, or the loop start after a looped Stop). */

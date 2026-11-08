@@ -48,6 +48,22 @@ Beyond the spec's values (plan 20 Task 11, for the literals the review found):
 Rules of use:
 - `--text-dim` only on `--well` and `--lcd`; on `--panel` use `--text-2`.
 - Text on any vivid colour (accent, play, a track colour) is `--on-color`.
+- Never `--play`, `--accent` or `--rec` as text or an icon on `--raised`
+  (1.7–2.8:1, under WCAG's 4.5:1 for text and 3:1 for icons). A warning or
+  status puts the colour in a fill instead: the vivid colour under
+  `--on-color` text (the top bar's red dropout / MIDI-blocked pill, the
+  orange latency pill, an armed Rec, a playing ▶), a light mix of the colour
+  with `--text` for an icon (an idle ▶: `--play` 55% / `--text`, 3.3:1), or
+  an LED dot beside a `--text` label (Rec; the dot's `--on-color` ring keeps
+  it 3:1 from the button).
+- Idle, active, disabled (both transports, the icon buttons): **idle**
+  (enabled, not running) is a normal raised button (`--raised`, gloss,
+  raised shadow) with a coloured or `--text` icon, never dimmed; **active**
+  is the vivid fill with an `--on-color` icon and a glow; **disabled** is
+  flat (no gloss, no shadow), 40% opacity, `cursor: not-allowed`. A Stop
+  stays enabled while nothing plays (a no-op) so the idle transport reads
+  as ready. (`--text` on
+  `--raised` itself is 4.07:1, a palette question raised with the owner.)
 - Track, category and signal colours are **data**: a component gets them from
   state or `theme.ts` and passes them in as `--c` (`style:--c={color}`).
 - `CATEGORY_COLORS` and `SIGNAL_COLORS` use the spec's keys verbatim. The
@@ -121,8 +137,8 @@ out of a skin with `appearance: auto`.
 - **checkbox**: a 34×20 switch (`--well` off, `--play` on, the handle as the
   knob, drawn with `::before`).
 - **text, search, number, url, email, textarea**: `--well` fields, 8 px radius,
-  accent focus ring. Number inputs keep their native spinners until
-  `NumberField.svelte` replaces them.
+  accent focus ring. Every number input is `NumberField.svelte`'s core, which
+  hides the native spinners (its steppers and the vertical scrub replace them).
 - **scrollbars**: `scrollbar-color: var(--raised) transparent` on `html`, with
   `color-scheme: dark` for the native bits we don't skin.
 
@@ -148,12 +164,17 @@ second, so its moving parts change only paint-time properties, never layout:
 ## Selects and the piano keys
 Letters are the QWERTY piano, so every `<select>` takes
 `onkeydown={selectKey}` (`ui/selectKey.ts`): no type-ahead on printable keys
-(Cmd/Ctrl/Alt chords and the navigation keys pass). After a pick with the
-pointer, `releaseSelect(sel)` gives the keys back: base-select's picker hands
-focus back to its select as it closes, after the change event, so besides the
-blur a one-shot `focus` listener blurs it again for 200 ms, plus a check on
-the next frame. `ChoiceParam` releases only after pointer
-picks: a keyboard pick (arrows, Enter) keeps focus.
+(Cmd/Ctrl/Alt chords and the navigation keys pass). That is the rack's patch
+and sample pickers, choice params, the mixer's sidechain picker, the pattern
+picker, the step grid's step count, the piano roll's grid and length, the
+Acid tab's length / root / scale, the track headers' "+ Lane" and Settings'
+latency. After a pick, `releaseSelect(sel)` gives the keys back:
+base-select's picker hands focus back to its select as it closes, after the
+change event, so besides the blur a one-shot `focus` listener blurs it again
+for 200 ms, plus a check on the next frame. `releaseSelect(sel, to)` focuses
+`to` instead (the piano roll's stage, which takes the keys itself).
+`ChoiceParam` releases only after pointer picks: a keyboard pick (arrows,
+Enter) keeps focus.
 
 ## Shared classes
 - `.btn` (raised), `.btn.primary` (`--accent`, dark text, glow), `.btn.quiet`
@@ -191,9 +212,9 @@ of these class names keeps its own box when it sets its own padding and font.
 contains a hex colour literal (`#abc`, `#abcd`, `#aabbcc`, `#aabbccdd`;
 comments ignored). `ALLOWED` started as every component that had literals when
 the theme landed and shrank with each task of plan 20; the test also fails if
-a listed file is already clean, so the list only shrinks. After the token
-pass (Task 11) only `App.svelte` is left (its restore / autosave banners and
-loading veil). Hex values belong in `theme.css`, `theme.ts` and
+a listed file is already clean, so the list only shrinks. It is empty since
+Task 5's fix round moved `App.svelte`, the last one, onto tokens: no
+component holds a hex literal. Hex values belong in `theme.css`, `theme.ts` and
 `state/palette.ts` only; canvas code reads `THEME` (the piano roll's `C`
 palette, the clip tab's waveform overlay) and draws faint shades with
 `globalAlpha`.
@@ -238,7 +259,7 @@ one 64 px `--top` row. The header comment has the details; in short:
 | ↶ ↷ | 32 px raised icon buttons | `undo`, `redo` |
 | Song transport | "Play song" (an aria-pressed toggle, like Space; pressed and glowing while the song plays), "Stop all" (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
 | Tempo | `NumberField variant="lcd"`, aria-label "BPM", 0.1 BPM steps with Shift | `tempo` |
-| Big timer | `ui/BigTimer.svelte`: bar:beat:tick (32 px mono) + seconds; the heard song position per frame while the song plays, else the parked song position | `timer`, `timer-pos`, `timer-seconds` |
+| Big timer | `ui/BigTimer.svelte`: bar:beat:tick (32 px mono) + seconds; the heard song position per frame while the song plays, the position inside the shown pattern (label "Pattern") while the pattern transport plays, else the parked song position | `timer`, `timer-pos`, `timer-seconds` |
 | Metronome | 32 px icon toggle (`--accent` when on) | — |
 | Master | Knob's slider variant on the master channel's `fader` param (curve `fader` = the fader law; `setMix`); automation, MIDI learn and undo as every Knob | `master-volume` |
 | Mini spectrum | the master spectrum on an `--lcd` well; opens the Mixer | `topbar-spectrum` |

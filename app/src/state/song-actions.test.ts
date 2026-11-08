@@ -367,6 +367,33 @@ describe('pattern focus (plan 20 task 12): the pattern transport plays only the 
     expect(p.selectedTrackId).toBe(p.tracks[1].id);
     expect(focuses(sent)).toEqual([2]);
   });
+
+  it('removing the focused track while the pattern plays with an Audio track (or nothing) left selected stops it', () => {
+    const { p, sink, sent, d0, s1, d2 } = setup();
+    const a = addAudioTrack(p, sink)!;
+    selectTrack(p, sink, s1.id);
+    playPattern(p, sink);
+    selectTrack(p, sink, a.id); // the focus stays on s1
+    sent.length = 0;
+    removeTrack(p, sink, s1.id);
+    expect(p.selectedTrackId).toBe(a.id);
+    expect(p.playing).toBe(false);
+    expect(sent.map((x) => x[0])).toContain(Op.STOP);
+    expect(focuses(sent)).toEqual([]);
+    // Another (unfocused) track's removal leaves it playing.
+    selectTrack(p, sink, d0.id);
+    playPattern(p, sink);
+    selectTrack(p, sink, a.id);
+    removeTrack(p, sink, d2.id);
+    expect(p.playing).toBe(true);
+    // Removing the selected focused track when the selection falls on nothing: stopped.
+    selectTrack(p, sink, d0.id);
+    removeTrack(p, sink, a.id);
+    expect(p.tracks.map((t) => t.id)).toEqual([d0.id]);
+    removeTrack(p, sink, d0.id);
+    expect(p.selectedTrackId).toBeNull();
+    expect(p.playing).toBe(false);
+  });
 });
 
 describe('mode, loop, seek', () => {

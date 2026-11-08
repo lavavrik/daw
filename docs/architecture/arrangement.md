@@ -51,9 +51,10 @@ is no PAT/SONG switch (and no Shift+L) any more.
   0). Recording is disabled; the count-in is ignored.
 - `state/song-actions.ts` `playSong` / `playPattern` start one: the other
   one, if running, is stopped first (the App's `beforeStop` hook closes held
-  recorded notes at the heard tick), then `setMode` (saved, so it marks the
-  project unsaved, but never an undo entry and never restored by undo, like
-  the selection: Cmd+Z can't switch what plays), then PLAY (the count-in
+  recorded notes at the heard tick), then `setMode` (saved silently with the
+  next save: it never marks the project unsaved, is never an undo entry and
+  never restored by undo, like the selection: Cmd+Z can't switch what plays,
+  and Play / Stop leave a saved project clean), then PLAY (the count-in
   is asked once the mode is set; `SET_PATTERN_FOCUS` goes right before PLAY:
   the selected pattern track's slot for the pattern transport, 255 = every
   track for the song). `stopTransport` stops either;
@@ -245,9 +246,17 @@ waveform, repeats, hatch), `TrackHeaders.svelte` (LOOK), `TrackVol.svelte`
   under 8 px get no preview; wider than the cap (deep zoom: a few in view)
   draw their marks directly.
 - **Ruler and playhead.** The loop range is an `--accent` bar along the
-  ruler's top over a faint band (dim while the loop is off or in Pattern
-  mode); bar numbers are in the mono font. The playhead is white (`--text`)
-  with a soft glow; the parked song position a dim line.
+  ruler's top over a faint band (dim while the loop is off or the pattern
+  transport plays); bar numbers are in the mono font. The playhead is white
+  (`--text`) with a soft glow; the parked song position a dim line. With no
+  PAT/SONG switch, the hidden `project.mode` (which transport ran last)
+  never changes the stopped playlist: stopped, it is the song's view (loop
+  live, the parked marker shown, a ruler click parks the next song Play
+  there); only while the pattern transport actually plays do the loop dim,
+  the marker hide, a ruler click flash "play the song from here", the
+  status line say "The pattern transport is playing…" and lane headers
+  show "Song only" (`data-loop-live`, `data-marker` on the ruler mirror
+  it). The status line is prose in the UI font.
 - **Track headers.** A 6 px colour bar, the name (and kind) over a thin
   volume slider, raised M / S / A (lit: `--accent`, `--play`, the track
   colour). The slider (`TrackVol.svelte`, `track-vol-<slot>`) is a skinned

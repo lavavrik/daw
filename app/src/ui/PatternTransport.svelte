@@ -1,6 +1,7 @@
 <script lang="ts">
   // The pattern transport (plan 20, spec §4), in the bottom panel's header:
-  // Play / Stop for Pattern mode (each track loops its current pattern), the
+  // Play / Stop for Pattern mode (the shown track loops its current pattern;
+  // the other tracks are silent: SET_PATTERN_FOCUS, plan 20 task 12), the
   // record arm and Count-in (recording only works in Pattern mode, so they
   // live here), and the readout of where the selected track's current pattern
   // is ("1.3 / 2" = bar 1, beat 3 of 2 bars; "– / 2" while it is not
@@ -14,10 +15,19 @@
   //
   // With no track or an Audio track selected (no pattern) the transport is
   // disabled with a tooltip saying why, except that a running pattern can
-  // still be stopped and an armed Rec disarmed.
+  // still be stopped and an armed Rec disarmed. Otherwise Stop is enabled
+  // even when nothing plays (a no-op then), so the idle transport reads as
+  // ready, not as disabled.
   //
-  // Rec: "● Rec" arms (R key); red while armed, "Count-in…" during the
-  // count-in, "● REC" (pulsing) while notes are being recorded. While the
+  // Look (owner: idle must not look disabled; same language as the top
+  // bar's song transport): idle = a normal raised button (--raised, gloss,
+  // raised shadow), Play's icon a light --play green, Stop's --text;
+  // playing = Play filled --play with an --on-color icon and a glow;
+  // disabled (no pattern track) = flat (no gloss, no shadow), 40% opacity,
+  // a not-allowed cursor.
+  //
+  // Rec: "Rec" with a red LED arms (R key); red while armed, "Count-in…"
+  // during the count-in, "REC" (pulsing) while notes are being recorded. While the
   // song plays it can't arm (Song mode never records). Count-in persists in
   // localStorage (state/recorder.ts saveRecSettings), with the Rec offset
   // that stays in the top bar.
@@ -78,7 +88,7 @@
     recorder.countIn = countIn = !countIn;
     saveRecSettings({ countIn: recorder.countIn, offsetMs: recorder.offsetMs });
   }
-  const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? '● REC' : '● Rec');
+  const recLabel = $derived(rec.state === 'count-in' ? 'Count-in…' : rec.state === 'recording' ? 'REC' : 'Rec');
   const recTitle = $derived(
     songPlaying && !rec.armed ? 'Recording works with the pattern transport: stop the song first'
     : why && !rec.armed ? why
@@ -92,14 +102,14 @@
     aria-label="Play pattern" title={why ?? 'Play the patterns on a loop (Space while the panel has focus)'} onclick={onPlay}
   ><svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor"></path></svg></button>
   <button
-    class="b" data-testid="pattern-stop" disabled={!playing}
+    class="b" data-testid="pattern-stop" disabled={!playing && !!why}
     aria-label="Stop pattern" title="Stop the pattern (Space while the panel has focus)" onclick={onStop}
   ><svg width="10" height="10" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor"></rect></svg></button>
   <button
     class="b rec" class:armed={rec.armed} class:live={rec.state === 'recording'}
     aria-pressed={rec.armed} data-testid="rec-button" data-state={rec.state}
     disabled={!rec.armed && (songPlaying || !!why)} title={recTitle} onclick={onToggleArm}
-  >{recLabel}</button>
+  >{#if rec.state !== 'count-in'}<span class="led" aria-hidden="true"></span>{/if}{recLabel}</button>
   <!-- Rec and Count-in keep the test ids they had in the top bar (rec-button, count-in). -->
   <button
     class="b ci" class:on={countIn} aria-pressed={countIn} data-testid="count-in" disabled={!!why} aria-label="Count-in"
@@ -119,12 +129,20 @@
     color: var(--text); font: 700 11px/1 var(--font-ui); white-space: nowrap; cursor: pointer;
   }
   .b:hover:not(:disabled) { filter: brightness(1.08); }
-  .b:disabled { opacity: 0.45; cursor: default; }
+  .b:disabled { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: not-allowed; }
   .b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .play { color: var(--play); }
+  /* Contrast (WCAG: 3:1 for icons, 4.5:1 for text): --play, --rec and
+     --accent as text or icons on --raised fail (1.7-2.8:1). Play idle: a
+     light green icon (--play mixed with --text, 3.3:1 on --raised); playing
+     the vivid --play fill with an --on-color icon (9.6:1) and a glow. Rec: a
+     --rec LED (an --on-color ring keeps it 3:1 from the button) beside a
+     --text label; armed the vivid --rec fill with --on-color text (5.6:1). */
+  .play { color: color-mix(in srgb, var(--play) 55%, var(--text)); }
   .play.on { background: var(--play) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--play) 40%, transparent); }
-  .rec { min-width: 66px; color: var(--rec); }
+  .rec { min-width: 66px; gap: 5px; }
+  .led { width: 7px; height: 7px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 1.5px var(--on-color); }
   .rec.armed { background: var(--rec) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--rec) 40%, transparent); }
+  .rec.armed .led { background: var(--on-color); box-shadow: none; }
   .rec.live { animation: rec-pulse 1s ease-in-out infinite; }
   @keyframes rec-pulse { 50% { filter: brightness(0.7); } }
   .ci.on { background: var(--accent) var(--gloss); color: var(--on-color); }

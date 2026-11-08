@@ -84,7 +84,7 @@ test('names: "Play song" is a toggle, "Stop all" stops either transport', async 
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.playing)).toBe(false);
 });
 
-test('the timer: 1:01:000 stopped at 0, advances while the song plays, the song position while the pattern plays', async ({ page }) => {
+test('the timer: 1:01:000 stopped at 0, advances while the song plays, the pattern position while the pattern plays', async ({ page }) => {
   await start(page);
   const pos = page.getByTestId('timer-pos');
   await expect(page.getByTestId('timer')).toHaveAttribute('aria-live', 'off');
@@ -97,12 +97,18 @@ test('the timer: 1:01:000 stopped at 0, advances while the song plays, the song 
   await expect(page.getByTestId('timer-seconds')).not.toHaveText('0:00.00');
   await page.getByTestId('song-stop').click();
   await expect(pos).toHaveText('1:01:000'); // back at the song position
-  // The pattern transport: the timer keeps showing the song position.
+  await expect(page.getByTestId('timer')).toHaveAttribute('aria-label', 'Song position');
+  // The pattern transport: the timer shows the position inside the shown pattern, labelled "Pattern".
+  const width = (await page.getByTestId('timer').boundingBox())!.width;
   await page.getByTestId('pattern-play').click();
-  await page.waitForTimeout(700);
-  await expect(pos).toHaveText('1:01:000');
+  await expect(page.getByTestId('timer')).toHaveAttribute('aria-label', 'Pattern position');
+  await expect(page.getByTestId('timer-label').getByText('Pattern', { exact: true })).toBeVisible();
+  await expect(pos).toHaveText(/^1:0[2-4]:\d{3}$/, { timeout: 5_000 }); // a 1-bar pattern: bar 1, beat 2+
+  expect((await page.getByTestId('timer').boundingBox())!.width).toBe(width); // the label switch moves nothing
   await page.getByTestId('song-stop').click(); // Stop stops whichever transport runs
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.playing)).toBe(false);
+  await expect(pos).toHaveText('1:01:000'); // the song position again
+  await expect(page.getByTestId('timer')).toHaveAttribute('aria-label', 'Song position');
   // A parked song position shows too.
   await page.evaluate(() => (window as Any).__daw.actions.seek(3840 * 2 + 960 + 288));
   await expect(pos).toHaveText('3:02:288');
@@ -116,9 +122,22 @@ test('tempo: a scrub is one undo entry', async ({ page }) => {
   const b = (await bpm.boundingBox())!;
   const x = b.x + b.width / 2;
   const y = b.y + b.height / 2;
+  // Record the SET_TEMPO sends: a scrub is heard live (previews), committed once.
+  await page.evaluate(() => {
+    const d = (window as Any).__daw;
+    const e = d.engine;
+    const orig = e.send.bind(e);
+    d.tempoSends = [];
+    e.send = (op: number, ...a: number[]) => { if (op === d.Op.SET_TEMPO) d.tempoSends.push(a[0]); return orig(op, ...a); };
+  });
+  const sends = () => page.evaluate(() => (window as Any).__daw.tempoSends as number[]);
   await page.mouse.move(x, y);
   await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(x, y - i * 4); // 40 px up: +10
+  // Mid-scrub: the engine already plays the live tempo; the project (and the history) not yet.
+  await expect.poll(sends).toContain(134);
+  expect(await page.evaluate(() => (window as Any).__daw.project.tempo)).toBe(124);
+  await expect(page.getByTestId('undo')).toBeDisabled();
   await page.mouse.up();
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.tempo)).toBe(134);
   await expect(bpm).toHaveValue('134');
@@ -127,6 +146,17 @@ test('tempo: a scrub is one undo entry', async ({ page }) => {
   await expect.poll(() => page.evaluate(() => (window as Any).__daw.project.tempo)).toBe(124);
   await expect(bpm).toHaveValue('124');
   await expect(page.getByTestId('undo')).toBeDisabled(); // one entry, nothing older
+  // Escape mid-scrub drops it: the engine gets the committed tempo back, no entry.
+  await page.evaluate(() => ((window as Any).__daw.tempoSends = []));
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(x, y - i * 4);
+  await expect.poll(sends).toContain(129);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  expect((await sends()).at(-1)).toBe(124);
+  expect(await page.evaluate(() => (window as Any).__daw.project.tempo)).toBe(124);
+  await expect(page.getByTestId('undo')).toBeDisabled();
 });
 
 test('master slider: the master fader, on the fader law, one undo entry per drag, follows automation', async ({ page }) => {
@@ -236,4 +266,90 @@ test('hint line: the hovered control, a flashed hint first', async ({ page }) =>
   await page.keyboard.press('KeyR');
   await expect(page.getByTestId('flash-hint')).toBeVisible();
   await expect(hint).toHaveText((await page.getByTestId('flash-hint').textContent())!);
+});
+
+// ---- Contrast of warnings and status (final review I3) ----------------------
+// WCAG: 4.5:1 for text, 3:1 for icons. --rec / --accent / --play as text or
+// an icon on --raised fail (ui-theme.md "Rules of use"), so warnings fill the
+// pill (vivid colour, --on-color text) and the pattern transport's status
+// uses fills and an LED. Computed colours, base colour only (the gloss only
+// lightens the top, which helps dark text).
+
+/** Contrast ratio between two computed CSS colours (rgb()/rgba() or color(srgb …)). */
+function contrastOf(page: Page, testid: string) {
+  return page.evaluate((testid) => {
+    const el = document.querySelector(`[data-testid="${testid}"]`) as HTMLElement;
+    const cs = getComputedStyle(el);
+    const parse = (c: string): number[] => {
+      const m = c.match(/color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)/);
+      if (m) return [1, 2, 3].map((i) => Number(m[i]));
+      const n = c.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+      return n.map((v) => v / 255);
+    };
+    const lum = (c: number[]) => {
+      const [r, g, b] = c.map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const fg = lum(parse(cs.color));
+    const bg = lum(parse(cs.backgroundColor));
+    return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05);
+  }, testid);
+}
+
+test('contrast: warning pills and the pattern transport status meet WCAG (text 4.5:1, icons 3:1)', async ({ page }) => {
+  await start(page);
+  // Dropouts: the red CPU pill.
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 3));
+  await expect(page.getByTestId('cpu')).toHaveClass(/\bbad\b/);
+  expect(await contrastOf(page, 'cpu')).toBeGreaterThanOrEqual(4.5);
+  // MIDI blocked and a Bluetooth-size latency: forced on (they depend on the machine).
+  await page.evaluate(() => {
+    document.querySelector('[data-testid="midi-status"]')!.classList.add('bad');
+    document.querySelector('[data-testid="settings-button"]')!.classList.add('warn');
+  });
+  expect(await contrastOf(page, 'midi-status')).toBeGreaterThanOrEqual(4.5);
+  expect(await contrastOf(page, 'settings-button')).toBeGreaterThanOrEqual(4.5);
+  // The pattern ▶ (icon, stopped and playing).
+  expect(await contrastOf(page, 'pattern-play')).toBeGreaterThanOrEqual(3);
+  // Rec, unarmed: a --text label (4.07:1 on --raised, the palette's own
+  // button text; flagged to the owner) and a red LED; armed: --on-color on --rec.
+  expect(await contrastOf(page, 'rec-button')).toBeGreaterThanOrEqual(4);
+  await expect(page.getByTestId('rec-button').locator('.led')).toBeVisible();
+  await page.keyboard.press('KeyR');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'true');
+  expect(await contrastOf(page, 'rec-button')).toBeGreaterThanOrEqual(4.5);
+  await page.getByTestId('pattern-play').click();
+  await expect(page.getByTestId('pattern-play')).toHaveAttribute('aria-pressed', 'true');
+  expect(await contrastOf(page, 'pattern-play')).toBeGreaterThanOrEqual(3);
+  await page.getByTestId('pattern-stop').click();
+});
+
+test('transports: idle reads as ready (raised, full opacity), playing is filled, disabled is flat and faint', async ({ page }) => {
+  await start(page);
+  const look = (id: string) => page.getByTestId(id).evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { opacity: Number(cs.opacity), shadow: cs.boxShadow !== 'none', bg: cs.backgroundColor, cursor: cs.cursor };
+  });
+  // Idle (stopped, a drum track selected): both Plays and both Stops are enabled raised buttons.
+  for (const id of ['play', 'song-stop', 'pattern-play', 'pattern-stop']) {
+    await expect(page.getByTestId(id)).toBeEnabled();
+    const l = await look(id);
+    expect(l.opacity, id).toBe(1);
+    expect(l.shadow, id).toBe(true);
+  }
+  // Playing: Play is filled (its background is no longer the idle --raised).
+  const idleBg = (await look('pattern-play')).bg;
+  await page.getByTestId('pattern-play').click();
+  await expect(page.getByTestId('pattern-play')).toHaveAttribute('aria-pressed', 'true');
+  expect((await look('pattern-play')).bg).not.toBe(idleBg);
+  await page.getByTestId('pattern-stop').click();
+  // Disabled (no pattern track): flat and faint.
+  await page.getByTestId('track-0').hover();
+  await page.getByRole('button', { name: 'Remove track Drums' }).click();
+  await page.getByTestId('inline-confirm-ok').click();
+  await expect(page.getByTestId('pattern-play')).toBeDisabled();
+  const d = await look('pattern-play');
+  expect(d.opacity).toBeLessThan(1);
+  expect(d.shadow).toBe(false);
+  expect(d.cursor).toBe('not-allowed');
 });

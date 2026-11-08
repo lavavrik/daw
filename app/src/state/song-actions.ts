@@ -13,11 +13,11 @@
 // send an audio clip as SOURCE, GAIN, SET (audio-actions.ts sendAudioClip).
 // Unlike note clips, audio clips may move between Audio lanes (they have no
 // pattern); `offset` is seconds for them.
-import { MAX_CLIPS, MAX_SONG_TICKS, Op, PATTERN_FOCUS_NONE } from '../audio/protocol';
+import { MAX_CLIPS, MAX_SONG_TICKS, Op } from '../audio/protocol';
 import { isPatternTrack, patternLength } from './project.svelte';
 import type { AudioClip, AudioTrack, Clip, PatternTrack, Project } from './project.svelte';
 import type { CommandSink } from './actions';
-import { patternFocusSlot, play, stop } from './actions';
+import { patternFocusSlot, play, sendPatternFocus, stop } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
 import { edit } from './edits';
 import {
@@ -271,8 +271,9 @@ export function makeUnique(p: Project, sink: CommandSink, trackId: string, clipI
  * mode, and arming Rec while stopped in Song mode does (App).
  *
  * The mode is treated like the track selection: saved in the project file
- * (it records which transport ran last), so SET_MODE marks the project
- * unsaved (state/edits.ts commandEdits), but it is NOT an undo entry, and
+ * (it records which transport ran last) with the next save, silently: SET_MODE
+ * never marks the project unsaved (state/edits.ts NON_EDIT_OPS; the saved
+ * fingerprint ignores it, serialize.ts fingerprintOf). It is NOT an undo entry, and
  * undo/redo neither record nor restore it (history.ts compares snapshots
  * with sameUndoState; diffApply leaves the mode alone). Otherwise Cmd+Z
  * right after a transport switch would switch what is playing. Like
@@ -327,8 +328,7 @@ function startTransport(p: Project, sink: CommandSink, mode: 'pattern' | 'song',
   if (transportPlaying(p, mode)) return true;
   stopTransport(p, sink, hooks);
   setMode(p, sink, mode);
-  const focus = mode === 'pattern' ? patternFocusSlot(p) : null;
-  sink.send(Op.SET_PATTERN_FOCUS, focus ?? PATTERN_FOCUS_NONE);
+  sendPatternFocus(p, sink, mode === 'pattern' ? patternFocusSlot(p) : null);
   return play(p, sink, hooks.countIn?.() ?? 0);
 }
 

@@ -423,4 +423,31 @@ describe('diffApply', () => {
     expect(f.points.find((x) => x.tick === b.tick)!.id).toBe(b.id);
     expect(r.m.errors).toEqual([]);
   });
+
+  it('undo while the pattern transport plays: the focus follows the restored selection (SET_PATTERN_FOCUS)', async () => {
+    const r = await rig();
+    selectTrack(r.p, r.sink, r.drums.id);
+    // The pattern transport runs (the transport is not part of a snapshot).
+    r.p.mode = 'pattern';
+    r.p.playing = true;
+    const A = serialize(r.p);
+    // An edit that changes the selection: the new synth track is selected and focused.
+    const t = addSynthTrack(r.p, r.sink)!;
+    expect(r.p.selectedTrackId).toBe(t.id);
+    const B = serialize(r.p);
+    const focuses = () => r.log.filter((x) => x[0] === Op.SET_PATTERN_FOCUS).map((x) => x[1]);
+    expect(focuses().at(-1)).toBe(t.slot);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A); // undo
+    expect(r.p.selectedTrackId).toBe(r.drums.id);
+    expect(focuses()).toEqual([r.drums.slot]);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, A, B); // redo: the new track again
+    expect(focuses()).toEqual([t.slot]);
+    // Stopped: undo leaves the focus alone (pattern Play sends it).
+    r.p.playing = false;
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A);
+    expect(focuses()).toEqual([]);
+  });
 });

@@ -258,12 +258,26 @@ async function playAndMeasure(page: Page, label: string, scSlot: number, mode: '
   return run;
 }
 
-/** Plays 10 s of the spec 6 mix (Pattern mode). */
+/** Plays 10 s of the spec 6 mix (the song: 16 bars of clips on every track). */
 test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
   test.setTimeout(60_000);
   await startAudio(page);
   const { synths } = await buildSpec6(page);
-  await playAndMeasure(page, 'spec6 browser', synths[0], 'pattern');
+  // The whole mix at once: the song transport over clips (the pattern
+  // transport plays only the shown track since plan 20 task 12).
+  const laid = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    for (const t of project.tracks) {
+      for (let start = 0; start < 16 * 3840; ) {
+        const c = a.addClip(t.id, { start });
+        if (!c) return false;
+        start += c.len;
+      }
+    }
+    return true;
+  });
+  expect(laid).toBe(true);
+  await playAndMeasure(page, 'spec6 browser', synths[0], 'song');
 });
 
 /**

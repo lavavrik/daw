@@ -52,6 +52,8 @@
   import TrackVol from './TrackVol.svelte';
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
+  import { releaseSelect, selectKey } from '../selectKey';
+  import { soloTitle } from '../soloTitle';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { MAX_AUTO_LANES } from '../../audio/protocol';
   import { laneCount, projectLanes } from '../../state/automation';
@@ -96,6 +98,7 @@
     const sel = e.currentTarget;
     const [g, i] = sel.value.split(':').map(Number);
     sel.value = '';
+    releaseSelect(sel); // give the keys back to the piano
     const item = choices(trackId)[g]?.items[i];
     if (item) addLane(p, engine, item.owner, item.target);
   }
@@ -168,6 +171,7 @@
     aria-label="Add an automation lane"
     title={full ? FULL : 'Add an automation lane: choose what it drives'}
     disabled={full}
+    onkeydown={selectKey}
     onchange={(e) => pick(e, trackId)}
   >
     <option value="">+ Lane</option>
@@ -222,7 +226,7 @@
         </div>
         <span class="ms">
           <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
-          <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloed ? `${t.name} is soloed — click to unsolo` : `Solo ${t.name}: play only this track (⌘/Ctrl/Shift-click: add it to the soloed ones)`} onclick={(e) => toggleSolo(p, engine, t.id, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
+          <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${t.name}`} data-testid={`track-solo-${t.slot}`} title={soloTitle(t.name, soloed)} onclick={(e) => toggleSolo(p, engine, t.id, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
           <button
             type="button"
             class="a"
@@ -280,7 +284,7 @@
         {/if}
         <div class="lrow">
           {#if isLastOfOwner(i)}{@render addSelect(r.trackId)}{/if}
-          {#if p.mode === 'pattern' && info}<span class="pat" title="Lanes play with the song: press Play in the top bar to hear them (the pattern transport ignores them)">Song only</span>{/if}
+          {#if p.playing && p.mode === 'pattern' && info}<span class="pat" title="Lanes play with the song: press Play in the top bar to hear them (the pattern transport ignores them)">Song only</span>{/if}
         </div>
         {#if info && r.laneId}
           {@const laneId = r.laneId}

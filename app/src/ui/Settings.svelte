@@ -24,6 +24,7 @@
   import { BT_LATENCY_MS, CUSTOM_HINT_MAX_S, CUSTOM_HINT_MIN_S, customHint, hintLabel } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
   import NumberField from './NumberField.svelte';
+  import { releaseSelect, selectKey } from './selectKey';
 
   let {
     engine,
@@ -75,7 +76,7 @@
   <div class="title lbl">Audio</div>
   <label class="field">
     <span>Latency</span>
-    <select data-testid="latency-hint" bind:value={choice} disabled={busy}>
+    <select data-testid="latency-hint" bind:value={choice} disabled={busy} onkeydown={selectKey} onchange={(e) => releaseSelect(e.currentTarget)}>
       <option value="interactive">Interactive (lowest)</option>
       <option value="balanced">Balanced</option>
       <option value="playback">Playback (most stable)</option>

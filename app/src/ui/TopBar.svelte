@@ -106,7 +106,7 @@
   import { THEME } from './theme';
   import { hintText } from './bigTimer';
   import { setLoop, transportPlaying } from '../state/song-actions';
-  import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
+  import { liveInputTrack, previewTempo, setMetronome, setTempo } from '../state/actions';
   import { setMix } from '../state/mixer-actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
@@ -228,6 +228,9 @@
   // preventDefault) is left alone, so the menu stays open. The listeners
   // stay attached and read `menu.open` itself: the `toggle` event comes a
   // task later, and an Escape pressed right after opening must still close.
+  // The key listener is on `document` (bubble): after any control inside,
+  // before the window's listeners, so its stopPropagation really keeps the
+  // App's Esc-ends-MIDI-learn (and the shortcuts) from also acting.
   onMount(() => {
     const outside = (e: PointerEvent) => {
       if (menu?.open && !projEl?.contains(e.target as Node)) closeMenu();
@@ -239,10 +242,10 @@
       closeToOpener();
     };
     window.addEventListener('pointerdown', outside, true);
-    window.addEventListener('keydown', key);
+    document.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('pointerdown', outside, true);
-      window.removeEventListener('keydown', key);
+      document.removeEventListener('keydown', key);
     };
   });
   /** The name button: toggles the menu, as the ⋯ does. */
@@ -428,7 +431,7 @@
     <button class="tp play" class:on={songPlaying} aria-pressed={songPlaying} onclick={onToggleSong} title="Play / Stop the song (Space)" data-testid="play">
       <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9.5-5.5z" fill="currentColor" /></svg><span class="sr-only">Play song</span>
     </button>
-    <button class="tp" data-testid="song-stop" aria-label="Stop all" title="Stop all (the song or the pattern)" disabled={!p.playing} onclick={onStop}>
+    <button class="tp" data-testid="song-stop" aria-label="Stop all" title="Stop all (the song or the pattern)" onclick={onStop}>
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" /></svg>
     </button>
     <button
@@ -442,7 +445,7 @@
     <NumberField
       variant="lcd" label="Tempo" ariaLabel="BPM" testid="tempo" min={20} max={300} step={1} decimals={1}
       title="Tempo (BPM): drag up/down, wheel or arrows (Shift = 0.1), or type" value={p.tempo}
-      onchange={(v) => setTempo(p, engine, v)}
+      onchange={(v) => setTempo(p, engine, v)} onpreview={(v) => previewTempo(engine, v)}
     />
   </div>
 
@@ -549,11 +552,18 @@
   .tp { width: 44px; height: 44px; border-radius: var(--r-lg); }
   .ib:hover:not(:disabled), .tp:hover:not(:disabled) { filter: brightness(1.08); }
   .ib:active:not(:disabled), .tp:active:not(:disabled) { translate: 0 1px; }
-  .ib:disabled, .tp:disabled { opacity: 0.45; cursor: default; }
+  /* Disabled is flat (no gloss, no shadow) and faint, never just a dim
+     raised button: idle (enabled) controls must not look disabled. */
+  .ib:disabled, .tp:disabled { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: not-allowed; }
   .ib:focus-visible, .tp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .ib.on, .tp.on { background-color: var(--accent); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
-  .tp.play { background-color: var(--play); color: var(--on-color); box-shadow: var(--raised-shadow), 0 2px 10px color-mix(in srgb, var(--play) 50%, transparent); }
-  .tp.play.on { box-shadow: var(--raised-shadow), 0 0 16px color-mix(in srgb, var(--play) 80%, transparent); }
+  /* The song transport speaks the pattern transport's language
+     (PatternTransport.svelte): idle Play is a raised button with a light
+     green icon (3.3:1 on --raised), playing it is filled --play with an
+     --on-color icon and a glow; Stop is a raised button with a --text icon
+     (enabled while stopped too: a no-op then). */
+  .tp.play { color: color-mix(in srgb, var(--play) 55%, var(--text)); }
+  .tp.play.on { background-color: var(--play); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 16px color-mix(in srgb, var(--play) 80%, transparent); }
 
   /* ⋯ menu */
   .more { position: static; }
@@ -604,7 +614,9 @@
   .pill.keys { display: block; line-height: 26px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
   .pill.midi { max-width: 120px; }
   .pill.midi .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .pill.bad { color: var(--rec); font-weight: 700; }
+  /* Warnings fill the pill (vivid colour, --on-color text: 5.6:1 on --rec,
+     8.8:1 on --accent); --rec or --accent text on --raised would be under 3:1. */
+  .pill.bad { background-color: var(--rec); color: var(--on-color); font-weight: 700; }
   .pill.midi.ok { background-color: color-mix(in srgb, var(--play) 30%, var(--raised)); }
   .led { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--play); vertical-align: 1px; }
   .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
@@ -620,7 +632,7 @@
   .pop summary.pill { display: flex; }
   .pop summary { list-style: none; }
   .pop summary::-webkit-details-marker { display: none; }
-  .settings summary.warn { color: var(--accent); font-weight: 700; }
+  .settings summary.warn { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
   /* At the right edge: the panel opens leftwards. */
   .settings .panel { left: auto; right: 0; width: 270px; padding: 10px 12px; }
   @media (max-width: 1399px) {

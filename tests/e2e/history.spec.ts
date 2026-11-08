@@ -117,6 +117,8 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.removeTrack((window as unknown as { __daw: Daw }).__daw.project.tracks[0].id));
   expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks.length)).toBe(0);
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Remove track/);
+  // The focused track went with nothing left selected: the pattern transport stopped (plan 20 final review).
+  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.playing)).toBe(false);
   await expectSilent(page, [0, 1]);
 
   await page.keyboard.press('ControlOrMeta+z');
@@ -125,8 +127,8 @@ test('undo remove track restores everything (sound resumes)', async ({ page }) =
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Set step/);
   await expect(page.getByTestId('redo')).toHaveAttribute('title', /^Redo Remove track/);
   expect(await summary(page)).toEqual(want);
-  // The transport never stopped, and both tracks play again.
-  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.playing)).toBe(true);
+  // Pattern Play again: both tracks play as before.
+  await page.getByTestId('pattern-play').click();
   const t0 = await playingTicks(page);
   await eachSounds(page, [1, 0], 10_000);
   expect(await playingTicks(page)).not.toBe(t0);

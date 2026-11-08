@@ -173,8 +173,10 @@ theirs). The engine's own `ERR_OUT_OF_MEMORY` stays the backstop.
 
 Every edit sends an engine command, so `AudioEngine.onCommand` →
 `commandEdits` (`state/edits.ts`) marks the project dirty and bumps
-`Project.version` for every op except transport, live notes and selection
-(`NON_EDIT_OPS`); the two command-free edits (add row, rename pattern) call
+`Project.version` for every op except transport (including the mode,
+`SET_MODE`: which transport ran last), live notes and selection
+(`NON_EDIT_OPS`; `fingerprintOf` also ignores the selection and the mode,
+which are saved, silently, with the next save); the two command-free edits (add row, rename pattern) call
 `markEdited` themselves. O(1) per command. `project/dirtyCheck.ts` then,
 500 ms after edits pause and in an idle callback, compares
 `projectFingerprint` with the saved one and clears `dirty` if the project is

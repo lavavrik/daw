@@ -140,7 +140,7 @@
   import { rangeFill } from '../rangeFill';
   import { patternOf, selectPattern } from '../../state/pattern-actions';
   import {
-    deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
+    deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips, transportPlaying,
   } from '../../state/song-actions';
   import { addAudioTrack, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
@@ -272,7 +272,7 @@
       return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)} · ${times}${inEditor ? '' : ' · double-click to edit'}`;
     }
     if (sel.length > 1) return `${sel.length} clips selected`;
-    if (p.mode === 'pattern' && byId.size) return 'The pattern transport ran last: play the song (top bar) to hear the clips';
+    if (patternRunning() && byId.size) return 'The pattern transport is playing: play the song (top bar) to hear the clips';
     return 'Click a lane to place its pattern · drop audio files on the timeline · drag the ruler to loop';
   });
 
@@ -328,8 +328,15 @@
   /** Heard song tick while playing in Song mode, else null. Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
 
-  /** The loop range counts (bright) only while on and in Song mode; otherwise it is shown dimmed. */
-  const loopLive = () => p.loop.on && p.mode === 'song';
+  // The playlist is the song's view: with the PAT/SONG switch gone (plan 20)
+  // the hidden `p.mode` (which transport ran last) must not change it while
+  // stopped. Stopped, it is drawn as Song (the loop range live, the parked
+  // song position shown: the next Song Play starts there); only while the
+  // pattern transport actually plays do the pattern-specific visuals show.
+  /** True while the pattern transport plays (the song is not heard). */
+  const patternRunning = () => transportPlaying(p, 'pattern');
+  /** The loop range counts (bright) while on, unless the pattern transport plays; otherwise it is shown dimmed. */
+  const loopLive = () => p.loop.on && !patternRunning();
 
   function sizeCanvas(cv: HTMLCanvasElement, w: number, h: number) {
     const pw = Math.round(w * dpr);
@@ -341,9 +348,9 @@
     return ctx;
   }
 
-  /** Song-mode marker: the heard playhead while playing, else the parked song position (dim). */
+  /** Song marker: the heard playhead while the song plays, else the parked song position (dim); none while the pattern transport plays. */
   function marker(): { t: number; live: boolean } | null {
-    if (p.mode !== 'song') return null;
+    if (patternRunning()) return null;
     if (playTick !== null) return { t: playTick, live: true };
     return p.playing ? null : { t: p.songPosition, live: false };
   }
@@ -888,8 +895,8 @@
     else if (d.kind === 'move' && !d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
     else if (d.kind === 'ruler' && !d.moved) {
       seek(p, engine, seekTick(d.t0, e.altKey));
-      // In Pattern mode the engine ignores the song position until the song transport plays.
-      if (p.mode === 'pattern') flashHint(`Song position set to bar ${Math.floor(p.songPosition / BAR) + 1} — play the song (top bar) from here`);
+      // While the pattern transport plays the engine ignores the song position until the song transport plays.
+      if (patternRunning()) flashHint(`Song position set to bar ${Math.floor(p.songPosition / BAR) + 1} — play the song (top bar) from here`);
     }
   }
 
@@ -1294,6 +1301,8 @@
           data-testid="tl-ruler"
           aria-label="Ruler: click to set the song position, drag to set the loop range (bars {Math.floor(p.loop.start / BAR) + 1}–{Math.ceil(p.loop.end / BAR)}{p.loop.on ? ', loop on' : ', loop off'})"
           data-loop="{p.loop.start},{p.loop.end},{p.loop.on ? 1 : 0}"
+          data-loop-live={loopLive() ? 1 : 0}
+          data-marker={patternRunning() ? 'none' : p.playing ? 'live' : 'parked'}
           title="Click: set the song position (Alt: exact). Drag: set the loop range."
           onpointerdown={rulerDown}
           onpointermove={rulerMove}
@@ -1487,7 +1496,7 @@
   .foot .btn { padding: 4px 10px; font-size: 11px; }
   .foot .btn.over { box-shadow: var(--raised-shadow), 0 0 0 2px var(--accent); }
   .hscroll { width: 140px; flex: none; margin-left: 8px; --c: var(--text-dim); }
-  .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--font-mono); color: var(--text-2); }
+  .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--font-ui); color: var(--text-2); }
   .readout.hint { color: var(--accent); }
   .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; }

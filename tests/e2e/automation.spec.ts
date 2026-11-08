@@ -620,6 +620,27 @@ test('Automate on a fader opens its lane', async ({ page }) => {
   await expect(pan).toHaveAttribute('data-auto', 'idle');
 });
 
+test('a track header volume slider has the control menu: Automate, MIDI learn (as the Fader)', async ({ page }) => {
+  await start(page);
+  const t = (await tracks(page))[0];
+  const vol = page.getByTestId(`track-vol-${t.slot}`);
+  const menu = page.getByTestId('auto-ctl-menu');
+  await vol.click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Automate');
+  await page.getByTestId('auto-ctl-automate').click();
+  await expect(menu).toBeHidden();
+  expect((await savedLanes(page, t.slot)).map((l) => l.target)).toEqual([{ mix: 'fader' }]);
+  await expect(vol).toHaveAttribute('data-auto', 'idle');
+  // MIDI learn: the slider pulses (the same target as the strip's fader); Esc ends it.
+  await vol.click({ button: 'right' });
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Show automation');
+  await page.getByTestId('auto-ctl-midi').click();
+  await expect(vol).toHaveAttribute('data-learning', '');
+  await page.keyboard.press('Escape');
+  await expect(vol).not.toHaveAttribute('data-learning', '');
+});
+
 test('automated readouts and arrow keys follow the heard value', async ({ page }) => {
   await start(page);
   const t = (await tracks(page))[0];

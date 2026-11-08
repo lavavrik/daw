@@ -253,8 +253,20 @@ test('closing the tab with unsaved edits to a saved project asks first (P9)', as
     const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
   }, dirName);
+  // A transport switch is not an edit: song Play / Stop leave the saved project clean (plan 20 ruling).
+  // (Saved again until clean: a default-kit sample landing during the write leaves it unsaved.)
+  await expect.poll(() => page.evaluate(async (n) => {
+    const d = (window as unknown as { __daw: Daw }).__daw;
+    if (d.project.dirty) await d.saveTo(await (await navigator.storage.getDirectory()).getDirectoryHandle(n));
+    return d.project.dirty;
+  }, dirName)).toBe(false);
+  await page.getByTestId('play').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.playing)).toBe(true);
+  await page.getByTestId('song-stop').click();
+  await expect(page.getByTestId('project-name')).not.toContainText('unsaved');
   await page.getByTestId('pattern-play').click(); // a real gesture (the prompt needs one) …
   await page.getByTestId('pattern-stop').click(); // … that leaves the transport stopped
+  await expect(page.getByTestId('project-name')).not.toContainText('unsaved');
   await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.actions.addSynthTrack('Lead'));
   await expect(page.getByTestId('project-name')).toContainText('● unsaved');
   const dialog = page.waitForEvent('dialog');

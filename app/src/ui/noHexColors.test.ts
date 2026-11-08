@@ -18,7 +18,6 @@ const ALLOWED: string[] = [
   'App.svelte',
   'ui/AutoMenu.svelte',
   'ui/BottomPanel.svelte',
-  'ui/Browser.svelte',
   'ui/ClipPanel.svelte',
   'ui/InlineConfirm.svelte',
   'ui/MidiPopover.svelte',

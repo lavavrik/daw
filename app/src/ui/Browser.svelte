@@ -13,6 +13,10 @@
   //                     samples; Patches (patches/*.json)
   //            Starter kit (always, read-only, foldable): the bundled CC0
   //            samples the default drum track is made of
+  //   tabs     All / Samples / Patches / Kits pick which sections show; the
+  //            search box filters them by name (library/browserFilter.ts).
+  //            Both are UI state only. While searching, folders holding a
+  //            match are forced open; the user's own expand state is kept.
   //   footer   "Samples 412 MB / 1 GB" (the engine's sample memory in use,
   //            removed samples included until the project is reopened;
   //            state/sampleBudget.ts), change folder
@@ -32,12 +36,17 @@
   import { LibraryLostError, library } from '../library/library.svelte';
   import { bindPreview, clearPreviewCache, previewState, stopPreview, togglePreview } from '../library/sharedPreview.svelte';
   import { listingFromPaths } from '../library/scan';
+  import { BROWSER_TABS, folderVisible, hasMatchInside, nameMatches, tabSections, type BrowserTab } from '../library/browserFilter';
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
 
   let { engine, p }: { engine: AudioEngine; p: Project } = $props();
 
   const lib = library.state;
+  let tab = $state<BrowserTab>('all');
+  let query = $state('');
+  const q = $derived(query.trim());
+  const sections = $derived(tabSections(tab));
   let error = $state<string | null>(null);
   // The app-wide preview player (library/sharedPreview: the step grid's rows
   // play through it too). An audio restart (Settings ▸ Apply) closes the
@@ -98,6 +107,13 @@
   });
 
   const isOpen = (path: string) => path in lib.listings;
+  /** Shown open: expanded by the user, or forced open so a search match inside is reachable. */
+  const shownOpen = (path: string) => isOpen(path) || (!!q && hasMatchInside(lib.listings, path, q));
+  const visibleFolders = (path: string) => lib.listings[path].folders.filter((f) => !q || folderVisible(lib.listings, f.path, f.name, q));
+  const visibleSamples = (path: string) => lib.listings[path].samples.filter((s) => nameMatches(s.name, q));
+  const visibleKit = $derived(kitSamples.filter((s) => nameMatches(s.name, q)));
+  const visiblePatches = $derived(lib.patches.filter((pt) => nameMatches(pt.name, q)));
+  const rootShown = $derived(lib.listings[''] ? visibleFolders('').length + visibleSamples('').length : 0);
   /** Expand lists that folder level (library.expand); a folder gone meanwhile says so once. */
   function fold(path: string) {
     if (isOpen(path)) return library.collapse(path);
@@ -111,25 +127,25 @@
 
 {#snippet folder(path: string, depth: number)}
   {@const f = lib.listings[path]}
-  {#each f.folders as sub (sub.path)}
+  {#each visibleFolders(path) as sub (sub.path)}
     <button
-      class="item dir" style:--d={depth} data-testid="lib-folder-{sub.path}" aria-expanded={isOpen(sub.path)}
+      class="item dir" style:--d={depth} data-testid="lib-folder-{sub.path}" aria-expanded={shownOpen(sub.path)}
       title={sub.path} onclick={() => fold(sub.path)}
-    ><span class="tw">{isOpen(sub.path) ? '▾' : '▸'}</span><span class="nm">{sub.name}</span></button>
-    {#if isOpen(sub.path)}{@render folder(sub.path, depth + 1)}{/if}
+    ><span class="tw">{shownOpen(sub.path) ? '▾' : '▸'}</span><span class="nm">{sub.name}</span></button>
+    {#if shownOpen(sub.path) && lib.listings[sub.path]}{@render folder(sub.path, depth + 1)}{/if}
   {/each}
-  {#each f.samples as s (s.path)}
+  {#each visibleSamples(path) as s (s.path)}
     <div
       class="item smp" class:on={previewing === s.path} style:--d={depth}
       role="button" tabindex="0" draggable="true" data-testid="lib-sample-{s.path}"
       title="{s.path} — click to preview, drag onto a row or a Sample Player"
       onclick={() => void toggle(s)} onkeydown={(e) => key(e, s)}
       ondragstart={(e) => startLibraryDrag(e, s.path)}
-    ><span class="tw">{previewing === s.path ? '■' : '♪'}</span><span class="nm">{s.name}</span></div>
+    ><span class="tw dot smp-dot">{previewing === s.path ? '■' : '●'}</span><span class="nm">{s.name}</span></div>
   {/each}
-  {#if f.more}
+  {#if f.more && !q}
     <p class="dim more" style:--d={depth} data-testid="lib-more-{path}">{f.more} more not shown</p>
-  {:else if depth > 0 && !f.folders.length && !f.samples.length}
+  {:else if depth > 0 && !q && !f.folders.length && !f.samples.length}
     <p class="dim more" style:--d={depth}>no audio files</p>
   {/if}
 {/snippet}
@@ -144,6 +160,16 @@
       {/if}
     {/if}
   </div>
+
+  <div class="tabs" role="tablist" aria-label="Library category">
+    {#each BROWSER_TABS as t (t.id)}
+      <button role="tab" aria-selected={tab === t.id} data-testid="lib-tab-{t.id}" onclick={() => (tab = t.id)}>{t.label}</button>
+    {/each}
+  </div>
+  <input
+    class="search" type="search" data-testid="lib-search" placeholder="Search" aria-label="Search the library"
+    bind:value={query} onkeydown={(e) => { if (e.key === 'Escape') query = ''; }}
+  />
 
   <!-- Always shown (fixed height), so starting/stopping a preview never
        shifts the tree below it. -->
@@ -172,22 +198,29 @@
       <button class="big" data-testid="library-reconnect" onclick={() => void library.reconnect()}>Reconnect folder</button>
     {:else if lib.listings['']}
       {@const top = lib.listings['']}
-      <div class="sec">Samples</div>
-      {#if top.samples.length || top.folders.length}
-        <div class="tree">{@render folder('', 0)}</div>
-      {:else}
-        <p class="dim">No audio files here (wav, aiff, mp3, flac, ogg, m4a).</p>
+      {#if sections.samples}
+        <div class="sec">Samples</div>
+        {#if rootShown}
+          <div class="tree">{@render folder('', 0)}</div>
+        {:else if q}
+          <p class="dim">No samples match "{q}".</p>
+        {:else}
+          <p class="dim">No audio files here (wav, aiff, mp3, flac, ogg, m4a).</p>
+        {/if}
       {/if}
-      <div class="sec">Patches</div>
-      {#each lib.patches as pt (pt.path)}
-        <div class="item pat" data-testid="lib-patch-{pt.name}" title="Load it from the Patch menu of a synth track's Instrument tab">
-          <span class="tw">⎍</span><span class="nm">{pt.name}</span>
-        </div>
-      {:else}
-        <p class="dim">None yet — Save patch in a synth track's Instrument tab.</p>
-      {/each}
+      {#if sections.patches}
+        <div class="sec">Patches</div>
+        {#each visiblePatches as pt (pt.path)}
+          <div class="item pat" data-testid="lib-patch-{pt.name}" title="Load it from the Patch menu of a synth track's Instrument tab">
+            <span class="tw dot pat-dot">●</span><span class="nm">{pt.name}</span>
+          </div>
+        {:else}
+          <p class="dim">{q ? `No patches match "${q}".` : 'No patches yet — save one from the Instrument tab.'}</p>
+        {/each}
+      {/if}
     {/if}
 
+    {#if sections.kit}
     <section class="kit" data-testid="starter-kit" aria-label="Starter kit">
       <button class="sec fold" data-testid="starter-kit-toggle" aria-expanded={kitOpen} onclick={() => (kitOpen = !kitOpen)}>
         <span>{kitOpen ? '▾' : '▸'} Starter kit</span>
@@ -195,18 +228,21 @@
       </button>
       {#if kitOpen}
         <div class="tree">
-          {#each kitSamples as s (s.path)}
+          {#each visibleKit as s (s.path)}
             <div
               class="item smp" class:on={previewing === KIT + s.path}
               role="button" tabindex="0" draggable="true" data-testid="kit-sample-{s.path}"
               title="{s.name} — built-in starter kit: click to preview, drag onto a row or a Sample Player"
               onclick={() => void toggle(s, true)} onkeydown={(e) => key(e, s, true)}
               ondragstart={(e) => startLibraryDrag(e, s.path, STARTER_SAMPLE_MIME)}
-            ><span class="tw">{previewing === KIT + s.path ? '■' : '♪'}</span><span class="nm">{s.name}</span></div>
+            ><span class="tw dot kit-dot">{previewing === KIT + s.path ? '■' : '●'}</span><span class="nm">{s.name}</span></div>
+          {:else}
+            <p class="dim">{q ? `No kit sounds match "${q}".` : 'No kit sounds.'}</p>
           {/each}
         </div>
       {/if}
     </section>
+    {/if}
   </div>
 
   <div class="foot">
@@ -220,51 +256,61 @@
 </aside>
 
 <style>
-  .pane { background: #1b1c21; border: 1px solid #2a2c33; padding: 8px 0 6px; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  /* Colours, radii and fonts come from theme.css tokens. Dots: samples
+     --accent, kits --rec, patches --text-2 (no per-patch category yet). */
+  .pane { background: var(--panel); border-right: 1px solid var(--line); padding: 8px 0 6px; display: flex; flex-direction: column; min-height: 0; min-width: 0; font-family: var(--font-ui); font-size: var(--fs-body); color: var(--text-2); }
   .head { display: flex; align-items: center; gap: 6px; padding: 0 8px 6px; min-width: 0; }
-  .ttl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #7d808c; flex: none; }
-  .name { color: #e4e5ea; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .ro { flex: none; font-size: 9px; color: #9aa6c4; border: 1px solid #3a3d48; border-radius: 3px; padding: 0 3px; }
-  .icon { margin-left: auto; flex: none; font: inherit; border: 0; background: transparent; color: #8d90a0; cursor: pointer; padding: 0 2px; }
-  .icon:hover { color: #fff; }
-  .pv { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 3px 6px; border-radius: 3px; background: #23302a; color: #9fe0b8; }
+  .ttl { font: 600 var(--fs-lbl) var(--font-ui); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); flex: none; }
+  .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .ro { flex: none; font-size: 9px; color: var(--text-dim); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 3px; }
+  .icon { margin-left: auto; flex: none; font: inherit; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; padding: 0 2px; }
+  .icon:hover { color: var(--text); }
+  .tabs { margin: 0 8px 6px; }
+  .tabs > button { flex: 1; padding: 4px 6px; }
+  .search { margin: 0 8px 6px; width: calc(100% - 16px); box-sizing: border-box; font: var(--fs-ctl) var(--font-ui); }
+  .pv { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 3px 6px; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--play); }
   .pv span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pv.idle { background: #22242b; color: #7d808c; }
+  .pv.idle { color: var(--text-dim); }
   .pv button:disabled { opacity: 0.4; cursor: default; }
-  .pv button { font: inherit; font-size: 11px; border: 1px solid currentColor; border-radius: 3px; background: transparent; color: inherit; cursor: pointer; padding: 0 6px; }
-  .err { display: flex; align-items: flex-start; gap: 6px; margin: 0 8px 6px; padding: 4px 6px; border-radius: 3px; background: #3a1d22; color: #ffb3ba; border: 1px solid #6b2a33; }
+  .pv button { font: inherit; font-size: var(--fs-ctl); border: 1px solid currentColor; border-radius: var(--r-sm); background: transparent; color: inherit; cursor: pointer; padding: 0 6px; }
+  .err { display: flex; align-items: flex-start; gap: 6px; margin: 0 8px 6px; padding: 4px 6px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--rec) 18%, var(--well)); color: var(--rec); border: 1px solid var(--rec); }
   .err span { flex: 1; }
   .err button { border: 0; background: transparent; color: inherit; cursor: pointer; }
   .body { flex: 1; min-height: 0; overflow: auto; padding: 0 4px; }
-  p { color: #9a9ca8; margin: 4px 4px 8px; }
-  .dim { color: #6a6d79; }
-  .lost { color: #ffd98a; }
-  code { color: #c9cbd3; }
-  .big { display: block; width: calc(100% - 8px); margin: 0 4px 6px; font: inherit; padding: 5px 8px; border-radius: 3px; border: 1px solid #f0a23a; background: #f0a23a; color: #111; font-weight: 600; cursor: pointer; text-align: center; }
-  .sec { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #6a6d79; margin: 6px 4px 2px; }
-  .kit { margin-top: 8px; border-top: 1px solid #2a2c33; padding-top: 2px; }
+  p { color: var(--text-2); margin: 4px 4px 8px; }
+  .dim { color: var(--text-dim); }
+  .lost { color: var(--accent); }
+  code { color: var(--text); font-family: var(--font-mono); }
+  .big { display: block; width: calc(100% - 8px); margin: 0 4px 6px; font: inherit; padding: 5px 8px; border-radius: var(--r-md); border: 0; background: var(--accent); color: var(--on-color); font-weight: 700; cursor: pointer; text-align: center; }
+  .sec { font: 600 var(--fs-lbl) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin: 8px 4px 2px; }
+  .kit { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 2px; }
   .fold {
     display: flex; align-items: center; gap: 6px; width: calc(100% - 8px); font-family: inherit; text-align: left;
     border: 0; background: transparent; padding: 0; cursor: pointer;
   }
-  .fold:hover, .fold:focus-visible { color: #c9cbd3; outline: none; }
+  .fold:hover, .fold:focus-visible { color: var(--text); outline: none; }
   .fold .ro { text-transform: none; letter-spacing: 0; }
   .tree { display: flex; flex-direction: column; }
   .item {
     display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box; font: inherit; text-align: left;
-    padding: 1px 4px 1px calc(4px + var(--d, 0) * 12px); border: 0; border-radius: 2px; background: transparent; color: #c9cbd3;
+    padding: 1px 4px 1px calc(4px + var(--d, 0) * 12px); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2);
     white-space: nowrap; cursor: pointer;
   }
   .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .item:hover, .item:focus-visible { background: #2a2c33; color: #fff; outline: none; }
-  .item.on { background: #23302a; color: #9fe0b8; }
+  .item:hover, .item:focus-visible { background: var(--raised); color: var(--text); outline: none; }
+  .item.on { background: var(--well); color: var(--play); }
   .smp { cursor: grab; }
   .pat { cursor: default; }
-  .tw { flex: none; width: 10px; color: #6a6d79; font-size: 10px; text-align: center; }
-  .dir { color: #e4e5ea; }
-  .more { margin: 0; padding: 1px 4px 1px calc(18px + var(--d, 0) * 12px); font-size: 11px; }
-  .foot { display: flex; gap: 10px; padding: 6px 8px 0; border-top: 1px solid #2a2c33; }
-  .budget { flex: 1; min-width: 0; font-size: 11px; color: #7d808c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .link { font: inherit; font-size: 11px; border: 0; background: transparent; color: #8fb8ff; cursor: pointer; padding: 0; }
+  .tw { flex: none; width: 10px; color: var(--text-dim); font-size: 10px; text-align: center; }
+  .dot { font-size: 8px; }
+  .smp-dot { color: var(--accent); }
+  .kit-dot { color: var(--rec); }
+  .pat-dot { color: var(--text-2); }
+  .on .dot { color: var(--play); }
+  .dir { color: var(--text); }
+  .more { margin: 0; padding: 1px 4px 1px calc(18px + var(--d, 0) * 12px); font-size: var(--fs-ctl); }
+  .foot { display: flex; gap: 10px; padding: 6px 8px 0; border-top: 1px solid var(--line); }
+  .budget { flex: 1; min-width: 0; font: var(--fs-ctl) var(--font-mono); color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .link { font: inherit; font-size: var(--fs-ctl); border: 0; background: transparent; color: var(--accent); cursor: pointer; padding: 0; }
   .link:hover { text-decoration: underline; }
 </style>

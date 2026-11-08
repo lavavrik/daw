@@ -312,3 +312,49 @@ test('library sample onto a SamplePlayer: picker shows it and a gate plays it', 
   await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.tracks[1].modules![1].params[0])).toBe(-1);
   await cleanup(page, name);
 });
+
+test('browser tabs and search filter the library', async ({ page }) => {
+  test.setTimeout(30_000);
+  await startAudio(page);
+  const name = `e2e-lib-tabs-${test.info().workerIndex}`;
+  await makeLibrary(page, name, [
+    { path: 'drums/kick.wav', bytes: kick },
+    { path: 'bass.wav', bytes: [...makeWav(55, 200)] },
+    { path: 'patches/Wobble.json', text: '{"name":"Wobble","modules":[],"cables":[]}' },
+  ]);
+  await attach(page, name);
+  await expect(page.getByTestId('lib-patch-Wobble')).toBeVisible();
+  await page.getByTestId('lib-folder-drums').click();
+  await expect(page.getByTestId('lib-sample-drums/kick.wav')).toBeVisible();
+
+  // Patches tab: only patches.
+  await page.getByTestId('lib-tab-patches').click();
+  await expect(page.getByTestId('lib-patch-Wobble')).toBeVisible();
+  await expect(page.getByTestId('lib-sample-bass.wav')).toBeHidden();
+  await expect(page.getByTestId('starter-kit')).toBeHidden();
+
+  // Kits tab: only the starter kit.
+  await page.getByTestId('lib-tab-kits').click();
+  await expect(page.getByTestId('starter-kit')).toBeVisible();
+  await expect(page.getByTestId('lib-patch-Wobble')).toBeHidden();
+
+  // Samples tab + search: "kick" keeps the folder holding it, hides the rest.
+  await page.getByTestId('lib-tab-samples').click();
+  await expect(page.getByTestId('lib-sample-bass.wav')).toBeVisible();
+  await page.getByTestId('lib-search').fill('KICK');
+  await expect(page.getByTestId('lib-sample-drums/kick.wav')).toBeVisible();
+  await expect(page.getByTestId('lib-sample-bass.wav')).toBeHidden();
+
+  // Previewing still works from a filtered list.
+  await page.getByTestId('lib-sample-drums/kick.wav').click();
+  await expect(page.getByTestId('preview-stop')).toBeEnabled();
+  await page.getByTestId('preview-stop').click();
+
+  // Clearing restores everything; an empty category says so.
+  await page.getByTestId('lib-search').fill('');
+  await expect(page.getByTestId('lib-sample-bass.wav')).toBeVisible();
+  await page.getByTestId('lib-tab-patches').click();
+  await page.getByTestId('lib-search').fill('zzz');
+  await expect(page.getByTestId('browser')).toContainText('No patches match');
+  await cleanup(page, name);
+});

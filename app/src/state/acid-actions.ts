@@ -2,11 +2,17 @@
 // edit is turned into a note diff by acidSteps.planEdit and applied through the
 // ordinary note actions, all inside ONE edit() so it is one undo entry.
 import type { CommandSink } from './actions';
+import { createSweepKeys } from '../history/sweep';
 import { ACID_MAX_BARS, convertSteps, DEFAULT_BASE, planEdit, readSteps, type AcidStep, type NoteDiff } from './acidSteps';
 import { edit } from './edits';
 import { addNote, deleteNotes, setPatternBars, updateNotes } from './pattern-actions';
 import { currentPattern, synthTrack } from './project.svelte';
 import type { Project } from './project.svelte';
+
+/** Coalesce keys with a 1000 ms idle rollover (history itself has no time limit). */
+let sweepKey = createSweepKeys();
+/** Test hook: replace the key source (e.g. with an injected clock). */
+export function setAcidSweepKeys(f: (base: string) => string) { sweepKey = f; }
 
 /** What a single-step edit changed; part of the undo coalesce key. */
 export type AcidEditKind = 'pitch' | 'oct' | 'accent' | 'slide' | 'kind' | 'entry';
@@ -27,7 +33,7 @@ function applyDiff(p: Project, sink: CommandSink, trackId: string, diff: NoteDif
  * Writes `next` (steps of the pattern read at `base`) into the current pattern
  * as one undo entry labelled `label`. With `coalesceKind`, consecutive single
  * step edits of that kind on this track merge (key `acid:<trackId>:<kind>`;
- * the 1000 ms idle rollover is the caller's: it changes the key).
+ * a new entry starts after 1000 ms idle, see sweepKey).
  *
  * Refused (false, nothing written) when the pattern can't be read at exactly
  * `base`: the UI only edits a view it got from readSteps at its own base. An
@@ -44,7 +50,7 @@ export function applyAcidSteps(
   if (!view.ok || view.base !== base) return false;
   const diff = planEdit(pat.notes, pat.bars, base, next);
   if (!diff.add.length && !diff.update.length && !diff.remove.length) return false;
-  edit(p, label, () => applyDiff(p, sink, trackId, diff), coalesceKind ? { coalesce: `acid:${trackId}:${coalesceKind}` } : undefined);
+  edit(p, label, () => applyDiff(p, sink, trackId, diff), coalesceKind ? { coalesce: sweepKey(`acid:${trackId}:${coalesceKind}`) } : undefined);
   return true;
 }
 

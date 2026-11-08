@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createHistory, debugStacks } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
-import { applyAcidSteps, convertToSteps, transposeAcid } from './acid-actions';
+import { createSweepKeys } from '../history/sweep';
+import { applyAcidSteps, setAcidSweepKeys, convertToSteps, transposeAcid } from './acid-actions';
 import { readSteps, REST, type AcidStep } from './acidSteps';
 import { addNote, setPatternBars } from './pattern-actions';
 import { Project, currentPattern } from './project.svelte';
@@ -76,6 +77,18 @@ describe('acid actions', () => {
     // A different kind starts a new entry.
     applyAcidSteps(p, sink, t.id, 36, pad([note(1, { accent: true }), note(2, { accent: true })]), 'Pitch', 'pitch');
     expect(entries()).toBe(3);
+  });
+
+  it('coalesced_toggles_split_after_idle', () => {
+    let now = 0;
+    setAcidSweepKeys(createSweepKeys(1000, () => now));
+    const { p, t, sink, entries } = setup();
+    applyAcidSteps(p, sink, t.id, 36, pad([note(0), note(2)]), 'Randomize steps');
+    applyAcidSteps(p, sink, t.id, 36, pad([note(0, { accent: true }), note(2)]), 'Accent', 'accent');
+    now = 1500;
+    applyAcidSteps(p, sink, t.id, 36, pad([note(0, { accent: true }), note(2, { accent: true })]), 'Accent', 'accent');
+    expect(entries()).toBe(3);
+    setAcidSweepKeys(createSweepKeys());
   });
 
   it('transpose_whole_pattern', () => {

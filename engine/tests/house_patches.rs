@@ -939,6 +939,54 @@ fn acid_line_accents_open_the_filter() {
     assert!(flat.abs() <= 1.0, "two plain notes differ by {flat:.1} dB");
 }
 
+/// Acid Line, C2 notes at (start s, vel), each held 0.2 s: the energy above
+/// `min_hz` (power, summed) and the RMS over the first 200 ms from each onset.
+fn acid_notes(notes: &[(f32, u8)], min_hz: f32) -> Vec<(f64, f32)> {
+    let mut ev = Vec::new();
+    for &(t, v) in notes {
+        ev.push((t, Ev::On(36, v)));
+        ev.push((t + 0.2, Ev::Off(36)));
+    }
+    let end = notes.last().unwrap().0 + 0.6;
+    let r = run(&mut load("Acid Line"), &ev, end);
+    notes
+        .iter()
+        .map(|&(t, _)| {
+            let (a, b) = (onset(t), onset(t) + 0.2);
+            let hi = spectrum(&r, a, b).iter().enumerate().filter(|(i, _)| *i as f32 * BIN_HZ >= min_hz).map(|x| *x.1).sum();
+            (hi, rms(&r.m[(a * SR) as usize..(b * SR) as usize]))
+        })
+        .collect()
+}
+
+#[test]
+fn acid_line_accent_threshold_step() {
+    // vel 99 vs 100, 1 s apart (the accent store is empty by then). Velocity
+    // alone (the envelopes' vel_amt) moves 1/127 of its range; only the
+    // Accent module (threshold 100/127) makes this a step.
+    let step = |a: u8, b: u8| {
+        let n = acid_notes(&[(0.0, a), (1.0, b)], 1000.0);
+        (10.0 * (n[1].0 / n[0].0).log10() as f32, db(n[1].1 / n[0].1))
+    };
+    let (hi, loud) = step(99, 100);
+    let (hi_ref, loud_ref) = step(98, 99); // below the threshold: velocity only
+    eprintln!("Acid threshold 99->100: >1 kHz {hi:+.1} dB, RMS {loud:+.1} dB; 98->99 (no accent): {hi_ref:+.2} dB, {loud_ref:+.2} dB");
+    assert!(hi_ref.abs() <= 0.5, "velocity alone moves 98->99 by {hi_ref:.2} dB");
+    assert!(hi >= 2.5, "vel 100 only {hi:.1} dB brighter than 99");
+    assert!(loud >= 0.5, "vel 100 only {loud:.2} dB louder (RMS) than 99");
+}
+
+#[test]
+fn acid_line_accent_run_opens_further() {
+    // Two accents 0.25 s apart: the store is still charged, so the second
+    // opens the filter further than the first. Measured above 3 kHz: the
+    // 1 kHz band is already full at the first accent.
+    let n = acid_notes(&[(0.0, 120), (0.25, 120)], 3000.0);
+    let gain = 10.0 * (n[1].0 / n[0].0).log10() as f32;
+    eprintln!("Acid accent run: second vs first >3 kHz {gain:+.1} dB");
+    assert!(gain >= 1.0, "second accent only {gain:.1} dB brighter than the first");
+}
+
 #[test]
 fn sub_bass_is_sub() {
     // C2, 0.2–1.0 s: the power below 200 Hz over the total.

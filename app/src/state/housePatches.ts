@@ -332,7 +332,7 @@ const PIANO_STAB: Patch = {
     { idx: 4, id: 'osc', params: { wave: 3, octave: -1 } },
     // Mix: saw, square, then the body layers (triangle, sub sine). The sub is a
     // touch louder: it carries most of the depth; much more and low chords boom.
-    { idx: 5, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.35, lvl4: 0.4 } },
+    { idx: 5, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.5, lvl4: 0.4 } },
     // LP12 opened by the hammer envelope.
     { idx: 6, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
     // Hammer envelope: instant, decays over ~0.5 s; velocity → brighter.
@@ -558,8 +558,8 @@ const ACID_LINE: Patch = {
     // Filter envelope: snappy decay to nearly closed; velocity = accent (deeper sweep).
     { idx: 3, id: 'adsr', params: { attack: 0.002, decay: 0.22, sustain: 0.08, release: 0.1, vel_amt: 0.5 } },
     // Filter cv: the envelope (in1), the mod wheel (in2, cutoff ride) and the
-    // accent sweep (in3, 0.35 = up to ~1.75 oct extra, on top of the envelope).
-    { idx: 4, id: 'mixer', params: { lvl1: 1, lvl2: 0.6, lvl3: 0.35 } },
+    // accent sweep (in3, 0.5 = up to ~2.5 oct extra, on top of the envelope).
+    { idx: 4, id: 'mixer', params: { lvl1: 1, lvl2: 0.6, lvl3: 0.5 } },
     // Grit.
     { idx: 5, id: 'saturator', params: { drive: 0.5, mix: 0.8, tone: 0.55 } },
     // Amp.

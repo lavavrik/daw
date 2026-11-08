@@ -1,10 +1,14 @@
 <script lang="ts">
-  // One param control: a knob for continuous/integer params, a segmented
-  // control for choice params (wave, filter mode...). The label is always
-  // under it and the value is always shown as a readout (anti-goal: never
-  // guess what a control is or what it is set to).
-  // (ChoiceSeg.svelte is the standalone segmented control the redesign moves
-  // choice params to; plan 20 Task 3 switched the Filter's mode, Task 9 the rest.)
+  // One param control: a knob (dial) or a slider for continuous/integer
+  // params. The label and the value readout are always shown (anti-goal:
+  // never guess what a control is or what it is set to).
+  // A choice param (wave, filter mode...) is not drawn here: Knob hands it to
+  // ChoiceParam.svelte (a ChoiceSeg row, or a <select> past 6 choices), as the
+  // rack's ModulePanel does directly, so a caller that passes any param def
+  // (the mixer's delay time) still gets the right control.
+  //
+  // The dial's size is the CSS custom property --dial (default 30 px), set by
+  // the caller on an ancestor: the rack's hero dials are bigger (ModulePanel).
   //
   // Slider variant (`variant="slider"`, plan 20 Task 3; spec §3): the same
   // control drawn as a label and a mono value readout on one row, and below
@@ -14,9 +18,12 @@
   // shared, and the root keeps the same role/name/value/testid, so tests and
   // screen readers see the same slider. Only the pointer differs, and only
   // on the track (its hit area is padded taller than the 6 px groove):
-  // - a press does NOT move the value; moving CLICK_SLOP_PX (3) or more makes
-  //   it a relative horizontal drag, the track's width = the full range
-  //   (Shift 10x finer; knobMath sliderDrag);
+  // - a press does NOT move the value; moving CLICK_SLOP_PX (3) or more
+  //   sideways makes it a relative horizontal drag, the track's width = the
+  //   full range (Shift 10x finer; knobMath sliderDrag). Vertical travel never
+  //   counts (knobMath isClickTravel), so a wobbly click is still a click;
+  // - a press ON THE HANDLE is a drag from the first pixel and never a click:
+  //   letting go of the handle without moving it changes nothing;
   // - a release before that is a click: the value jumps to the pointer
   //   (knobMath sliderPosFromX, against the track's live rect taken at the
   //   release, so a scrolled or zoomed container lands under the pointer).
@@ -86,24 +93,25 @@
   import { isLearning } from '../midiLearn.svelte';
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
-  import { CLICK_SLOP_PX, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos } from './knobMath';
+  import ChoiceParam from './ChoiceParam.svelte';
+  import { dragPos, fillSpan, formatValue, fromPos, isClickTravel, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos } from './knobMath';
   import type { KnobDef } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color = '#f0a23a', testid, note = '', auto = null, variant = 'knob' }: {
+  let { def, value, onchange, moduleName = '', color = 'var(--accent)', testid, note = '', auto = null, variant = 'knob' }: {
     /** A rack ParamDef or a mixer MixParamDef. */
     def: KnobDef;
     value: number;
     onchange: (v: number) => void;
     /** For the accessible name: "<module name> <label>". */
     moduleName?: string;
-    /** Value-arc colour (the module's category colour). */
+    /** Value-arc / fill colour (the module's category colour; any CSS colour, var() included). */
     color?: string;
     testid?: string;
     /** Extra line under the label, e.g. the mixer delay's "(max 2 s)"; "" = none. */
     note?: string;
     /** What an automation lane on this knob targets (null: not automatable here). */
     auto?: { owner: MixChannelTarget; target: AutoTarget } | null;
-    /** A dial, or a horizontal slider (header comment). Choice params ignore it. */
+    /** A dial, or a horizontal slider (header comment). Choice params ignore it (ChoiceParam). */
     variant?: 'knob' | 'slider';
   } = $props();
   const slider = $derived(variant === 'slider');
@@ -210,9 +218,9 @@
   let raf = 0;
   let moved = false;
   // Slider: the press point, whether it is still a click (under CLICK_SLOP_PX
-  // of travel), and the track's width at the press (the drag's full range).
+  // of horizontal travel, not on the handle), and the track's width at the
+  // press (the drag's full range).
   let downX = 0;
-  let downY = 0;
   let clicking = false;
   let trackW = 0;
 
@@ -253,8 +261,8 @@
     pos = toPos(def, from);
     lastY = e.clientY;
     lastX = downX = e.clientX;
-    downY = e.clientY;
-    clicking = slider;
+    // On the handle it is a drag from the start: no jump on release.
+    clicking = slider && !handleEl?.contains(e.target as Node);
     trackW = railEl?.getBoundingClientRect().width ?? 0;
   }
   function move(e: PointerEvent) {
@@ -264,7 +272,7 @@
       // nothing moves until the pointer has left the click slop.
       pos = sliderDrag(pos, e.clientX - lastX, trackW, e.shiftKey);
       lastX = e.clientX;
-      if (clicking && Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_SLOP_PX) return;
+      if (clicking && isClickTravel(downX, e.clientX)) return;
       clicking = false;
     } else {
       pos = dragPos(pos, e.clientY - lastY, e.shiftKey);
@@ -383,52 +391,10 @@
     e.preventDefault(); // don't scroll the panel
     if (v !== value) change(v);
   }
-
-  // ---- choice params -----------------------------------------------------
-  // A radiogroup with roving focus: Tab reaches the selected option, arrows
-  // move the selection (Space is the global play/stop key, so it is not used
-  // to pick; click or Enter works).
-  const choiceIdx = $derived(Math.round(value));
-  let seg = $state<HTMLElement | null>(null);
-  function choiceKey(e: KeyboardEvent) {
-    const n = def.choices.length;
-    let i: number | null = null;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') i = (choiceIdx + 1) % n;
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') i = (choiceIdx - 1 + n) % n;
-    else if (e.key === 'Home') i = 0;
-    else if (e.key === 'End') i = n - 1;
-    if (i === null) return;
-    e.preventDefault();
-    if (i !== choiceIdx) onchange(i);
-    queueMicrotask(() => seg?.querySelectorAll<HTMLElement>('[role="radio"]')[i]?.focus());
-  }
 </script>
 
 {#if def.choices.length}
-  <div class="choice" data-testid={testid}>
-    <div
-      class="seg"
-      role="radiogroup"
-      tabindex="-1"
-      aria-label={name}
-      bind:this={seg}
-      onkeydown={choiceKey}
-      style:--c={color}
-    >
-      {#each def.choices as c, i (i)}
-        <button
-          type="button"
-          role="radio"
-          aria-checked={i === choiceIdx}
-          tabindex={i === choiceIdx ? 0 : -1}
-          class:on={i === choiceIdx}
-          onclick={() => { if (i !== choiceIdx) onchange(i); }}
-        >{c}</button>
-      {/each}
-    </div>
-    <span class="label">{def.label}</span>
-    {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
-  </div>
+  <ChoiceParam {def} {value} {onchange} {moduleName} {color} {testid} {note} />
 {:else}
   <!-- The tags, and the readout or the typed-entry field: shared by both variants. -->
   {#snippet tags()}
@@ -540,41 +506,35 @@
 {/if}
 
 <style>
-  .knob { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; width: 56px; padding: 2px 0; border-radius: 4px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; }
-  .knob:focus-visible { box-shadow: 0 0 0 1px #f0a23a; }
-  .knob:hover .readout, .knob.dragging .readout, .knob:focus-visible .readout { color: #fff; background: #000; }
-  .dial { width: 30px; height: 30px; }
-  .track, .val { fill: none; stroke-width: 2.5; stroke-linecap: round; }
-  .track { stroke: #3a3d47; }
+  /* Tokens only (spec §2–§3). The dial is --dial wide (30 px unless the caller sets it). */
+  .knob { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; width: max(56px, calc(var(--dial, 30px) + 8px)); padding: 2px 0; border-radius: var(--r-sm); cursor: ns-resize; touch-action: none; user-select: none; outline: none; }
+  .knob:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .knob:hover .readout, .knob.dragging .readout, .knob:focus-visible .readout { color: var(--accent); }
+  .dial { width: var(--dial, 30px); height: var(--dial, 30px); }
+  .track, .val { fill: none; stroke-width: 3; stroke-linecap: round; }
+  .track { stroke: var(--well); }
   .val { stroke: var(--c); }
-  .cap { fill: #34363e; stroke: #50535e; stroke-width: 1; }
-  .ptr { stroke: #e8e9ee; stroke-width: 2; stroke-linecap: round; }
+  .cap { fill: var(--raised); stroke: color-mix(in srgb, var(--text) 25%, var(--raised)); stroke-width: 1; }
+  .ptr { stroke: var(--text); stroke-width: 2; stroke-linecap: round; }
   /* Automated: the base (own value) tick, the A badge; grey while the lane is idle / suspended. */
-  .base { stroke: #e8e9ee; stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
-  .badge { position: absolute; top: 1px; right: 4px; font: 700 8px/10px ui-sans-serif, system-ui, sans-serif; width: 10px; text-align: center; border-radius: 2px; background: var(--c); color: #111; pointer-events: none; }
-  .knob.auto-off .badge { background: #6b6e7a; }
-  /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
-  .cc { position: absolute; top: 1px; left: 3px; font: 700 7px/10px ui-sans-serif, system-ui, sans-serif; padding: 0 2px; border-radius: 2px; background: #3d8fd6; color: #fff; pointer-events: none; }
-  .knob.learning, .slider.learning { outline: 2px solid #4fb3ff; outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
-  @keyframes learn-pulse { 50% { outline-color: rgba(79, 179, 255, 0.15); } }
+  .base { stroke: var(--text); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
+  .badge { position: absolute; top: 1px; right: 4px; width: 10px; font: 700 8px/10px var(--font-ui); text-align: center; border-radius: 3px; background: var(--c); color: var(--on-color); pointer-events: none; }
+  .knob.auto-off .badge, .slider.auto-off .badge { background: var(--text-dim); }
+  /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline (cv blue: a controller). */
+  .cc { position: absolute; top: 1px; left: 3px; padding: 0 2px; font: 700 7px/10px var(--font-ui); border-radius: 3px; background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
+  .knob.learning, .slider.learning { outline: 2px solid var(--sig-cv); outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .knob.learning, .slider.learning { animation: none; } }
-  .knob.auto-susp .val { stroke: #7d808c; }
-  .label { font-size: 10px; color: #a3a6b3; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-  .note { font-size: 9px; color: #f0a43a; white-space: nowrap; }
-  .readout { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7d9e0; background: #15161a; border-radius: 2px; padding: 0 3px; min-width: 40px; text-align: center; white-space: nowrap; }
-
+  .knob.auto-susp .val { stroke: var(--text-dim); }
+  .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
+  .note { font-size: var(--fs-lbl); color: var(--accent); white-space: nowrap; }
+  .readout { min-width: 40px; padding: 0 4px; border-radius: 4px; background: var(--well); box-shadow: var(--well-shadow); font: 500 var(--fs-lbl)/14px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); text-align: center; white-space: nowrap; }
   .readout.typeable { cursor: text; }
   /* The heard (automated) value: italic in the knob's colour. */
   .readout.auto { font-style: italic; color: var(--c); }
-  .readout.entry { width: 52px; min-width: 0; box-sizing: border-box; border: 1px solid #f0a23a; color: #fff; background: #000; outline: none; padding: 0 2px; }
-  .readout.entry.bad { border-color: #ff5c6a; background: #3a1418; }
-  .choice { display: flex; flex-direction: column; align-items: center; gap: 2px; grid-column: 1 / -1; }
-  .seg { display: flex; flex-wrap: wrap; justify-content: center; gap: 1px; background: #15161a; border-radius: 3px; padding: 1px; outline: none; }
-  .seg button { font: 10px/1.2 ui-sans-serif, system-ui, sans-serif; padding: 2px 5px; border: 0; border-radius: 2px; background: transparent; color: #a3a6b3; cursor: pointer; }
-  .seg button:hover { color: #fff; }
-  .seg button.on { background: var(--c); color: #111; font-weight: 600; }
-  .seg button:focus-visible { outline: 1px solid #f0a23a; outline-offset: 0; }
-  /* ---- slider variant (spec §2–§3; tokens only) ----
+  .readout.entry { width: 56px; min-width: 0; box-sizing: border-box; border: 0; padding: 0 3px; box-shadow: var(--well-shadow), 0 0 0 1px var(--accent); outline: none; }
+  .readout.entry.bad { background: color-mix(in srgb, var(--rec) 25%, var(--well)); box-shadow: var(--well-shadow), 0 0 0 1px var(--rec); }
+  /* ---- slider variant ----
      Label (left) and mono value (right) on one row; below, the hit area
      (5 px padding around the 6 px --well groove: 16 px to aim at) with the
      fill in --c plus the gloss, and the handle recipe. 32 px in all. The
@@ -582,21 +542,19 @@
   /* grid-column: a full row of the module's param grid (no effect outside a grid). */
   .slider { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 112px; min-height: 28px; padding-top: 2px; border-radius: var(--r-sm); user-select: none; outline: none; grid-column: 1 / -1; }
   .slider .row { display: flex; align-items: baseline; gap: 4px; padding: 0 2px; }
-  .slider .label { flex: 0 1 auto; max-width: none; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
-  .slider .readout { margin-left: auto; min-width: 0; padding: 0; background: none; border-radius: 0; text-align: right; font: 500 var(--fs-ctl)/14px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); }
+  .slider .label { flex: 0 1 auto; max-width: none; }
+  .slider .readout { margin-left: auto; min-width: 0; padding: 0; background: none; box-shadow: none; border-radius: 0; text-align: right; font-size: var(--fs-ctl); }
   .slider .readout.typeable:hover { color: var(--accent); }
-  .slider .readout.auto { color: var(--c); }
-  .slider .readout.entry { width: 64px; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow), 0 0 0 1px var(--accent); color: var(--text); }
-  .slider .readout.entry.bad { box-shadow: var(--well-shadow), 0 0 0 1px var(--rec); }
-  .slider .badge, .slider .cc { position: static; align-self: center; color: var(--on-color); }
-  .slider .cc { background: var(--sig-cv); }
-  .slider.auto-off .badge { background: var(--text-dim); }
-  .slider .note { padding: 0 2px; font-size: var(--fs-lbl); color: var(--accent); }
+  .slider .readout.entry { width: 64px; padding: 0 4px; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow), 0 0 0 1px var(--accent); }
+  .slider .readout.entry.bad { background: color-mix(in srgb, var(--rec) 25%, var(--well)); box-shadow: var(--well-shadow), 0 0 0 1px var(--rec); }
+  .slider .badge, .slider .cc { position: static; align-self: center; }
+  .slider .note { padding: 0 2px; }
   .hit { padding: 5px 7px; cursor: ew-resize; touch-action: none; }
   .rail { position: relative; height: 6px; border-radius: 3px; background: var(--well); box-shadow: var(--well-shadow); }
   .fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--c) var(--gloss); }
   .slider.auto-susp .fill { background-color: var(--text-dim); }
-  .handle { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--handle); box-shadow: var(--handle-shadow); }
+  .handle { position: absolute; top: 50%; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--handle); box-shadow: var(--handle-shadow); cursor: grab; }
+  .slider.dragging .handle { cursor: grabbing; }
   .slider:focus-visible .handle { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--handle-shadow); }
   /* Automated: the base (own value) tick across the groove. */
   .slider .base { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: 0.8; }

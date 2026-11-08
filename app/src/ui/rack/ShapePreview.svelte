@@ -27,7 +27,7 @@
   import { useAutoBus } from '../autoBus';
   import { adsrCompactLabel, adsrLabel, adsrLayout, adsrPoints, lfoLabel, lfoPoints } from '../vis/shapes';
 
-  let { def, idx, params, owner = null, tempo = 120, color = '#f0a23a' }: {
+  let { def, idx, params, owner = null, tempo = 120, color = 'var(--accent)' }: {
     /** The ADSR's or the LFO's catalog def. */
     def: ModuleDef;
     /** The module idx (its automation targets). */
@@ -38,6 +38,7 @@
     owner?: MixChannelTarget | null;
     /** Transport BPM (a synced LFO's period). */
     tempo?: number;
+    /** The curve's colour (the module's category colour; any CSS colour). */
     color?: string;
   } = $props();
 
@@ -173,13 +174,14 @@
 </div>
 
 <style>
-  .shape { display: flex; flex-direction: column; align-items: center; gap: 1px; margin: 0 auto; }
-  svg { display: block; background: #0f1013; border: 1px solid #2e3038; border-radius: 3px; overflow: hidden; }
+  /* An --lcd screen in a well (tokens only); the curve in the module's colour. */
+  .shape { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 0 auto; }
+  svg { display: block; border-radius: var(--r-sm); background: var(--lcd); box-shadow: var(--well-shadow); overflow: hidden; }
   .line { fill: none; stroke: var(--c); stroke-width: 1.5; stroke-linejoin: round; }
-  .fill { fill: var(--c); opacity: 0.14; stroke: none; }
+  .fill { fill: var(--c); opacity: 0.18; stroke: none; }
   .soft { fill: none; stroke: var(--c); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.55; }
-  .ticks { fill: none; stroke: #ffffff14; stroke-width: 1; }
-  .zero { stroke: #ffffff26; stroke-width: 1; }
-  .label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-size: 9px; color: #8d90a0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ticks { fill: none; stroke: var(--text); stroke-width: 1; opacity: 0.08; }
+  .zero { stroke: var(--text); stroke-width: 1; opacity: 0.15; }
+  .label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; font: 9px var(--font-mono); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 </style>

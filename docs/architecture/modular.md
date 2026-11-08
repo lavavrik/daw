@@ -117,25 +117,64 @@ disabled when the rack already flows.
   snap (no swap; pushed-panel outline), equal row heights (no ratchet),
   edge auto-scroll.
 
-### Param controls (plan 20 redesign)
+### Look and param controls (plan 20 redesign)
 
-A module's params draw as one of three controls (spec §3):
-- **Slider** (`Knob.svelte` with `variant="slider"`): label and value on one
-  row, a horizontal track below. Same behaviour, ARIA slider and test id as
-  the knob. A horizontal drag is relative (track width = full range, Shift
-  10× finer); a click with under 3 px of travel jumps to the pointer on the
-  track's live rect (so it lands under the pointer in a scrolled rail).
-  Bipolar params fill from zero. Maths: `knobMath.ts` `sliderPosFromX`,
-  `sliderDrag`, `fillSpan`, `CLICK_SLOP_PX`.
-- **Hero dial** (the knob): `filter.cutoff`, `sample_player.root`, `lfo.rate`.
-- **ChoiceSeg** (`ChoiceSeg.svelte`): a radiogroup `.seg` row for choice
-  params; the group keeps the control's test id (`knob-<m>-<param>`), each
-  option is `<testid>-<index>`; arrows move the pick, one undo entry each.
+The rack follows the design board "Instrument rack" (spec §2–§4). Every
+colour, shadow, radius and font is a `theme.css` token; the rack files have
+no hex literals (`noHexColors.test.ts`).
 
-Rollout: Task 3 switched only the Filter (`reso` slider, `mode` ChoiceSeg;
-`ModulePanel.svelte` `sliderParam` / `segParam`); Task 9 moves the rest.
-Tests: `rack.spec.ts` "slider param: …" (also in a horizontally scrolled
-rack) and "choice seg: …".
+- **Cards** (`ModulePanel.svelte`): `--lift`, 12 px corners, `--panel` body;
+  a glossy header (`--c` + `--gloss`, `--on-color` text) in the module's
+  category colour.
+- **Category colours** (`ui/theme.ts` `moduleColor`): the spec has six
+  (source, filter, modulation, utility, effect, output) and the catalog four
+  (`source/shaping/utility/effect`). `CATALOG_CATEGORIES` maps the catalog's
+  (`shaping` → filter), and `MODULE_CATEGORIES` overrides per module as on
+  the board: ADSR, LFO, Accent → modulation; VCA → utility; Saturator →
+  effect; Out → output. The add-module menu still groups by the catalog
+  category (its header in that colour); each item has a dot in the module's
+  own colour.
+- **Jack and cable colours** (`ui/theme.ts` `jackColor`): audio orange, cv
+  blue, gate green, vel purple. The catalog's `pitch` is a cv (1 V/oct); its
+  velocity ports are plain `cv` ports named `vel`, so the name gives them the
+  vel colour. A cable takes its output's colour. `theme.test.ts` checks
+  every catalog module, category and port gets one.
+- **Widths.** Cards are at least 180 px; a module with more than five
+  sliders lays them out two per row (Formant, Oscillator, ADSR, EQ), so
+  cards run about 180–280 px. Wider cards than before mean the flow layout
+  wraps sooner and a positioned row pushes its neighbours (the layout
+  re-measures). The card has no negative margins: Chrome sizes them
+  differently for a flex item (flow) and a `width: max-content` panel
+  (positioned), and the two widths must agree for `moveTo`'s snapping.
+
+A module's params draw as one of these controls (spec §3), in this order:
+choices, the hero dial, the sliders. Every one keeps the test id
+`knob-<m>-<param>`.
+- **Choice params** (`ChoiceParam.svelte`): 6 or fewer choices
+  (`knobMath.SEG_MAX_CHOICES`) are a `ChoiceSeg.svelte` radiogroup `.seg`
+  row (the group carries the test id, each option `<testid>-<index>`;
+  arrows move the pick, a click focuses its option; one undo entry each);
+  more (Delay and LFO/Scope divisions) are a skinned `<select>` carrying the
+  test id (letters are swallowed: they are the QWERTY piano). `Knob.svelte`
+  hands a choice def to `ChoiceParam` too, so a caller that passes any
+  param (the mixer's delay time) gets the same controls.
+- **Hero dial** (the knob, 60 px through the `--dial` custom property):
+  `filter.cutoff`, `sample_player.root`, `lfo.rate` (`ModulePanel` `HERO`).
+- **Slider** (`Knob.svelte` with `variant="slider"`): every other continuous
+  or integer param. Label and value on one row, a horizontal track below.
+  Same behaviour, ARIA slider and test id as the knob. A horizontal drag is
+  relative (track width = full range, Shift 10× finer). A click with under
+  3 px of *horizontal* travel (vertical wobble does not count:
+  `knobMath.isClickTravel`) jumps to the pointer on the track's live rect, so
+  it lands under the pointer in a scrolled rail; a press on the handle itself
+  never jumps (letting go of it unmoved changes nothing). Integer params
+  round on the way (the handle snaps to the value). Bipolar params fill from
+  zero. Maths: `knobMath.ts` `sliderPosFromX`, `sliderDrag`, `fillSpan`,
+  `CLICK_SLOP_PX`, `isClickTravel`.
+
+Tests (`rack.spec.ts`): "slider param: …" (also in a horizontally scrolled
+rack), "choice seg: …", "slider: a press on the handle never jumps; …",
+"integer slider: …", "a choice with more than 6 options is a select; …".
 
 ## Signals
 
@@ -700,8 +739,13 @@ Modules are enum-dispatched (no trait objects, no allocation):
 4. Regenerate the golden file:
    `UPDATE_CATALOG=1 cargo test -p daw-engine catalog`, and review the diff
    to `engine/catalog.json`. The kind-id test in `catalog.rs` must be extended.
-5. Nothing in the UI changes: it imports `engine/catalog.json`, so the module
-   shows in "+ Add module", with knobs and cable colours, automatically.
+5. Nothing else in the UI has to change: it imports `engine/catalog.json`,
+   so the module shows in "+ Add module", with sliders, choices and cable
+   colours, automatically. Its header colour comes from its catalog category
+   (`ui/theme.ts` `CATALOG_CATEGORIES`); add a `MODULE_CATEGORIES` entry if
+   its role differs (a `shaping` envelope is modulation, say), and a `HERO`
+   entry in `ModulePanel.svelte` if one param should stay a dial. A new
+   catalog category or signal kind fails `theme.test.ts` until it is mapped.
 
 ## Live input routing
 

@@ -1,5 +1,7 @@
 <script lang="ts">
-  // A labelled patch point, ringed in its signal colour (SIGNAL_COLORS).
+  // A labelled patch point: a glossy hole in its signal colour (spec §4:
+  // audio orange, cv blue, gate green, vel purple; ui/theme.ts jackColor maps
+  // the catalog's signal kinds, pitch is cv). Its cables take the same colour.
   //
   // The Rack owns all cable logic. A Jack only:
   // - carries data attributes (`data-jack`, `data-m`, `data-port`,
@@ -18,7 +20,7 @@
   // counts too. The label sits ABOVE the hole: cables always sag downward
   // from the hole, so they never strike through jack names.
   import type { SignalKind } from '../../audio/catalog';
-  import { SIGNAL_COLORS } from './cables';
+  import { jackColor } from '../theme';
 
   let { m, port, dir, name, signal, moduleName, connected, picked = false, onpointerdown, onkey, onfocus }: {
     m: number;
@@ -50,7 +52,7 @@
   data-dir={dir}
   data-testid={`jack-${m}-${dir}-${name}`}
   title={`${moduleName} ${name} (${dir === 'in' ? 'input' : 'output'}, ${signal}) — ${hint}`}
-  style:--c={SIGNAL_COLORS[signal]}
+  style:--c={jackColor({ name, signal })}
   class:picked
   role="button"
   tabindex="0"
@@ -65,10 +67,11 @@
 </div>
 
 <style>
-  .jack { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 28px; padding: 2px 1px; cursor: grab; touch-action: none; user-select: none; }
-  .hole { width: 12px; height: 12px; border-radius: 50%; background: #0b0b0d; border: 2.5px solid var(--c); box-shadow: inset 0 0 0 2px #2a2c33; }
-  .jack:hover .hole { box-shadow: 0 0 0 2px #ffffff55, inset 0 0 0 2px #2a2c33; }
-  .name { font-size: 10px; color: #c9cbd3; white-space: nowrap; }
-  .jack:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; border-radius: 4px; }
-  .picked .hole { background: var(--c); box-shadow: 0 0 0 3px #f0a23a; }
+  /* Tokens only: the hole is the signal colour with the gloss, in a --lcd rim. */
+  .jack { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 28px; padding: 2px 1px; border-radius: var(--r-sm); cursor: grab; touch-action: none; user-select: none; }
+  .hole { box-sizing: border-box; width: 15px; height: 15px; border: 3px solid var(--lcd); border-radius: 50%; background: var(--c) var(--gloss); box-shadow: var(--handle-shadow); }
+  .jack:hover .hole { box-shadow: var(--handle-shadow), 0 0 0 2px color-mix(in srgb, var(--c) 55%, transparent); }
+  .name { font: 500 9px var(--font-ui); color: var(--text-2); white-space: nowrap; }
+  .jack:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .picked .hole { border-color: var(--text); box-shadow: 0 0 0 3px var(--accent), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
 </style>

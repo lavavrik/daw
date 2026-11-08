@@ -447,6 +447,8 @@ async function loadDeepBass(page: Page) {
   await page.getByTestId('add-synth-track').click();
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('knob-4-reso')).toBeVisible();
+  // The mouse helpers below aim at boundingBox() points: the slider must be on screen.
+  await page.getByTestId('knob-4-reso').scrollIntoViewIfNeeded();
 }
 
 /** Filter resonance: 0..1, lin, default 0.2 (engine/catalog.json); a slider here. */
@@ -587,4 +589,103 @@ test('choice seg: click and arrow keys pick, one undo entry each', async ({ page
     await page.keyboard.press('ControlOrMeta+z');
     await expect.poll(checked).toBe(want);
   }
+});
+
+// ---- Plan 20 Task 9: the whole rack on sliders, segs and selects ----
+
+test('slider: a press on the handle never jumps; vertical wobble is still a click', async ({ page }) => {
+  await loadDeepBass(page);
+  const v0 = await resoValue(page);
+  const label0 = await undoLabel(page);
+  const handle = page.getByTestId('knob-4-reso').locator('.handle');
+
+  // Pressed and let go on the handle, off its centre: nothing changes, no entry.
+  let h = (await handle.boundingBox())!;
+  await page.mouse.click(h.x + h.width / 2 + 4, h.y + h.height / 2);
+  await page.waitForTimeout(100);
+  expect(await resoValue(page)).toBe(v0);
+  expect(await undoLabel(page)).toBe(label0);
+
+  // Grabbed by the handle, a drag is relative from the first pixel: +25 % of the track.
+  const w = (await onTrack(page, 0)).w;
+  h = (await handle.boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2 + 4, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(h.x + h.width / 2 + 4 + w / 4, h.y + h.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(Math.min(1, v0 + 0.25), 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(v0, 5);
+
+  // A click that wobbles up and down (no sideways travel) is still a click: it jumps.
+  const frac = v0 > 0.5 ? 0.1 : 0.9;
+  const a = await onTrack(page, frac);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x, a.y + 8, { steps: 3 });
+  await page.mouse.move(a.x + 1, a.y - 5, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(frac + 1 / a.w, 2);
+  await page.keyboard.press('ControlOrMeta+z'); // one entry
+  await expect.poll(() => resoValue(page)).toBeCloseTo(v0, 5);
+});
+
+test('integer slider: a click-jump rounds, the handle snaps, one undo entry', async ({ page }) => {
+  await loadDeepBass(page);
+  const voices = page.getByTestId('knob-0-voices'); // MIDI In voices: 1..16, integer
+  await voices.scrollIntoViewIfNeeded();
+  await expect(voices).toHaveAttribute('role', 'slider');
+  const v0 = Number(await voices.getAttribute('aria-valuenow'));
+  const track = page.getByTestId('knob-0-voices-track');
+  const handleX = async () => {
+    const b = (await voices.locator('.handle').boundingBox())!;
+    return b.x + b.width / 2;
+  };
+  const t = (await track.boundingBox())!;
+  const at = (frac: number) => ({ x: t.x + t.width * frac, y: t.y + t.height / 2 });
+
+  // 1 + 15 * 0.32 = 5.8 -> 6; the handle sits on 6, not under the pointer.
+  const want = v0 === 6 ? 13 : 6;
+  const frac = want === 6 ? 0.32 : 0.81; // 0.81 -> 13.15 -> 13
+  await page.mouse.click(at(frac).x, at(frac).y);
+  await expect(voices).toHaveAttribute('aria-valuenow', String(want));
+  await expect(voices.getByTestId('knob-readout')).toHaveText(String(want));
+  expect(Math.abs((await handleX()) - (t.x + (t.width * (want - 1)) / 15))).toBeLessThan(1.5);
+
+  // A relative drag of two steps' width moves two whole steps.
+  const p = at(want === 6 ? 0.9 : 0.1);
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.mouse.move(p.x + (2 * t.width) / 15 + 1, p.y, { steps: 6 });
+  await page.mouse.up();
+  await expect(voices).toHaveAttribute('aria-valuenow', String(want + 2));
+  expect(Math.abs((await handleX()) - (t.x + (t.width * (want + 1)) / 15))).toBeLessThan(1.5);
+
+  for (const v of [want, v0]) {
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(voices).toHaveAttribute('aria-valuenow', String(v));
+  }
+});
+
+test('a choice with more than 6 options is a select; the hero dial stays a knob', async ({ page }) => {
+  await loadDeepBass(page);
+  await page.getByRole('button', { name: '+ Add module' }).click();
+  await page.getByTestId('add-lfo').click(); // Deep Bass has 8 modules: the LFO is 8
+  const div = page.getByTestId('knob-8-division');
+  await div.scrollIntoViewIfNeeded();
+  expect(await div.evaluate((e) => e.tagName)).toBe('SELECT');
+  await expect(div).toHaveAttribute('aria-label', 'LFO Division');
+  const checked = div.locator('option:checked');
+  const t0 = (await checked.textContent())!;
+  const pick = t0 === '1 bar' ? '2 bars' : '1 bar';
+  await div.selectOption({ label: pick });
+  await expect(checked).toHaveText(pick);
+  await expect.poll(() => undoLabel(page)).toBe('Set Division');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(checked).toHaveText(t0);
+  // Wave (4 choices) is a seg row; Rate is the LFO's hero dial; Depth a slider.
+  await expect(page.getByTestId('knob-8-wave')).toHaveAttribute('role', 'radiogroup');
+  await expect(page.getByTestId('knob-8-rate')).toHaveAttribute('role', 'slider');
+  await expect(page.getByTestId('knob-8-rate-track')).toHaveCount(0);
+  await expect(page.getByTestId('knob-8-depth-track')).toHaveCount(1);
 });

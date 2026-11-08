@@ -51,9 +51,10 @@ export const THEME = {
 export const RADII = { sm: 6, md: 8, lg: 12 } as const;
 
 /**
- * Rack module header colour per category (spec §2), written verbatim.
- * The catalog's categories today are source/shaping/utility/effect; mapping
- * them onto these keys is the rack task's job (ui/rack/cables.ts).
+ * Rack module header colour per category (spec §2), written verbatim. The
+ * catalog has only four categories (source/shaping/utility/effect), so a
+ * module's colour comes from `rackCategory` below, not from its catalog
+ * category alone.
  */
 export const CATEGORY_COLORS = {
   source: '#ffb347',
@@ -66,8 +67,7 @@ export const CATEGORY_COLORS = {
 
 /**
  * Jack and cable colour per signal type (spec §4 "Jacks"), written verbatim.
- * The spec names `vel`; the catalog's SignalKind has `pitch` instead and no
- * `vel`, so the rack task decides which key a pitch jack reads.
+ * The catalog's signal kinds map onto these through `jackSignal` below.
  */
 export const SIGNAL_COLORS = {
   audio: '#ff9f43',
@@ -75,6 +75,66 @@ export const SIGNAL_COLORS = {
   gate: '#7ee081',
   vel: '#9b8cff',
 } as const;
+
+// ---- catalog -> spec colours (plan 20 Task 9) ------------------------------
+// The spec has six rack categories and four jack colours; the catalog
+// (engine/catalog.json) has four categories and the signal kinds
+// audio/cv/gate/pitch. theme.test.ts checks every catalog module, category
+// and port gets a colour.
+
+export type RackCategory = keyof typeof CATEGORY_COLORS;
+export type JackSignal = keyof typeof SIGNAL_COLORS;
+
+/** The catalog's categories onto the spec's: `shaping` is mostly filters (Filter, Formant). */
+export const CATALOG_CATEGORIES: Readonly<Record<string, RackCategory>> = {
+  source: 'source',
+  shaping: 'filter',
+  utility: 'utility',
+  effect: 'effect',
+};
+
+/**
+ * Modules whose role on the design board ("Instrument rack") is not their
+ * catalog category: envelopes, the LFO and Accent are modulation, the VCA is
+ * a utility, the Saturator an effect, Out the output.
+ */
+export const MODULE_CATEGORIES: Readonly<Record<string, RackCategory>> = {
+  lfo: 'modulation',
+  adsr: 'modulation',
+  accent: 'modulation',
+  vca: 'utility',
+  saturator: 'effect',
+  out: 'output',
+};
+
+/** A module's rack category (unknown catalog categories fall back to utility). */
+export const rackCategory = (m: { id: string; category: string }): RackCategory =>
+  MODULE_CATEGORIES[m.id] ?? CATALOG_CATEGORIES[m.category] ?? 'utility';
+
+/** A module's header colour. */
+export const moduleColor = (m: { id: string; category: string }) => CATEGORY_COLORS[rackCategory(m)];
+
+/** A catalog category's colour (the add-module menu's group headers). */
+export const catalogCategoryColor = (category: string) => CATEGORY_COLORS[CATALOG_CATEGORIES[category] ?? 'utility'];
+
+/** The catalog's signal kinds onto the spec's jack colours: pitch is a cv (1 V/oct). */
+export const CATALOG_SIGNALS: Readonly<Record<string, JackSignal>> = {
+  audio: 'audio',
+  cv: 'cv',
+  gate: 'gate',
+  pitch: 'cv',
+};
+
+/**
+ * A port's jack colour key. The catalog carries velocity as a plain `cv`
+ * port named `vel` (MIDI In's output, the ADSR's and Accent's inputs); the
+ * spec gives velocity its own colour, so the name decides.
+ */
+export const jackSignal = (port: { name: string; signal: string }): JackSignal =>
+  port.name === 'vel' ? 'vel' : (CATALOG_SIGNALS[port.signal] ?? 'cv');
+
+/** A port's jack and cable colour. */
+export const jackColor = (port: { name: string; signal: string }) => SIGNAL_COLORS[jackSignal(port)];
 
 /** The CSS custom-property name (without `--`) for a THEME key: textDim -> text-dim, text2 -> text-2. */
 export const tokenName = (key: string) => key.replace(/([A-Z])/g, '-$1').replace(/(\d+)/g, '-$1').toLowerCase();

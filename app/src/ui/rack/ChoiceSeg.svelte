@@ -1,8 +1,7 @@
 <script lang="ts">
   // A choice param (filter mode, wave, …) as a segmented control (spec §3:
   // choice params with 6 or fewer choices; more stay a skinned <select>).
-  // Plan 20 Task 3 switched the Filter's mode to it (ModulePanel); Task 9
-  // moves the other choice params here from Knob.svelte's own seg row.
+  // ChoiceParam.svelte picks this or the <select> by the choice count.
   //
   // - The label sits above a `.seg` row (theme.css) of buttons; the picked
   //   one is in the owner's colour (`color`, the module's category colour)
@@ -10,13 +9,14 @@
   // - A `role="radiogroup"` with roving focus: Tab reaches the picked option,
   //   Left/Right (and Up/Down) move the selection and the focus, wrapping;
   //   Home/End pick the first/last. Space is the global play/stop key, so it
-  //   does not pick; a click or Enter (a button's click) does.
+  //   does not pick; a click or Enter (a button's click) does. A click also
+  //   focuses its option (Chrome does that for buttons, Safari does not), so
+  //   the arrow keys go on from where the mouse left off.
   // - Test ids: the group carries the control's `testid` (what the replaced
   //   control had, e.g. `knob-4-mode`), and each option `<testid>-<index>`.
   // - Undo: every change is one `onchange`, so one entry: a click lands
   //   inside its pointer gesture, a key press is an edit of its own.
-  // - No automation lane or MIDI learn: choice params have neither (Knob's
-  //   choice row had no AutoMenu / learn hooks either).
+  // - No automation lane or MIDI learn: choice params have neither.
   import type { KnobDef } from './knobMath';
 
   let { def, value, onchange, moduleName = '', color, testid, note = '' }: {
@@ -71,7 +71,10 @@
         aria-checked={i === picked}
         tabindex={i === picked ? 0 : -1}
         data-testid={testid ? `${testid}-${i}` : undefined}
-        onclick={() => { if (i !== picked) onchange(i); }}
+        onclick={(e) => {
+          e.currentTarget.focus();
+          if (i !== picked) onchange(i);
+        }}
       >{c}</button>
     {/each}
   </div>
@@ -79,7 +82,7 @@
 </div>
 
 <style>
-  /* Full width in the module's param grid (like Knob's choice row). */
+  /* Full width in the module's param grid. */
   .choice { display: flex; flex-direction: column; gap: 4px; grid-column: 1 / -1; padding: 2px 0; }
   .label { padding: 0 2px; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
   .seg { flex-wrap: wrap; outline: none; }

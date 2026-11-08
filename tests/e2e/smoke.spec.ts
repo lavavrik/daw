@@ -742,9 +742,10 @@ test('effect modules: pink Effect group, a Delay in the signal path, pool limit 
   await page.getByTestId('add-delay').click();
   const delay = page.getByTestId('module-8');
   await expect(delay).toContainText('Delay');
-  // Effect category colour (pink) on the header rule.
-  await expect(delay).toHaveCSS('border-top-color', 'rgb(255, 122, 138)');
-  await expect(page.getByTestId('knob-8-division')).toContainText('3/16');
+  // Effect category colour (pink, spec §2) on the header.
+  await expect(page.getByTestId('module-header-8')).toHaveCSS('background-color', 'rgb(244, 124, 195)');
+  // 12 divisions: a select (spec §3: more than 6 choices).
+  await expect(page.getByTestId('knob-8-division').locator('option:checked')).toHaveText('3/16');
   // VCA -> Delay -> Out: the patch still plays through it.
   await dragTo(page, 'jack-6-out-out', await centre(page, 'jack-8-in-l'));
   await dragTo(page, 'jack-8-out-l', await centre(page, 'jack-7-in-l'));
@@ -782,7 +783,9 @@ test('loading the Chord Stab patch replaces the rack and plays chords', async ({
 test('a cable can also be drawn from an empty input to an output; a full rack says so', async ({ page }) => {
   await addSynth(page);
   const cables = page.locator('[data-testid="cables"] path.cable');
-  await dragTo(page, 'jack-3-in-in3', await centre(page, 'jack-1-out-out'));
+  // Mixer in3 <- the ADSR's env: both sit in the rack's second row at 1280 px
+  // (the cards' widths decide the rows), so both ends are on screen together.
+  await dragTo(page, 'jack-3-in-in3', await centre(page, 'jack-5-out-env'));
   await expect(cables).toHaveCount(12);
   // Deep Bass has 8 modules; fill the other 24 slots through the menu.
   const addBtn = page.getByRole('button', { name: '+ Add module' });

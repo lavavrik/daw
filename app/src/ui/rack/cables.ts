@@ -1,23 +1,5 @@
-// Rack palette and cable geometry (pure; unit-tested in cables.test.ts).
-import type { SignalKind } from '../../audio/catalog';
-
-/** Cable/jack colour per signal kind: you can tell what a cable carries at a glance. */
-export const SIGNAL_COLORS: Record<SignalKind, string> = {
-  audio: '#5ec4ff',
-  pitch: '#f0a23a',
-  gate: '#7ddc7d',
-  cv: '#b28cff',
-};
-
-/** Module header colour per catalog category (unknown categories fall back to utility). */
-export const CATEGORY_COLORS: Record<string, string> = {
-  source: '#f0a23a',
-  shaping: '#b28cff',
-  utility: '#8aa0b8',
-  effect: '#ff7a8a',
-};
-
-export const categoryColor = (category: string) => CATEGORY_COLORS[category] ?? CATEGORY_COLORS.utility;
+// Cable geometry (pure; unit-tested in cables.test.ts).
+// Colours live in ui/theme.ts (jackColor, moduleColor): spec §2/§4.
 
 export interface Pt {
   x: number;

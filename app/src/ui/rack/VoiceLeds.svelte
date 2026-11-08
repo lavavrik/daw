@@ -103,15 +103,16 @@
 {/if}
 
 <style>
-  .voices { display: flex; align-items: center; gap: 3px; color: #8d90a0; font-size: 11px; }
-  .lbl { margin-right: 2px; }
+  /* Tokens only: an LED is a --well dot that lights in --play by level, ringed in the accent while its gate is held. */
+  .voices { display: flex; align-items: center; gap: 3px; }
+  .lbl { margin-right: 3px; }
   i {
     --lv: 0;
-    width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box;
-    background: color-mix(in srgb, #7dff9a calc(var(--lv) * 100%), #23262d);
-    box-shadow: 0 0 calc(var(--lv) * 5px) color-mix(in srgb, #7dff9a calc(var(--lv) * 70%), transparent);
-    border: 1px solid #3a3d48;
+    width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box;
+    background: color-mix(in srgb, var(--play) calc(var(--lv) * 100%), var(--well));
+    box-shadow: var(--well-shadow), 0 0 calc(var(--lv) * 8px) color-mix(in srgb, var(--play) calc(var(--lv) * 60%), transparent);
+    border: 1px solid var(--line);
   }
   /* data-gate is written by frame(), not the template */
-  .voices > :global(i[data-gate='1']) { border-color: #f0a23a; }
+  .voices > :global(i[data-gate='1']) { border-color: var(--accent); }
 </style>

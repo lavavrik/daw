@@ -5,7 +5,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CATEGORY_COLORS, RADII, SIGNAL_COLORS, THEME, TRACK_COLORS, tokenName } from './theme';
+import { CATALOG } from '../audio/catalog';
+import {
+  CATALOG_CATEGORIES, CATALOG_SIGNALS, CATEGORY_COLORS, RADII, SIGNAL_COLORS, THEME, TRACK_COLORS, catalogCategoryColor, jackColor, jackSignal,
+  moduleColor, rackCategory, tokenName,
+} from './theme';
 import { TRACK_COLORS as STATE_TRACK_COLORS } from '../state/palette';
 import { TRACK_COLORS as PROJECT_TRACK_COLORS } from '../state/project.svelte';
 
@@ -73,5 +77,55 @@ describe('theme tokens', () => {
     expect(tokenName('textDim')).toBe('text-dim');
     expect(tokenName('raisedShadow')).toBe('raised-shadow');
     expect(tokenName('fsBody')).toBe('fs-body');
+  });
+});
+
+describe('catalog -> spec colours (rack)', () => {
+  const cats = Object.keys(CATEGORY_COLORS);
+  const sigs = Object.keys(SIGNAL_COLORS);
+
+  it('every catalog category maps onto a spec category', () => {
+    const used = [...new Set(CATALOG.modules.map((m) => m.category))];
+    expect(used.filter((c) => !(c in CATALOG_CATEGORIES))).toEqual([]);
+    for (const c of used) expect(cats).toContain(CATALOG_CATEGORIES[c]);
+  });
+
+  it('every catalog module has a header colour from the spec palette', () => {
+    for (const m of CATALOG.modules) {
+      expect(cats, m.id).toContain(rackCategory(m));
+      expect(moduleColor(m), m.id).toBe(CATEGORY_COLORS[rackCategory(m)]);
+    }
+  });
+
+  it('follows the design board for the modules it shows', () => {
+    const cat = (id: string) => rackCategory(CATALOG.modules.find((m) => m.id === id)!);
+    expect(['midi_in', 'osc', 'noise', 'sample_player'].map(cat)).toEqual(['source', 'source', 'source', 'source']);
+    expect(['filter', 'formant'].map(cat)).toEqual(['filter', 'filter']);
+    expect(['adsr', 'lfo', 'accent'].map(cat)).toEqual(['modulation', 'modulation', 'modulation']);
+    expect(['vca', 'mixer', 'scope', 'attenuator'].map(cat)).toEqual(['utility', 'utility', 'utility', 'utility']);
+    expect(['saturator', 'delay', 'reverb'].map(cat)).toEqual(['effect', 'effect', 'effect']);
+    expect(cat('out')).toBe('output');
+    expect(rackCategory({ id: 'new_thing', category: 'mystery' })).toBe('utility');
+    expect(catalogCategoryColor('shaping')).toBe(CATEGORY_COLORS.filter);
+    expect(catalogCategoryColor('mystery')).toBe(CATEGORY_COLORS.utility);
+  });
+
+  it('every catalog port has a jack colour', () => {
+    const kinds = new Set<string>();
+    for (const m of CATALOG.modules) {
+      for (const p of [...m.inputs, ...m.outputs]) {
+        kinds.add(p.signal);
+        expect(sigs, `${m.id}.${p.name}`).toContain(jackSignal(p));
+      }
+    }
+    expect([...kinds].filter((k) => !(k in CATALOG_SIGNALS))).toEqual([]);
+  });
+
+  it('pitch is cv, a vel port is vel', () => {
+    expect(jackColor({ name: 'pitch', signal: 'pitch' })).toBe(SIGNAL_COLORS.cv);
+    expect(jackColor({ name: 'vel', signal: 'cv' })).toBe(SIGNAL_COLORS.vel);
+    expect(jackColor({ name: 'env', signal: 'cv' })).toBe(SIGNAL_COLORS.cv);
+    expect(jackColor({ name: 'gate', signal: 'gate' })).toBe(SIGNAL_COLORS.gate);
+    expect(jackColor({ name: 'out', signal: 'audio' })).toBe(SIGNAL_COLORS.audio);
   });
 });

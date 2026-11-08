@@ -80,7 +80,7 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
-  import type { ModuleDef, SignalKind } from '../../audio/catalog';
+  import type { ModuleDef } from '../../audio/catalog';
   import type { AudioEngine } from '../../audio/engine';
   import { lastLive } from '../../input/lastNote.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
@@ -105,7 +105,8 @@
   } from '../../state/rack-actions';
   import { deferSampleAssign } from '../../state/sampleLoads';
   import { importSample } from '../../state/sampleImport';
-  import { cableBottom, cablePath, categoryColor, SIGNAL_COLORS } from './cables';
+  import { catalogCategoryColor, jackColor, moduleColor, SIGNAL_COLORS } from '../theme';
+  import { cableBottom, cablePath } from './cables';
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
   import VoiceLeds from './VoiceLeds.svelte';
@@ -153,11 +154,11 @@
   const full = $derived(track.modules.length >= CATALOG.maxModules);
   const isEdited = $derived(edited.has(track.id));
 
-  function signalOf(m: number, dir: 'in' | 'out', port: number): SignalKind {
+  /** A jack's colour (its signal: ui/theme.ts jackColor); a cable takes its output's. */
+  function colorOf(m: number, dir: 'in' | 'out', port: number): string {
     const mod = track.modules.find((x) => x.idx === m);
-    if (!mod) return 'audio';
-    const d = moduleDef(mod.kind);
-    return (dir === 'in' ? d.inputs : d.outputs)[port]?.signal ?? 'audio';
+    const pd = mod ? (dir === 'in' ? moduleDef(mod.kind).inputs : moduleDef(mod.kind).outputs)[port] : undefined;
+    return jackColor(pd ?? { name: '', signal: 'audio' });
   }
 
   function portName(m: number, dir: 'in' | 'out', port: number): string {
@@ -541,7 +542,8 @@
     fixed: End & { dir: 'in' | 'out' };
     /** Input whose existing cable is being carried (unplugged visually, not yet in the engine). */
     carry: End | null;
-    signal: SignalKind;
+    /** The cable's colour (its output's signal). */
+    color: string;
     /** Carried end, relative to `.content`. */
     at: Pt;
     /** Last pointer position (viewport), to re-derive `at` after a scroll. */
@@ -560,7 +562,7 @@
         id: key(c.to.m, 'in', c.to.port),
         a: pos[key(c.from.m, 'out', c.from.port)],
         b: pos[key(c.to.m, 'in', c.to.port)],
-        color: SIGNAL_COLORS[signalOf(c.from.m, 'out', c.from.port)],
+        color: colorOf(c.from.m, 'out', c.from.port),
       }))
       .filter((c) => c.a && c.b),
   );
@@ -592,8 +594,8 @@
     const client = { x: e.clientX, y: e.clientY };
     const existing = dir === 'in' ? track.cables.find((c) => c.to.m === m && c.to.port === port) : undefined;
     drag = existing
-      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at: local(e), client }
-      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at: local(e), client };
+      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, color: colorOf(existing.from.m, 'out', existing.from.port), at: local(e), client }
+      : { fixed: { m, port, dir }, carry: null, color: colorOf(m, dir, port), at: local(e), client };
 
     const move = (ev: PointerEvent) => {
       if (!drag) return;
@@ -674,8 +676,8 @@
     const kbd = { m, port, dir };
     rackStatus = ''; // the pick's own text takes the region (no stale move news after it)
     drag = existing
-      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, signal: signalOf(existing.from.m, 'out', existing.from.port), at, client: { x: 0, y: 0 }, kbd, kbdAt }
-      : { fixed: { m, port, dir }, carry: null, signal: signalOf(m, dir, port), at, client: { x: 0, y: 0 }, kbd, kbdAt };
+      ? { fixed: { ...existing.from, dir: 'out' }, carry: { m, port }, color: colorOf(existing.from.m, 'out', existing.from.port), at, client: { x: 0, y: 0 }, kbd, kbdAt }
+      : { fixed: { m, port, dir }, carry: null, color: colorOf(m, dir, port), at, client: { x: 0, y: 0 }, kbd, kbdAt };
   }
   /** The free end of a keyboard-picked cable follows focus from jack to jack. */
   function jackFocus(m: number, dir: 'in' | 'out', port: number) {
@@ -937,6 +939,14 @@
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) e.preventDefault();
   }
 
+  /** What each cable colour carries (the catalog's pitch is a cv, velocity has its own). */
+  const LEGEND_TITLES: Record<string, string> = {
+    audio: 'Audio signals',
+    cv: 'Control voltages: pitch, envelopes, LFOs, mod',
+    gate: 'Gates (note on/off)',
+    vel: 'Velocity',
+  };
+
   // ---- add-module menu ---------------------------------------------------------
   const CATEGORY_ORDER = ['source', 'shaping', 'effect', 'utility'];
   const groups = $derived.by(() => {
@@ -1040,13 +1050,13 @@
     {/if}
     <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
     <VoiceLeds {track} />
-    <button class="add" data-testid="rack-tidy" disabled={!placed}
+    <button class="btn" data-testid="rack-tidy" disabled={!placed}
       title={placed ? 'Remove every module position: back to the wrapping layout' : 'The rack already wraps (drag a module header to place it)'}
       onclick={tidy}>Tidy</button>
-    <button class="add" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
+    <button class="btn" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}>Save patch</button>
     <div class="addwrap">
       <button
-        class="add"
+        class="btn"
         bind:this={menuBtn}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
@@ -1058,12 +1068,14 @@
             <p class="full">Rack is full ({CATALOG.maxModules} modules). Remove one first.</p>
           {:else}
             {#each groups as g (g.category)}
-              <div class="group" style:--c={categoryColor(g.category)}>
+              <div class="group" style:--c={catalogCategoryColor(g.category)}>
                 <div class="gh">{g.category[0].toUpperCase() + g.category.slice(1)}</div>
                 {#each g.modules as md (md.id)}
                   {@const note = poolFullNote(md)}
+                  <!-- The dot is the module's own header colour (a group can mix them: Shaping holds filters and envelopes). -->
                   <button role="menuitem" data-testid={`add-${md.id}`} aria-disabled={note ? 'true' : undefined}
-                    title={note || undefined} onclick={() => add(md.id)}>{md.name}{#if note}<small>{note}</small>{/if}</button>
+                    title={note || undefined} onclick={() => add(md.id)}
+                  ><i class="dot" style:--c={moduleColor(md)}></i>{md.name}{#if note}<small>{note}</small>{/if}</button>
                 {/each}
               </div>
             {/each}
@@ -1073,7 +1085,7 @@
     </div>
     <span class="legend" aria-label="Cable colours">
       {#each Object.entries(SIGNAL_COLORS) as [sig, col] (sig)}
-        <span><i style:background={col}></i>{sig}</span>
+        <span title={LEGEND_TITLES[sig]}><i style:--c={col}></i>{sig}</span>
       {/each}
     </span>
   </div>
@@ -1170,8 +1182,8 @@
           <circle class="plug" cx={c.b.x} cy={c.b.y} r="3.5" fill={c.color} />
         {/each}
         {#if drag && dragA}
-          <path class="drag" d={cablePath(dragA, drag.at)} stroke={SIGNAL_COLORS[drag.signal]} />
-          <circle class="plug" cx={drag.at.x} cy={drag.at.y} r="4.5" fill={SIGNAL_COLORS[drag.signal]} />
+          <path class="drag" d={cablePath(dragA, drag.at)} stroke={drag.color} />
+          <circle class="plug" cx={drag.at.x} cy={drag.at.y} r="4.5" fill={drag.color} />
         {/if}
       </svg>
     </div>
@@ -1179,55 +1191,58 @@
 </div>
 
 <style>
+  /* Tokens only (spec §2): the toolbar uses the shared .btn class and the
+     skinned <select>; the rail is the --work area the cards sit on. */
   .rack { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; min-width: 0; }
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .patch { display: flex; align-items: center; gap: 6px; color: #8d90a0; }
-  select { font: inherit; background: #24262c; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 2px 4px; }
-  .edited { color: #ffd98a; font-size: 11px; }
-  .link { font: inherit; font-size: 11px; border: 0; background: transparent; color: #8fb8ff; cursor: pointer; padding: 0; text-decoration: underline; }
-  .link:disabled { color: #6f7280; cursor: not-allowed; text-decoration: none; }
+  .patch { display: flex; align-items: center; gap: 6px; }
+  .edited { color: var(--accent); font-size: var(--fs-lbl); }
+  .link { padding: 0; border: 0; background: transparent; color: var(--text); font: 500 var(--fs-lbl) var(--font-ui); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; cursor: pointer; }
+  .link:hover:not(:disabled) { color: var(--accent); }
+  .link:disabled { color: var(--text-2); opacity: 0.6; cursor: not-allowed; text-decoration: none; }
+  .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .addwrap { position: relative; }
-  .add { font: inherit; padding: 3px 10px; border: 1px solid #3a3d48; border-radius: 3px; background: #24262c; color: #c9cbd3; cursor: pointer; }
-  .add:hover, .add[aria-expanded='true'] { background: #2e313a; color: #fff; }
-  select:focus-visible, .add:focus-visible, .link:focus-visible { outline: 2px solid #f0a23a; outline-offset: -1px; }
-  .menu { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: flex; gap: 10px; padding: 8px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; }
-  .group { display: flex; flex-direction: column; gap: 1px; min-width: 96px; }
-  .gh { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c); border-bottom: 2px solid var(--c); margin-bottom: 3px; padding-bottom: 1px; }
-  .group button { font: inherit; text-align: left; padding: 3px 6px; border: 0; border-radius: 2px; background: transparent; color: #d7d9e0; cursor: pointer; white-space: nowrap; }
-  .group button:hover, .group button:focus-visible { background: #2e313a; outline: none; color: #fff; }
-  .group button[aria-disabled='true'] { color: #6f7280; cursor: not-allowed; }
-  .group button small { display: block; font-size: 9px; color: #8d90a0; }
-  .full { margin: 0; color: #ffd98a; white-space: nowrap; }
-  .legend { margin-left: auto; display: flex; gap: 8px; color: #8d90a0; font-size: 10px; }
-  .legend span { display: flex; align-items: center; gap: 3px; }
-  .legend i { width: 12px; height: 3px; border-radius: 2px; }
+  .btn { padding: 4px 10px; }
+  .btn[aria-expanded='true'] { filter: brightness(1.1); }
+  .menu { position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; display: flex; gap: 14px; padding: 10px; border-radius: 10px; background: var(--panel); box-shadow: var(--lift); }
+  .group { display: flex; flex-direction: column; gap: 1px; min-width: 104px; }
+  .gh { margin-bottom: 4px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); font: 700 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; }
+  .group button { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer; }
+  .group button:hover, .group button:focus-visible { background: var(--raised); outline: none; }
+  .group button[aria-disabled='true'] { color: var(--text-2); opacity: 0.6; cursor: not-allowed; }
+  .group button small { flex-basis: 100%; padding-left: 14px; font-size: 9px; color: var(--text-2); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  .full { margin: 0; color: var(--accent); white-space: nowrap; }
+  .legend { margin-left: auto; display: flex; gap: 10px; font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); }
+  .legend span { display: flex; align-items: center; gap: 4px; }
+  .legend i { width: 14px; height: 4px; border-radius: 2px; background: var(--c); }
 
-  .add:disabled { opacity: 0.45; cursor: not-allowed; }
-  .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-radius: 3px; background: #2b2a1c; color: #ffd98a; border: 1px solid #5a512b; }
+  .note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; border-radius: var(--r-md); background: var(--well); box-shadow: var(--well-shadow), inset 3px 0 0 var(--accent); color: var(--text); }
   .note > span { flex: 1; min-width: 0; }
-  .note button { font: inherit; border: 1px solid currentColor; border-radius: 3px; padding: 1px 8px; background: transparent; color: inherit; cursor: pointer; }
-  .note button[aria-label='Dismiss'] { border: 0; }
-  .note .ok { background: #f0a23a; color: #111; border-color: #f0a23a; font-weight: 600; }
-  .note.save { background: #1f2127; color: #c9cbd3; border-color: #3a3d48; }
+  .note button { padding: 2px 10px; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); cursor: pointer; }
+  .note button[aria-label='Dismiss'] { padding: 0 6px; background: transparent; box-shadow: none; }
+  .note .ok { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
+  .note button:disabled { opacity: 0.45; cursor: default; }
+  .note.save { box-shadow: var(--well-shadow); }
   .note label { display: flex; align-items: center; gap: 6px; }
-  .note input { font: inherit; width: 160px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 4px; }
-  .note .bad { flex-basis: 100%; color: #ffb3ba; }
-  .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; background: #101114; border-radius: 4px; }
+  .note input { width: 160px; }
+  .note .bad { flex-basis: 100%; color: var(--rec); }
+  .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; border-radius: var(--r-md); background: var(--work); box-shadow: var(--well-shadow); }
   /* Wraps into rows; `width: 100%` (not max-content) so the rail's width is the wrap point. */
-  .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 4px; width: 100%; box-sizing: border-box; padding: 6px; }
-  .empty { color: #7d808c; margin: 8px; }
+  .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 8px; width: 100%; box-sizing: border-box; padding: 6px; }
+  .empty { margin: 8px; color: var(--text-2); }
   /* Drag feedback (plan 18): where the panel lands, and the band for a new row below the last one. */
-  .outline, .newrow { position: absolute; box-sizing: border-box; pointer-events: none; border-radius: 3px; }
-  .outline { border: 2px dashed #f0a23a; background: #f0a23a14; }
-  .outline.refused { border-color: #ff6b75; background: #ff6b7514; }
+  .outline, .newrow { position: absolute; box-sizing: border-box; pointer-events: none; border-radius: var(--r-lg); }
+  .outline { border: 2px dashed var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .outline.refused { border-color: var(--rec); background: color-mix(in srgb, var(--rec) 8%, transparent); }
   /* Just under the red outline, above the lifted panel (which mostly covers the outline itself). */
-  .outline.refused span { position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 4px; padding: 2px 6px; white-space: nowrap; font-size: 11px; color: #ffb3ba; background: #1f2127; border: 1px solid #ff6b75; border-radius: 3px; }
+  .outline.refused span { position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 4px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--rec); color: var(--on-color); font: 600 var(--fs-lbl) var(--font-ui); white-space: nowrap; }
   /* A panel the drop would push: where it would end up. */
-  .outline.pushed { border: 1px dashed #f0a23a80; background: none; }
-  .newrow { left: 6px; right: 6px; border: 1px dashed #4a4d58; color: #6f7280; font-size: 10px; padding: 4px 8px; }
+  .outline.pushed { border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: none; }
+  .newrow { left: 6px; right: 6px; padding: 4px 8px; border: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-lbl); }
   /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */
   .cables { position: absolute; z-index: 4; left: 0; top: 0; overflow: visible; pointer-events: none; }
-  .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }
+  .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }
   .plug { opacity: 0.95; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }

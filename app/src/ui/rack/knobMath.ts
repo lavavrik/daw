@@ -96,11 +96,19 @@ export function dragPos(pos: number, dy: number, fine: boolean): number {
 
 /**
  * Slider variant (Knob.svelte `variant="slider"`, plan 20): the same position
- * space, laid out horizontally. Pointer travel below CLICK_SLOP_PX (in any
- * direction) between press and release is a click: it jumps the value to the
- * pointer (sliderPosFromX). More is a relative drag (sliderDrag).
+ * space, laid out horizontally. Horizontal pointer travel below CLICK_SLOP_PX
+ * between press and release is a click: it jumps the value to the pointer
+ * (sliderPosFromX). More is a relative drag (sliderDrag). Vertical travel
+ * does not count (a slider only moves sideways), so a hand that wobbles up or
+ * down while clicking still clicks.
  */
 export const CLICK_SLOP_PX = 3;
+
+/** Still a click (no drag yet): under CLICK_SLOP_PX of horizontal travel from the press. */
+export const isClickTravel = (downX: number, x: number) => Math.abs(x - downX) < CLICK_SLOP_PX;
+
+/** Choice params with this many choices or fewer draw as a segmented row; more as a <select> (spec §3). */
+export const SEG_MAX_CHOICES = 6;
 
 /**
  * Position 0..1 under `clientX` on a track whose live rect (getBoundingClientRect,

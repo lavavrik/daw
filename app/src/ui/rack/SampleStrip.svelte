@@ -36,6 +36,7 @@
   import { onDestroy } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { SampleMeta } from '../../state/project.svelte';
+  import { THEME } from '../theme';
   import { columns, fileMap, waveBase } from '../vis/waveMath';
   import {
     drawnValue, keyMarker, loopMin, loopTooShort, markerChanges, markerXs, stripEmptyText, STRIP_H, STRIP_W,
@@ -63,7 +64,8 @@
   const H = STRIP_H;
   const FLAG_W = 9;
   const FLAG_H = 12;
-  const COLORS: Record<Marker, string> = { start: '#4cd07d', end: '#ff5c6a', loopStart: '#f5d142' };
+  /** Marker colours (CSS: they go into style:background): start green, end red, loop start the accent. */
+  const COLORS: Record<Marker, string> = { start: 'var(--play)', end: 'var(--rec)', loopStart: 'var(--accent)' };
   const LABELS: Record<Marker, string> = { start: 'Start', end: 'End', loopStart: 'Loop start' };
 
   const xs = $derived(markerXs(region, W));
@@ -108,7 +110,8 @@
     const lanes = base.channels >= 2 ? 2 : 1;
     const laneH = ch / lanes;
     const amp = laneH / 2 - Math.max(1, Math.round(ratio));
-    ctx.fillStyle = '#ffffff14';
+    ctx.fillStyle = THEME.text; // the centre line, faint
+    ctx.globalAlpha = 0.08;
     for (let l = 0; l < lanes; l++) ctx.fillRect(0, Math.round(l * laneH + laneH / 2), cw, 1);
     ctx.fillStyle = col;
     ctx.globalAlpha = 0.8; // the markers stay the brightest thing on the strip
@@ -231,16 +234,17 @@
 </div>
 
 <style>
-  .strip { position: relative; flex: none; align-self: center; background: #15161a; border-radius: 2px; overflow: hidden; }
+  /* Tokens only: an --lcd screen in a well; the played region bright, the rest veiled. */
+  .strip { position: relative; flex: none; align-self: center; border-radius: var(--r-sm); background: var(--lcd); box-shadow: var(--well-shadow); overflow: hidden; }
   canvas { position: absolute; inset: 0; display: block; }
-  .dim { position: absolute; top: 0; bottom: 0; background: #000a; pointer-events: none; }
-  .loop { position: absolute; top: 0; bottom: 0; background: #f5d1421c; pointer-events: none; }
+  .dim { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--lcd) 65%, transparent); pointer-events: none; }
+  .loop { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 11%, transparent); pointer-events: none; }
   /* Too short to loop: hatched, and hoverable for its title (the flags sit above it). */
-  .loop.short { background: repeating-linear-gradient(135deg, #f5d14240 0 2px, transparent 2px 5px); pointer-events: auto; }
-  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #6f7280; pointer-events: none; }
+  .loop.short { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--accent) 25%, transparent) 0 2px, transparent 2px 5px); pointer-events: auto; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: var(--fs-lbl) var(--font-ui); color: var(--text-dim); pointer-events: none; }
   .line { position: absolute; top: 0; bottom: 0; width: 1px; pointer-events: none; }
   .flag { position: absolute; top: 0; box-sizing: border-box; cursor: ew-resize; touch-action: none; clip-path: polygon(0 0, 100% 0, 100% 60%, 0 100%); }
   .flag.end { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 60%); }
   .flag.bottom { top: auto; bottom: 0; clip-path: polygon(0 0, 100% 40%, 100% 100%, 0 100%); }
-  .flag:focus-visible { outline: 1px solid #fff; outline-offset: 0; clip-path: none; }
+  .flag:focus-visible { outline: 1px solid var(--text); outline-offset: 0; clip-path: none; }
 </style>

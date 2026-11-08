@@ -18,6 +18,10 @@
   // key up. Esc, Cmd/Ctrl+Z or redo during a drag cancel it (history/gestures.ts
   // registerDragCancel): the wheel goes back to where the drag started (Pitch:
   // the centre), and the key never undoes an older edit.
+  //
+  // Look (plan 20, the design board "Instrument rack"): --well grooves; Pitch
+  // has the white handle and a centre line, Mod fills in the track's colour
+  // with a matching glowing handle. Tokens only (the track colour is data).
   import type { AudioEngine } from '../audio/engine';
   import { moduleDef, paramIndex } from '../audio/catalog';
   import { onDestroy } from 'svelte';
@@ -129,11 +133,11 @@
   const pos = (k: Kind) => (value(k) - lo(k)) / (1 - lo(k));
 </script>
 
-<div class="wheels" data-testid="wheels">
+<div class="wheels" data-testid="wheels" style:--c={track.color}>
   {#each ['pitch', 'mod'] as const as k (k)}
     {@const v = value(k)}
     <div class="wheel">
-      <span class="name">{k === 'pitch' ? 'Pitch' : 'Mod'}</span>
+      <span class="name lbl">{k === 'pitch' ? 'Pitch' : 'Mod'}</span>
       <div
         class="track"
         class:pitch={k === 'pitch'}
@@ -162,22 +166,23 @@
       >
         {#if k === 'pitch'}<i class="centre"></i>{/if}
         <i class="fill" style:bottom="{k === 'pitch' ? Math.min(pos(k), 0.5) * 100 : 0}%" style:top="{(1 - (k === 'pitch' ? Math.max(pos(k), 0.5) : pos(k))) * 100}%"></i>
-        <i class="thumb" style:bottom="calc({pos(k) * 100}% - 3px)"></i>
+        <i class="thumb" style:bottom="calc({pos(k) * 100}% - 5px)"></i>
       </div>
-      <span class="val" data-testid="wheel-{k}-value">{k === 'pitch' ? bendLabel(v, range) : modLabel(v)}</span>
+      <span class="val mono" data-testid="wheel-{k}-value">{k === 'pitch' ? bendLabel(v, range) : modLabel(v)}</span>
     </div>
   {/each}
 </div>
 
 <style>
-  .wheels { flex: none; display: flex; gap: 6px; padding: 2px 8px 2px 0; margin-right: 8px; border-right: 1px solid #2a2c33; align-self: flex-start; }
-  .wheel { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 34px; }
-  .name, .val { font-size: 10px; color: #9a9dab; white-space: nowrap; }
-  .val { color: #c9cbd3; font-variant-numeric: tabular-nums; }
-  .track { position: relative; width: 20px; background: #15161a; border: 1px solid #3a3d48; border-radius: 4px; cursor: ns-resize; touch-action: none; overflow: hidden; }
-  .track:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
+  .wheels { flex: none; display: flex; gap: 6px; padding: 2px 10px 2px 0; margin-right: 8px; border-right: 1px solid var(--line); align-self: flex-start; }
+  .wheel { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 34px; }
+  .name, .val { white-space: nowrap; }
+  .val { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text); }
+  .track { position: relative; width: 22px; border-radius: 11px; background: var(--well); box-shadow: var(--well-shadow); cursor: ns-resize; touch-action: none; overflow: hidden; }
+  .track:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .track i { position: absolute; left: 0; right: 0; display: block; pointer-events: none; }
-  .centre { top: 50%; height: 1px; background: #4a4e5b; }
-  .fill { background: color-mix(in srgb, #f0a23a 30%, transparent); }
-  .thumb { height: 6px; background: #f0a23a; border-radius: 2px; }
+  .centre { top: 50%; height: 1px; background: var(--line); }
+  .fill { background: color-mix(in srgb, var(--c) 40%, transparent) var(--gloss); }
+  .track .thumb { left: 3px; right: 3px; height: 10px; border-radius: 4px; background: var(--c) var(--gloss); box-shadow: var(--handle-shadow), 0 0 8px color-mix(in srgb, var(--c) 50%, transparent); }
+  .track.pitch .thumb { background: var(--handle); box-shadow: var(--handle-shadow); }
 </style>

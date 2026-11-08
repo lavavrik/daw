@@ -636,8 +636,14 @@ test('scope edits while playing cause no dropouts', async ({ page }) => {
     for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowUp');
   }
   for (const [k, choice] of [['trig', 'Free'], ['sync', 'Sync'], ['division', '1 bar'], ['mode', 'XY'], ['mode', 'A+B']]) {
-    await page.getByTestId(`knob-8-${k}`).getByRole('radio', { name: choice, exact: true }).click();
+    // Division has 8 choices: a select (spec §3); the rest are seg rows.
+    if (k === 'division') await page.getByTestId(`knob-8-${k}`).selectOption({ label: choice });
+    else await page.getByTestId(`knob-8-${k}`).getByRole('radio', { name: choice, exact: true }).click();
   }
+  // The readout is written when the canvas redraws, which it does only on
+  // screen: the card is taller than the rail with its sliders, so the last
+  // controls scrolled the screen out of view.
+  await page.getByTestId('scope-8').scrollIntoViewIfNeeded();
   await expect(page.getByTestId('scope-8')).toHaveAttribute('data-readout', '1 bar · sync');
   // Unplug A (pick it up from the input, drop it with Delete), then remove the module.
   await page.getByTestId('jack-8-in-a').focus();

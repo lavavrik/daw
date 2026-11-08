@@ -24,17 +24,8 @@ const ALLOWED: string[] = [
   'ui/Settings.svelte',
   'ui/StartOverlay.svelte',
   'ui/TopBar.svelte',
-  'ui/Wheels.svelte',
   'ui/acid/AcidSteps.svelte',
   'ui/pianoroll/PianoRoll.svelte',
-  'ui/rack/Jack.svelte',
-  'ui/rack/Knob.svelte',
-  'ui/rack/ModulePanel.svelte',
-  'ui/rack/Rack.svelte',
-  'ui/rack/SampleStrip.svelte',
-  'ui/rack/ScopeView.svelte',
-  'ui/rack/ShapePreview.svelte',
-  'ui/rack/VoiceLeds.svelte',
 ];
 
 function svelteFiles(dir: string): string[] {

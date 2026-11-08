@@ -38,9 +38,15 @@ Rules of use:
 - Text on any vivid colour (accent, play, a track colour) is `--on-color`.
 - Track, category and signal colours are **data**: a component gets them from
   state or `theme.ts` and passes them in as `--c` (`style:--c={color}`).
-- `CATEGORY_COLORS` and `SIGNAL_COLORS` use the spec's keys verbatim; the
+- `CATEGORY_COLORS` and `SIGNAL_COLORS` use the spec's keys verbatim. The
   catalog's categories (`source/shaping/utility/effect`) and signal kinds
-  (`audio/cv/gate/pitch`) are mapped onto them by the rack task.
+  (`audio/cv/gate/pitch`) map onto them in `theme.ts`: `moduleColor(def)`
+  (category map plus per-module overrides) and `jackColor(port)` (pitch is
+  cv; a port named `vel` is vel). `docs/architecture/modular.md` ("Look and
+  param controls") has the table's reasoning; `theme.test.ts` checks every
+  catalog module, category and port gets a colour.
+- Canvas code reads colours from `THEME`; a faint shade is a token drawn at
+  a low `globalAlpha`, not a new literal (the rack's scope and sample strip).
 
 ## Depth recipes
 These are the only shadows and gradients. Pick one:

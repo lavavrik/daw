@@ -3,7 +3,7 @@ import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
-import { CLICK_SLOP_PX, DRAG_PX, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos, ZERO_ZONE } from './knobMath';
+import { CLICK_SLOP_PX, DRAG_PX, isClickTravel, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos, ZERO_ZONE } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
   const d = moduleDef(mod);
@@ -160,8 +160,13 @@ describe('slider maths', () => {
     expect(fromPos(cutoff, sliderDrag(toPos(cutoff, 20), 100, 200, false))).toBeCloseTo(Math.sqrt(20 * 20000));
   });
 
-  it('a click is less than CLICK_SLOP_PX of travel', () => {
+  it('a click is less than CLICK_SLOP_PX of horizontal travel; vertical travel does not count', () => {
     expect(CLICK_SLOP_PX).toBe(3);
+    expect(isClickTravel(100, 100)).toBe(true);
+    expect(isClickTravel(100, 102.9)).toBe(true);
+    expect(isClickTravel(100, 97.1)).toBe(true);
+    expect(isClickTravel(100, 103)).toBe(false);
+    expect(isClickTravel(100, 97)).toBe(false);
   });
 
   it('fillSpan: unipolar params fill from the left, bipolar ones from zero', () => {

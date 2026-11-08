@@ -23,6 +23,7 @@
   import { moduleDef } from '../../audio/catalog';
   import { SCOPE_FLAG, SCOPE_HDR, VIS_HDR, VIS_WANT, type VisViews } from '../../audio/visLayout';
   import { VIS_SCOPE_HDR, VIS_SCOPE_RING, VIS_SCOPES } from '../../audio/protocol';
+  import { SIGNAL_COLORS, THEME } from '../theme';
   import { frameLoop } from '../vis/frameLoop';
   import { createIdleDriver, type IdleDriver } from '../vis/idleDriver';
   import { createSyncHold, findScope, readout, scopeWindow, windowFrames, windowLen } from '../vis/scopeMath';
@@ -40,8 +41,9 @@
 
   const W = 168;
   const H = 96;
-  const A = '#f0a23a';
-  const B = '#4cc9f0';
+  // Canvas colours from the theme (ui/theme.ts): trace A the accent, B cv blue.
+  const A = THEME.accent;
+  const B = SIGNAL_COLORS.cv;
   const IDLE_MS = 250;
   const MASK = VIS_SCOPE_RING - 1;
   const DIVISIONS = moduleDef('scope').params[2].choices;
@@ -88,10 +90,11 @@
   }
 
   function grid(c: CanvasRenderingContext2D) {
-    c.fillStyle = '#0f1013';
+    c.fillStyle = THEME.lcd;
     c.fillRect(0, 0, W, H);
     c.lineWidth = 1;
-    c.strokeStyle = '#ffffff12';
+    c.strokeStyle = THEME.text; // faint graticule: the text colour at low alpha
+    c.globalAlpha = 0.07;
     c.beginPath();
     for (let i = 1; i < 10; i++) {
       const x = Math.round((i * W) / 10) + 0.5;
@@ -104,11 +107,12 @@
       c.lineTo(W, y);
     }
     c.stroke();
-    c.strokeStyle = '#ffffff24';
+    c.globalAlpha = 0.14;
     c.beginPath();
     c.moveTo(0, H / 2 + 0.5);
     c.lineTo(W, H / 2 + 0.5);
     c.stroke();
+    c.globalAlpha = 1;
   }
 
   /** One trace (`off` 0 = A, 2 = B) of entries `start..start+len`. */
@@ -153,7 +157,7 @@
       c.stroke();
     }
     const mx = off === 0 ? W - 18 : W - 9;
-    c.font = '7px system-ui, sans-serif';
+    c.font = `7px ${THEME.fontUi}`;
     if (over) c.fillText('▲', mx, 8);
     if (under) c.fillText('▼', mx, H - 2);
   }
@@ -239,8 +243,8 @@
       c.restore();
     }
     c.globalAlpha = 1;
-    c.font = '9px system-ui, sans-serif';
-    c.fillStyle = '#8d90a0';
+    c.font = `9px ${THEME.fontMono}`;
+    c.fillStyle = THEME.textDim;
     c.textBaseline = 'alphabetic';
     const text = readout(params[0] ?? 5, sync, division);
     c.fillText(text, 4, H - 4);
@@ -249,7 +253,7 @@
     if (box.dataset.tag !== tag) box.dataset.tag = tag;
     if (isXY) c.fillText('XY', W - 16, H - 4);
     if (tag) {
-      c.fillStyle = tag === 'idle' ? '#6f7280' : '#ff8a92';
+      c.fillStyle = tag === 'idle' ? THEME.textDim : THEME.rec;
       const tw = c.measureText(tag).width;
       c.fillText(tag, W - tw - 4, 11);
     }
@@ -285,9 +289,10 @@
 </button>
 
 <style>
-  .scope { position: relative; display: block; padding: 0; margin: 0 auto; border: 1px solid #2e3038; border-radius: 3px; background: #0f1013; cursor: pointer; line-height: 0; }
-  .scope:focus-visible { outline: 1px solid #f0a23a; }
-  .scope.frozen { border-color: #4cc9f0; }
+  /* An --lcd screen in a well (tokens only); frozen: a cv-blue ring and pause mark. */
+  .scope { position: relative; display: block; padding: 0; margin: 0 auto; border: 0; border-radius: var(--r-sm); background: var(--lcd); box-shadow: var(--well-shadow); cursor: pointer; line-height: 0; overflow: hidden; }
+  .scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .scope.frozen { box-shadow: var(--well-shadow), inset 0 0 0 1px var(--sig-cv); }
   canvas { display: block; }
-  .pause { position: absolute; top: 3px; left: 4px; font-size: 9px; line-height: 1; color: #4cc9f0; }
+  .pause { position: absolute; top: 3px; left: 4px; font-size: 9px; line-height: 1; color: var(--sig-cv); }
 </style>

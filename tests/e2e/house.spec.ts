@@ -60,7 +60,9 @@ test('Sax rack shows a Formant', async ({ page }) => {
   const fi = 4; // the Sax's Formant (housePatches.ts idx 4; house_patches.rs checks the same)
   const panel = page.getByTestId(`module-${fi}`);
   await expect(panel).toBeVisible();
-  await expect(panel.locator(`[data-testid^="knob-${fi}-"]`)).toHaveCount(10);
+  // Ten param controls (a slider's `-track` part, no role, is not one; nor is the
+  // Formant's own `track` param's track, `knob-4-track-track`).
+  await expect(panel.locator(`[data-testid^="knob-${fi}-"]:is([role], select)`)).toHaveCount(10);
   // f1 reads the patch's value (520 Hz), in the knob's own format.
   await expect(page.getByTestId(`knob-${fi}-f1`)).toContainText('520');
 });

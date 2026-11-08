@@ -1,9 +1,19 @@
 <script lang="ts">
-  // One module in the rack: a header in its category colour (source orange,
-  // shaping purple, utility grey-blue, effect pink) with the module's name and
-  // a × to remove it; then its params (choice params as segmented controls,
-  // the rest as knobs), then the input jacks, then the output jacks on a dark
-  // plate (VCV convention: outputs are the boxed ones).
+  // One module in the rack (plan 20 Task 9; spec §4 "Rack", the design
+  // board "Instrument rack"): a --lift card with a glossy header in its
+  // category colour (ui/theme.ts moduleColor: source, filter, modulation,
+  // utility, effect, output) holding the module's name and a × to remove it;
+  // then its params; then the input jacks (left) and the output jacks (right,
+  // on a recessed plate: VCV's convention, outputs are the boxed ones).
+  //
+  // Params (spec §3), in this order:
+  // - choice params: ChoiceParam (a ChoiceSeg row up to 6 choices, a
+  //   <select> past that), full width;
+  // - the module's hero param, if it has one (HERO below): a big dial;
+  // - every other continuous or integer param: a slider, one column, or two
+  //   when the module has more than SLIDER_ONE_COLUMN of them (keeps the
+  //   card short: the Formant has ten).
+  // Every control keeps the test id `knob-<idx>-<param>`.
   //
   // Sample Player: its `sample` param (a sample-pool id, -1 = none) is a
   // dropdown of the project's loaded samples instead of a knob, and the
@@ -17,14 +27,14 @@
   // `lastNote` (the last live note, input/lastNote.svelte.ts; disabled until
   // one has arrived since load).
   //
-  // Scope (plan 12): its screen (ScopeView.svelte) sits above the knobs;
+  // Scope (plan 12): its screen (ScopeView.svelte) sits above the params;
   // Rack passes `scope` = the track's engine slot (with the module idx it
   // finds its scope-bank slot) and the sample rate.
   //
   // ADSR / LFO (plan 12 Task 5): a shape preview (ShapePreview.svelte) above
-  // the knobs, following the knob values shown (lanes included).
+  // the params, following the values shown (lanes included).
   //
-  // Knobs follow their automation lanes (not a Scope's: its params only
+  // Sliders and dials follow their automation lanes (not a Scope's: its params only
   // change the view) (`owner` = the track: Knob.svelte
   // registers module idx + param name with the app's autoBus) and offer
   // "Automate" on right-click when the param is continuous.
@@ -42,8 +52,8 @@
   import { isSampleDrag } from '../../library/drag';
   import type { RackModule, SampleMeta } from '../../state/project.svelte';
   import { delayClampNote } from '../mixer/mixMath';
-  import { categoryColor } from './cables';
-  import ChoiceSeg from './ChoiceSeg.svelte';
+  import { moduleColor } from '../theme';
+  import ChoiceParam from './ChoiceParam.svelte';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
   import ScopeView from './ScopeView.svelte';
@@ -155,17 +165,18 @@
    * with the mixer delay: same table, same rule). */
   const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
-  // Redesign rollout (plan 20): the Filter's reso is the first slider and its
-  // mode the first ChoiceSeg (Task 3); Task 9 moves the rest of the rack
-  // (every non-hero continuous/integer param a slider, every choice a seg).
-  const sliderParam = (name: string) => def.id === 'filter' && name === 'reso';
-  const segParam = (name: string) => def.id === 'filter' && name === 'mode';
-  const color = $derived(categoryColor(def.category));
+  /** The one param per module kind that stays a dial (spec §3 "Where each is used"). */
+  const HERO: Record<string, string> = { filter: 'cutoff', sample_player: 'root', lfo: 'rate' };
+  /** Up to this many sliders stack in one column; more go two per row. */
+  const SLIDER_ONE_COLUMN = 5;
+  const color = $derived(moduleColor(def));
   const shown = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.i !== sampleIdx));
   const choices = $derived(shown.filter((x) => x.pd.choices.length));
-  const knobs = $derived(shown.filter((x) => !x.pd.choices.length));
-  // 1 knob: 1 column; up to 4: 2 columns; more: 4 (keeps the rail short).
-  const cols = $derived(knobs.length <= 1 ? 1 : knobs.length <= 4 ? 2 : 4);
+  const hero = $derived(shown.find((x) => !x.pd.choices.length && HERO[def.id] === x.pd.name) ?? null);
+  const sliders = $derived(shown.filter((x) => !x.pd.choices.length && x !== hero));
+  const twoCols = $derived(sliders.length > SLIDER_ONE_COLUMN);
+  /** Continuous knobs follow their automation lanes (not a Scope's: its params only change the view). */
+  const autoFor = (name: string) => (owner && !scope ? { owner, target: { kind: 'rack' as const, module: module.idx, param: name } } : null);
 </script>
 
 <div
@@ -184,58 +195,64 @@
     <span class="title">{title}</span>
     <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}>×</button>
   </header>
-  {#if samples && sampleIdx >= 0}
-    <label class="smp" title="Drop a sample here (library or Finder), or pick one the project has">
-      <span>Sample</span>
-      <select
-        data-testid={`sample-${module.idx}`} value={sampleValue} onchange={pickSample} onkeydown={selectKey}
-        onfocus={onsamplesopen} onpointerdown={onsamplesopen}
-      >
-        <option value={-1}>— none —</option>
-        {#if sampleValue >= 0 && !samples.some((s) => s.id === sampleValue)}
-          <option value={sampleValue} disabled>#{sampleValue} (missing)</option>
-        {/if}
-        {#each samples as s (s.id)}
-          <option value={s.id}>{s.name}</option>
-        {/each}
-      </select>
-    </label>
-    {#if strip}
-      <SampleStrip idx={module.idx} sampleId={sampleValue} meta={sampleMeta} {sampleRate} region={strip.region} loop={strip.loop} {color} onchange={markerChange} />
+  <!-- No negative margins anywhere in the card: Chrome counts them differently
+       for a flow (flex item) and a positioned (width: max-content) panel, and
+       the two widths must agree (rackLayout snaps to the measured width). -->
+  <div class="body">
+    {#if samples && sampleIdx >= 0}
+      <label class="smp" title="Drop a sample here (library or Finder), or pick one the project has">
+        <span class="lbl">Sample</span>
+        <select
+          data-testid={`sample-${module.idx}`} value={sampleValue} onchange={pickSample} onkeydown={selectKey}
+          onfocus={onsamplesopen} onpointerdown={onsamplesopen}
+        >
+          <option value={-1}>— none —</option>
+          {#if sampleValue >= 0 && !samples.some((s) => s.id === sampleValue)}
+            <option value={sampleValue} disabled>#{sampleValue} (missing)</option>
+          {/if}
+          {#each samples as s (s.id)}
+            <option value={s.id}>{s.name}</option>
+          {/each}
+        </select>
+      </label>
+      {#if strip}
+        <SampleStrip idx={module.idx} sampleId={sampleValue} meta={sampleMeta} {sampleRate} region={strip.region} loop={strip.loop} {color} onchange={markerChange} />
+      {/if}
     {/if}
-  {/if}
-  {#if scope}
-    <ScopeView track={scope.track} idx={module.idx} params={module.params} sampleRate={scope.sampleRate} {tempo} />
-  {/if}
-  {#if def.id === 'adsr' || def.id === 'lfo'}
-    <ShapePreview {def} idx={module.idx} params={module.params} {owner} {tempo} {color} />
-  {/if}
-  {#if def.params.length}
-    <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>
-      {#each choices as { pd, i } (pd.name)}
-        {#if segParam(pd.name)}
-          <ChoiceSeg def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+    {#if scope}
+      <ScopeView track={scope.track} idx={module.idx} params={module.params} sampleRate={scope.sampleRate} {tempo} />
+    {/if}
+    {#if def.id === 'adsr' || def.id === 'lfo'}
+      <ShapePreview {def} idx={module.idx} params={module.params} {owner} {tempo} {color} />
+    {/if}
+    {#if shown.length}
+      <div class="params" class:two={twoCols}>
+        {#each choices as { pd, i } (pd.name)}
+          <ChoiceParam def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
             note={noteFor(pd.name, module.params[i])} />
-        {:else}
-          <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-            note={noteFor(pd.name, module.params[i])} />
+        {/each}
+        {#if hero}
+          {@const { pd, i } = hero}
+          <div class="hero">
+            <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+              auto={autoFor(pd.name)} />
+          </div>
         {/if}
-      {/each}
-      {#each knobs as { pd, i } (pd.name)}
-        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-          auto={owner && !scope ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null}
-          variant={sliderParam(pd.name) ? 'slider' : 'knob'} />
-      {/each}
-    </div>
-  {/if}
-  {#if strip}
-    {@const root = strip.at.root}
-    <button
-      class="root-last" data-testid={`root-from-last-${module.idx}`} disabled={lastNote === null}
-      title={lastNote === null ? 'Play a note (keyboard or MIDI) first: Root then takes it' : `Set Root to the last played note (${noteName(lastNote)})`}
-      onclick={() => { if (lastNote !== null && lastNote !== module.params[root]) onparam(root, lastNote); }}
-    >Root ← last note{lastNote !== null ? ` (${noteName(lastNote)})` : ''}</button>
-  {/if}
+        {#each sliders as { pd, i } (pd.name)}
+          <Knob variant="slider" def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+            auto={autoFor(pd.name)} />
+        {/each}
+      </div>
+    {/if}
+    {#if strip}
+      {@const root = strip.at.root}
+      <button
+        class="btn root-last" data-testid={`root-from-last-${module.idx}`} disabled={lastNote === null}
+        title={lastNote === null ? 'Play a note (keyboard or MIDI) first: Root then takes it' : `Set Root to the last played note (${noteName(lastNote)})`}
+        onclick={() => { if (lastNote !== null && lastNote !== module.params[root]) onparam(root, lastNote); }}
+      >Root ← last note{lastNote !== null ? ` (${noteName(lastNote)})` : ''}</button>
+    {/if}
+  </div>
   <div class="spacer" data-stretch></div>
   <!-- inputs, then outputs (boxed); side by side when they fit, keeps the rail short -->
   <div class="ports">
@@ -267,31 +284,38 @@
 </div>
 
 <style>
+  /* The card (spec §4 "Rack"): --lift, 12 px corners, a glossy header in the
+     category colour (--c) with dark text. Tokens only. */
+  .panel { flex: none; display: flex; flex-direction: column; min-width: 180px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift); color: var(--text); }
   .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
-  .smp { display: flex; flex-direction: column; gap: 2px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #8d90a0; }
-  .smp select { font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; max-width: 120px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 2px; }
-  .root-last { align-self: center; font: inherit; font-size: 10px; background: #15161a; color: #d7d9e0; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 6px; cursor: pointer; }
-  .root-last:hover:not(:disabled) { border-color: var(--c); color: #fff; }
-  .root-last:disabled { opacity: 0.45; cursor: default; }
-  .root-last:focus-visible { outline: 1px solid #f0a23a; }
-  .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
-  header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); cursor: grab; touch-action: none; user-select: none; }
-  header:focus-visible { outline: 1px solid #f0a23a; outline-offset: -1px; }
+  header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 12px; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); cursor: grab; touch-action: none; user-select: none; }
+  header:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel).
      border-box: the row's min-height is a measured offsetHeight. */
   .panel.placed { position: absolute; width: max-content; box-sizing: border-box; }
-  .panel.lifted { z-index: 3; box-shadow: 0 8px 24px #000c; opacity: 0.92; }
+  .panel.lifted { z-index: 3; box-shadow: var(--lift), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
-  .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }
-  .x { border: 0; background: transparent; color: #8d90a0; font-size: 14px; line-height: 1; padding: 0 2px; cursor: pointer; opacity: 0.6; }
-  .panel:hover .x, .x:focus-visible { opacity: 1; }
-  .x:hover { color: #ff8a92; }
-  .x:focus-visible { outline: 1px solid #f0a23a; }
-  .params { display: grid; gap: 4px 2px; justify-content: center; }
+  .title { flex: 1; font: 700 var(--fs-ctl) var(--font-ui); white-space: nowrap; }
+  .x { padding: 0 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
+  .panel:hover .x, .x:focus-visible { opacity: 0.85; }
+  .x:hover { opacity: 1; }
+  .x:focus-visible { outline: 2px solid var(--on-color); }
+  .body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+  .smp { display: flex; flex-direction: column; gap: 4px; }
+  .smp select { max-width: 200px; }
+  .root-last { align-self: center; padding: 4px 10px; font-size: var(--fs-lbl); }
+  /* Choices and the hero span the grid; sliders take a cell each (Knob's
+     slider spans the row by default: in two columns it takes one). */
+  .params { display: grid; grid-template-columns: minmax(150px, 1fr); gap: 8px 14px; }
+  .params.two { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .params.two > :global(.slider) { grid-column: auto; }
+  .hero { grid-column: 1 / -1; display: flex; justify-content: center; --dial: 60px; }
+  /* The spacer (data-stretch, a direct child) is the only part that grows: Rack measures the natural height without it. */
   .spacer { flex: 1; }
-  .ports { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 4px; border-top: 1px solid #2e3038; padding-top: 4px; }
-  .group { display: flex; align-items: center; gap: 2px; flex: 1 1 auto; padding: 2px; }
-  .outs { background: #15161a; border: 1px solid #2e3038; border-radius: 3px; }
-  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6f7280; }
-  .jacks { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; justify-content: center; }
+  /* Inputs left, outputs right on a recessed plate; they wrap when the card is narrow. */
+  .ports { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+  .group { display: flex; align-items: center; gap: 2px; padding: 2px 4px; }
+  .outs { margin-left: auto; border-radius: var(--r-md); background: var(--work); box-shadow: var(--well-shadow); }
+  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font: 600 9px var(--font-ui); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
+  .jacks { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
 </style>

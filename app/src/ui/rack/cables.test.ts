@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cableBottom, cablePath, SIGNAL_COLORS } from './cables';
+import { jackColor } from '../theme';
+import { cableBottom, cablePath } from './cables';
 
 /** "M x y C x1 y1 x2 y2 x y" -> the 8 numbers. */
 function nums(d: string): number[] {
@@ -35,9 +36,13 @@ describe('cablePath', () => {
   });
 });
 
-describe('SIGNAL_COLORS', () => {
-  it('has the agreed colour per signal kind', () => {
-    expect(SIGNAL_COLORS).toEqual({ audio: '#5ec4ff', pitch: '#f0a23a', gate: '#7ddc7d', cv: '#b28cff' });
+describe('cable colours', () => {
+  it('a cable takes its source jack colour (spec §4)', () => {
+    expect(jackColor({ name: 'out', signal: 'audio' })).toBe('#ff9f43');
+    expect(jackColor({ name: 'env', signal: 'cv' })).toBe('#5cc8ff');
+    expect(jackColor({ name: 'pitch', signal: 'pitch' })).toBe('#5cc8ff');
+    expect(jackColor({ name: 'gate', signal: 'gate' })).toBe('#7ee081');
+    expect(jackColor({ name: 'vel', signal: 'cv' })).toBe('#9b8cff');
   });
 });
 

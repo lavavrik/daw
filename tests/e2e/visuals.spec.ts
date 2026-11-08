@@ -352,11 +352,11 @@ test('ADSR preview follows its knobs', async ({ page }) => {
   const att0 = Number(await svg.getAttribute('data-attack'));
   const text0 = await label.textContent();
   expect(rel0).toBeGreaterThan(0);
-  // Drag Release up: its segment widens (and the others give way), the label follows.
-  const k = await centre(page, 'knob-5-release');
+  // Drag the Release slider right: its segment widens (and the others give way), the label follows.
+  const k = await centre(page, 'knob-5-release-track');
   await page.mouse.move(k.x, k.y);
   await page.mouse.down();
-  await page.mouse.move(k.x, k.y - 60, { steps: 6 });
+  await page.mouse.move(k.x + 40, k.y, { steps: 6 });
   await page.mouse.up();
   await expect.poll(async () => Number(await svg.getAttribute('data-release'))).toBeGreaterThan(rel0 * 1.2);
   expect(await label.textContent()).not.toBe(text0);

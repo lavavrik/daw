@@ -332,7 +332,7 @@ const PIANO_STAB: Patch = {
     { idx: 4, id: 'osc', params: { wave: 3, octave: -1 } },
     // Mix: saw, square, then the body layers (triangle, sub sine). The sub is a
     // touch louder: it carries most of the depth; much more and low chords boom.
-    { idx: 5, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.5, lvl4: 0.4 } },
+    { idx: 5, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.35, lvl4: 0.4 } },
     // LP12 opened by the hammer envelope.
     { idx: 6, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
     // Hammer envelope: instant, decays over ~0.5 s; velocity → brighter.

@@ -1254,7 +1254,9 @@
         banners.error = err instanceof Error ? err.message : String(err);
         return;
       }
-      if (files[0]) await addSamplerTrack(p, engine, files[0]);
+      if (!files[0]) return;
+      if (files.length > 1) flashHint('A sampler track takes one sample: using the first');
+      await addSamplerTrack(p, engine, files[0]);
     })();
   }
 

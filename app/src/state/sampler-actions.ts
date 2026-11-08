@@ -34,6 +34,9 @@ export async function addSamplerTrack(
 
   if (!file) return edit(p, 'Add sampler track', () => addSynthTrack(p, engine, uniqueTrackName(p, 'Sampler'), SAMPLER_PATCH));
 
+  // A sample imported here stays in the pool, unreferenced, if the race below
+  // is lost (session replaced, tracks filled up during the decode): same as a
+  // drop whose target vanished elsewhere; the project save keeps only what is used.
   const r = await importSample(p, engine, file, () => p.generation === generation);
   if (!r.ok) {
     if (r.error) banners.error = r.error;
@@ -46,7 +49,7 @@ export async function addSamplerTrack(
     return t;
   });
   if (!track) {
-    banners.error = p.tracks.length >= MAX_TRACKS ? TRACKS_FULL_TEXT : null;
+    if (p.generation === generation) banners.error = TRACKS_FULL_TEXT; // only that branch has news
     return null;
   }
   if (r.deferred) {

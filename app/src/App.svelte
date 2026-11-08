@@ -28,7 +28,7 @@
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
   import { lastLive } from './input/lastNote.svelte';
-  import { observeCommand, resetWheels } from './input/wheels.svelte';
+  import { observeCommand, resetWheels, wheels } from './input/wheels.svelte';
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
@@ -509,6 +509,7 @@
     // mod / reset move the on-screen wheels (input/wheels.svelte.ts). A new
     // engine starts with both wheels at rest.
     resetWheels();
+    window.__daw.wheels = wheels; // e2e: the wheels' state after the strip unmounts
     e.onCommand = (op, a) => {
       commandEdits(project, op);
       observeCommand(op, a);

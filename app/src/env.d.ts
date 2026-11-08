@@ -39,6 +39,8 @@ declare global {
       library: Library;
       /** Undo/redo (null until audio starts). */
       history: History | null;
+      /** The Pitch / Mod wheels' state (input/wheels.svelte.ts), for e2e. */
+      wheels?: { bend: number; mod: number };
       /** serialize(project): what a save writes and undo snapshots (e2e). */
       snapshot: () => ProjectJson;
     };

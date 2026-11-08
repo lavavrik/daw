@@ -42,14 +42,24 @@
   type Kind = 'pitch' | 'mod';
   const lo = (k: Kind) => (k === 'pitch' ? -1 : 0);
   const value = (k: Kind) => (k === 'pitch' ? wheels.bend : wheels.mod);
+  /**
+   * The pitch value this wheel last sent while holding a bend (drag or held
+   * arrow key), or null. Springing back only happens while the engine still
+   * has that value, so a blur or key-up never re-centres a bend the
+   * hardware wheel is holding.
+   */
+  let ownBend: number | null = null;
   function send(k: Kind, v: number) {
+    if (!Number.isFinite(v)) return; // keep the mirror and the engine in step
     const c = Math.min(1, Math.max(lo(k), v));
+    if (k === 'pitch') ownBend = c === 0 ? null : c;
     // The engine's onCommand hook moves `wheels` (the single source of truth).
     engine.send(k === 'pitch' ? Op.PITCH_BEND : Op.MOD_WHEEL, c);
   }
-  /** Pitch at rest: centre. Only sends when off-centre (a hardware wheel sends one 0 too). */
+  /** Pitch at rest: back to the centre, if the bend is still ours. */
   function release(k: Kind) {
-    if (k === 'pitch' && wheels.bend !== 0) send('pitch', 0);
+    if (k === 'pitch' && ownBend !== null && wheels.bend === ownBend) send('pitch', 0);
+    if (k === 'pitch') ownBend = null;
   }
 
   let drag: { k: Kind; y0: number; v0: number; id: number } | null = null;
@@ -62,12 +72,18 @@
   }
   function move(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.id) return;
+    // A lost pointerup (window blur, alt-tab): no button is down any more.
+    if (e.buttons === 0) return up(e);
     const span = 1 - lo(drag.k); // pitch 2, mod 1
     send(drag.k, drag.v0 + ((drag.y0 - e.clientY) / H) * span);
   }
   function up(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.id) return;
-    const k = drag.k;
+    end();
+  }
+  /** Stop dragging (if dragging) and let Pitch spring back. */
+  function end() {
+    const k = drag?.k ?? 'pitch';
     drag = null;
     release(k);
   }
@@ -80,7 +96,13 @@
     send(k, k === 'pitch' ? 0 : v0);
     return true;
   }
-  onDestroy(registerDragCancel(cancel));
+  const unregister = registerDragCancel(cancel);
+  // Unmounting mid-drag or mid-key-hold (another track selected, the mixer
+  // opened) must not leave the pitch bent: no pointerup / blur arrives then.
+  onDestroy(() => {
+    unregister();
+    end();
+  });
 
   function key(k: Kind, e: KeyboardEvent) {
     if (e.key === 'Escape' && cancel()) {
@@ -136,7 +158,7 @@
         ondblclick={() => send(k, 0)}
         onkeydown={(e) => key(k, e)}
         onkeyup={(e) => keyUp(k, e)}
-        onblur={() => release(k)}
+        onblur={end}
       >
         {#if k === 'pitch'}<i class="centre"></i>{/if}
         <i class="fill" style:bottom="{k === 'pitch' ? Math.min(pos(k), 0.5) * 100 : 0}%" style:top="{(1 - (k === 'pitch' ? Math.max(pos(k), 0.5) : pos(k))) * 100}%"></i>

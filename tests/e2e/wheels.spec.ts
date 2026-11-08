@@ -91,3 +91,52 @@ test('Cmd/Ctrl+Z during a mod drag cancels it and undoes nothing', async ({ page
   await page.mouse.up();
   expect(await undoLabel(page)).toBe('Add synth track');
 });
+
+const engineWheels = (page: Page) => page.evaluate(() => ({ ...(window as Any).__daw.wheels }));
+
+test('leaving the synth tabs mid-drag springs the pitch back', async ({ page }) => {
+  await start(page);
+  const box = (await page.getByTestId('wheel-pitch').boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 40, { steps: 3 });
+  await expect.poll(async () => (await engineWheels(page)).bend).toBeGreaterThan(0.5);
+  await page.keyboard.press('Alt+5'); // the Mixer tab: the strip unmounts
+  await expect(page.getByTestId('wheels')).toHaveCount(0);
+  await expect.poll(async () => (await engineWheels(page)).bend).toBe(0);
+  await page.mouse.up();
+});
+
+test('blur mid-drag ends the drag; a held hardware bend is never re-centred by the screen', async ({ page }) => {
+  await start(page);
+  const box = (await page.getByTestId('wheel-pitch').boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 30, { steps: 3 });
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+  await expect.poll(() => now(page, 'pitch')).toBe(0);
+  await page.mouse.move(x, y - 50, { steps: 3 }); // the drag is over: no re-bend
+  expect(await now(page, 'pitch')).toBe(0);
+  await page.mouse.up();
+  // The hardware holds a bend; focusing and leaving the wheel leaves it alone.
+  await inject(page, [0xe0, 0x00, 0x60]);
+  await expect.poll(() => now(page, 'pitch')).toBeGreaterThan(0.4);
+  await page.getByTestId('wheel-pitch').focus();
+  await page.getByTestId('wheel-pitch').blur();
+  expect(await now(page, 'pitch')).toBeGreaterThan(0.4);
+});
+
+test('wheel keys: Home resets, arrows step, Escape without a drag does nothing', async ({ page }) => {
+  await start(page);
+  await page.getByTestId('wheel-mod').focus();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(() => now(page, 'mod')).toBe(0.05);
+  // Escape with no drag does nothing to the wheels.
+  await page.keyboard.press('Escape');
+  expect(await now(page, 'mod')).toBe(0.05);
+});

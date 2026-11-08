@@ -735,7 +735,6 @@ test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({
   await page.screenshot({ path: 'test-results/automation-curve.png' });
 
   // One undo takes the bend back (the points stay); redo brings it again.
-  // (Before playing: the switch to Song mode is an undo entry of its own.)
   await page.keyboard.press(undoKey);
   await expect.poll(() => savedLanes(page, slot)).toEqual(straight);
   await page.keyboard.press('ControlOrMeta+Shift+z');

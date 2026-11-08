@@ -205,9 +205,23 @@ export function jsonEqual(a: Json, b: Json): boolean {
 
 /** fingerprintOf(a) === fingerprintOf(b), without building the strings: equal but for the selection. */
 export function sameProject(a: ProjectJson, b: ProjectJson): boolean {
+  return equalExcept(a, b, ['selection']);
+}
+
+/**
+ * What the undo history compares (history/history.ts): equal but for the
+ * selection and the mode. Both are saved but not undone: selecting is not
+ * an edit, and the mode is which transport ran last (plan 20: a transport
+ * switch is not an undo entry; state/song-actions.ts setMode).
+ */
+export function sameUndoState(a: ProjectJson, b: ProjectJson): boolean {
+  return equalExcept(a, b, ['selection', 'mode']);
+}
+
+function equalExcept(a: ProjectJson, b: ProjectJson, skip: (keyof ProjectJson)[]): boolean {
   if (a === b) return true;
   for (const k of Object.keys(a) as (keyof ProjectJson)[]) {
-    if (k !== 'selection' && !jsonEqual(a[k], b[k])) return false;
+    if (!skip.includes(k) && !jsonEqual(a[k], b[k])) return false;
   }
   return Object.keys(a).length === Object.keys(b).length;
 }

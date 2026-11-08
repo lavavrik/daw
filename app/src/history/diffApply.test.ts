@@ -168,8 +168,21 @@ describe('diffApply', () => {
       setTempo(p, sink, 90);
       setMetronome(p, sink, false);
       setLoop(p, sink, { on: false, start: 0, end: 3840 });
-      setMode(p, sink, 'pattern');
     }));
+
+  it('the mode is never restored (plan 20: which transport ran last is not undone)', async () => {
+    const r = await rig();
+    expect(r.p.mode).toBe('song'); // the fixture's
+    const A = serialize(r.p);
+    setMode(r.p, r.sink, 'pattern');
+    setTempo(r.p, r.sink, 90);
+    const B = serialize(r.p);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A);
+    expect(r.p.tempo).toBe(A.tempo);
+    expect(r.p.mode).toBe('pattern');
+    expect(r.log.some((c) => c[0] === Op.SET_MODE)).toBe(false);
+  });
 
   it('added tracks, and a slot that changed kind', () =>
     roundTrip(({ p, sink, synth2 }) => {

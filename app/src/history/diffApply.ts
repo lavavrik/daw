@@ -36,7 +36,9 @@
 //      kept one gets its point difference by idx (state/automation.ts
 //      pointCommands: removals before sets) and its enable flag. Lane and
 //      point UI ids survive when their engine lane / idx is kept;
-//   4. tempo, metronome, loop, mode; selection and the live input track;
+//   4. tempo, metronome, loop; selection and the live input track; NOT the
+//      mode (plan 20: which transport ran last is never undone, so an undo
+//      never switches what is playing; history.ts sameUndoState ignores it);
 //      the MIDI mappings (UI state only, no command: rebuilt from `to` by
 //      slot, so a track rebuilt in step 2 under a fresh id keeps them).
 // The project name is not restored (a Save As names the project, not an edit).
@@ -51,7 +53,7 @@ import { accepts, setMix, setSidechain } from '../state/mixer-actions';
 import type { MixChannelTarget } from '../state/mixer-actions';
 import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-actions';
 import { patchRack } from '../state/rack-actions';
-import { sendClip, setLoop, setMode } from '../state/song-actions';
+import { sendClip, setLoop } from '../state/song-actions';
 import { sendAudioClip } from '../state/audio-actions';
 import { MAX_ROWS, MAX_STEPS, currentPattern, newChannel } from '../state/project.svelte';
 import type {
@@ -159,7 +161,6 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   if (p.tempo !== to.tempo) setTempo(p, sink, to.tempo);
   if (p.metronome !== to.metronome) setMetronome(p, sink, to.metronome);
   if (!same(p.loop, to.loop)) setLoop(p, sink, to.loop);
-  if (p.mode !== to.mode) setMode(p, sink, to.mode);
   const sel = to.selection.track !== null ? bySlot.get(to.selection.track) : order[0];
   const synth = to.selection.synth !== null ? bySlot.get(to.selection.synth) : order.find((t) => t.kind === 'synth');
   p.selectedTrackId = sel?.id ?? null;

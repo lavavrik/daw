@@ -4,7 +4,8 @@ import { addDrumTrack, play, removeTrack, selectTrack, setTempo, toggleStep } fr
 import { setMix } from '../state/mixer-actions';
 import { mixParam } from '../audio/mixerCatalog';
 import { addNote, deleteNotes, newPattern, selectPattern } from '../state/pattern-actions';
-import { edit } from '../state/edits';
+import { commandEdits, edit } from '../state/edits';
+import { playPattern, playSong, stopTransport } from '../state/song-actions';
 import { recorderFor } from '../state/recorder';
 import { addSynthTrack } from '../state/rack-actions';
 import { Project, currentPattern } from '../state/project.svelte';
@@ -578,5 +579,45 @@ describe('recording pass hold', () => {
     s.note();
     s.toggle(6);
     expect(s.h.labels.undo).toBe('Toggle step'); // clear() ended the hold
+  });
+});
+
+// Plan 20: the transports set the mode, which is saved but never undone.
+describe('transport switches and the mode', () => {
+  it('playPattern while the song plays adds no history entry', () => {
+    const s = setup();
+    s.toggle(1);
+    playSong(s.p, s.sink);
+    expect(s.p.mode).toBe('song');
+    expect(s.h.labels).toEqual({ undo: 'Toggle step', redo: null });
+    playPattern(s.p, s.sink);
+    expect([s.p.mode, s.p.playing]).toEqual(['pattern', true]);
+    expect(s.h.labels).toEqual({ undo: 'Toggle step', redo: null }); // no "Pattern mode" / "Song mode" entry
+  });
+  it('undo / redo of an unrelated edit after a transport switch keep the mode (and what plays)', () => {
+    const s = setup();
+    s.toggle(2); // made in Pattern mode
+    playSong(s.p, s.sink);
+    s.sent.length = 0;
+    s.h.undo();
+    expect(s.step(2)).toBe(0);
+    expect([s.p.mode, s.p.playing]).toEqual(['song', true]);
+    expect(s.sent.some((c) => c[0] === Op.SET_MODE || c[0] === Op.STOP || c[0] === Op.PLAY)).toBe(false);
+    s.toggle(3); // made in Song mode
+    stopTransport(s.p, s.sink);
+    playPattern(s.p, s.sink);
+    s.h.undo();
+    expect(s.step(3)).toBe(0);
+    expect(s.p.mode).toBe('pattern');
+    s.h.redo();
+    expect(s.step(3)).toBeGreaterThan(0);
+    expect(s.p.mode).toBe('pattern');
+  });
+  it('a mode switch still marks the project unsaved (it is saved), through the SET_MODE command', () => {
+    const p = new Project();
+    const sink = { send(op: number) { commandEdits(p, op); return true; } };
+    expect(p.dirty).toBe(false);
+    playSong(p, sink);
+    expect(p.dirty).toBe(true);
   });
 });

@@ -138,13 +138,17 @@
     {#if ptrack}
       <PatternPicker {p} {engine} track={ptrack} />
     {/if}
-    <!-- Status line: flashed hints (banners.hint) win over the Song-mode hint. -->
+    <!-- Status line: the Song-mode hint (hidden while a flashed hint shows). -->
     <span class="status">
       <span class="hint" class:off={!songIdle || banners.hint !== null} data-testid="song-hint" title={songHint} aria-hidden={!songIdle || banners.hint !== null}>{songHint}</span>
-      {#if banners.hint !== null}
-        <span class="hint flash" data-testid="flash-hint" role="status">{banners.hint}</span>
-      {/if}
     </span>
+    <!-- A flashed hint (banners.hint) overlays the header's right end for its
+         few seconds: since the pattern transport (plan 20) the status line can
+         be ~0 px wide at 1280 px, which clipped it. It never moves the layout
+         and lets clicks through to the tabs under it. -->
+    {#if banners.hint !== null}
+      <span class="flash" data-testid="flash-hint" role="status">{banners.hint}</span>
+    {/if}
     <span class="tabs">
       <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? 'Alt+1 / F6' : 'Select a drum track (Alt+1 / F6)'} onclick={() => (p.mixerOpen = false)}>Step grid</button>
       <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+2 / F7' : 'Select a synth track (Alt+2 / F7)'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
@@ -221,7 +225,7 @@
 
 <style>
   .pane { background: #1b1c21; border: 1px solid #2a2c33; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-  .head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
+  .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
   .none { color: #7d808c; }
   .tabs { display: flex; gap: 2px; }
@@ -230,7 +234,12 @@
   .status { position: relative; flex: 1 1 0; min-width: 0; align-self: stretch; }
   .status .hint { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); color: #9aa6c4; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .status .hint.off { visibility: hidden; }
-  .status .flash { color: #ffd98a; }
+  .flash {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
+    max-width: calc(100% - 16px); padding: 3px 10px; border-radius: var(--r-sm);
+    background: var(--well); box-shadow: var(--lift); color: var(--accent);
+    font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  }
   .tab { font: inherit; font-size: 11px; padding: 3px 10px; border: 0; border-radius: 3px 3px 0 0; background: #24262c; color: #c9cbd3; }
   .tab.active { background: #f0a23a; color: #111; }
   .tab:disabled { opacity: 0.45; cursor: not-allowed; }

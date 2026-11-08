@@ -32,15 +32,17 @@
 //     edits when they merge, before settle() knows whether they changed
 //     anything, so an edit that turns out to be a no-op still counts: the
 //     Undo take tooltip may say "1 edit" for one that changed nothing.
-// An entry whose before and after only differ in the track selection is
-// dropped (selecting is not an edit; projectFingerprint ignores it too).
+// An entry whose before and after only differ in the track selection or the
+// mode is dropped (selecting is not an edit; projectFingerprint ignores the
+// selection too; the mode is which transport ran last, saved but never
+// undone: sameUndoState, and diffApply does not restore it).
 // A new entry clears the redo stack; at most `cap` entries are kept.
 //
 // Cost (plan 8):
 //   - Snapshots share structure: each one is passed through shareSnapshot
 //     against the previous one, so tracks / strips / patterns that did not
 //     change are the same (frozen in dev/test) objects across every entry.
-//     "Did anything change" compares snapshots (sameProject: identical
+//     "Did anything change" compares snapshots (sameUndoState: identical
 //     subtrees are skipped), so no fingerprint strings are built or kept.
 //   - Lazy "after": a keyed merge only marks the newest entry stale.
 //     settle() takes its "after" when it is needed: before the next entry's
@@ -58,7 +60,7 @@
 // still differs only by its own edit.
 import type { ProjectJson } from '../project/schema';
 import { banners } from '../state/banners.svelte';
-import { jsonEqual, sameProject, shareSnapshot } from '../project/serialize';
+import { jsonEqual, sameUndoState, shareSnapshot } from '../project/serialize';
 
 export interface HistoryOptions {
   snapshot: () => ProjectJson;
@@ -210,7 +212,7 @@ export function createHistory(o: HistoryOptions): History {
     if (!top?.stale || applying) return null;
     top.stale = false;
     const now = snap();
-    if (sameProject(now, top.before)) {
+    if (sameUndoState(now, top.before)) {
       undo.pop(); // merged back to where it started: nothing to undo
       if (last === top) last = null;
       changed();
@@ -265,14 +267,14 @@ export function createHistory(o: HistoryOptions): History {
     } else if (merge) {
       const after = snap();
       top.stale = false;
-      if (sameProject(after, top.before)) {
+      if (sameUndoState(after, top.before)) {
         undo.pop(); // merged back to where it started: nothing to undo
         last = null;
       } else top.after = after;
     } else {
       if (!g.before) return;
       const after = snap();
-      if (sameProject(g.before, after)) return; // nothing (but maybe the selection) changed
+      if (sameUndoState(g.before, after)) return; // nothing (but maybe the selection or mode) changed
       // Share the snapshot with the previous entry when nothing happened between them.
       const before = top && jsonEqual(top.after, g.before) ? top.after : g.before;
       const e: Entry = { label: g.label ?? 'Edit', before, after, coalesce: g.coalesce, id: nextId++, merges: 0, absorbed: 0 };

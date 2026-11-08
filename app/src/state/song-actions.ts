@@ -267,19 +267,24 @@ export function makeUnique(p: Project, sink: CommandSink, trackId: string, clipI
 
 /**
  * SET_MODE; entering Song mode also sends SEEK to the parked song position.
- * The UI no longer has a mode switch (plan 20): the two transports below set
- * the mode, and undo/redo (history/diffApply.ts) and load paths use this.
- * It is an edit like before: `project.mode` is saved (it records which
- * transport ran last), so a transport that changes it is one undo entry
- * ("Song mode" / "Pattern mode") and marks the project unsaved.
+ * The UI has no mode switch (plan 20): the two transports below set the
+ * mode, and arming Rec while stopped in Song mode does (App).
+ *
+ * The mode is treated like the track selection: saved in the project file
+ * (it records which transport ran last), so SET_MODE marks the project
+ * unsaved (state/edits.ts commandEdits), but it is NOT an undo entry, and
+ * undo/redo neither record nor restore it (history.ts compares snapshots
+ * with sameUndoState; diffApply leaves the mode alone). Otherwise Cmd+Z
+ * right after a transport switch would switch what is playing. Like
+ * selectTrack it settles the history first, so a pending recording pass's
+ * "after" is taken before the mode changes.
  */
 export function setMode(p: Project, sink: CommandSink, mode: 'pattern' | 'song') {
-  return edit(p, mode === 'song' ? 'Song mode' : 'Pattern mode', () => {
-    if (p.mode === mode || (mode !== 'pattern' && mode !== 'song')) return;
-    p.mode = mode;
-    sink.send(Op.SET_MODE, mode === 'song' ? 1 : 0);
-    if (mode === 'song') sink.send(Op.SEEK, p.songPosition);
-  });
+  if (p.mode === mode || (mode !== 'pattern' && mode !== 'song')) return;
+  p.history?.settle();
+  p.mode = mode;
+  sink.send(Op.SET_MODE, mode === 'song' ? 1 : 0);
+  if (mode === 'song') sink.send(Op.SEEK, p.songPosition);
 }
 
 // ---- Transports (plan 20) ---------------------------------------------------

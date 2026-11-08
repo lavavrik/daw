@@ -20,6 +20,11 @@ edit is undoable as long as it is in the saved project.
 - An entry whose before/after differ only in the track selection is dropped
   (`fingerprintOf` ignores `selection`, like the unsaved mark): selecting is
   not an edit. The project name is never restored (Save As sets it).
+- The mode (`project.mode`, which transport ran last; plan 20) is saved but
+  never undone, like the selection: `setMode` (the transports, Rec) is not
+  wrapped in `edit()` and calls `settle()` first; `sameUndoState` ignores
+  `mode` and `selection`, and `diffApply` does not restore it, so Cmd+Z never
+  switches what is playing. SET_MODE still marks the project unsaved.
 - Selecting a pattern is not an entry either (`selectPattern` is not
   wrapped), but the current pattern is saved, so it is part of the next
   entry's "before": undoing an edit made before a pattern switch also
@@ -175,8 +180,8 @@ entry kept two whole-project snapshots and two fingerprint strings.
   changed patterns / rows / patch). Unchanged tracks, the mixer, strips are
   the same objects across all entries.
 - **No fingerprint strings.** "Did this edit change anything" and "did the
-  pass end where it began" use `sameProject(a, b)` (fingerprint equality,
-  selection ignored) and the before/after sharing check uses `jsonEqual`;
+  pass end where it began" use `sameUndoState(a, b)` (fingerprint equality
+  with the selection and the mode ignored) and the before/after sharing check uses `jsonEqual`;
   both skip identical subtrees, so with sharing they cost O(changed part).
   `diffApply`'s per-track compare short-circuits on identity too.
 - **Immutable, frozen in dev/test.** Snapshots are never written; with
@@ -277,7 +282,7 @@ Order:
      **tick** first (a delete compacts idx, so a kept point can come back at
      another idx), then by idx for a point whose old tick is gone (moved in
      place); unchanged owners are not touched.
-4. **Transport** (tempo, metronome, loop, mode), selection, and
+4. **Transport** (tempo, metronome, loop; not the mode), selection, and
    `SET_INPUT_TRACK` only if the live input changed.
 
 **No stuck notes:** the engine releases a note that is removed or changed

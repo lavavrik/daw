@@ -47,8 +47,9 @@ is no PAT/SONG switch (and no Shift+L) any more.
   0). Recording is disabled; the count-in is ignored.
 - `state/song-actions.ts` `playSong` / `playPattern` start one: the other
   one, if running, is stopped first (the App's `beforeStop` hook closes held
-  recorded notes at the heard tick), then `setMode` (an undo entry, "Song
-  mode" / "Pattern mode", only when the mode changes), then PLAY (the count-in
+  recorded notes at the heard tick), then `setMode` (saved, so it marks the
+  project unsaved, but never an undo entry and never restored by undo, like
+  the selection: Cmd+Z can't switch what plays), then PLAY (the count-in
   is asked once the mode is set). `toggleTransport` is Space and the top
   bar's Play / Stop; `stopTransport` stops either.
 - **Space** (`input/shortcuts.ts`) toggles the pattern transport when the key's
@@ -58,7 +59,7 @@ is no PAT/SONG switch (and no Shift+L) any more.
   cell cancels its pointerdown (no text selection while painting), so the
   grid focuses the cell itself: a clicked step puts the focus in the panel.
 - **Rec** while the song plays is refused with a hint; stopped in Song mode
-  (the song ran last), arming switches to Pattern mode first (an undo entry),
+  (the song ran last), arming switches to Pattern mode first (no undo entry),
   so the next pattern Play records and counts in.
 - **Loop** (ruler drag sets whole bars and turns it on; the top bar's Loop
   button toggles it, whatever ran last; it plays in Song mode only): with `start < end`, playback wraps from end to

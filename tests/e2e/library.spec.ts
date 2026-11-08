@@ -319,6 +319,7 @@ test('browser tabs and search filter the library', async ({ page }) => {
   const name = `e2e-lib-tabs-${test.info().workerIndex}`;
   await makeLibrary(page, name, [
     { path: 'drums/kick.wav', bytes: kick },
+    { path: 'pads/warm.wav', bytes: kick },
     { path: 'bass.wav', bytes: [...makeWav(55, 200)] },
     { path: 'patches/Wobble.json', text: '{"name":"Wobble","modules":[],"cables":[]}' },
   ]);
@@ -344,6 +345,14 @@ test('browser tabs and search filter the library', async ({ page }) => {
   await page.getByTestId('lib-search').fill('KICK');
   await expect(page.getByTestId('lib-sample-drums/kick.wav')).toBeVisible();
   await expect(page.getByTestId('lib-sample-bass.wav')).toBeHidden();
+
+  // Hint about unopened folders; folding a folder under a query keeps it listed.
+  await expect(page.getByTestId('lib-search-hint')).toBeVisible();
+  await page.getByTestId('lib-folder-drums').click();
+  await expect(page.getByTestId('lib-folder-drums')).toBeVisible();
+  await expect(page.getByTestId('lib-sample-drums/kick.wav')).toBeHidden();
+  await page.getByTestId('lib-folder-drums').click();
+  await expect(page.getByTestId('lib-sample-drums/kick.wav')).toBeVisible();
 
   // Previewing still works from a filtered list.
   await page.getByTestId('lib-sample-drums/kick.wav').click();

@@ -15,8 +15,9 @@
   //            samples the default drum track is made of
   //   tabs     All / Samples / Patches / Kits pick which sections show; the
   //            search box filters them by name (library/browserFilter.ts).
-  //            Both are UI state only. While searching, folders holding a
-  //            match are forced open; the user's own expand state is kept.
+  //            Both are UI state only. While searching, folding a folder only
+  //            hides its children (`searchFolded`; the listing stays, so the
+  //            folder doesn't vanish); clearing the search drops that.
   //   footer   "Samples 412 MB / 1 GB" (the engine's sample memory in use,
   //            removed samples included until the project is reopened;
   //            state/sampleBudget.ts), change folder
@@ -36,7 +37,7 @@
   import { LibraryLostError, library } from '../library/library.svelte';
   import { bindPreview, clearPreviewCache, previewState, stopPreview, togglePreview } from '../library/sharedPreview.svelte';
   import { listingFromPaths } from '../library/scan';
-  import { BROWSER_TABS, folderVisible, hasMatchInside, nameMatches, tabSections, type BrowserTab } from '../library/browserFilter';
+  import { BROWSER_TABS, folderVisible, hasUnscannedFolder, isFolderOpen, nameMatches, tabSections, type BrowserTab } from '../library/browserFilter';
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
 
@@ -47,6 +48,8 @@
   let query = $state('');
   const q = $derived(query.trim());
   const sections = $derived(tabSections(tab));
+  let searchFolded = $state(new Set<string>());
+  $effect(() => { if (!q) searchFolded = new Set(); });
   let error = $state<string | null>(null);
   // The app-wide preview player (library/sharedPreview: the step grid's rows
   // play through it too). An audio restart (Settings ▸ Apply) closes the
@@ -107,15 +110,21 @@
   });
 
   const isOpen = (path: string) => path in lib.listings;
-  /** Shown open: expanded by the user, or forced open so a search match inside is reachable. */
-  const shownOpen = (path: string) => isOpen(path) || (!!q && hasMatchInside(lib.listings, path, q));
-  const visibleFolders = (path: string) => lib.listings[path].folders.filter((f) => !q || folderVisible(lib.listings, f.path, f.name, q));
-  const visibleSamples = (path: string) => lib.listings[path].samples.filter((s) => nameMatches(s.name, q));
+  const shownOpen = (path: string) => isFolderOpen(lib.listings, searchFolded, path, q);
+  /** `all`: an ancestor's name matched, so its contents show unfiltered. */
+  const visibleFolders = (path: string, all: boolean) => lib.listings[path].folders.filter((f) => all || !q || folderVisible(lib.listings, f.path, f.name, q));
+  const visibleSamples = (path: string, all: boolean) => lib.listings[path].samples.filter((s) => all || nameMatches(s.name, q));
   const visibleKit = $derived(kitSamples.filter((s) => nameMatches(s.name, q)));
   const visiblePatches = $derived(lib.patches.filter((pt) => nameMatches(pt.name, q)));
-  const rootShown = $derived(lib.listings[''] ? visibleFolders('').length + visibleSamples('').length : 0);
+  const rootShown = $derived(lib.listings[''] ? visibleFolders('', false).length + visibleSamples('', false).length : 0);
   /** Expand lists that folder level (library.expand); a folder gone meanwhile says so once. */
   function fold(path: string) {
+    if (q && isOpen(path)) {
+      const n = new Set(searchFolded);
+      if (!n.delete(path)) n.add(path);
+      searchFolded = n;
+      return;
+    }
     if (isOpen(path)) return library.collapse(path);
     library.expand(path).catch((e) => {
       if (!(e instanceof LibraryLostError)) error = e instanceof Error ? e.message : String(e);
@@ -125,16 +134,16 @@
   const nameOf = (key: string) => (key.startsWith(KIT) ? key.slice(KIT.length) : key.slice(key.lastIndexOf('/') + 1));
 </script>
 
-{#snippet folder(path: string, depth: number)}
+{#snippet folder(path: string, depth: number, all: boolean)}
   {@const f = lib.listings[path]}
-  {#each visibleFolders(path) as sub (sub.path)}
+  {#each visibleFolders(path, all) as sub (sub.path)}
     <button
       class="item dir" style:--d={depth} data-testid="lib-folder-{sub.path}" aria-expanded={shownOpen(sub.path)}
       title={sub.path} onclick={() => fold(sub.path)}
     ><span class="tw">{shownOpen(sub.path) ? '▾' : '▸'}</span><span class="nm">{sub.name}</span></button>
-    {#if shownOpen(sub.path) && lib.listings[sub.path]}{@render folder(sub.path, depth + 1)}{/if}
+    {#if shownOpen(sub.path) && lib.listings[sub.path]}{@render folder(sub.path, depth + 1, all || nameMatches(sub.name, q))}{/if}
   {/each}
-  {#each visibleSamples(path) as s (s.path)}
+  {#each visibleSamples(path, all) as s (s.path)}
     <div
       class="item smp" class:on={previewing === s.path} style:--d={depth}
       role="button" tabindex="0" draggable="true" data-testid="lib-sample-{s.path}"
@@ -161,9 +170,9 @@
     {/if}
   </div>
 
-  <div class="tabs" role="tablist" aria-label="Library category">
+  <div class="tabs" role="group" aria-label="Library category">
     {#each BROWSER_TABS as t (t.id)}
-      <button role="tab" aria-selected={tab === t.id} data-testid="lib-tab-{t.id}" onclick={() => (tab = t.id)}>{t.label}</button>
+      <button aria-pressed={tab === t.id} data-testid="lib-tab-{t.id}" onclick={() => (tab = t.id)}>{t.label}</button>
     {/each}
   </div>
   <input
@@ -201,11 +210,14 @@
       {#if sections.samples}
         <div class="sec">Samples</div>
         {#if rootShown}
-          <div class="tree">{@render folder('', 0)}</div>
+          <div class="tree">{@render folder('', 0, false)}</div>
         {:else if q}
           <p class="dim">No samples match "{q}".</p>
         {:else}
           <p class="dim">No audio files here (wav, aiff, mp3, flac, ogg, m4a).</p>
+        {/if}
+        {#if q && hasUnscannedFolder(lib.listings)}
+          <p class="dim hint" data-testid="lib-search-hint">Only opened folders are searched</p>
         {/if}
       {/if}
       {#if sections.patches}
@@ -223,7 +235,7 @@
     {#if sections.kit}
     <section class="kit" data-testid="starter-kit" aria-label="Starter kit">
       <button class="sec fold" data-testid="starter-kit-toggle" aria-expanded={kitOpen} onclick={() => (kitOpen = !kitOpen)}>
-        <span>{kitOpen ? '▾' : '▸'} Starter kit</span>
+        <span>{kitOpen ? '▾' : '▸'} Starter kit{#if q && !kitOpen && visibleKit.length} — {visibleKit.length} match{visibleKit.length === 1 ? '' : 'es'}{/if}</span>
         <span class="ro" title="Built in (CC0): drag a sound into the project; nothing is saved here">read-only</span>
       </button>
       {#if kitOpen}
@@ -265,7 +277,7 @@
   .ro { flex: none; font-size: 9px; color: var(--text-dim); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 3px; }
   .icon { margin-left: auto; flex: none; font: inherit; border: 0; background: transparent; color: var(--text-dim); cursor: pointer; padding: 0 2px; }
   .icon:hover { color: var(--text); }
-  .tabs { margin: 0 8px 6px; }
+  .tabs { display: flex; margin: 0 8px 6px; }
   .tabs > button { flex: 1; padding: 4px 6px; }
   .search { margin: 0 8px 6px; width: calc(100% - 16px); box-sizing: border-box; font: var(--fs-ctl) var(--font-ui); }
   .pv { display: flex; align-items: center; gap: 6px; margin: 0 8px 6px; padding: 3px 6px; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--play); }

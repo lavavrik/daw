@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { folderVisible, hasMatchInside, nameMatches, tabSections } from './browserFilter';
+import { folderVisible, hasMatchInside, hasUnscannedFolder, isFolderOpen, nameMatches, tabSections } from './browserFilter';
 import type { LibListing } from './scan';
 
 const L = (folders: [string, string][], samples: string[]): LibListing => ({
@@ -36,5 +36,16 @@ describe('browser filter', () => {
     expect(tabSections('samples')).toEqual({ samples: true, patches: false, kit: true });
     expect(tabSections('patches')).toEqual({ samples: false, patches: true, kit: false });
     expect(tabSections('kits')).toEqual({ samples: false, patches: false, kit: true });
+  });
+  it('collapsing under a query hides children but keeps the folder visible', () => {
+    const collapsed = new Set(['drums']);
+    expect(isFolderOpen(listings, collapsed, 'drums', 'kick')).toBe(false);
+    expect(folderVisible(listings, 'drums', 'drums', 'kick')).toBe(true); // listing kept
+    expect(isFolderOpen(listings, collapsed, 'drums', '')).toBe(true); // no query: real state
+    expect(isFolderOpen(listings, collapsed, 'unopened', 'kick')).toBe(false);
+  });
+  it('knows when a folder was never scanned', () => {
+    expect(hasUnscannedFolder(listings)).toBe(true);
+    expect(hasUnscannedFolder({ '': L([], ['a.wav']) })).toBe(false);
   });
 });

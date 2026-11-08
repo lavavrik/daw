@@ -5,10 +5,13 @@
 //           and the starter-kit samples, Patches = patches/*.json, Kits = the
 //           starter kit (the library has no kit-folder concept).
 //   search  case-insensitive substring of the name. A folder stays shown when
-//           it, or anything in its *loaded* listing, matches, and is forced
-//           open so the match is reachable; the user's own expand state is
-//           untouched, so clearing the search restores it. Folders never
-//           expanded are not listed (scan.ts is lazy) and so cannot match.
+//           it, or anything in its *loaded* listing, matches. Folders never
+//           expanded are not listed (scan.ts is lazy) and so cannot match
+//           (the pane says so: hasUnscannedFolder). A folder whose own name
+//           matches shows all its contents. While a query is active, folding
+//           a folder only hides its children (`collapsed` set, see
+//           isFolderOpen): its listing stays loaded, so it stays visible.
+//           Clearing the search drops that set and restores the real state.
 import type { LibListing } from './scan';
 
 export type BrowserTab = 'all' | 'samples' | 'patches' | 'kits';
@@ -47,4 +50,18 @@ export function hasMatchInside(listings: Record<string, LibListing>, path: strin
 /** Folder visibility under a query: its own name matches, or something loaded inside it does. */
 export function folderVisible(listings: Record<string, LibListing>, path: string, name: string, query: string): boolean {
   return nameMatches(name, query) || hasMatchInside(listings, path, query);
+}
+
+/**
+ * Is a folder's content shown? Without a query: the library's own expand state
+ * (it has a listing). Under a query: it must also not be in `collapsed`, the
+ * search-time folds, which never touch the library's listings.
+ */
+export function isFolderOpen(listings: Record<string, LibListing>, collapsed: ReadonlySet<string>, path: string, query: string): boolean {
+  return path in listings && !(query.trim() && collapsed.has(path));
+}
+
+/** True when some folder listed so far was never opened, so its files can't be searched. */
+export function hasUnscannedFolder(listings: Record<string, LibListing>): boolean {
+  return Object.values(listings).some((l) => l.folders.some((f) => !(f.path in listings)));
 }

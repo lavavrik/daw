@@ -9,7 +9,7 @@ import { buildFixture } from '../project/testFixture';
 import { fromPos } from '../ui/rack/knobMath';
 import { removeTrack } from './actions';
 import {
-  LEARNABLE_CC, applyCc, ccValue, dropRackMappings, forgetMidi, learnMidi, mappingFor, mappingForCc, mappingLabel,
+  LEARNABLE_CC, applyCc, ccValue, dropRackMappings, forgetMidi, learnMidi, learnableDef, mappingFor, mappingForCc, mappingLabel,
 } from './midiMap';
 import { loadPatch, removeModule } from './rack-actions';
 import { STARTER_PATCHES } from './patches';
@@ -139,6 +139,7 @@ describe('MIDI mappings', () => {
     const filter = synth.modules.find((m) => m.idx === 4)!;
     const RESO = paramIndex(moduleDef('filter'), 'reso');
     const resoBefore = filter.params[RESO];
+    const cutoffBefore = filter.params[CUTOFF];
     for (const v of [10, 20, 30]) applyCc(p, sink, 74, v);
     const cutoffSwept = filter.params[CUTOFF];
     for (const v of [100, 127]) applyCc(p, sink, 71, v);
@@ -148,6 +149,43 @@ describe('MIDI mappings', () => {
     expect(filter.params[RESO]).toBe(resoBefore);
     expect(filter.params[CUTOFF]).toBe(cutoffSwept);
     expect(p.history.labels.undo).toBe('Set Cutoff (MIDI)');
+    p.history.undo();
+    expect(filter.params[CUTOFF]).toBe(cutoffBefore);
+    expect(p.history.labels.undo).toBeNull(); // the learns came before the history
+  });
+
+  it('a coalesce key of its own starts a new entry (the router ends a sweep after a pause)', async () => {
+    const { p, synth, sink } = await rig();
+    learnMidi(p, 74, synth.id, cutoff);
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    const filter = synth.modules.find((m) => m.idx === 4)!;
+    const before = filter.params[CUTOFF];
+    applyCc(p, sink, 74, 10, undefined, 'midi:74:1');
+    applyCc(p, sink, 74, 20, undefined, 'midi:74:1');
+    const first = filter.params[CUTOFF];
+    applyCc(p, sink, 74, 90, undefined, 'midi:74:2');
+    expect(debugStacks(p.history).undo).toHaveLength(2);
+    p.history.undo();
+    expect(filter.params[CUTOFF]).toBe(first);
+    p.history.undo();
+    expect(filter.params[CUTOFF]).toBe(before);
+  });
+
+  it('learnableDef: continuous and integer, not choices or 0..1 flags', async () => {
+    expect(learnableDef(moduleDef('filter').params[CUTOFF])).toBe(true);
+    expect(learnableDef(moduleDef('osc').params[paramIndex(moduleDef('osc'), 'octave')])).toBe(true);
+    expect(learnableDef(moduleDef('filter').params[paramIndex(moduleDef('filter'), 'mode')])).toBe(false);
+    expect(learnableDef(mixParam('fader'))).toBe(true);
+    expect(learnableDef(mixParam('delay_time'))).toBe(false); // a choice
+    for (const flag of ['mute', 'solo', 'eq_on', 'comp_on', 'send_a_pre', 'send_b_pre', 'delay_ping_pong']) {
+      expect(learnableDef(mixParam(flag))).toBe(false);
+    }
+    // learnMidi refuses them, without an edit.
+    const { p, synth, drums } = await rig();
+    expect(learnMidi(p, 20, drums.id, { kind: 'mix', param: 'mute' })).toBe(false);
+    expect(learnMidi(p, 21, synth.id, { kind: 'rack', module: 4, param: 'mode' })).toBe(false);
+    expect(learnMidi(p, 22, 'delay', { kind: 'mix', param: 'delay_ping_pong' })).toBe(false);
+    expect(p.midiMap).toEqual([]);
   });
 
   it('dropped mappings are inert', async () => {

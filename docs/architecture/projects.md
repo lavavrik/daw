@@ -265,8 +265,9 @@ notice banner after the load (all of them in the console):
 - a MIDI mapping (plan 14) is dropped when it is malformed, its `cc` is not
   an integer 0..119, its `track` slot has no track or its `channel` is
   unknown, its target is missing, unknown or not on its channel (or a rack
-  target off a synth track, or on a module the validated rack lacks), its
-  CC is already mapped, or its control already has a CC (the first entry
+  target off a synth track, or on a module the validated rack lacks), the
+  target is not learnable (a choice or a 0..1 on/off flag: midiMap.ts
+  `learnableDef`), its CC is already mapped, or its control already has a CC (the first entry
   wins either way). `projectCommands`' normalize also drops one whose module
   the FX pool dropped.
 

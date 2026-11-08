@@ -26,11 +26,14 @@
   // then sets the base (one undo entry); a drag and the arrows start from
   // the heard value. Escape mid-drag restores the base without a new
   // override. Right-click, the ContextMenu key or Shift+F10: "Automate" /
-  // "Show automation".
+  // "Show automation", then "MIDI learn" / "Forget MIDI (CC 7)" (plan 14,
+  // as Knob.svelte: the learn target pulses, a mapped fader shows a "CC"
+  // tag `<testid>-cc` and its title (the accessible description) says "MIDI CC 7").
   import { onDestroy, untrack } from 'svelte';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
-  import { openAutoMenu } from '../AutoMenu.svelte';
+  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { isLearning } from '../midiLearn.svelte';
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderDrag, faderKeyStep, faderPos, formatDb } from './mixMath';
@@ -111,9 +114,17 @@
     if (bus && auto) bus.touch(auto.owner, auto.target);
     onchange(v);
   }
-  /** The Automate menu at (x, y), or beside the fader (keyboard); false when there is no lane target. */
+  // ---- MIDI learn ------------------------------------------------------------
+  const learningMe = $derived(auto ? isLearning(auto.owner, auto.target) : false);
+  /** The CC mapped to this fader, or null. */
+  const cc = $derived(bus && auto ? bus.midiCc(auto.owner, auto.target) : null);
+  const ccNote = $derived(cc !== null ? ` — MIDI CC ${cc}` : '');
+
+  /** The control menu at (x, y), or beside the fader (keyboard); false when it would have no item. */
   function menuAt(x: number | null, y: number | null): boolean {
-    if (!bus || !auto || !bus.canAutomate(auto.owner, auto.target)) return false;
+    if (!bus || !auto) return false;
+    const items = menuItems(bus, auto.owner, auto.target);
+    if (!items.automate && !items.midi) return false;
     const r = el?.getBoundingClientRect();
     openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: el });
     return true;
@@ -220,13 +231,15 @@
     aria-valuemax={FADER_MAX_DB}
     aria-valuenow={ariaAuto ?? shown}
     aria-valuetext={ariaAuto !== null ? `${formatDb(ariaAuto)}, automated (base ${readout})` : readout}
-    title={automated
+    title={(automated
       ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
-      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = 0 dB, arrows = ±1 dB${autoStatus ? ', right-click = Automate' : ''}`}
+      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = 0 dB, arrows = ±1 dB${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
     class:auto-off={automated && autoStatus !== 'on'}
     class:auto-susp={autoStatus === 'suspended'}
+    class:learning={learningMe}
+    data-learning={learningMe ? '' : undefined}
     bind:this={el}
     style:height="{height}px"
     onpointerdown={down}
@@ -243,6 +256,7 @@
       <div class="base" data-testid="auto-base" style:bottom="{baseBottom}px"></div>
       <span class="badge" data-testid="auto-badge" aria-hidden="true">A</span>
     {/if}
+    {#if cc !== null}<span class="cc" data-testid={`${testid}-cc`} aria-hidden="true">CC</span>{/if}
     <!-- Positioned by paint(): the lane's value while it applies. -->
     <div class="cap" bind:this={capEl} style:height="{CAP_H}px"></div>
   </div>
@@ -263,5 +277,10 @@
   .base { position: absolute; left: 3px; width: 6px; height: 2px; margin-bottom: -1px; background: #e8e9ee; border-radius: 1px; opacity: 0.85; }
   .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 8px/10px ui-sans-serif, system-ui, sans-serif; width: 10px; text-align: center; border-radius: 2px; background: #f0a23a; color: #111; pointer-events: none; }
   .fader.auto-off .badge { background: #6b6e7a; }
+  /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
+  .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 7px/10px ui-sans-serif, system-ui, sans-serif; padding: 0 2px; border-radius: 2px; background: #3d8fd6; color: #fff; pointer-events: none; }
+  .fader.learning { outline: 2px solid #4fb3ff; outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { outline-color: rgba(79, 179, 255, 0.15); } }
+  @media (prefers-reduced-motion: reduce) { .fader.learning { animation: none; } }
   .fader.auto-susp .cap { filter: grayscale(1) brightness(0.8); }
 </style>

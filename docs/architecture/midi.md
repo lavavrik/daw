@@ -22,7 +22,8 @@ Web MIDI input ─▶ input/midi.ts parseMidi ─▶ { t: 'cc', cc, v }  (CC 0..
 - `window.__daw.midi.inject(bytes)` feeds raw bytes through the same handler
   (Playwright cannot drive Web MIDI).
 - The UI applies at most one move per mapping per animation frame (the
-  latest value wins), so a dense CC stream costs one edit per frame.
+  latest value wins), so a dense CC stream costs one edit per frame (see
+  "UI" below).
 
 ## The mapping model (`state/midiMap.ts`)
 
@@ -38,16 +39,19 @@ on a synth track's rack).
 - **Which targets:** `mappingDef` resolves the catalog def. It is
   automation's `targetDef` minus the "non-integer only" rule: an octave,
   unison or voices knob can be mapped (fromPos + clampParam round it).
-  Whether a control offers "MIDI learn" at all is the UI's decision (knobs
-  and faders; not choice radios or on/off buttons).
+  `learnableDef(def)` then rejects choice params (radio groups: wave, filter
+  mode, delay division) and 0..1 integer flags (mute, solo, eq_on,
+  comp_on, send_*_pre, delay_ping_pong). `learnMidi` refuses those,
+  `validate` drops them with a warning, and the UI does not offer them.
 - **Value:** CC value `v` sets the param to `ccValue(def, v)` =
   `fromPos(def, v / 127)`: the knob's own taper (log for `exp` params, the
   zero zone for glide), then the action's clamp. The control jumps to the CC
   value (no soft takeover).
-- **Applying:** `applyCc(p, sink, cc, v, touch?)` resolves the mapping (a
-  rack target by module idx and param NAME, so it survives catalog growth)
-  and calls `setParam` / `setMix` with `{ coalesce: 'midi:<cc>', label:
-  'Set <param label> (MIDI)' }`, then `touch(owner, target)` (the UI
+- **Applying:** `applyCc(p, sink, cc, v, touch?, coalesce?)` resolves the
+  mapping (a rack target by module idx and param NAME, so it survives
+  catalog growth) and calls `setParam` / `setMix` with `{ coalesce, label:
+  'Set <param label> (MIDI)' }` (`coalesce` defaults to `midi:<cc>`; the UI
+  router passes `midi:<cc>:<sweep>`), then `touch(owner, target)` (the UI
   overrides an automated target in Song mode, like a drag). An unmapped CC,
   or a mapping whose control no longer resolves, does nothing and returns
   false.
@@ -70,7 +74,19 @@ undo entry: one undo brings the track and its mappings back. A load (`blankState
 - A CC sweep on one control is one entry ("Set Cutoff (MIDI)"): consecutive
   edits with the same coalesce key merge while that entry is the newest
   (history.md). A sweep on another CC in between starts a new entry, so
-  CC 74 then CC 71 is two entries.
+  CC 74 then CC 71 is two entries. A sweep also ends after a pause: the UI
+  router numbers sweeps per CC (`midi:<cc>:<n>`, `n` steps when a CC comes
+  more than 1000 ms after the previous one on that number), so turning the
+  same knob twice a few seconds apart is two entries.
+- App's history merges one-shot edits made in the same task
+  (`coalesceTask`). The router applies every waiting CC in ONE
+  requestAnimationFrame callback, so moves of DIFFERENT mappings that land
+  in the same frame (two controller knobs turned together) may merge into
+  one entry. Accepted: undo takes back both. A learn runs in the MIDI
+  message's own task and a move only ever in a later frame, so a learn and
+  a move never merge.
+- The CC that completes a learn only binds; it does not also move the
+  control, so the learn entry is a pure "MIDI learn CC n".
 - Undo snapshots carry `midiMap` (it is in the saved project). `diffApply`
   step 4 rebuilds `p.midiMap` from the target snapshot by track slot (no
   engine command), so a track that undo rebuilds under a fresh id gets its
@@ -93,3 +109,35 @@ name or one the channel does not take, a duplicate cc and a duplicate
 control (the first wins). A load's `normalize` also drops a mapping on a
 module the FX pool dropped. Slots become the new track ids in
 `commands.ts` `midiMapState` (load and undo share it).
+
+## UI (`ui/midiLearn.svelte.ts`, AutoMenu, Knob, Fader)
+
+- **The menu.** Right-click (or the ContextMenu key / Shift+F10) on a knob
+  or fader opens `AutoMenu.svelte`: "Automate" / "Show automation" when
+  `bus.canAutomate` (continuous params), then "MIDI learn", or "Forget MIDI
+  (CC 74)" when the control has a CC, when `bus.canLearn` (continuous and
+  integer: `canLearn` = `mappingDef` + `learnableDef`). The menu opens when
+  either kind of item exists, so an integer knob (octave) opens it for learn
+  only. ArrowUp / ArrowDown move between the items, Escape closes it.
+  Controls without an `auto` identity (the scope's knobs) offer neither.
+- **Learn mode.** `startLearn(owner, target, label)` sets the one learn
+  target (a second "MIDI learn" replaces it), shows the hint "Move a knob on
+  your MIDI controller (Esc cancels)" (`banners.hint`) and starts a 10 000 ms
+  timer. The target knob / fader gets class `learning`: a pulsing outline
+  (static under `prefers-reduced-motion`). App routes `onCc` to the router:
+  the first learnable CC calls `learnMidi`, flashes "MIDI CC 74 → Filter
+  Cutoff" and ends learn mode; CC 120..127 are ignored and learning goes on.
+  Esc (App's window keydown, bubble phase: an Esc an open menu or a typed
+  value consumes is theirs) or the timeout calls `cancelLearn`. If the
+  control was removed meanwhile, the CC binds nothing and learn mode ends.
+- **Moves.** Outside learn mode `createCcRouter` keeps the latest value of
+  each mapped CC and applies them all in the next animation frame
+  (`applyCc` with `touch` = `autoBus.touch`): in Song mode a CC on an
+  automated target overrides its lane (AUTO_OVERRIDE) exactly like a drag;
+  in Pattern mode only the base moves. Unmapped CCs cost no frame. A value
+  still queued for a CC when that CC is re-learned is dropped.
+- **The badge.** A mapped control shows a small "CC" tag
+  (`data-testid="<testid>-cc"`; the fader's is `fader-cc`) and its title
+  (its accessible description) ends "— MIDI CC 74". Knob / Fader read
+  `bus.midiCc(owner, target)` (reactive: `project.midiMap`).
+- e2e: `tests/e2e/midi.spec.ts` (learn, sweep, undo, forget, a fader, Esc).

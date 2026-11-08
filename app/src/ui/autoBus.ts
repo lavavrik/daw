@@ -45,7 +45,9 @@ import type { CommandSink } from '../state/actions';
 import { isMasterChannel, laneValueAt, nextBreakpoint, projectLanes, targetDef } from '../state/automation';
 import type { AutoDef } from '../state/automation';
 import { overrideLane } from '../state/automation-actions';
+import { mappingFor } from '../state/midiMap';
 import type { MixChannelTarget } from '../state/mixer-actions';
+import { canLearn } from './midiLearn.svelte';
 import type { AutoTarget, AutomationLane, Project } from '../state/project.svelte';
 
 export type AutoStatus = 'none' | 'on' | 'idle' | 'suspended';
@@ -86,6 +88,13 @@ export interface AutoBus {
   touch(owner: MixChannelTarget, target: AutoTarget): boolean;
   /** `target` can have a lane on `owner` (a continuous param it has): "Automate" is offered. */
   canAutomate(owner: MixChannelTarget, target: AutoTarget): boolean;
+  /**
+   * `target` on `owner` can be MIDI-learned (continuous or integer, not a
+   * choice or on/off flag: ui/midiLearn canLearn): "MIDI learn" is offered.
+   */
+  canLearn(owner: MixChannelTarget, target: AutoTarget): boolean;
+  /** The CC mapped to `target` on `owner`, or null (reactive: project.midiMap). */
+  midiCc(owner: MixChannelTarget, target: AutoTarget): number | null;
   /** The lane on `target` of `owner`, or null. */
   laneFor(owner: MixChannelTarget, target: AutoTarget): AutomationLane | null;
   /** Evaluate every control now (and start the loop if it should run). */
@@ -261,6 +270,8 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
       const o = isMasterChannel(owner) ? owner : p.tracks.find((t) => t.id === owner);
       return !!o && targetDef(o, target) !== null;
     },
+    canLearn: (owner, target) => canLearn(p, owner, target),
+    midiCc: (owner, target) => mappingFor(p, owner, target)?.cc ?? null,
     laneFor(owner, target) {
       return lanes().get(keyOf(owner, target))?.lane ?? null;
     },

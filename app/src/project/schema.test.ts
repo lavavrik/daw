@@ -311,11 +311,15 @@ describe('project schema', () => {
       { cc: 18, track: drums.slot, target: 'fader' }, // malformed target
       { cc: 74, track: drums.slot, target: { mix: 'pan' } }, // duplicate cc
       { cc: 19, track: synth.slot, target: { rack: [4, 'cutoff'] } }, // duplicate control
+      { cc: 21, track: drums.slot, target: { mix: 'mute' } }, // an on/off flag
+      { cc: 22, track: synth.slot, target: { rack: [4, 'mode'] } }, // a choice
+      { cc: 23, channel: 'delay', target: { mix: 'delay_ping_pong' } }, // a flag on a return
     ];
     const r = ok(validate(json));
     expect(r.project.midiMap).toEqual(keep);
     const w = r.warnings.filter((x) => /MIDI/.test(x));
-    expect(w).toHaveLength(13);
+    expect(w).toHaveLength(16);
+    expect(w.filter((x) => /not learnable/.test(x))).toHaveLength(3);
     for (const re of [/malformed/, /CC 120/, /CC 3.5/, /slot 29/, /bus/, /module 30/, /only synth tracks/, /wobble/, /pan/, /nope/, /already mapped/, /already has CC 74/]) {
       expect(w.join('\n')).toMatch(re);
     }

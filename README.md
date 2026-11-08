@@ -332,6 +332,10 @@ and drops. Design notes:
   **Shift+F10** on it) for **Automate** (adds its lane) or **Show
   automation**: the lane opens on the timeline (the Master row for
   the master and the returns). Switches and choices don't offer it.
+- **MIDI learn.** The same menu has **MIDI learn**: then move a knob on your
+  MIDI controller and it moves that control from now on (a small **CC** tag
+  marks it; **Forget MIDI (CC 74)** in the menu unbinds it; Esc cancels
+  learning). Saved with the project; a sweep is one undo step.
 - Removing a rack module or a track removes its lanes too; undo brings them
   back.
 

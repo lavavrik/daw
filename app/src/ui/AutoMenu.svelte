@@ -1,13 +1,21 @@
 <script module lang="ts">
-  // The in-app menu a right-click on a continuous knob or fader opens (plan 10
-  // Task 4): "Automate" (no lane on that target yet: creates it, one undo
-  // entry) or "Show automation". Either way it opens the owner's lanes on
-  // the timeline (the track's A; the Master row for the returns and the
-  // master) and scrolls the lane into view. Integer / choice controls never
-  // open it (autoBus.canAutomate). One menu for the whole app, rendered by
-  // App; the controls call openAutoMenu.
+  // The in-app menu a right-click on a knob or fader opens (plan 10 Task 4,
+  // plan 14 Task 3). Its items, in order:
+  //   - "Automate" (no lane on that target yet: creates it, one undo entry)
+  //     or "Show automation". Either way it opens the owner's lanes on the
+  //     timeline (the track's A; the Master row for the returns and the
+  //     master) and scrolls the lane into view. Only for continuous params
+  //     (autoBus.canAutomate).
+  //   - "MIDI learn" (ui/midiLearn.svelte.ts startLearn: the next CC binds
+  //     to it) or, when the control has a CC, "Forget MIDI (CC 74)" (one
+  //     undo entry). For continuous and integer params (canLearn), not
+  //     choices or on/off flags.
+  // The controls open it when either kind of item exists (menuItems); ArrowUp
+  // / ArrowDown move between the items, Escape closes it. One menu for the
+  // whole app, rendered by App; the controls call openAutoMenu.
   import type { MixChannelTarget } from '../state/mixer-actions';
   import type { AutoTarget } from '../state/project.svelte';
+  import type { AutoBus } from './autoBus';
 
   export interface AutoMenuReq {
     x: number;
@@ -24,6 +32,11 @@
   export function openAutoMenu(req: AutoMenuReq) {
     menu.req = req;
   }
+
+  /** Which items the menu would have for this control (a control opens it only when one is true). */
+  export function menuItems(bus: AutoBus, owner: MixChannelTarget, target: AutoTarget) {
+    return { automate: bus.canAutomate(owner, target), midi: bus.canLearn(owner, target) };
+  }
 </script>
 
 <script lang="ts">
@@ -32,8 +45,9 @@
   import { isMasterChannel } from '../state/automation';
   import { addLane } from '../state/automation-actions';
   import { flashHint } from '../state/banners.svelte';
+  import { forgetMidi, mappingFor } from '../state/midiMap';
   import type { Project } from '../state/project.svelte';
-  import type { AutoBus } from './autoBus';
+  import { startLearn } from './midiLearn.svelte';
   import { laneView, setOpen } from './song/laneView.svelte';
   import { MASTER_ROW } from './song/tlMath';
 
@@ -42,9 +56,12 @@
   let el = $state<HTMLDivElement | null>(null);
   const req = $derived(menu.req);
   const exists = $derived(req ? bus.laneFor(req.owner, req.target) !== null : false);
-  /** Kept inside the window (the menu is about 170 x 60 px). */
-  const left = $derived(req ? Math.max(4, Math.min(req.x, window.innerWidth - 180)) : 0);
-  const top = $derived(req ? Math.max(4, Math.min(req.y, window.innerHeight - 70)) : 0);
+  const items = $derived(req ? menuItems(bus, req.owner, req.target) : { automate: false, midi: false });
+  /** The control's CC mapping ("Forget MIDI (CC 74)"), or null ("MIDI learn"). */
+  const mapped = $derived(req ? mappingFor(p, req.owner, req.target) : null);
+  /** Kept inside the window (the menu is about 180 x 90 px). */
+  const left = $derived(req ? Math.max(4, Math.min(req.x, window.innerWidth - 190)) : 0);
+  const top = $derived(req ? Math.max(4, Math.min(req.y, window.innerHeight - 96)) : 0);
 
   function close(refocus = true) {
     const from = menu.req?.from ?? null;
@@ -71,7 +88,21 @@
     document.querySelector(`[data-testid^="auto-lane-"][data-lane="${lane.lane}"]`)?.scrollIntoView({ block: 'nearest' });
   }
 
-  // Focus the item on open; a press anywhere else closes the menu.
+  function learn() {
+    const r = menu.req;
+    if (!r) return;
+    close();
+    startLearn(r.owner, r.target, r.label);
+  }
+
+  function forget() {
+    const r = menu.req;
+    if (!r) return;
+    close();
+    forgetMidi(p, r.owner, r.target);
+  }
+
+  // Focus the first item on open; a press anywhere else closes the menu.
   $effect(() => {
     if (!req || !el) return;
     el.querySelector<HTMLElement>('button')?.focus();
@@ -87,6 +118,11 @@
     if (e.key === 'Escape') {
       e.preventDefault();
       close();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const all = [...(el?.querySelectorAll<HTMLElement>('button') ?? [])];
+      const i = all.indexOf(document.activeElement as HTMLElement);
+      all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
     }
   }
 </script>
@@ -98,19 +134,36 @@
     data-testid="auto-ctl-menu"
     role="menu"
     tabindex="-1"
-    aria-label={`Automation of ${req.label}`}
+    aria-label={items.automate ? `Automation of ${req.label}` : `MIDI of ${req.label}`}
     style:left="{left}px"
     style:top="{top}px"
     onkeydown={key}
     oncontextmenu={(e) => e.preventDefault()}
   >
     <div class="ttl">{req.label}</div>
-    <button
-      role="menuitem"
-      data-testid="auto-ctl-automate"
-      title={exists ? 'Open its automation lane on the timeline' : 'Add an automation lane for it on the timeline'}
-      onclick={() => void act()}
-    >{exists ? 'Show automation' : 'Automate'}</button>
+    {#if items.automate}
+      <button
+        role="menuitem"
+        data-testid="auto-ctl-automate"
+        title={exists ? 'Open its automation lane on the timeline' : 'Add an automation lane for it on the timeline'}
+        onclick={() => void act()}
+      >{exists ? 'Show automation' : 'Automate'}</button>
+    {/if}
+    {#if mapped}
+      <button
+        role="menuitem"
+        data-testid="auto-ctl-midi"
+        title={`Unbind MIDI CC ${mapped.cc} from it`}
+        onclick={forget}
+      >Forget MIDI (CC {mapped.cc})</button>
+    {:else if items.midi}
+      <button
+        role="menuitem"
+        data-testid="auto-ctl-midi"
+        title="Then move a knob on your MIDI controller: its CC moves this control"
+        onclick={learn}
+      >MIDI learn</button>
+    {/if}
   </div>
 {/if}
 

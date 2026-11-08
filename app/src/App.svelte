@@ -55,6 +55,7 @@
   import { createVisHooks } from './ui/vis/visHooks';
   import { visWake } from './ui/vis/visWake';
   import AutoMenu from './ui/AutoMenu.svelte';
+  import { cancelLearn, createCcRouter, learning } from './ui/midiLearn.svelte';
   import { laneView } from './ui/song/laneView.svelte';
 
   const project = new Project();
@@ -74,11 +75,10 @@
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
   /** The last CC received (shown by TopBar, Task 4). */
   let midiCc = $state<{ cc: number; v: number } | null>(null);
-  /** Where CCs go after `midiCc`; MIDI learn (Task 3) replaces it. */
-  let ccSink: (cc: number, v: number) => void = () => {};
+  /** Every CC: shown (`midiCc`), then MIDI learn or the mapped control (ccRouter, below). */
   const onCc = (cc: number, v: number) => {
     midiCc = { cc, v };
-    ccSink(cc, v);
+    ccRouter.onCc(cc, v);
   };
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
@@ -307,6 +307,14 @@
     onSuspended: (ids) => (laneView.suspended = ids),
   });
   provideAutoBus(autoBus);
+  // MIDI learn and mapped CCs (ui/midiLearn.svelte.ts): learn mode binds the
+  // next CC; otherwise one move per mapping per frame through the normal
+  // action, overriding an automated target like a drag (autoBus.touch).
+  const ccRouter = createCcRouter({
+    p: project,
+    sink: { send: (op, a, b, c, d) => engine?.send(op, a, b, c, d) ?? false },
+    touch: (owner, target) => void autoBus.touch(owner, target),
+  });
   // A new clock means a new engine (an audio restart): it has no overrides.
   $effect(() => {
     void clock;
@@ -722,9 +730,16 @@
     };
     window.addEventListener('pointerdown', wake, true);
     window.addEventListener('keydown', wake, true);
+    // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
+    // (an open menu, a typed knob value) is that widget's.
+    const escLearn = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && learning()) cancelLearn();
+    };
+    window.addEventListener('keydown', escLearn);
     return () => {
       window.removeEventListener('pointerdown', wake, true);
       window.removeEventListener('keydown', wake, true);
+      window.removeEventListener('keydown', escLearn);
     };
   });
 

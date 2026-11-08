@@ -5,6 +5,7 @@ import { laneValueAt } from '../state/automation';
 import { addLane, addPoint } from '../state/automation-actions';
 import { addAudioTrack } from '../state/audio-actions';
 import { commandEdits } from '../state/edits';
+import { learnMidi } from '../state/midiMap';
 import { Project } from '../state/project.svelte';
 import { createAutoBus } from './autoBus';
 import type { AutoView } from './autoBus';
@@ -181,6 +182,12 @@ describe('autoBus', () => {
     expect(bus.canAutomate(t.id, { kind: 'mix', param: 'mute' })).toBe(false);
     expect(bus.canAutomate('master', { kind: 'mix', param: 'limiter_ceiling' })).toBe(true);
     expect(bus.canAutomate(t.id, { kind: 'rack', module: 0, param: 'cutoff' })).toBe(false); // audio track: no rack
+    // MIDI learn (plan 14): the same controls minus flags; the mapped CC.
+    expect(bus.canLearn(t.id, { kind: 'mix', param: 'fader' })).toBe(true);
+    expect(bus.canLearn(t.id, { kind: 'mix', param: 'mute' })).toBe(false);
+    expect(bus.midiCc(t.id, { kind: 'mix', param: 'fader' })).toBeNull();
+    learnMidi(p, 7, t.id, { kind: 'mix', param: 'fader' });
+    expect(bus.midiCc(t.id, { kind: 'mix', param: 'fader' })).toBe(7);
     // No loop while stopped, nor without controls.
     p.mode = 'song';
     bus.refresh();

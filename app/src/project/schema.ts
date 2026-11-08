@@ -30,6 +30,7 @@ import type { MixParamDef } from '../audio/mixerCatalog';
 import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
+import { learnableDef } from '../state/midiMap';
 import { accepts } from '../state/mixer-actions';
 import { validatePatch } from '../state/patches';
 import type { Patch } from '../state/patches';
@@ -632,7 +633,8 @@ function readMasterLanes(r: Reader, v: unknown, lanes: Lanes): MasterLaneJson[] 
 /**
  * The MIDI mappings. Dropped, with a warning: a malformed entry, a CC
  * outside 0..119 (or not an integer), an unknown track slot or channel, a
- * target the owner does not have (mappingTargetWhy), a CC already mapped,
+ * target the owner does not have or that is not learnable (a choice or an
+ * on/off flag: mappingTargetWhy), a CC already mapped,
  * and a control that already has a CC (first wins, as in learnMidi).
  */
 function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] {
@@ -697,7 +699,8 @@ function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] 
 /**
  * Why a mapping cannot use `target` on a mixer channel (`kind`, `index`) and,
  * for a synth track, its rack `patch` (validated); null when it can. Like
- * laneDef, but integer params are allowed (state/midiMap.ts mappingDef).
+ * laneDef, but integer params are allowed (state/midiMap.ts mappingDef);
+ * choices and 0..1 flags are not (learnableDef).
  */
 function mappingTargetWhy(target: unknown, kind: MixTarget, index: number, patch: Patch | null): string | null {
   if (!isObj(target)) return 'no target';
@@ -706,7 +709,7 @@ function mappingTargetWhy(target: unknown, kind: MixTarget, index: number, patch
     const def = MIX_PARAMS.find((d) => d.name === name);
     if (!def) return `unknown param "${name}"`;
     if (!accepts(def, kind, index)) return `${name} does not apply here`;
-    return null;
+    return learnableDef(def) ? null : `${name} is not learnable (a choice or an on/off switch)`;
   }
   const rack = target.rack;
   if (kind === 'track' && Array.isArray(rack) && rack.length === 2 && typeof rack[1] === 'string') {
@@ -714,8 +717,9 @@ function mappingTargetWhy(target: unknown, kind: MixTarget, index: number, patch
     if (!patch) return `${name}: only synth tracks have a rack`;
     const pm = patch.modules.find((m) => m.idx === mod);
     if (!pm) return `${name}: no module ${String(mod)} in the rack`;
-    if (!moduleDef(pm.id).params.some((d) => d.name === name)) return `unknown param "${name}" of module ${String(mod)}`;
-    return null;
+    const def = moduleDef(pm.id).params.find((d) => d.name === name);
+    if (!def) return `unknown param "${name}" of module ${String(mod)}`;
+    return learnableDef(def) ? null : `${name} is not learnable (a choice or an on/off switch)`;
   }
   return 'no target';
 }

@@ -14,18 +14,20 @@
 //   - A control is named exactly as automation names a lane target: an owner
 //     (a track id, or 'reverb' / 'delay' / 'master') plus an AutoTarget. Unlike
 //     a lane, an INTEGER param (octave, unison, voices) may be mapped too: the
-//     knob's own taper and clampParam round it (mappingDef). Which controls
-//     offer "MIDI learn" at all is the UI's call (Knob / Fader only; no
-//     choice radios or on/off buttons).
+//     knob's own taper and clampParam round it (mappingDef). Choice params
+//     and 0..1 on/off flags are never learnable (learnableDef: learnMidi
+//     refuses them, validate drops them, the UI does not offer them).
 //   - Lifetime: removing a track drops its mappings; removing a rack module
 //     drops that module's; loading a patch drops the track's rack mappings
 //     (its mixer mappings stay). The drop* helpers are plain mutations,
 //     called INSIDE the removal's own edit so they share its undo entry.
-//   - A CC move goes through the normal setParam / setMix action with the
-//     coalesce key `midi:<cc>`, so a sweep on one CC is one undo entry
-//     ("Set Cutoff (MIDI)"), like a knob drag; a sweep on another CC starts
-//     a new one. Rate limiting (one move per frame) is the UI's job
-//     (ui/midiLearn.svelte.ts), not this module's.
+//   - A CC move goes through the normal setParam / setMix action with a
+//     coalesce key (`midi:<cc>` by default; the UI router adds a sweep
+//     number, `midi:<cc>:<n>`, so a 1 s pause ends a sweep), so a sweep on
+//     one CC is one undo entry ("Set Cutoff (MIDI)"), like a knob drag; a
+//     sweep on another CC starts a new one. Rate limiting (one move per
+//     frame) and sweep boundaries are the UI's job (ui/midiLearn.svelte.ts),
+//     not this module's.
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { fromPos } from '../ui/rack/knobMath';
@@ -38,6 +40,18 @@ import { accepts, setMix } from './mixer-actions';
 import type { MixChannelTarget } from './mixer-actions';
 import { setParam } from './rack-actions';
 import type { AutoTarget, Project } from './project.svelte';
+
+/**
+ * Can a control with catalog def `def` be learned? Continuous and integer
+ * knobs/faders: yes. Choice params (a radio group: wave, filter mode, delay
+ * division) and 0..1 integer flags (mute, solo, eq_on, comp_on,
+ * send_*_pre, delay_ping_pong: on/off buttons): no. Used by the UI
+ * (ui/midiLearn canLearn), learnMidi and the schema's validate.
+ */
+export function learnableDef(def: Pick<AutoDef, 'choices' | 'integer' | 'min' | 'max'>): boolean {
+  if (def.choices.length) return false;
+  return !(def.integer && def.min === 0 && def.max === 1);
+}
 
 /** One mapping: CC `cc` moves `target` of `owner` (a track id, or a Master-row channel). */
 export interface MidiMapping {
@@ -90,10 +104,12 @@ export function mappingForCc(p: Project, cc: number): MidiMapping | null {
 /**
  * Map CC `cc` to the control: one edit "MIDI learn CC <cc>" that first drops
  * any mapping of that CC and any of that control. False (and no edit) when
- * the CC is not learnable or the control does not exist (mappingDef).
+ * the CC is not learnable, the control does not exist (mappingDef) or is a
+ * choice / on-off flag (learnableDef).
  */
 export function learnMidi(p: Project, cc: number, owner: MixChannelTarget, target: AutoTarget): boolean {
-  if (!LEARNABLE_CC(cc) || !mappingDef(p, owner, target)) return false;
+  const def = mappingDef(p, owner, target);
+  if (!LEARNABLE_CC(cc) || !def || !learnableDef(def)) return false;
   const had = mappingForCc(p, cc);
   if (had && isControl(had, owner, target)) return true; // already so: nothing to do
   return edit(p, `MIDI learn CC ${cc}`, () => {
@@ -135,7 +151,11 @@ export function dropRackMappings(p: Project, trackId: string) {
   dropWhere(p, (m) => m.owner === trackId && m.target.kind === 'rack');
 }
 
-/** CC value 0..127 -> param value: the knob's own taper (knobMath fromPos), clamped and rounded like a drag. */
+/**
+ * CC value 0..127 -> param value: the knob's own taper (knobMath fromPos).
+ * Clamping and integer rounding happen in the action's clampParam
+ * (setParam / setMix), as for a drag.
+ */
 export function ccValue(def: KnobDef, v: number): number {
   return fromPos(def, v / 127);
 }
@@ -144,20 +164,23 @@ export function ccValue(def: KnobDef, v: number): number {
  * CC `cc` arrived with value `v` (0..127): move its mapped control through
  * the normal action (setParam / setMix, so the model, the engine and the
  * knob all follow), as an undo entry "Set <param label> (MIDI)" that merges
- * with the same CC's previous moves (coalesce `midi:<cc>`). Then
+ * with the previous moves of the same coalesce key (`coalesce`, default
+ * `midi:<cc>`; the UI router passes `midi:<cc>:<sweep>` so a pause of 1 s
+ * ends a sweep, ui/midiLearn.svelte.ts). Then
  * `touch(owner, target)` (the UI: override the target's automation lane,
  * as a drag does). False, doing nothing, when the CC is unmapped or its
  * control no longer resolves.
  */
 export function applyCc(
   p: Project, sink: CommandSink, cc: number, v: number, touch?: (owner: MixChannelTarget, target: AutoTarget) => void,
+  coalesce = `midi:${cc}`,
 ): boolean {
   const m = mappingForCc(p, cc);
   if (!m) return false;
   const def = mappingDef(p, m.owner, m.target);
   if (!def) return false;
   const value = ccValue(def, v);
-  const opts = { coalesce: `midi:${cc}`, label: `Set ${def.label} (MIDI)` };
+  const opts = { coalesce, label: `Set ${def.label} (MIDI)` };
   if (m.target.kind === 'rack') {
     const t = p.tracks.find((x) => x.id === m.owner);
     const mod = t?.kind === 'synth' ? t.modules.find((x) => x.idx === (m.target as { module: number }).module) : undefined;

@@ -44,10 +44,20 @@
   // "un-override"). Right-click, the ContextMenu key or Shift+F10 opens the
   // "Automate" / "Show automation" menu (AutoMenu.svelte) on continuous
   // params; integer ones don't register and don't offer it.
+  //
+  // MIDI learn (plan 14 Task 3; ui/midiLearn.svelte.ts): the same menu also
+  // offers "MIDI learn" / "Forget MIDI (CC 74)" on continuous AND integer
+  // knobs (bus.canLearn), so an integer knob opens it too (learn only).
+  // While this knob is the learn target it pulses (class `learning`; a
+  // static outline under prefers-reduced-motion). A mapped knob shows a
+  // small "CC" tag (`<testid>-cc`) and its title (the accessible description) says
+  // "MIDI CC 74". A CC move arrives as an ordinary `value` change (the
+  // router calls the same action as onchange, plus bus.touch).
   import { onDestroy, untrack } from 'svelte';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
-  import { openAutoMenu } from '../AutoMenu.svelte';
+  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { isLearning } from '../midiLearn.svelte';
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import { dragPos, formatValue, fromPos, keyStep, parseValue, toPos } from './knobMath';
@@ -125,9 +135,17 @@
     if (bus && auto) bus.touch(auto.owner, auto.target);
     onchange(v);
   }
-  /** The Automate menu at (x, y), or under the knob (keyboard); false when the param can't have a lane. */
+  // ---- MIDI learn ------------------------------------------------------------
+  const learningMe = $derived(auto ? isLearning(auto.owner, auto.target) : false);
+  /** The CC mapped to this knob, or null. */
+  const cc = $derived(bus && auto ? bus.midiCc(auto.owner, auto.target) : null);
+  const ccNote = $derived(cc !== null ? ` — MIDI CC ${cc}` : '');
+
+  /** The control menu at (x, y), or under the knob (keyboard); false when it would have no item. */
   function menuAt(x: number | null, y: number | null): boolean {
-    if (!bus || !autoKey || !auto || !bus.canAutomate(auto.owner, auto.target)) return false;
+    if (!bus || !auto) return false;
+    const items = menuItems(bus, auto.owner, auto.target);
+    if (!items.automate && !items.midi) return false;
     const r = knobEl?.getBoundingClientRect();
     openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: knobEl });
     return true;
@@ -347,14 +365,16 @@
     aria-valuetext={ariaAuto !== null
       ? `${formatValue(def, ariaAuto)}${note ? ` ${note}` : ''}, automated (base ${readout})`
       : note ? `${readout} ${note}` : readout}
-    title={automated
+    title={(automated
       ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
-      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`}
+      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
     class:auto-on={autoStatus === 'on'}
     class:auto-off={automated && autoStatus !== 'on'}
     class:auto-susp={autoStatus === 'suspended'}
+    class:learning={learningMe}
+    data-learning={learningMe ? '' : undefined}
     style:--c={color}
     bind:this={knobEl}
     onpointerdown={down}
@@ -379,6 +399,7 @@
       <line class="ptr" bind:this={ptrEl} x1="16" y1="16" x2="16" y2="8" />
     </svg>
     {#if automated}<span class="badge" data-testid="auto-badge" aria-hidden="true">A</span>{/if}
+    {#if cc !== null}<span class="cc" data-testid={testid ? `${testid}-cc` : 'knob-cc'} aria-hidden="true">CC</span>{/if}
     <span class="label">{def.label}</span>
     {#if editing}
       <input
@@ -425,6 +446,11 @@
   .base { stroke: #e8e9ee; stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
   .badge { position: absolute; top: 1px; right: 4px; font: 700 8px/10px ui-sans-serif, system-ui, sans-serif; width: 10px; text-align: center; border-radius: 2px; background: var(--c); color: #111; pointer-events: none; }
   .knob.auto-off .badge { background: #6b6e7a; }
+  /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
+  .cc { position: absolute; top: 1px; left: 3px; font: 700 7px/10px ui-sans-serif, system-ui, sans-serif; padding: 0 2px; border-radius: 2px; background: #3d8fd6; color: #fff; pointer-events: none; }
+  .knob.learning { outline: 2px solid #4fb3ff; outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { outline-color: rgba(79, 179, 255, 0.15); } }
+  @media (prefers-reduced-motion: reduce) { .knob.learning { animation: none; } }
   .knob.auto-susp .val { stroke: #7d808c; }
   .label { font-size: 10px; color: #a3a6b3; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .note { font-size: 9px; color: #f0a43a; white-space: nowrap; }

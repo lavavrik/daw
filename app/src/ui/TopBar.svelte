@@ -47,6 +47,7 @@
   import { liveInputTrack, setMetronome, setTempo } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
+  import MidiPopover from './MidiPopover.svelte';
   import { DEFAULT_OCTAVE, wheelOctaveSteps } from '../input/qwertyPiano';
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, saveRecSettings, undoTakeTitle } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
@@ -70,6 +71,7 @@
     octave = DEFAULT_OCTAVE,
     onOctave = () => {},
     midi = { state: 'no-devices', devices: [] },
+    midiCc = null,
     recorder,
     rec,
     onTogglePlay,
@@ -89,6 +91,8 @@
     /** Octave buttons / wheel: ask the App to change the octave (0..8). */
     onOctave?: (o: number) => void;
     midi?: MidiStatus;
+    /** The last CC received, for the MIDI popover. */
+    midiCc?: { cc: number; v: number } | null;
     recorder: Recorder;
     /** Recorder status, refreshed every frame by the App. */
     rec: RecStatus;
@@ -174,6 +178,8 @@
 
   // Reactive: follows track selection (project state is $state).
   const keysTrack = $derived(liveInputTrack(p));
+  let midiOpen = $state(false);
+  let midiBtn = $state<HTMLElement | null>(null);
   const midiLabel = $derived(
     midi.state === 'connected'
       ? midi.devices[0] + (midi.devices.length > 1 ? ` +${midi.devices.length - 1}` : '')
@@ -369,7 +375,13 @@
     <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
       onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
   </span>
-  <span class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
+  <span class="midiwrap">
+    <button class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
+      aria-haspopup="dialog" aria-expanded={midiOpen} onclick={() => (midiOpen = !midiOpen)}>MIDI: {midiLabel}</button>
+    {#if midiOpen}
+      <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} onclose={() => (midiOpen = false)} />
+    {/if}
+  </span>
   <span class="spacer"></span>
   {#if engineError}
     <span class="fatal" role="alert" data-testid="engine-error" title={engineError}>
@@ -439,6 +451,7 @@
     /* With dropouts the red pill drops its "CPU " word (tooltip unchanged). */
     .pill.bad .cpuw { display: none; }
   }
+  .midiwrap { position: relative; display: inline-flex; }
   .spacer { flex: 1; }
   button, .pill, input, summary { white-space: nowrap; flex: none; }
   button, .pill, input { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 4px 10px; }
@@ -477,6 +490,7 @@
   .bpm { display: flex; align-items: center; gap: 6px; }
   .lbl { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
   input { width: 48px; }
+  button.pill { cursor: pointer; }
   .pill { padding: 4px 6px; background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
   /* Compact: the bar has to stay on one row at 1280 px (layout.spec). */
   .octave { display: inline-flex; align-items: center; flex: none; }

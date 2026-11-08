@@ -781,7 +781,7 @@
     {#if recorder && session}
       <TopBar
         bind:this={topBar}
-        p={project} {engine} {octave} onOctave={(o) => changeOctave(o)} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
+        p={project} {engine} {octave} onOctave={(o) => changeOctave(o)} {midi} {midiCc} {recorder} {rec} {session} {restoreOffer} {undoLabels}
         onTogglePlay={transportToggle} onToggleArm={toggleArm}
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}

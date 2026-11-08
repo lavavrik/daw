@@ -120,3 +120,60 @@ test('MIDI learn a mixer fader; Esc cancels learning', async ({ page }) => {
   await inject(page, [0xb0, 20, 64]);
   expect(await midiMap(page)).toHaveLength(1);
 });
+
+// The MIDI popover (plan 14 Task 4): devices, last CC, the mapping list.
+test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async ({ page }) => {
+  await start(page);
+  await page.getByTestId('add-synth-track').click();
+  const slot = await page.evaluate(() => (window as Any).__daw.project.tracks.at(-1).slot as number);
+  await page.getByTestId(`track-${slot}`).click();
+  await page.getByRole('button', { name: 'Instrument' }).click();
+
+  const pill = page.getByTestId('midi-status');
+  const pop = page.getByTestId('midi-popover');
+  await expect(pop).toHaveCount(0);
+  await pill.click();
+  await expect(pop).toBeVisible();
+  await expect(pop).toHaveAttribute('role', 'dialog');
+  await expect(pop).toHaveAttribute('aria-label', 'MIDI');
+  // No real device under Playwright: the status text, the empty states.
+  await expect(page.getByTestId('midi-devices')).not.toHaveText('');
+  await expect(page.getByTestId('midi-last-cc')).toHaveText('Move a knob on your controller');
+  await expect(pop).toContainText('Right-click a knob → MIDI learn');
+
+  // The pill toggles; live last-CC readout.
+  await pill.click();
+  await expect(pop).toHaveCount(0);
+  await pill.click();
+  await inject(page, [0xb0, 20, 33]);
+  await expect(page.getByTestId('midi-last-cc')).toHaveText('CC 20 = 33');
+
+  // Esc closes (and does not leak to anything else).
+  await page.keyboard.press('Escape');
+  await expect(pop).toHaveCount(0);
+
+  // Learn cutoff on CC 74 (popover closed by the right-click's outside press).
+  await page.getByTestId('knob-4-cutoff').click({ button: 'right' });
+  await page.getByTestId('auto-ctl-midi').click();
+  await inject(page, [0xb0, 74, 64]);
+  await pill.click();
+  const row = page.getByTestId('midi-map-74');
+  await expect(row).toHaveText(/^CC 74 → .* · Filter · Cutoff/);
+  await expect(page.getByTestId('midi-last-cc')).toHaveText('CC 74 = 64');
+
+  // An outside press closes it.
+  await page.getByTestId('timeline').click({ position: { x: 5, y: 5 } });
+  await expect(pop).toHaveCount(0);
+  await pill.click();
+
+  // Forget: gone from the list and the model; one undo brings it back.
+  await row.getByRole('button', { name: 'Forget CC 74' }).click();
+  await expect(row).toHaveCount(0);
+  await expect(pop).toContainText('Right-click a knob → MIDI learn');
+  expect(await midiMap(page)).toEqual([]);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('ControlOrMeta+z');
+  await pill.click();
+  await expect(page.getByTestId('midi-map-74')).toBeVisible();
+  expect((await midiMap(page)).length).toBe(1);
+});

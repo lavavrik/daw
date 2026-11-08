@@ -141,3 +141,25 @@ module the FX pool dropped. Slots become the new track ids in
   (its accessible description) ends "— MIDI CC 74". Knob / Fader read
   `bus.midiCc(owner, target)` (reactive: `project.midiMap`).
 - e2e: `tests/e2e/midi.spec.ts` (learn, sweep, undo, forget, a fader, Esc).
+
+## The popover
+
+- **Where.** The top bar's `midi-status` pill is a button (`aria-haspopup=
+  "dialog"`) that toggles `ui/MidiPopover.svelte`
+  (`data-testid="midi-popover"`, `role="dialog"`, `aria-label="MIDI"`),
+  anchored under the pill in a `position: relative` wrapper (the bar is
+  `overflow-x: clip`, so it can drop below). App passes `midiCc` (the last
+  CC, any channel) to TopBar.
+- **Non-modal**, like the piano roll's Examples popover: Esc (stopped, so
+  it is not also "cancel learn"; focus returns to the pill), a pointer press
+  outside it, or focus moving away (Tab out) closes it. Pressing the pill
+  again is its own toggle.
+- **Sections.** Devices: one line per device, or the status text for
+  none / denied / unsupported. Last CC: `CC 74 = 100`
+  (`data-testid="midi-last-cc"`), or "Move a knob on your controller".
+  Mappings: `p.midiMap` sorted by CC, rows `CC <n> → <mappingLabel>`
+  (`midi-map-<n>`) with a ✕ (`aria-label="Forget CC <n>"`) that calls
+  `forgetMidi`: one undo entry "Forget MIDI CC n". Empty: "Right-click a
+  knob → MIDI learn". The list is reactive, so a learn or an undo updates
+  it while open.
+- e2e: the "MIDI popover" test in `tests/e2e/midi.spec.ts`.

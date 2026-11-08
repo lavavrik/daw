@@ -283,6 +283,9 @@
   .name:not(:disabled):hover { filter: brightness(1.06); }
   .name b { font-size: var(--fs-ctl); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .sub { font-size: var(--fs-lbl); opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  /* Returns and master sit on --raised: light text at full opacity (dark text and the dimmed subtitle lack contrast there). */
+  .neutral .name { color: var(--text); }
+  .neutral .sub { opacity: 1; }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .ms { display: flex; gap: 3px; padding: 2px 0 4px; min-height: 22px; }
   .ms button { width: 26px; height: 20px; font: 700 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); color: var(--text); cursor: pointer; box-shadow: var(--raised-shadow); }

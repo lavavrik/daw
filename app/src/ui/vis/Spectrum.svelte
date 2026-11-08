@@ -61,12 +61,22 @@
 
   const hzLabel = (f: number) => (f >= 1000 ? `${f / 1000}k` : `${f}`);
 
-  /** The trace colour with a gloss: bright at the top, fading to nothing at the floor. */
+  /** `hex` (#rrggbb) at alpha `a`, as an rgba() string (no color-mix in addColorStop). */
+  function withAlpha(hex: string, a: number) {
+    const n = parseInt(hex.slice(1, 7), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+  let gradient: CanvasGradient | null = null;
+  let gradientKey = '';
+  /** The trace colour with a gloss: bright at the top, fading toward the floor. Cached per colour and height. */
   function barFill(c: CanvasRenderingContext2D) {
+    const key = `${color}|${height}`;
+    if (gradient && key === gradientKey) return gradient;
     const g = c.createLinearGradient(0, 0, 0, height);
     g.addColorStop(0, color);
-    g.addColorStop(1, `color-mix(in srgb, ${color} 25%, transparent)`);
-    return g;
+    g.addColorStop(1, color.startsWith('#') && color.length >= 7 ? withAlpha(color, 0.25) : color);
+    gradientKey = key;
+    return (gradient = g);
   }
 
   function drawGrid() {

@@ -182,17 +182,19 @@ test('undo during a knob or fader drag cancels the drag', async ({ page }) => {
   await page.getByTestId('mixer-tab').click();
   const strip = page.getByTestId('strip-1');
 
-  // Knob (pan): drag up, Cmd+Z with the mouse still down, keep moving, release.
+  // Slider (pan): drag along its track, Cmd+Z with the mouse still down, keep moving, release.
   const knob = strip.getByTestId('knob-pan');
   await expect(knob).toHaveAttribute('aria-valuenow', '0');
-  const k = (await knob.boundingBox())!;
-  await page.mouse.move(k.x + k.width / 2, k.y + k.height / 2);
+  const rail = (await knob.locator('.rail').boundingBox())!;
+  const y = rail.y + rail.height / 2;
+  const x0 = rail.x + rail.width / 2;
+  await page.mouse.move(x0, y);
   await page.mouse.down();
-  for (let i = 1; i <= 6; i++) await page.mouse.move(k.x + k.width / 2, k.y + k.height / 2 - i * 8);
+  for (let i = 1; i <= 6; i++) await page.mouse.move(x0 + i * 8, y);
   await expect(knob).not.toHaveAttribute('aria-valuenow', '0');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(knob).toHaveAttribute('aria-valuenow', '0');
-  await page.mouse.move(k.x + k.width / 2, k.y - 80, { steps: 4 }); // the cancelled drag moves nothing
+  await page.mouse.move(x0 + 60, y, { steps: 4 }); // the cancelled drag moves nothing
   await page.mouse.up();
   await page.waitForTimeout(100);
   await expect(knob).toHaveAttribute('aria-valuenow', '0');

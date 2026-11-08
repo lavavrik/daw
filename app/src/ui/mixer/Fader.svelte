@@ -286,9 +286,9 @@
   .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--c, var(--accent)) var(--gloss); }
   .cap {
     position: absolute; left: 1px; right: 1px; border-radius: 4px;
-    /* The handle recipe, with three grip grooves across the middle. */
+    /* The handle recipe, with grip grooves (1 px every 4 px) over the middle 8 px band: two lines. */
     background:
-      repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,.28) 3px 4px) center / 100% 8px no-repeat,
+      repeating-linear-gradient(to bottom, transparent 0 3px, color-mix(in srgb, var(--well) 40%, transparent) 3px 4px) center / 100% 8px no-repeat,
       var(--handle);
     box-shadow: var(--handle-shadow);
   }

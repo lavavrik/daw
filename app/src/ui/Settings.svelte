@@ -20,6 +20,7 @@
   import type { AudioEngine, LatencyInfo } from '../audio/engine';
   import { BT_LATENCY_MS, CUSTOM_HINT_MAX_S, CUSTOM_HINT_MIN_S, customHint, hintLabel } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
+  import NumberField from './NumberField.svelte';
 
   let {
     engine,
@@ -43,7 +44,7 @@
   // Seeded from the running hint once: the panel mounts each time it opens.
   const start = untrack(() => hint);
   let choice = $state<Choice>(typeof start === 'number' ? 'custom' : start);
-  let customMs = $state(Math.round((typeof start === 'number' ? start : 0.02) * 1000));
+  let customMs = $state<number | null>(Math.round((typeof start === 'number' ? start : 0.02) * 1000));
   let info = $state<LatencyInfo | null>(null);
   let status = $state<string | null>(null);
 
@@ -79,17 +80,17 @@
     </select>
   </label>
   {#if choice === 'custom'}
-    <label class="field">
+    <div class="field">
       <span>Buffer</span>
-      <input
-        type="number" data-testid="latency-custom" disabled={busy}
-        min={CUSTOM_HINT_MIN_S * 1000} max={CUSTOM_HINT_MAX_S * 1000} step="1"
-        bind:value={customMs}
-      /> ms
+      <NumberField
+        testid="latency-custom" ariaLabel="Buffer (ms)" unit="ms" disabled={busy}
+        min={CUSTOM_HINT_MIN_S * 1000} max={CUSTOM_HINT_MAX_S * 1000} step={1}
+        value={customMs} oninput={(v) => (customMs = v)} onchange={(v) => (customMs = v)}
+      />
       <span class="applies" class:bad={wanted === null} data-testid="latency-applies">
         {wanted === null ? `Enter ${CUSTOM_HINT_MIN_S * 1000}–${CUSTOM_HINT_MAX_S * 1000} ms` : `Applies ${hintLabel(wanted)}`}
       </span>
-    </label>
+    </div>
   {/if}
   <dl class="readout" title="What the browser chose for the running audio ({hintLabel(hint)})">
     <dt>Sample rate</dt><dd data-testid="settings-rate">{info ? `${info.sampleRate / 1000} kHz` : '—'}</dd>
@@ -118,7 +119,6 @@
   .field { display: flex; align-items: center; gap: 6px; }
   .field > span { width: 52px; color: #9a9da8; font-size: 11px; }
   select { font: inherit; color: #c9cbd3; background: #2a2c33; border: 1px solid #34363e; border-radius: 4px; padding: 3px 4px; flex: 1; }
-  input { width: 56px; }
   .readout { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 2px 0 0; font-size: 11px; font-variant-numeric: tabular-nums; }
   .readout dt { color: #7d808c; }
   .readout dd { margin: 0; text-align: right; color: #c9cbd3; }

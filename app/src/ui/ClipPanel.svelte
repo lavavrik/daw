@@ -57,6 +57,7 @@
   import { clipFocus, sampleName } from './song/clipFocus.svelte';
   import { banners } from '../state/banners.svelte';
   import { pendingSampleIds, sampleFailed } from '../state/sampleLoads';
+  import NumberField from './NumberField.svelte';
 
   let { p, engine, clock = null, track }: {
     p: Project;
@@ -266,23 +267,10 @@
     if (!clip) return;
     setAudioClip(p, engine, clip.id, { gain: (e.currentTarget as HTMLInputElement).valueAsNumber });
   }
-  /** Commit a typed fade (beats); an unreadable entry just shows the value again. */
-  function setFade(which: 'fadeIn' | 'fadeOut', el: HTMLInputElement) {
+  /** Commit a fade (beats). The clip may shorten it to fit; the field re-reads the real value. */
+  function setFade(which: 'fadeIn' | 'fadeOut', beatsValue: number) {
     if (!clip) return;
-    const v = Number(el.value);
-    if (el.value.trim() !== '' && Number.isFinite(v) && v >= 0) setAudioClip(p, engine, clip.id, { [which]: Math.round(v * BEAT) });
-    el.value = beats(clip[which]); // what it really is now (shortened to fit, or unchanged)
-  }
-  function fadeKey(e: KeyboardEvent, which: 'fadeIn' | 'fadeOut') {
-    const el = e.currentTarget as HTMLInputElement;
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      setFade(which, el);
-    } else if (e.key === 'Escape' && clip) {
-      e.preventDefault();
-      el.value = beats(clip[which]);
-      el.blur();
-    }
+    setAudioClip(p, engine, clip.id, { [which]: Math.round(beatsValue * BEAT) });
   }
 </script>
 
@@ -342,28 +330,26 @@
         />
         <output for={gainId} data-testid="cliptab-gain-text">{gainText(c.gain)}</output>
       </label>
-      <label>
+      <div class="fld">
         <span class="lbl">Fade in</span>
         {#key c.id}
-          <input
-            type="number" data-testid="cliptab-fade-in" aria-label="Fade in (beats)" min="0" step="0.25" value={beats(c.fadeIn)}
-            title="Fade in, in beats (exact: type a value, Enter)"
-            onchange={(e) => setFade('fadeIn', e.currentTarget)} onkeydown={(e) => fadeKey(e, 'fadeIn')}
+          <NumberField
+            testid="cliptab-fade-in" ariaLabel="Fade in (beats)" label="Fade in" unit="beats" min={0} step={0.25} decimals={3}
+            value={c.fadeIn / BEAT} title="Fade in, in beats (exact: type a value, Enter)"
+            onchange={(v) => setFade('fadeIn', v)}
           />
         {/key}
-        <span class="unit">beats</span>
-      </label>
-      <label>
+      </div>
+      <div class="fld">
         <span class="lbl">Fade out</span>
         {#key c.id}
-          <input
-            type="number" data-testid="cliptab-fade-out" aria-label="Fade out (beats)" min="0" step="0.25" value={beats(c.fadeOut)}
-            title="Fade out, in beats (exact: type a value, Enter)"
-            onchange={(e) => setFade('fadeOut', e.currentTarget)} onkeydown={(e) => fadeKey(e, 'fadeOut')}
+          <NumberField
+            testid="cliptab-fade-out" ariaLabel="Fade out (beats)" label="Fade out" unit="beats" min={0} step={0.25} decimals={3}
+            value={c.fadeOut / BEAT} title="Fade out, in beats (exact: type a value, Enter)"
+            onchange={(v) => setFade('fadeOut', v)}
           />
         {/key}
-        <span class="unit">beats</span>
-      </label>
+      </div>
       <label class="loop" title="Loop to fill: the file repeats until the clip ends">
         <input type="checkbox" data-testid="cliptab-loop" checked={c.loop} onchange={(e) => setAudioClip(p, engine, c.id, { loop: e.currentTarget.checked })} />
         Loop to fill
@@ -380,13 +366,10 @@
   .info b.missing, .bad { color: #ff8a92; }
   .tag { font-size: 10px; border: 1px solid #3a3d48; border-radius: 3px; padding: 0 4px; color: #c9cbd3; }
   .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; }
-  label { display: flex; align-items: center; gap: 6px; color: #c9cbd3; }
+  label, .fld { display: flex; align-items: center; gap: 6px; color: #c9cbd3; }
   .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: #7d808c; }
   .gain input { width: 180px; accent-color: var(--c); }
   output { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 58px; }
-  input[type='number'] { width: 64px; font: inherit; background: #15161a; color: #e4e5ea; border: 1px solid #3a3d48; border-radius: 3px; padding: 2px 4px; }
-  input[type='number']:focus-visible { outline: 2px solid #f0a23a; outline-offset: -1px; }
-  .unit { color: #7d808c; font-size: 11px; }
   .loop input { accent-color: var(--c); }
   .handle { position: absolute; touch-action: none; cursor: ew-resize; box-sizing: border-box; }
   .handle:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }

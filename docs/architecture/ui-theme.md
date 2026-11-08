@@ -134,3 +134,11 @@ the theme landed. A task that moves a file onto tokens removes it from the
 list in the same commit; the test also fails if a listed file is already
 clean, so the list only shrinks. Hex values belong in `theme.css`,
 `theme.ts` and `state/palette.ts` only.
+
+## NumberField
+
+`ui/NumberField.svelte` replaces bare `<input type="number">` (spec §3). It keeps a real number input (with the `id` / `data-testid`, so `fill` works) and adds steppers and a vertical scrub. `variant="plain"` is a `--well` field with − and +; `variant="lcd"` is the tempo readout (label above, stacked ▲▼). The maths lives in `ui/numberField.ts`.
+
+- A scrub starts after 3 px of vertical travel (a click still focuses the input), moves 1 step per 4 px, Shift = step / 10. Only the display moves; `onchange` fires once on release, so a scrub is one undo entry. Esc or Cmd/Ctrl+Z mid-scrub drops it (`registerDragCancel`).
+- Arrows step; the wheel steps only while the field is focused (so scrolling a panel never edits a field under the cursor). Enter/blur commits, Esc reverts. `oninput` reports the raw text for live validation (Settings' buffer field).
+- Do not wrap a NumberField in a `<label>`: a click on label text would forward to the first button (the − step). Use a `div`.

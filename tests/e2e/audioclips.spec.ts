@@ -420,6 +420,63 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await page.keyboard.press('Space');
 });
 
+test('Clip tab number field: scrub, steppers, click types; one undo each', async ({ page }) => {
+  test.setTimeout(30_000);
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2); // 8 beats
+  await page.getByTestId(`clip-${slot}-0`).click({ position: { x: 20, y: 8 } });
+  await page.getByTestId('mixer-tab').click();
+  await page.keyboard.press('Alt+6');
+  await expect(page.getByTestId('cliptab-panel')).toBeVisible();
+  const c0 = async () => (await audioTracks(page))[0].clips[0];
+  const field = page.getByTestId('cliptab-fade-in');
+  const b = (await field.boundingBox())!;
+  const x = b.x + b.width / 2;
+  const y = b.y + b.height / 2;
+
+  // A click without travel focuses the input for typing; nothing changes.
+  await page.mouse.click(x, y);
+  await expect(field).toBeFocused();
+  expect((await c0()).fadeIn).toBe(0);
+  await field.blur();
+
+  // Scrub up 41 px: 10 steps of 0.25 beat. Only the display moves until the release.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 20, { steps: 5 });
+  await page.mouse.move(x, y - 41, { steps: 5 });
+  await expect(field).toHaveValue('2.5');
+  expect((await c0()).fadeIn).toBe(0);
+  await page.mouse.up();
+  await expect.poll(async () => (await c0()).fadeIn).toBe(2.5 * BEAT);
+  await expect(field).toHaveValue('2.5');
+  // One undo restores the whole scrub.
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).fadeIn).toBe(0);
+  await expect(field).toHaveValue('0');
+
+  // Escape mid-scrub drops it: nothing changed, nothing to undo.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y - 40, { steps: 8 });
+  await expect(field).toHaveValue('2.5');
+  await page.keyboard.press('Escape');
+  await page.mouse.move(x, y - 60, { steps: 4 });
+  await page.mouse.up();
+  await expect(field).toHaveValue('0');
+  expect((await c0()).fadeIn).toBe(0);
+
+  // Arrow keys step (Shift = a tenth of a step); the stepper buttons too.
+  await field.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(async () => (await c0()).fadeIn).toBe(BEAT / 4);
+  await page.keyboard.press('Shift+ArrowUp');
+  await expect.poll(async () => (await c0()).fadeIn).toBe(Math.round(0.275 * BEAT));
+  await page.getByRole('button', { name: 'Decrease Fade in' }).click();
+  await expect.poll(async () => (await c0()).fadeIn).toBe(Math.round(0.025 * BEAT));
+});
+
 test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) => {
   test.setTimeout(30_000);
   await start(page);

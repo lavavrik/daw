@@ -11,6 +11,12 @@
   // shortcuts (Space, the piano keys) and the App's Esc-ends-MIDI-learn must
   // not act behind a modal. Esc is prevented too, so the dialog's own
   // `cancel` never fires and the close always goes through `onclose`.
+  // ⌘S / ⌘O (Ctrl on Windows / Linux) are prevented as well: the stopped
+  // key never reaches the app's Save / Open, so the browser would open its
+  // own "Save page" / "Open file" dialog behind the modal instead.
+  // A press closes it only OUTSIDE the dialog's box (on the backdrop): a
+  // click on the padding or between paragraphs also targets the <dialog>
+  // element itself, so the target alone can't tell the two apart.
   import { onMount } from 'svelte';
   import Icon from './Icon.svelte';
   import X from 'phosphor-svelte/lib/X';
@@ -33,10 +39,17 @@
   }
   function key(e: KeyboardEvent) {
     e.stopPropagation();
+    if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'o')) e.preventDefault();
     if (e.key === 'Escape') {
       e.preventDefault();
       close();
     }
+  }
+  function backdropPress(e: MouseEvent) {
+    if (!dlg || e.target !== dlg) return;
+    const r = dlg.getBoundingClientRect();
+    const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+    if (!inside) close();
   }
   onMount(() => {
     dlg?.showModal();
@@ -48,7 +61,7 @@
 <dialog
   bind:this={dlg} class="sheet" class:about={kind === 'about'}
   aria-labelledby="sheet-title" data-testid={kind === 'shortcuts' ? 'shortcuts-sheet' : 'about-dialog'}
-  onkeydown={key} onclick={(e) => { if (e.target === dlg) close(); }}
+  onkeydown={key} onclick={backdropPress}
 >
   <header>
     <h2 id="sheet-title">{kind === 'shortcuts' ? 'Keyboard shortcuts' : 'About'}</h2>

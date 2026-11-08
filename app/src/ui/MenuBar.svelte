@@ -16,11 +16,11 @@
   //             actions as the playlist footer's buttons (ui/addTrack.ts)
   //   Patterns  New, Duplicate, Rename…, Delete for the selected track's
   //             current pattern (state/pattern-actions.ts, as PatternPicker);
-  //             disabled with the reason as tooltip when the selected track
+  //             inert with the reason (see below) when the selected track
   //             has no patterns. Rename… turns the list into a name field
   //             (Enter renames, Esc goes back to the list).
   //   View      Mixer (a toggle), the editor tabs (BottomPanel.pickTab through
-  //             `onTab`; a tab the selected track can't show is disabled with
+  //             `onTab`; a tab the selected track can't show is inert with
   //             shortcuts.ts tabFor's hint), Reset lane heights
   //   Options   Keyboard: octave − / + and "Keys play: <track>"; MIDI… (the
   //             MIDI popover), Audio settings… (the ⚙ Settings panel),
@@ -45,6 +45,11 @@
   // Commands close the menu and return the focus to its opener. Settings
   // (octave − / +, Metronome, Count-in, the offset) and Undo take keep it
   // open: they are often used twice in a row.
+  // An item that can't run now is INERT, not disabled (ui/inertItem.ts):
+  // aria-disabled, still focusable and in the arrow-key list, its reason
+  // read out through aria-describedby (and shown as its tooltip).
+  // Keys typed on a menu button or in an open menu stay there (keepKey):
+  // only Escape and Cmd / Ctrl chords reach the global shortcuts.
   //
   // ESC LAYERING (Review focus 2). The Esc listener is on `document`
   // (bubble): it runs after any control inside (an Esc a field used itself,
@@ -85,6 +90,7 @@
   import NumberField from './NumberField.svelte';
   import ShortcutsSheet from './ShortcutsSheet.svelte';
   import Icon from './Icon.svelte';
+  import { blockInert, inertItem } from './inertItem';
   import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
   import ArrowCounterClockwise from 'phosphor-svelte/lib/ArrowCounterClockwise';
   import ArrowsVertical from 'phosphor-svelte/lib/ArrowsVertical';
@@ -159,6 +165,8 @@
   type MenuName = (typeof MENUS)[number];
   const slug = (m: string) => m.toLowerCase();
   const kbd = (k: string) => formatKeys(k, IS_MAC);
+  /** Why an item is inert while a load / New replaces the session. */
+  const LOADING = 'Loading a project…';
 
   let root = $state<HTMLElement | null>(null);
   /** Every menu's popover stays in the DOM, hidden while closed (as the ⋯ <details> did: tests read a hidden item's state). */
@@ -224,6 +232,7 @@
   const neighbour = (m: MenuName, d: 1 | -1) => MENUS[(MENUS.indexOf(m) + d + MENUS.length) % MENUS.length];
 
   function buttonKey(e: KeyboardEvent, m: MenuName) {
+    keepKey(e);
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (open !== m) show(m);
@@ -235,9 +244,20 @@
       btns[n]?.focus();
     }
   }
+  /**
+   * Keys typed on a menu button or inside an open menu stay there: Space
+   * presses the focused item (never also starts the song), letters never
+   * play notes, arm recording or move the octave (the global shortcuts
+   * listen on window). Escape still bubbles to the document listener below
+   * (it closes the menu), and Cmd / Ctrl chords (⌘S, ⌘O, ⌘Z) still work.
+   */
+  function keepKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape' && !e.metaKey && !e.ctrlKey) e.stopPropagation();
+  }
   /** A text field keeps its keys (arrows move the caret / step the value). */
   const isField = (t: EventTarget | null) => t instanceof HTMLInputElement;
   function panelKey(e: KeyboardEvent) {
+    keepKey(e);
     if (!open || isField(e.target)) return;
     const items = itemsOf();
     const i = items.indexOf(document.activeElement as HTMLElement);
@@ -438,7 +458,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div
         class="pop" id={`menu-${slug(m)}-panel`} role="group" aria-label={m} data-testid={`menu-${slug(m)}-panel`}
-        hidden={open !== m} bind:this={panels[m]} onkeydown={panelKey}
+        hidden={open !== m} bind:this={panels[m]} onkeydown={panelKey} onclickcapture={blockInert}
       >
         {#if m === 'File'}
           {#if confirming}
@@ -455,30 +475,30 @@
             <button class="it" data-testid="project-save" onclick={() => run('save')}><Icon icon={FloppyDisk} /><span class="l">Save</span><kbd>{kbd('Mod+S')}</kbd></button>
             <button class="it" data-testid="project-save-as" onclick={() => run('saveAs')}><Icon icon={FloppyDiskBack} /><span class="l">Save as…</span><kbd>{kbd('Shift+Mod+S')}</kbd></button>
             <button
-              class="it" data-testid="project-export" disabled={banners.exporting !== null || p.loading}
+              class="it" data-testid="project-export" use:inertItem={banners.exporting !== null ? 'An export is running' : p.loading ? LOADING : null}
               title="Render the song (Song mode, from the start to the last clip + 2 s, metronome off) to a 24-bit WAV"
               onclick={() => run('export')}
             ><Icon icon={Export} /><span class="l">Export WAV…</span></button>
             <hr />
             <button
-              class="it" data-testid="undo-take" disabled={!rec.canUndoTake}
+              class="it" data-testid="undo-take" use:inertItem={rec.canUndoTake ? null : 'No recording pass to undo'}
               title={undoTakeTitle(rec.takeEdits)} onclick={() => recorder.undoLastTake()}
             ><Icon icon={ArrowCounterClockwise} /><span class="l">Undo take</span></button>
           {/if}
         {:else if m === 'Edit'}
           <button
-            class="it" data-testid="menu-undo" disabled={!undoLabels.undo || p.loading}
+            class="it" data-testid="menu-undo" use:inertItem={p.loading ? LOADING : undoLabels.undo ? null : 'Nothing to undo'}
             title={undoLabels.undo ? undefined : 'Nothing to undo'} onclick={() => edit(onUndo)}
           ><Icon icon={ArrowCounterClockwise} /><span class="l">{undoLabels.undo ? `Undo ${undoLabels.undo}` : 'Undo'}</span><kbd>{kbd('Mod+Z')}</kbd></button>
           <button
-            class="it" data-testid="menu-redo" disabled={!undoLabels.redo || p.loading}
+            class="it" data-testid="menu-redo" use:inertItem={p.loading ? LOADING : undoLabels.redo ? null : 'Nothing to redo'}
             title={undoLabels.redo ? undefined : 'Nothing to redo'} onclick={() => edit(onRedo)}
           ><Icon icon={ArrowClockwise} /><span class="l">{undoLabels.redo ? `Redo ${undoLabels.redo}` : 'Redo'}</span><kbd>{kbd('Shift+Mod+Z')}</kbd></button>
         {:else if m === 'Add'}
           {#each ADD_ITEMS as a (a.kind)}
             {@const why = addBlocked(p, a.kind)}
             {#if a.kind === 'master'}<hr />{/if}
-            <button class="it" data-testid={`menu-add-${a.kind}`} disabled={!!why || p.loading} title={why ?? a.title} onclick={() => add(a.kind)}>
+            <button class="it" data-testid={`menu-add-${a.kind}`} use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? a.title} onclick={() => add(a.kind)}>
               <Icon icon={ADD_ICONS[a.kind]} /><span class="l">{a.label}</span>
             </button>
           {/each}
@@ -492,16 +512,16 @@
             <p class="note">Enter to rename, Esc to go back</p>
           {:else}
             <p class="sec" title={ptrack ? undefined : NO_PATTERNS}>{ptrack && cur ? `${ptrack.name} · ${cur.name}` : 'No pattern track selected'}</p>
-            <button class="it" data-testid="menu-pattern-new" disabled={!!fullWhy} title={fullWhy ?? 'New empty pattern'} onclick={() => patternCmd((t) => newPattern(p, engine, t))}>
+            <button class="it" data-testid="menu-pattern-new" use:inertItem={fullWhy} title={fullWhy ?? 'New empty pattern'} onclick={() => patternCmd((t) => newPattern(p, engine, t))}>
               <Icon icon={Plus} /><span class="l">New</span>
             </button>
-            <button class="it" data-testid="menu-pattern-dup" disabled={!!fullWhy} title={fullWhy ?? 'Duplicate this pattern'} onclick={() => patternCmd((t) => duplicatePattern(p, engine, t))}>
+            <button class="it" data-testid="menu-pattern-dup" use:inertItem={fullWhy} title={fullWhy ?? 'Duplicate this pattern'} onclick={() => patternCmd((t) => duplicatePattern(p, engine, t))}>
               <Icon icon={Copy} /><span class="l">Duplicate</span>
             </button>
-            <button class="it" data-testid="menu-pattern-rename" disabled={!ptrack} title={ptrack ? 'Rename this pattern' : NO_PATTERNS} onclick={() => void startRename()}>
+            <button class="it" data-testid="menu-pattern-rename" use:inertItem={ptrack ? null : NO_PATTERNS} title={ptrack ? 'Rename this pattern' : NO_PATTERNS} onclick={() => void startRename()}>
               <Icon icon={PencilSimple} /><span class="l">Rename…</span>
             </button>
-            <button class="it" data-testid="menu-pattern-delete" disabled={!!deleteWhy} title={deleteWhy ?? 'Delete this pattern'} onclick={() => patternCmd((t, pid) => deletePattern(p, engine, t, pid))}>
+            <button class="it" data-testid="menu-pattern-delete" use:inertItem={deleteWhy} title={deleteWhy ?? 'Delete this pattern'} onclick={() => patternCmd((t, pid) => deletePattern(p, engine, t, pid))}>
               <Icon icon={Trash} /><span class="l">Delete</span>
             </button>
             <!-- Task 4 (pattern library) adds here:
@@ -515,13 +535,13 @@
           <hr />
           {#each TABS as t (t.tab)}
             {@const why = tabWhy(t.tab)}
-            <button class="it" data-testid={`menu-view-${t.tab}`} disabled={!!why} title={why ?? undefined} onclick={() => view(() => onTab(t.tab))}>
+            <button class="it" data-testid={`menu-view-${t.tab}`} use:inertItem={why} title={why ?? undefined} onclick={() => view(() => onTab(t.tab))}>
               <Icon icon={t.icon} /><span class="l">{t.label}</span><kbd>{kbd(t.keys)}</kbd>
             </button>
           {/each}
           <hr />
           <button
-            class="it" data-testid="menu-view-reset-lanes" disabled={laneView.heights.size === 0}
+            class="it" data-testid="menu-view-reset-lanes" use:inertItem={laneView.heights.size ? null : 'No lane was resized'}
             title={laneView.heights.size ? 'Give every automation lane its default height' : 'No lane was resized'}
             onclick={() => view(() => (laneView.heights = new Map()))}
           ><Icon icon={ArrowsVertical} /><span class="l">Reset lane heights</span></button>
@@ -529,8 +549,8 @@
           <p class="sec"><Icon icon={Keyboard} size={12} /> Keyboard</p>
           <div class="oct" role="group" aria-label="Octave">
             <span class="l">Octave <b data-testid="menu-octave">{octave}</b></span>
-            <button class="sq" data-testid="menu-octave-down" aria-label="Octave down" title="Octave down (Z)" disabled={octave <= 0} onclick={() => onOctave(octave - 1)}>−</button>
-            <button class="sq" data-testid="menu-octave-up" aria-label="Octave up" title="Octave up (X)" disabled={octave >= 8} onclick={() => onOctave(octave + 1)}>+</button>
+            <button class="sq" data-testid="menu-octave-down" aria-label="Octave down" title="Octave down (Z)" use:inertItem={octave <= 0 ? 'Already the lowest octave' : null} onclick={() => onOctave(octave - 1)}>−</button>
+            <button class="sq" data-testid="menu-octave-up" aria-label="Octave up" title="Octave up (X)" use:inertItem={octave >= 8 ? 'Already the highest octave' : null} onclick={() => onOctave(octave + 1)}>+</button>
           </div>
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
             Keys play: <b>{keysTrack?.name ?? '(no track)'}</b>
@@ -549,7 +569,7 @@
           <div class="offset">
             <span class="l" aria-hidden="true">Recording offset</span>
             <NumberField
-              testid="rec-offset" ariaLabel="Rec offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
+              testid="rec-offset" ariaLabel="Recording offset (ms)" unit="ms" min={REC_OFFSET_MIN} max={REC_OFFSET_MAX} step={1}
               value={recPrefs.offsetMs} onchange={(v) => setRecOffset(recorder, v)}
             />
           </div>
@@ -595,8 +615,9 @@
   }
   .it :global(svg) { flex: none; color: var(--text-2); }
   .it .l { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .it:hover:not(:disabled) { background: var(--raised); }
-  .it:disabled { opacity: 0.45; cursor: default; }
+  .it:hover:not([aria-disabled='true']) { background: var(--raised); }
+  /* aria-disabled is set by use:inertItem (unseen by the compiler: :global). */
+  .pop :global(.it[aria-disabled='true']) { opacity: 0.45; cursor: default; }
   .it:focus-visible, .sq:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .ck { display: inline-flex; }
   .ck :global(svg) { color: var(--accent); }
@@ -612,7 +633,7 @@
     width: 24px; height: 22px; padding: 0; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss);
     box-shadow: var(--raised-shadow); color: var(--text); font: 600 var(--fs-ctl) var(--font-ui); cursor: pointer;
   }
-  .sq:disabled { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: default; }
+  .pop :global(.sq[aria-disabled='true']) { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: default; }
   .info { margin: 2px 8px 2px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .info b { color: var(--text); font-weight: 600; }
   .offset { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; }

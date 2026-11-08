@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openMenu, type MenuName } from './topbar';
+import { startApp } from './startApp';
 
 // The menu bar (plan 21 Task 3; ui/MenuBar.svelte): File · Edit · Add ·
 // Patterns · View · Options · Help in the top bar's left block. topbar.spec.ts
@@ -17,7 +18,7 @@ const daw = (page: Page, fn: (d: Any) => unknown) => page.evaluate(`(${fn.toStri
 
 async function start(page: Page) {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await startApp(page);
   await expect(page.getByTestId('play')).toBeVisible();
 }
 
@@ -60,11 +61,11 @@ test('keyboard: ↓ opens on the first item, ↑ ↓ Home End move, ← → go t
   await page.keyboard.press('ArrowDown');
   await expect(page.getByTestId('project-open')).toBeFocused();
   await page.keyboard.press('End');
-  await expect(page.getByTestId('project-export')).toBeFocused(); // Undo take is disabled: skipped
+  await expect(page.getByTestId('undo-take')).toBeFocused(); // inert (no take), but reachable
   await page.keyboard.press('ArrowDown'); // wraps
   await expect(page.getByTestId('project-new')).toBeFocused();
   await page.keyboard.press('ArrowUp');
-  await expect(page.getByTestId('project-export')).toBeFocused();
+  await expect(page.getByTestId('undo-take')).toBeFocused();
   await page.keyboard.press('Home');
   await expect(page.getByTestId('project-new')).toBeFocused();
   await page.keyboard.press('ArrowRight');
@@ -176,8 +177,13 @@ test('Options ▸ Keyboard: octave − / + change the octave; Keys play names th
   await page.getByTestId('menu-octave-down').click();
   await page.getByTestId('menu-octave-down').click();
   await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct - 1}`);
-  // The Z / X keys play on the new octave (the shortcuts were told).
+  // The Z / X keys play on the new octave (the shortcuts were told). Not
+  // while the focus is on the menu button Esc returned it to: keys typed
+  // there stay with the menu bar.
   await page.keyboard.press('Escape');
+  await page.keyboard.press('KeyX');
+  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct - 1}`);
+  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await page.keyboard.press('KeyX');
   await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct}`);
 });
@@ -231,4 +237,60 @@ test('Help ▸ Keyboard shortcuts lists Space; Esc closes it; About shows the ve
   await expect(page.getByTestId('about-version')).toHaveText(/^\d+\.\d+\.\d+/);
   await page.getByTestId('about-dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await expect(page.getByTestId('about-dialog')).toBeHidden();
+});
+
+test('keys typed in an open menu stay there: Space presses the item, not the song; letters play nothing', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Options');
+  const met = page.getByTestId('menu-metronome');
+  const was = await met.getAttribute('aria-pressed');
+  await met.focus();
+  await page.keyboard.press('Space');
+  await expect(met).toHaveAttribute('aria-pressed', was === 'true' ? 'false' : 'true');
+  expect(await daw(page, (d) => d.project.playing)).toBe(false);
+  // R does not arm recording, Z does not move the octave.
+  const octave = await page.getByTestId('menu-octave').textContent();
+  await page.keyboard.press('KeyR');
+  await page.keyboard.press('KeyZ');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('menu-octave')).toHaveText(octave!);
+  // On a closed menu's button too.
+  await page.keyboard.press('Escape');
+  await expect(btn(page, 'Options')).toBeFocused();
+  await page.keyboard.press('Space'); // presses the button: Options opens
+  await expect(btn(page, 'Options')).toHaveAttribute('aria-expanded', 'true');
+  expect(await daw(page, (d) => d.project.playing)).toBe(false);
+  // Escape still closes it (it reaches the document listener).
+  await page.keyboard.press('Escape');
+  await expect(panel(page, 'Options')).toBeHidden();
+});
+
+test('an item that cannot run is inert, not disabled: focusable, with its reason as description', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Edit');
+  const undo = page.getByTestId('menu-undo');
+  await expect(undo).toBeDisabled(); // aria-disabled (nothing edited yet)
+  await expect(undo).toHaveAttribute('aria-disabled', 'true');
+  await expect(undo).toHaveAccessibleDescription('Nothing to undo');
+  // Still reachable from the keyboard (↓ from the button lands on it).
+  await btn(page, 'Edit').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(undo).toBeFocused();
+  // Enter does nothing: the menu stays open.
+  await page.keyboard.press('Enter');
+  await expect(panel(page, 'Edit')).toBeVisible();
+});
+
+test('the About dialog closes on its backdrop, not on a press inside its padding', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Help');
+  await page.getByTestId('menu-about').click();
+  const dlg = page.getByTestId('about-dialog');
+  await expect(dlg).toBeVisible();
+  // The left padding beside a paragraph: the <dialog> itself is the target.
+  const box = (await dlg.boundingBox())!;
+  await page.mouse.click(box.x + 4, box.y + box.height - 6);
+  await expect(dlg).toBeVisible();
+  await page.mouse.click(box.x - 20, box.y + 10); // the backdrop
+  await expect(dlg).toBeHidden();
 });

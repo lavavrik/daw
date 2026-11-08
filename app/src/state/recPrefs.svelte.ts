@@ -31,7 +31,7 @@ export function setCountIn(r: Recorder, on: boolean) {
   save(r);
 }
 
-/** The recorder clamps nothing itself: callers pass REC_OFFSET_MIN..MAX (NumberField does). */
+/** The recorder clamps (REC_OFFSET_MIN..MAX, rounded; NaN -> 0): the mirror takes its clamped value. */
 export function setRecOffset(r: Recorder, ms: number) {
   r.offsetMs = ms;
   recPrefs.offsetMs = r.offsetMs;

@@ -119,6 +119,28 @@ async function dragHeader(page: Page, idx: number, dx: number, dy: number) {
   await page.mouse.up();
 }
 
+const contentLeft = (page: Page) => page.locator('[data-testid="rail"] > .content').evaluate((c) => c.getBoundingClientRect().left);
+
+/**
+ * Drag module `idx` (same row) so its left lands on grid x `gx`, with the
+ * pointer kept clear of the rail's auto-scroll edges: the held pointer goes to
+ * the rail's middle, the rail is scrolled under it, then it moves to the spot.
+ */
+async function dragToGridX(page: Page, idx: number, gx: number) {
+  const a = await headerGrip(page, idx);
+  const rects = await panelRects(page);
+  const grabX = a.x - (await contentLeft(page)) - rects[idx].left;
+  const rail = page.getByTestId('rail');
+  const rb = (await rail.boundingBox())!;
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(rb.x + rb.width / 2, a.y, { steps: 5 });
+  const target = 6 + gx * 10 + grabX; // `.content` px under the pointer at the drop
+  await rail.evaluate((r, t) => { r.scrollLeft = t - r.clientWidth / 2; }, target);
+  await page.mouse.move((await contentLeft(page)) + target, a.y, { steps: 3 });
+  await page.mouse.up();
+}
+
 /** Panel rects relative to the rail's `.content` (scroll-independent). */
 const panelRects = (page: Page) =>
   page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])').evaluateAll((els) => {
@@ -213,6 +235,9 @@ test('keyboard move', async ({ page }) => {
   await page.getByTestId('module-header-6').focus();
   for (let i = 0; i < 3; i++) await page.keyboard.press('Alt+ArrowRight');
   expect((await positions(page))[6]?.x).toBe(x0 + 3);
+  // Screen readers hear where it went (row 1-based, position in grid units).
+  const row = (await positions(page))[6]!.row;
+  await expect(page.getByTestId('jack-status')).toHaveText(`Moved VCA to row ${row + 1}, position ${x0 + 3}`);
   await expect.poll(() => undoLabel(page)).toBe('Move module'); // a gesture's entry lands a task after the release
   await page.keyboard.press('ControlOrMeta+z'); // one entry: straight back to flow
   await expect.poll(() => anyPos(page)).toBe(false);
@@ -230,7 +255,8 @@ test('wide rack scrolls', async ({ page }) => {
   await page.mouse.down();
   await page.mouse.move(toX, a.y, { steps: 10 });
   await page.mouse.up();
-  expect((await positions(page))[6]?.x).toBe(300);
+  // At least 300: with the pointer past the rail's right edge, edge auto-scroll carries it further.
+  expect((await positions(page))[6]?.x).toBeGreaterThanOrEqual(300);
   await expect.poll(() => rail.evaluate((r) => r.scrollWidth > r.clientWidth + 100)).toBe(true);
   await rail.evaluate((r) => (r.scrollLeft = r.scrollWidth));
   await expect.poll(async () => { const e = await plugError(page); return e.n > 0 && e.worst <= 3; }).toBe(true);
@@ -255,11 +281,10 @@ test('drop back on its own spot is not an edit', async ({ page }) => {
 
 test('x stays within 0..1000', async ({ page }) => {
   await loadBrass(page);
-  const cx = () => page.locator('[data-testid="rail"] > .content').evaluate((c) => c.getBoundingClientRect().left);
   // Drag the VCA (6) to grid x 1200: clamped to 1000.
   let a = await headerGrip(page, 6);
-  let rects = await panelRects(page);
-  let c = await cx();
+  const rects = await panelRects(page);
+  const c = await contentLeft(page);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move(c + 6 + 12000 + (a.x - c - rects[6].left), a.y, { steps: 10 });
@@ -273,26 +298,128 @@ test('x stays within 0..1000', async ({ page }) => {
 
   // Module 7 (same row) right up against the VCA: a nudge would push it to 1001.
   const w7 = Math.ceil(rects[7].width / 10);
-  a = await headerGrip(page, 7);
-  rects = await panelRects(page);
-  c = await cx();
-  await page.mouse.move(a.x, a.y);
-  await page.mouse.down();
-  await page.mouse.move(c + 6 + (1000 - w7) * 10 + (a.x - c - rects[7].left), a.y, { steps: 10 });
-  await page.mouse.up();
+  await dragToGridX(page, 7, 1000 - w7);
   pos = await positions(page);
   expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 });
   await page.getByTestId('module-header-7').focus();
   await page.keyboard.press('Alt+ArrowRight');
   expect(await positions(page)).toEqual(pos); // refused, nothing written
+  await expect(page.getByTestId('jack-status')).toHaveText('Too far right — move left or Tidy'); // and says why
 
-  // A drop that would push the VCA past 1000 is refused too (red outline, no write).
+  // A drop that would push the VCA past 1000 is refused too (red outline + hint, no write).
   a = await headerGrip(page, 7);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move(a.x + 50, a.y, { steps: 4 });
   await expect(page.getByTestId('rack-drop-outline')).toHaveAttribute('data-refused', 'true');
+  await expect(page.getByTestId('rack-drop-refusal')).toHaveText('Too far right — move left or Tidy');
   await page.mouse.up();
-  await page.waitForTimeout(50);
+  await expect(page.getByTestId('flash-hint')).toHaveText('Too far right — move left or Tidy');
   expect(await positions(page)).toEqual(pos);
+});
+
+test('a panel past x 1000 does not block other moves', async ({ page }) => {
+  await loadBrass(page);
+  // The VCA (6) to a new bottom row at x 1000 (the pointer far right and below: clamped).
+  const rects = await panelRects(page);
+  const a = await headerGrip(page, 6);
+  const c = await contentLeft(page);
+  const lastBottom = Math.max(...Object.values(rects).map((r) => r.bottom));
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(c + 12000, a.y + lastBottom + 40 - rects[6].top, { steps: 10 });
+  await page.mouse.up();
+  let pos = await positions(page);
+  expect(pos[6]).toEqual({ row: Math.max(...Object.values(pos).map((q) => q!.row)), x: 1000 });
+  // A module added now is drawn at the end of the bottom row: past 1000.
+  await page.getByRole('button', { name: '+ Add module' }).click();
+  await page.getByTestId('add-menu').getByRole('menuitem', { name: 'Noise' }).click();
+  await expect(page.getByTestId('module-10')).toBeVisible();
+  const r = await panelRects(page);
+  expect(r[10].left).toBeGreaterThanOrEqual(r[6].left + r[6].width - 1);
+  // Moving another module still works; the added one is saved at 1000 (drawn where it was).
+  await page.getByTestId('module-header-2').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  pos = await positions(page);
+  expect(pos[2]!.x).toBe(Math.round((rects[2].left - 6) / 10) + 1);
+  expect(pos[10]).toEqual({ row: pos[6]!.row, x: 1000 });
+  await expect.poll(async () => (await panelRects(page))[10].left).toBeCloseTo(r[10].left, 0);
+});
+
+test('drop onto the left neighbour\'s right half does not swap', async ({ page }) => {
+  await loadBrass(page);
+  const rects = await panelRects(page);
+  expect(Math.abs(rects[1].top - rects[0].top)).toBeLessThan(2); // 0 and 1 share the first row
+  const x0 = Math.round((rects[0].left - 6) / 10);
+  const w0 = Math.ceil(rects[0].width / 10);
+  // Pin with B (1) moved 8 units right, then B dragged with its left edge 3/4
+  // into A (0): it snaps to A's right edge, A stays.
+  await dragHeader(page, 1, 80, 0);
+  expect((await positions(page))[1]!.x).toBeGreaterThan(x0 + w0);
+  const moved = await panelRects(page);
+  await dragHeader(page, 1, moved[0].left + 0.75 * moved[0].width - moved[1].left, 0);
+  let pos = await positions(page);
+  expect(pos[0]).toEqual({ row: 0, x: x0 });
+  expect(pos[1]).toEqual({ row: 0, x: x0 + w0 });
+  // Alt+Left into the touching neighbour: no change, nothing written.
+  await page.getByTestId('module-header-1').focus();
+  await page.keyboard.press('Alt+ArrowLeft');
+  expect(await positions(page)).toEqual(pos);
+  // In A's LEFT half A would be pushed: its new place is outlined during the drag.
+  const a = await headerGrip(page, 1);
+  pos = await positions(page);
+  const now = await panelRects(page);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + now[0].left + 0.2 * now[0].width - now[1].left, a.y, { steps: 5 });
+  await expect(page.getByTestId('rack-push-outline-0')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  expect(await positions(page)).toEqual(pos);
+});
+
+test('positioned rows keep their panels equally tall', async ({ page }) => {
+  await loadBrass(page);
+  /** Per row (by pos): every panel's height, and its natural height (without the stretch spacer). */
+  const rows = () => page.evaluate(() => {
+    const t = (window as unknown as { __daw: RackDaw }).__daw.project.tracks[1];
+    const out: Record<number, { idx: number; h: number; natural: number }[]> = {};
+    for (const m of t.modules ?? []) {
+      const el = document.querySelector<HTMLElement>(`[data-testid="module-${m.idx}"]`)!;
+      const s = el.querySelector<HTMLElement>(':scope > [data-stretch]')!;
+      (out[m.pos!.row] ??= []).push({ idx: m.idx, h: el.offsetHeight, natural: el.offsetHeight - s.offsetHeight });
+    }
+    return out;
+  });
+  // Pin by a nudge, then every row's panels are as tall as the row (jacks line up as in flow).
+  await page.getByTestId('module-header-6').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(async () => Object.values(await rows()).every((r) => new Set(r.map((q) => q.h)).size === 1)).toBe(true);
+  // The tallest panel of a row whose panels differ leaves it: the row shrinks to the next tallest (no ratchet).
+  const r0 = Object.values(await rows()).find((r) => new Set(r.map((q) => q.natural)).size > 1)!;
+  const tallest = r0.reduce((x, y) => (y.natural > x.natural ? y : x));
+  const rest = Math.max(...r0.filter((q) => q.idx !== tallest.idx).map((q) => q.natural));
+  const rects = await panelRects(page);
+  await dragHeader(page, tallest.idx, 0, Math.max(...Object.values(rects).map((r) => r.bottom)) + 40 - rects[tallest.idx].top);
+  const left = r0.find((q) => q.idx !== tallest.idx)!.idx;
+  await expect.poll(async () => (await page.getByTestId(`module-${left}`).evaluate((e) => (e as HTMLElement).offsetHeight))).toBe(rest);
+});
+
+test('dragging near the rail edge scrolls it', async ({ page }) => {
+  await loadBrass(page);
+  const rail = page.getByTestId('rail');
+  const rb = (await rail.boundingBox())!;
+  const a = await headerGrip(page, 4);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(rb.x + rb.width - 10, a.y, { steps: 5 }); // inside the right edge zone
+  await expect.poll(() => rail.evaluate((r) => r.scrollLeft)).toBeGreaterThan(50);
+  await page.mouse.move(rb.x + rb.width / 2, a.y, { steps: 3 }); // out of the zone: it stops
+  await page.waitForTimeout(100);
+  const s = await rail.evaluate((r) => r.scrollLeft);
+  await page.waitForTimeout(200);
+  expect(await rail.evaluate((r) => r.scrollLeft)).toBe(s);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  expect(await anyPos(page)).toBe(false);
 });

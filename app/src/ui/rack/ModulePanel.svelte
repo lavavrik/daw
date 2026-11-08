@@ -33,9 +33,11 @@
   // Alt+arrow keys move the panel). Rack.svelte owns the drag: it gets the
   // press through `onheaderdown` (a press on the header's × does not start
   // one) and the keys through `onheaderkey`, and places the panel with
-  // `place` (positioned rack: absolute left/top inside `.content`; null =
+  // `place` (positioned rack: absolute left/top inside `.content`, and the
+  // row's height as min-height so a row's jacks line up as in flow; null =
   // flow) and `shift` (the dragged panel's translate while it follows the
-  // pointer).
+  // pointer). The spacer above the ports (`data-stretch`) is the only part
+  // that grows: Rack subtracts it to measure the panel's natural height.
   import type { ModuleDef } from '../../audio/catalog';
   import { isSampleDrag } from '../../library/drag';
   import type { RackModule, SampleMeta } from '../../state/project.svelte';
@@ -85,8 +87,8 @@
     lastNote?: number | null;
     /** Scope only: the track's engine slot and the sample rate (its screen). */
     scope?: { track: number; sampleRate: number } | null;
-    /** Positioned rack: the panel's left/top in `.content` px; null = flow (flex-wrap). */
-    place?: { left: number; top: number } | null;
+    /** Positioned rack: the panel's left/top in `.content` px and its row's height (min-height); null = flow (flex-wrap). */
+    place?: { left: number; top: number; height: number } | null;
     /** While dragged: the translate (px) that keeps it under the pointer. */
     shift?: { x: number; y: number } | null;
     /** A primary press on the header (not on its × button): Rack starts a module drag. */
@@ -163,6 +165,7 @@
 <div
   class="panel" class:dropping class:placed={!!place} class:lifted={!!shift} data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
   style:left={place ? `${place.left}px` : undefined} style:top={place ? `${place.top}px` : undefined}
+  style:min-height={place?.height ? `${place.height}px` : undefined}
   style:transform={shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined}
   ondragenter={over} ondragover={over} ondragleave={() => (dropping = false)} ondrop={drop}
 >
@@ -221,7 +224,7 @@
       onclick={() => { if (lastNote !== null && lastNote !== module.params[root]) onparam(root, lastNote); }}
     >Root ← last note{lastNote !== null ? ` (${noteName(lastNote)})` : ''}</button>
   {/if}
-  <div class="spacer"></div>
+  <div class="spacer" data-stretch></div>
   <!-- inputs, then outputs (boxed); side by side when they fit, keeps the rail short -->
   <div class="ports">
     {#if def.inputs.length}
@@ -262,8 +265,9 @@
   .panel { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 92px; background: #22242b; border: 1px solid #33363f; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 5px 5px; box-shadow: 0 1px 0 #0006; }
   header { display: flex; align-items: center; margin: 0 -5px; padding: 2px 4px 2px 7px; background: color-mix(in srgb, var(--c) 22%, #22242b); cursor: grab; touch-action: none; user-select: none; }
   header:focus-visible { outline: 1px solid #f0a23a; outline-offset: -1px; }
-  /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel). */
-  .panel.placed { position: absolute; width: max-content; }
+  /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel).
+     border-box: the row's min-height is a measured offsetHeight. */
+  .panel.placed { position: absolute; width: max-content; box-sizing: border-box; }
   .panel.lifted { z-index: 3; box-shadow: 0 8px 24px #000c; opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--c); white-space: nowrap; }

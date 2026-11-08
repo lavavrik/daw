@@ -21,22 +21,35 @@ Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3
     `left = 6 + x·10`. The top of a row is the sum of the heights of the rows
     above it plus 14 px gaps.
   - A row is as tall as its tallest panel, measured from the DOM.
-  - Panels keep their natural height and `width: max-content`. Far to the
-    right, shrink-to-fit would squeeze them.
+  - Every panel gets `min-height` = its row's height (`box-sizing:
+    border-box`), so a row's jacks line up at the bottom as in flow. Panels
+    keep `width: max-content`: far to the right, shrink-to-fit would squeeze
+    them.
   - `.content` gets an explicit width (at least 100 %) and height, so the
     rail scrolls both ways.
   - The pure layout is in `app/src/ui/rack/rackLayout.ts`:
     - `layoutRack` resolves overlap left to right in each row, so a panel
       that grows pushes its neighbours instead of covering them;
+    - `moveTo` places a module and pushes what it overlaps right
+      (cascading). When the module's left edge lands inside a panel P, in
+      P's right half (x ≥ P.x + P.w/2) it first snaps to P's right edge (P
+      stays: no swap, no gap); in P's left half P is pushed right of it.
+      So Alt+Left on a panel touching its left neighbour changes nothing;
     - modules without a `pos` go at the end of the bottom row;
     - empty rows are compacted.
 
-**Measuring.** `measure()` reads every panel's `offsetWidth`/`offsetHeight`
-(a transform doesn't change them) into `dims`. The layout is derived from
-`dims`.
+**Measuring.** `measure()` reads every panel's `offsetWidth` and natural
+height (a transform doesn't change them) into `dims`. The layout is derived
+from `dims`.
 
+- The natural height is `offsetHeight` minus the panel's stretch spacer
+  (`[data-stretch]` in ModulePanel, its only flex-grow child), which is
+  what the row's `min-height` (or flow's stretch) adds. So a row height
+  never feeds back into the measurement: when the tallest panel leaves a
+  row, the row shrinks to the next tallest.
 - When a size changes, the layout changes, so measure runs again after the
-  DOM update. This converges, because positions never change a panel's size.
+  DOM update. This converges, because positions never change a panel's
+  width or natural height.
 - An effect on the derived geometry re-measures after a move that changed
   no size.
 - Jack centres are measured relative to `.content`. The ResizeObserver
@@ -46,16 +59,36 @@ Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3
 handle. A press on its × is not a drag.
 
 - While dragging:
+  - `pointermove` stores only the client point; the rAF `measure()` derives
+    the `.content` point from it (and from the release point on release),
+    so there is no layout read per move;
   - the panel follows the pointer with a translate, and the cables
     re-measure every frame;
+  - within 30 px of the rail's edge, or past it, the rail auto-scrolls
+    toward that edge each frame (up to 16 px, faster deeper in). The
+    scroll's `measure()` moves the drag point along. It stops when the
+    pointer leaves the zone, the rail can't scroll further, or the drag
+    ends;
   - the target row is the row band under the pointer (bands come from the
     panel rects at the press), and below the last band a dashed "new row"
     band shows;
   - x is `round((pointer − grab offset − 6) / 10)`;
-  - a dashed outline shows `moveTo`'s placement of the module.
+  - a dashed outline shows `moveTo`'s placement of the module, and fainter
+    outlines (`rack-push-outline-<idx>`) show where the panels it pushes
+    would go.
 - On release, with more than 3 px of travel and a changed placement, there
   is one `setRackLayout(…, 'Move module')`. It runs inside the pointer
   gesture, so it makes one undo entry.
+- **Bounds.** The saved `pos` must stay within row 0..31 and x 0..1000
+  (`patches.ts` drops a rack's whole layout otherwise). A drop's x is
+  clamped to 1000. `inBounds(result, base)` holds only the panels whose x
+  the move changes to x ≤ 1000, so a panel already drawn past 1000 (pushed
+  by a grown neighbour, or a module added at the end of the bottom row)
+  doesn't block other moves. `toPositions` saves such a panel at 1000, and
+  `layoutRack` pushes it back to where it was drawn. A refused move (a push
+  past 1000, a 33rd row) writes nothing: the outline turns red with the
+  reason under it ("Too far right — move left or Tidy"), and the status
+  line (`flashHint`) and the live region say it too.
 - In a flow rack the base is `pinFromRects` of the on-screen rects: the
   first drag pins every module and moves this one in that same entry. Flow
   keeps rendering until the drop.
@@ -68,6 +101,9 @@ or 1 row, with the same push rules.
 - Quick nudges are one entry: the coalesce key is
   `sweepKey('rackmove:<trackId>')` (`history/sweep.ts`), and it steps after
   1 s idle.
+- The rack's polite live region (`jack-status`, shared with keyboard
+  patching) announces each move: "Moved VCA to row 2, position 31" (row
+  1-based, position in grid units). A refused nudge says why instead.
 
 **Tidy** (toolbar, `rack-tidy`) removes every `pos` ("Tidy rack"). It is
 disabled when the rack already flows.
@@ -76,7 +112,10 @@ disabled when the rack already flows.
 
 - `cables follow wrapped rows`;
 - the plan 18 drag tests: new row, push, click, Tidy, undo mid drag,
-  keyboard, wide rack.
+  keyboard (and its announcement), wide rack, own spot, x within 0..1000
+  (refusal hint), a panel past 1000 not blocking others, the right-half
+  snap (no swap; pushed-panel outline), equal row heights (no ratchet),
+  edge auto-scroll.
 
 ## Signals
 

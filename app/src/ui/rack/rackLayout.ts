@@ -58,7 +58,14 @@ export function layoutRack(
   return compact(out);
 }
 
-/** Place `idx` at (row, x): push overlaps right (cascading), remove empty rows, renumber. row may equal maxRow + 1 (new row). */
+/**
+ * Place `idx` at (row, x): push overlaps right (cascading), remove empty rows, renumber. row may equal maxRow + 1 (new row).
+ *
+ * Left overlap: when x falls inside a panel P of the target row (P.x < x < P.x + P.w), x in P's RIGHT
+ * half (x >= P.x + P.w / 2) snaps to P's right edge first (the mover only nudged into its left
+ * neighbour: P stays put, no swap); in P's LEFT half P is pushed right of the mover as usual. So
+ * Alt+Left on a panel touching its left neighbour is no change (the rack writes nothing).
+ */
 export function moveTo(placed: readonly Placed[], idx: number, row: number, x: number): Placed[] {
   const me = placed.find((p) => p.idx === idx);
   if (!me) return placed.map((p) => ({ ...p }));
@@ -68,6 +75,9 @@ export function moveTo(placed: readonly Placed[], idx: number, row: number, x: n
   // The mover leaves its old row first, so that row keeps its gap.
   const others = placed.filter((p) => p.idx !== idx).map((p) => ({ ...p }));
   const target = others.filter((p) => p.row === r).sort((a, b) => a.x - b.x || a.idx - b.idx);
+  // One panel at most contains x (a drawn row never overlaps), and its right edge is no other's inside.
+  const left = target.find((p) => p.x < moved.x && moved.x < p.x + p.w);
+  if (left && moved.x * 2 >= left.x * 2 + left.w) moved.x = left.x + left.w;
   let edge = moved.x + moved.w;
   for (const p of target) {
     if (p.x + p.w <= moved.x) continue; // wholly left of the mover
@@ -93,11 +103,23 @@ export function pinFromRects(
   return out;
 }
 
-/** Every module within the saved bounds: a move whose result is not (a push past x 1000, a 33rd row) must not be written. */
-export function inBounds(placed: readonly Placed[]): boolean {
-  return placed.every((p) => p.row <= MAX_ROW && p.x <= MAX_X);
+/**
+ * Every module within the saved bounds: a move whose result is not (a push past x 1000, a 33rd row)
+ * must not be written. With `before` (the layout the move started from) only panels whose x the
+ * move changed are held to x <= MAX_X: one already drawn past 1000 (a grown neighbour pushed it,
+ * or an appended module) must not block every other move. Rows are checked for all (compaction
+ * only ever lowers them).
+ */
+export function inBounds(placed: readonly Placed[], before?: readonly Placed[]): boolean {
+  const was = new Map(before?.map((p) => [p.idx, p.x]));
+  return placed.every((p) => p.row <= MAX_ROW && (p.x <= MAX_X || was.get(p.idx) === p.x));
 }
 
+/**
+ * The positions to save. x is clamped to MAX_X: a panel drawn past 1000 that this move did not
+ * touch (see inBounds) is saved at 1000 and pushed back to where it was when drawn (layoutRack),
+ * so the saved layout always validates (patches.ts drops a rack's whole layout otherwise).
+ */
 export function toPositions(placed: readonly Placed[]): { idx: number; pos: RackPos }[] {
-  return placed.map((p) => ({ idx: p.idx, pos: { row: p.row, x: p.x } }));
+  return placed.map((p) => ({ idx: p.idx, pos: { row: p.row, x: Math.min(MAX_X, p.x) } }));
 }

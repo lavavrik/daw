@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Note } from './project.svelte';
 import {
-  convertSteps, DEFAULT_BASE, normalizeSteps, planEdit, readSteps, REST, stepPitch,
+  convertSteps, DEFAULT_BASE, MAX_BASE, MIN_BASE, normalizeSteps, planEdit, readSteps, REST, stepPitch,
   type AcidStep, type NoteDiff, type NoteInit,
 } from './acidSteps';
 
@@ -181,6 +181,20 @@ describe('acid steps: editing', () => {
       { add: [{ pitch: 40, vel: 80, start: 240, len: 120 }], update: [{ id: 'a', len: 120 }], remove: [] });
   });
 
+  it('a held piano-roll note keeps its length when a note is entered right after it', () => {
+    // 480 ticks covers steps 0..1 (note + tie) and ends exactly at step 2: no slide.
+    const notes = [mk(0, 480, 36, 80, 'a')];
+    expect(readSteps(notes, 1)).toEqual({ ok: true, base: 36, steps: pad([note(0), tie()]) });
+    const next = pad([note(0), tie(), note(4)]);
+    const d = planEdit(notes, 1, 36, next);
+    expect(d).toEqual({ add: [{ pitch: 40, vel: 80, start: 480, len: 120 }], update: [], remove: [] });
+    expect(readSteps(apply(notes, d), 1)).toEqual({ ok: true, base: 36, steps: next });
+    // And back: the note after it becomes a rest, the held note still keeps 480.
+    const after = apply(notes, d);
+    expect(planEdit(after, 1, 36, pad([note(0), tie()]))).toEqual(
+      { add: [], update: [], remove: [after[1].id] });
+  });
+
   it('a kept slide that would overlap the note after next is shortened', () => {
     // 'a' slides into 'b' and runs to tick 1000, which is fine while the next note is at step 5.
     const notes = [mk(0, 1000, 36, 80, 'a'), mk(240, 120, 38, 80, 'b'), mk(1200, 120, 40, 80, 'c')];
@@ -267,6 +281,14 @@ describe('acid steps: reading', () => {
     expect(readSteps([mk(0, 120, 37), mk(240, 120, 70)], 1, 24)).toMatchObject({ ok: true, base: 48 });
   });
 
+  it('auto-fit only picks bases 12..96 (the tab\'s base range)', () => {
+    // 110..127: only base 108 (window 96..131) would fit, past MAX_BASE 96.
+    expect(readSteps([mk(0, 120, 110), mk(240, 120, 127)], 1)).toEqual({ ok: false, reason: 'range' });
+    // Low pitches: base 0 is never offered; 12 (window 0..35) fits them.
+    expect(readSteps([mk(0, 120, 2), mk(240, 120, 30)], 1)).toMatchObject({ ok: true, base: 12 });
+    expect([MIN_BASE, MAX_BASE]).toEqual([12, 96]);
+  });
+
   it('empty pattern reads as rests at the given base', () => {
     expect(readSteps([], 2, 48)).toEqual({ ok: true, base: 48, steps: pad([], 2) });
   });
@@ -310,6 +332,14 @@ describe('acid steps: convert', () => {
     expect(conv.steps[15].kind).toBe('note');
     expect(stepPitch(conv.base, conv.steps[15])).toBe(44); // highest of the two wins
     expect(conv.steps.filter((s) => s.kind === 'note')).toHaveLength(1);
+  });
+
+  it('convert picks a base in 12..96 for high pitches', () => {
+    const conv = convertSteps([mk(0, 120, 110), mk(240, 120, 127)], 1);
+    expect(conv.base).toBeGreaterThanOrEqual(MIN_BASE);
+    expect(conv.base).toBeLessThanOrEqual(MAX_BASE);
+    expect(conv.base).toBe(96); // the window holding the most of them (110)
+    for (const st of conv.steps) if (st.kind === 'note') expect(stepPitch(conv.base, st)).toBeLessThanOrEqual(MAX_BASE + 23);
   });
 
   it('convert keeps a readable pattern as it reads', () => {

@@ -37,18 +37,20 @@
 //     updated field by field, each field rewritten to its canonical value only
 //     when its own inputs changed:
 //       pitch ← the note step's key/oct;   vel ← its accent;
-//       len   ← the run's tie count, the slide on its last step, and whether
-//               the step right after the run is a note.
+//       len   ← the run's tie count, the slide on its last step, and (only
+//               with that slide) whether the step right after the run is a
+//               note.
 //     So a run whose steps and following step are unchanged is left exactly as
 //     it is, and a piano-roll length (240, 480, a 30-tick slide overlap…)
 //     survives edits that don't concern it.
 //   - one safety net: a kept length that would now run past the start of the
 //     note after next (a long slide overlap, once a note is inserted behind its
 //     target) would read as polyphony, so that length is rewritten too.
-// Proof sketch that a kept length still reads the same: if the step after the
-// run is a note, the next note's start is unchanged; if it is a rest (or the
-// end), the old length was ≤ the run's span, so moving later notes can't
-// change its coverage or make it a slide.
+// Proof sketch that a kept length still reads the same: with a slide, the
+// step after the run is a note in both readings, so the next note's start is
+// unchanged; without one, the old length was ≤ the run's span (it neither
+// ran past a next note nor was capped by one), so adding, moving or removing
+// later notes can't change its coverage or make it a slide.
 import { STEP_TICKS } from '../audio/protocol';
 import type { Note } from './project.svelte';
 
@@ -67,6 +69,12 @@ export interface NoteDiff {
 }
 
 export const DEFAULT_BASE = 36;
+/**
+ * Lowest / highest base (the tab's −/+ range and every auto-fit or Convert
+ * base): the window base−12 .. base+23 stays inside MIDI 0..127.
+ */
+export const MIN_BASE = 12;
+export const MAX_BASE = 96;
 /** Longest pattern the tab can show (spec §2.7). */
 export const ACID_MAX_BARS = 4;
 const STEPS_PER_BAR = 16;
@@ -124,10 +132,17 @@ function canonicalNote(steps: readonly AcidStep[], base: number, i: number): Not
   return { pitch: stepPitch(base, s), vel: s.accent ? ACCENT_VEL : PLAIN_VEL, start: i * STEP_TICKS, len };
 }
 
-/** The inputs of a run's canonical length; equal shapes keep a note's length. */
+/**
+ * The inputs of a run's canonical length; equal shapes keep a note's length.
+ * Whether a note follows the run matters only when the run's last step has a
+ * slide (the overlap reaches that note). Without one, a read length is at
+ * most the run's span and covers exactly its steps whatever follows, so a
+ * held 480-tick note keeps its length when a note is entered right after it.
+ */
 function lenShape(steps: readonly AcidStep[], i: number): string {
   const j = runEnd(steps, i);
-  return `${j - i}:${steps[j].slide}:${steps[j + 1]?.kind === 'note'}`;
+  const slide = steps[j].slide;
+  return `${j - i}:${slide}:${slide && steps[j + 1]?.kind === 'note'}`;
 }
 
 /** Notes starting before the pattern end, sorted by start. */
@@ -149,11 +164,15 @@ function fits(sorted: readonly NoteLike[], base: number): boolean {
   return sorted.every((n) => n.pitch >= base - 12 && n.pitch <= base + 23);
 }
 
-/** Auto-fit bases from the lowest pitch (spec §2.6 "fit the lowest note"). */
+/**
+ * Auto-fit bases from the lowest pitch (spec §2.6 "fit the lowest note"),
+ * only those in MIN_BASE..MAX_BASE: a pattern that would need another base
+ * reads as 'range' (Convert folds it into the window).
+ */
 function autoBases(sorted: readonly NoteLike[]): number[] {
   if (sorted.length === 0) return [];
   const low = 12 * Math.floor(Math.min(...sorted.map((n) => n.pitch)) / 12);
-  return [low + 12, low];
+  return [low + 12, low].filter((b) => b >= MIN_BASE && b <= MAX_BASE);
 }
 
 /**
@@ -244,8 +263,8 @@ export function planEdit(notes: readonly Note[], bars: number, base: number, nex
  * For "Convert to steps" (spec §2.7): starts snap to the nearest step, a chord
  * keeps its highest note, pitches fold into the window by octaves, only the
  * first 64 steps are kept. The base is the one `readSteps` would pick if every
- * pitch fits; otherwise the C (12..96) whose window holds the most pitches,
- * preferring DEFAULT_BASE. Lengths are read as usual (capped, so no poly).
+ * pitch fits; otherwise the C (MIN_BASE..MAX_BASE) whose window holds the most
+ * pitches, preferring DEFAULT_BASE. Lengths are read as usual (capped, so no poly).
  */
 export function convertSteps(notes: readonly Note[], bars: number): { base: number; steps: AcidStep[] } {
   const nSteps = Math.min(bars, ACID_MAX_BARS) * STEPS_PER_BAR;

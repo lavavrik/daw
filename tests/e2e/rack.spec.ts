@@ -104,7 +104,9 @@ const undoLabel = (page: Page) =>
 
 /** A point on module `idx`'s header, clear of its × button (viewport px; scrolled into view first). */
 async function headerGrip(page: Page, idx: number) {
-  await page.getByTestId(`module-header-${idx}`).scrollIntoViewIfNeeded();
+  // Centred vertically: a header grabbed within 30 px of the rail's edge would
+  // start the drag's edge auto-scroll and move the target row.
+  await page.getByTestId(`module-header-${idx}`).evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'nearest' }));
   const b = (await page.getByTestId(`module-header-${idx}`).boundingBox())!;
   return { x: b.x + 12, y: b.y + b.height / 2 };
 }
@@ -126,7 +128,12 @@ const contentLeft = (page: Page) => page.locator('[data-testid="rail"] > .conten
  * pointer kept clear of the rail's auto-scroll edges: the held pointer goes to
  * the rail's middle, the rail is scrolled under it, then it moves to the spot.
  */
-async function dragToGridX(page: Page, idx: number, gx: number) {
+/**
+ * Drag module `idx` to grid x `gx`, in its own row, or in `rowMate`'s row
+ * (the flow layout's rows depend on the rack's width, so a test that needs
+ * two modules in one row says so instead of assuming it).
+ */
+async function dragToGridX(page: Page, idx: number, gx: number, rowMate?: number) {
   const a = await headerGrip(page, idx);
   const rects = await panelRects(page);
   const grabX = a.x - (await contentLeft(page)) - rects[idx].left;
@@ -137,7 +144,12 @@ async function dragToGridX(page: Page, idx: number, gx: number) {
   await page.mouse.move(rb.x + rb.width / 2, a.y, { steps: 5 });
   const target = 6 + gx * 10 + grabX; // `.content` px under the pointer at the drop
   await rail.evaluate((r, t) => { r.scrollLeft = t - r.clientWidth / 2; }, target);
-  await page.mouse.move((await contentLeft(page)) + target, a.y, { steps: 3 });
+  let y = a.y;
+  if (rowMate !== undefined) {
+    const m = (await page.getByTestId(`module-header-${rowMate}`).boundingBox())!;
+    y = m.y + m.height / 2;
+  }
+  await page.mouse.move((await contentLeft(page)) + target, y, { steps: 3 });
   await page.mouse.up();
 }
 
@@ -296,9 +308,9 @@ test('x stays within 0..1000', async ({ page }) => {
   await page.keyboard.press('Alt+ArrowRight');
   expect(await positions(page)).toEqual(pos);
 
-  // Module 7 (same row) right up against the VCA: a nudge would push it to 1001.
+  // Module 7 into the VCA's row, right up against it: a nudge would push it to 1001.
   const w7 = Math.ceil(rects[7].width / 10);
-  await dragToGridX(page, 7, 1000 - w7);
+  await dragToGridX(page, 7, 1000 - w7, 6);
   pos = await positions(page);
   expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 });
   await page.getByTestId('module-header-7').focus();

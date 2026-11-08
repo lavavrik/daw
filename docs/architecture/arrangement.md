@@ -215,8 +215,10 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
 
 ## The playlist look (plan 20)
 Spec `docs/superpowers/specs/2026-11-14-redesign.md` §4 *Playlist*; code in
-`ui/song/Timeline.svelte` (LOOK comment), `TrackHeaders.svelte` (LOOK,
-VOLUME SLIDER), `AutoLane.svelte`, `tlMath.ts` (clip previews).
+`ui/song/Timeline.svelte` (LOOK comment: what is drawn when),
+`clipDraw.ts` (the clip drawing: body, previews and their bitmap cache,
+waveform, repeats, hatch), `TrackHeaders.svelte` (LOOK), `TrackVol.svelte`
+(the volume slider), `AutoLane.svelte`, `tlMath.ts` (preview marks).
 
 - **Colours.** The canvases read the theme tokens from `ui/theme.ts`
   (`theme.css` for the HTML); a shade between tokens is a token under a
@@ -228,7 +230,7 @@ VOLUME SLIDER), `AutoLane.svelte`, `tlMath.ts` (clip previews).
   `--on-color` under the name: a mark per drum hit (one band per row that
   has hits, `drumPreview`), a dash per note at its pitch (`notePreview`), or
   for audio the waveform from the peaks. A missing or failed sample's clip
-  is grey with a `--rec` hatch. The selection is a light outline with grips.
+  is dark (`--well`) with a `--rec` hatch and a light (`--text`) name. The selection is a light outline with grips.
 - **Preview cost.** The marks are a `$derived` per used pattern, normalised
   to one period, so a scroll or zoom never recomputes them; only visible
   clips draw, only the periods in view are placed (`periodStarts`), and a
@@ -242,12 +244,18 @@ VOLUME SLIDER), `AutoLane.svelte`, `tlMath.ts` (clip previews).
   with a soft glow; the parked song position a dim line.
 - **Track headers.** A 6 px colour bar, the name (and kind) over a thin
   volume slider, raised M / S / A (lit: `--accent`, `--play`, the track
-  colour). The slider (`track-vol-<slot>`) is a skinned range input bound to
-  the track's mixer fader: `setMix('fader')` like the strip's Fader, its
-  travel on the fader law (`mixMath.faderPos` / `faderDb`), one undo entry
-  per drag (the window gesture bracket), Escape or Cmd/Ctrl+Z mid-drag
-  restores the value from before the press (`registerDragCancel`), arrows
-  ±1 dB, double-click 0 dB. The Master row has no slider.
+  colour). The slider (`TrackVol.svelte`, `track-vol-<slot>`) is a skinned
+  range input bound to the track's mixer fader: `setMix('fader')` like the
+  strip's Fader, its travel on the fader law (`mixMath.faderPos` /
+  `faderDb`), one undo entry per drag (the window gesture bracket), Escape
+  or Cmd/Ctrl+Z mid-drag restores the value from before the press
+  (`registerDragCancel`; the press also ends on window blur or the next
+  pointerdown, so a lost release leaves nothing stale), arrows ±1 dB from
+  the heard value, double-click 0 dB. Like the Fader it registers on the
+  auto bus: while the fader's lane applies (Song mode) the thumb rides at
+  the heard value (`data-auto`, `data-auto-value`, aria "automated (base
+  …)"), and an edit overrides the lane (`autoBus.touch`). The Master row
+  has no slider.
 
 ## Limits
 | What | Limit |

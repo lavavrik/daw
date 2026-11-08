@@ -20,24 +20,27 @@
   // parked song position are drawn only in Song mode.
   //
   // LOOK (plan 20, spec §4 Playlist). Every canvas colour is a theme token
-  // read from ui/theme.ts (C below); shades between tokens are a token under
-  // a white or black veil. A clip is a rounded body in the track colour with
-  // the --gloss recipe drawn on canvas (drawBody: a white 30 % -> 0 gradient
-  // over the top 60 %, a 1 px top highlight, a 2 px darker bottom edge), its
-  // name in --on-color, and a mini preview of what it plays in --on-color:
+  // read from ui/theme.ts (clipDraw.CANVAS, `C` here); shades between tokens
+  // are a token under a white or black veil. The clip drawing itself lives in
+  // clipDraw.ts: a rounded body in the track colour with the --gloss recipe
+  // drawn on canvas (drawBody: a white 30 % -> 0 gradient over the top 60 %,
+  // a 1 px top highlight, a 2 px darker bottom edge), its name in
+  // --on-color, and a mini preview of what it plays in --on-color:
   //   - drum pattern: a mark per hit, one band per row that has hits;
   //   - synth pattern: a dash per note at its pitch;
   //   - audio: the waveform from the sample's peaks (drawAudio).
-  // Preview cost stays bounded: the marks are computed once per pattern
-  // content (`previews`, a $derived: a scroll or zoom does not recompute
-  // them), only visible clips draw, only the pattern periods in view are
-  // placed (tlMath.periodStarts), and a period narrower than BITMAP_MAX_PX is
-  // rendered once into a cached bitmap per pattern and zoom
-  // (previewBitmap) and stamped, so a zoomed-out song is one drawImage per
-  // period. Below PREVIEW_MIN_PX per period there is no preview. The selection is a
-  // light outline with resize grips. The loop range is an --accent bar on the
-  // ruler (dim while the loop is off or in Pattern mode) over a faint band;
-  // the playhead is white (--text) with a soft glow.
+  // A missing / failed sample's clip is dark (--well) with a --rec hatch and
+  // a light name. Preview cost stays bounded: the marks are computed once
+  // per pattern content (`previews`, a $derived: a scroll or zoom does not
+  // recompute them), only visible clips draw, only the pattern periods in
+  // view are placed (tlMath.periodStarts), and a period narrower than
+  // clipDraw.BITMAP_MAX_PX is rendered once into a cached bitmap per pattern
+  // and zoom (PreviewCache) and stamped, so a zoomed-out song is one
+  // drawImage per period. Below PREVIEW_MIN_PX per period there is no
+  // preview. The selection is a light outline with resize grips. The loop
+  // range is an --accent bar on the ruler (dim while the loop is off or in
+  // Pattern mode) over a faint band; the playhead is white (--text) with a
+  // soft glow.
   //
   // AUDIO LANES (plan 9; spec addendum §3.1/3.2). An Audio track's clips draw,
   // in the track colour: the min/max waveform from the sample's peaks
@@ -125,7 +128,6 @@
   import { pendingSampleIds, sampleFailed } from '../../state/sampleLoads';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
-  import { peaksFrames, peaksLevel } from '../../audio/peaks';
   import { clipFocus, sampleName } from './clipFocus.svelte';
   import { addSynthTrack } from '../../state/rack-actions';
   import { addSamplerTrack } from '../../state/sampler-actions';
@@ -139,7 +141,7 @@
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips,
   } from '../../state/song-actions';
-  import { addAudioTrack, clipGainLinear, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
+  import { addAudioTrack, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
@@ -148,12 +150,14 @@
   import { targetLabel } from './autoLabels';
   import { targetDef } from '../../state/automation';
   import {
-    BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
-    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, fileTicks, followPage, hitTest, loopFromDrag,
-    notePreview, periodStarts, placeLen, repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX,
+    BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges,
+    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, followPage, hitTest, loopFromDrag,
+    notePreview, placeLen, repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX,
     xToTick, zoomAt,
   } from './tlMath';
   import type { ClipBox, PreviewMark, TlView } from './tlMath';
+  import { CANVAS as C, PreviewCache, drawAudio, drawBody, drawPreview, drawRepeats, veil } from './clipDraw';
+  import type { AudioState } from './clipDraw';
 
   let { p, engine, clock }: { p: Project; engine: CommandSink & ImportEngine; clock: AudioClock | null } = $props();
 
@@ -323,23 +327,6 @@
   /** Heard song tick while playing in Song mode, else null. Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
 
-  /**
-   * Canvas colours: theme tokens (ui/theme.ts mirrors theme.css). A shade
-   * between tokens is a token under a veil (`veil`), never a literal.
-   */
-  const C = {
-    lane: THEME.work, // clip rows (the playlist area)
-    sep: THEME.grid, // row separators, beat lines
-    bar: THEME.line,
-    bar4: THEME.raised,
-    ruler: THEME.panel,
-    rulerText: THEME.text2,
-    accent: THEME.accent,
-    playhead: THEME.text, // "white"
-    onColor: THEME.onColor, // clip names and previews
-  };
-  /** White (lighter) or black (darker) at `a` over what is there: the shades between tokens. */
-  const veil = (light: boolean, a: number) => (light ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`);
   /** The loop range counts (bright) only while on and in Song mode; otherwise it is shown dimmed. */
   const loopLive = () => p.loop.on && p.mode === 'song';
 
@@ -360,13 +347,9 @@
     return p.playing ? null : { t: p.songPosition, live: false };
   }
 
-  // ---- clip previews (LOOK at the top) ----------------------------------------
-  /** No preview when one pattern period is narrower than this (px): the marks would be noise. */
-  const PREVIEW_MIN_PX = 8;
-  /** A period up to this wide (device px) is stamped from a cached bitmap; a wider one draws its marks directly. */
-  const BITMAP_MAX_PX = 2048;
-  /** The preview band starts this far below the clip's top (under the name). */
-  const PREVIEW_TOP = 14;
+  // ---- clip previews (LOOK at the top; the drawing is clipDraw.ts) ----------------
+  /** Each pattern's preview bitmap, by pattern id (clipDraw.PreviewCache). */
+  const previewCache = new PreviewCache();
   /**
    * Each used pattern's preview marks by pattern id (tlMath drumPreview /
    * notePreview), normalised to one period. A $derived: Svelte recomputes it
@@ -387,76 +370,6 @@
     }
     return m;
   });
-  /** A mark's rectangle in a period `periodPx` wide and a band `bandH` tall (px, from the period's top left). */
-  function markRect(m: PreviewMark, periodPx: number, bandH: number, drum: boolean): [number, number, number, number] {
-    const w = (m.t1 - m.t0) * periodPx;
-    const h = m.h * bandH;
-    // Steps keep a 1 px gap when there is room; a note dash is at least 1.5 px tall.
-    return [m.t0 * periodPx, m.y * bandH, Math.max(1, drum && w > 3 ? w - 1 : w), Math.max(drum ? 1 : 1.5, h > 2 ? h - 0.5 : h)];
-  }
-  /** One period's marks rendered once per pattern content and zoom (see LOOK); evicted when the pattern is no longer used. */
-  const previewCache = new Map<string, { marks: PreviewMark[]; periodPx: number; bandH: number; dpr: number; cv: OffscreenCanvas }>();
-  function previewBitmap(id: string, marks: PreviewMark[], drum: boolean, periodPx: number, bandH: number): OffscreenCanvas | null {
-    const hit = previewCache.get(id);
-    if (hit && hit.marks === marks && hit.periodPx === periodPx && hit.bandH === bandH && hit.dpr === dpr) return hit.cv;
-    const cv = hit?.cv ?? new OffscreenCanvas(1, 1);
-    cv.width = Math.max(1, Math.ceil(periodPx * dpr));
-    cv.height = Math.max(1, Math.ceil(bandH * dpr));
-    const g = cv.getContext('2d');
-    if (!g) return null;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = C.onColor;
-    for (const m of marks) g.fillRect(...markRect(m, periodPx, bandH, drum));
-    previewCache.set(id, { marks, periodPx, bandH, dpr, cv });
-    return cv;
-  }
-  /** A pattern clip's preview, under its name (the caller has clipped to the clip's body). */
-  function drawPreview(ctx: CanvasRenderingContext2D, t: Track, c: Clip, y: number, h: number, v: TlView, W: number) {
-    if (!isPatternTrack(t)) return;
-    const pat = patternOf(t, c.patternId);
-    const pv = pat && previews.get(pat.id);
-    if (!pat || !pv || !pv.marks.length) return;
-    const patLen = patternLength(pat);
-    const periodPx = patLen / v.ticksPerPx;
-    if (periodPx < PREVIEW_MIN_PX) return;
-    const bandY = y + PREVIEW_TOP;
-    const bandH = h - PREVIEW_TOP - 3;
-    const bmp = periodPx * dpr <= BITMAP_MAX_PX ? previewBitmap(pat.id, pv.marks, pv.drum, periodPx, bandH) : null;
-    ctx.fillStyle = C.onColor;
-    ctx.globalAlpha = 0.6;
-    for (const ps of periodStarts(c.start, c.len, c.offset, patLen, xToTick(0, v), xToTick(W, v))) {
-      const px = Math.round(tickToX(ps, v) * dpr) / dpr; // on a device pixel: crisp stamps
-      if (bmp) ctx.drawImage(bmp, px, bandY, bmp.width / dpr, bmp.height / dpr);
-      else {
-        // A period wider than the bitmap cap (deep zoom): at most a few in view, marks drawn directly.
-        for (const m of pv.marks) {
-          const [mx, my, mw, mh] = markRect(m, periodPx, bandH, pv.drum);
-          if (px + mx + mw >= 0 && px + mx <= W) ctx.fillRect(px + mx, bandY + my, mw, mh);
-        }
-      }
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  /**
-   * A clip's body (LOOK at the top): `color` with the gloss drawn as on CSS
-   * --gloss (white 30 % -> 0 at 60 % of the height), a 1 px top highlight and
-   * a 2 px darker bottom edge. The caller has clipped to the rounded body.
-   */
-  function drawBody(ctx: CanvasRenderingContext2D, color: string, x: number, y: number, w: number, h: number) {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, w, h);
-    const g = ctx.createLinearGradient(0, y, 0, y + h);
-    g.addColorStop(0, veil(true, 0.3));
-    g.addColorStop(0.6, veil(true, 0));
-    ctx.fillStyle = g;
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = veil(true, 0.5);
-    ctx.fillRect(x, y, w, 1);
-    ctx.fillStyle = veil(false, 0.18);
-    ctx.fillRect(x, y + h - 2, w, 2);
-  }
-
   /** Reads every reactive input, so the $effect below redraws on any change. */
   function drawLanes() {
     const cv = canvas;
@@ -517,7 +430,7 @@
     }
 
     // Bitmaps of patterns no clip uses any more go.
-    for (const id of previewCache.keys()) if (!previews.has(id)) previewCache.delete(id);
+    previewCache.prune((id) => previews.has(id));
 
     // clips (unselected first; the selection on top)
     ctx.font = `700 10px ${THEME.fontUi}`;
@@ -541,22 +454,27 @@
       body.roundRect(bx0, y, bx1 - bx0, h, rad);
       ctx.save();
       ctx.clip(body);
-      drawBody(ctx, broken ? THEME.raised : t.color, bx0, y, bx1 - bx0, h);
-      if (isAudio(c)) drawAudio(ctx, c, x0, x1, y, h, v, W, pending, st);
-      else {
-        drawPreview(ctx, t, c, y, h, v, W);
+      drawBody(ctx, broken ? C.broken : t.color, bx0, y, bx1 - bx0, h);
+      if (isAudio(c)) {
+        const meta = c.sampleId !== null ? p.sampleMeta.get(c.sampleId) : undefined;
+        drawAudio(ctx, c, meta, p.tempo, x0, x1, y, h, v, W, pending.has(c.sampleId ?? -1), st);
+      } else {
+        const pat = isPatternTrack(t) ? patternOf(t, c.patternId) : null;
+        const pv = pat && previews.get(pat.id);
+        if (pat && pv) drawPreview(ctx, { patternId: pat.id, ...pv, patLen: patternLength(pat), start: c.start, len: c.len, offset: c.offset }, y, h, v, W, dpr, previewCache);
         drawRepeats(ctx, repeatTicks(c.start, c.len, c.offset, patLenOf(t, c)), x0, x1, y, h, v);
       }
       if (w > 18) { // the name, pinned to the left edge while scrolled
         const name = patNameOf(t, c) + (st === 'failed' ? ' · sample failed to load' : '');
         const lx = Math.max(x0, 0) + 5;
         if (isAudio(c)) { // over the waveform: on a backing in the body colour
-          ctx.fillStyle = broken ? THEME.raised : t.color;
-          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = broken ? C.broken : t.color;
+          ctx.globalAlpha = broken ? 1 : 0.85;
           ctx.fillRect(lx - 3, y + 2, ctx.measureText(name).width + 6, 12);
           ctx.globalAlpha = 1;
         }
-        ctx.fillStyle = C.onColor;
+        // A broken clip's body is dark: its name is light (--text on --well).
+        ctx.fillStyle = broken ? C.brokenText : C.onColor;
         ctx.fillText(name, lx, y + 3);
       }
       ctx.restore();
@@ -607,7 +525,7 @@
         ctx.fillStyle = C.playhead;
         if (m.live) {
           ctx.shadowColor = veil(true, 0.6);
-          ctx.shadowBlur = 6;
+          ctx.shadowBlur = 6 * dpr; // device px: the canvas transform does not scale shadows
           ctx.fillRect(x - 1, 0, 2, H);
           ctx.shadowBlur = 0;
           ctx.shadowColor = 'transparent';
@@ -620,35 +538,6 @@
     }
   }
 
-  /** A notch + dashed line at each tick where the clip's material starts again (pattern, or a loop clip's file), in --on-color. */
-  function drawRepeats(ctx: CanvasRenderingContext2D, ticks: number[], x0: number, x1: number, y: number, h: number, v: TlView) {
-    ctx.strokeStyle = C.onColor;
-    ctx.fillStyle = C.onColor;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.globalAlpha = 0.45;
-    ctx.beginPath();
-    for (const r of ticks) {
-      const rx = Math.round(tickToX(r, v)) + 0.5;
-      if (rx < x0 || rx > x1) continue;
-      ctx.moveTo(rx, y + 2);
-      ctx.lineTo(rx, y + h);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 0.7;
-    for (const r of ticks) {
-      const rx = Math.round(tickToX(r, v)) + 0.5;
-      if (rx < x0 || rx > x1) continue;
-      ctx.beginPath();
-      ctx.moveTo(rx - 3, y + 1);
-      ctx.lineTo(rx + 3, y + 1);
-      ctx.lineTo(rx, y + 5);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-  }
-
   /**
    * What is wrong with an audio clip's sample, if anything: `missing` (none:
    * not in the project folder), `failed` (its deferred load failed:
@@ -656,147 +545,12 @@
    * load waits for Stop). Drawn hatched (the first two in --rec on a grey
    * body), and said in the overlay's aria-label and data-state.
    */
-  function audioState(c: AudioClip, pending: ReadonlySet<number>): 'missing' | 'failed' | 'pending' | null {
+  function audioState(c: AudioClip, pending: ReadonlySet<number>): AudioState {
     if (c.sampleId === null) return 'missing';
     if (sampleFailed(c.sampleId)) return 'failed';
     return pending.has(c.sampleId) ? 'pending' : null;
   }
   const STATE_TEXT = { missing: 'missing sample', failed: 'sample failed to load: stop and drop it again', pending: 'loads when playback stops' };
-
-  /** Diagonal stripes over [x0, x1) × [y, y + h) (the caller has clipped to the clip). */
-  function hatch(ctx: CanvasRenderingContext2D, color: string, alpha: number, x0: number, x1: number, y: number, h: number) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.globalAlpha = alpha;
-    ctx.beginPath();
-    const xs = Math.max(x0, -h); // only the stripes in view
-    const xe = Math.min(x1, width + h);
-    for (let x = Math.floor(xs / 8) * 8 - h; x < xe; x += 8) {
-      ctx.moveTo(x, y + h);
-      ctx.lineTo(x + h, y);
-    }
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
-  /**
-   * An audio clip's body (see AUDIO LANES at the top), in --on-color over the
-   * track colour: the waveform, the fade ramps, the loop notches or the
-   * end-of-file mark, and the hatch of a deferred or missing sample. The
-   * caller has clipped to the clip's box and draws the body, the name and
-   * the outline.
-   */
-  function drawAudio(
-    ctx: CanvasRenderingContext2D, c: AudioClip, x0: number, x1: number, y: number, h: number,
-    v: TlView, W: number, pending: Set<number>, st: ReturnType<typeof audioState>,
-  ) {
-    const meta = c.sampleId !== null ? p.sampleMeta.get(c.sampleId) : undefined;
-    const seconds = meta?.seconds ?? null;
-    const tps = fileTicks(1, p.tempo); // ticks per second
-    const end = c.start + c.len;
-    const top = y + 3; // full height: the name is drawn over it on a backing
-    const bottom = y + h - 2;
-    const mid = (top + bottom) / 2;
-    const amp = (bottom - top) / 2;
-    const xa = Math.max(Math.floor(x0), 0);
-    const xb = Math.min(Math.ceil(x1), W);
-    const gain = clipGainLinear(c.gain);
-    /** The clip's own envelope (gain × fades) at song tick `t`, for scaling the picture. */
-    const env = (t: number) => {
-      let g = gain;
-      if (c.fadeIn > 0 && t < c.start + c.fadeIn) g *= Math.max(0, (t - c.start) / c.fadeIn);
-      if (c.fadeOut > 0 && t > end - c.fadeOut) g *= Math.max(0, (end - t) / c.fadeOut);
-      return g;
-    };
-
-    // The waveform: one min/max bar per pixel from the peaks level that matches the zoom (downsampled already).
-    ctx.fillStyle = C.onColor;
-    if (meta?.peaks && seconds && seconds > 0) {
-      const pk = meta.peaks;
-      const frames = peaksFrames(pk);
-      const fps = frames / seconds; // file frames per second (the rate the peaks were made at)
-      const lv = peaksLevel(pk, (v.ticksPerPx / tps) * fps);
-      const pairs = lv.data[0]?.length / 2 || 0;
-      ctx.globalAlpha = 0.55;
-      for (let px = xa; px < xb && pairs > 0; px++) {
-        const ta = Math.max(c.start, xToTick(px, v));
-        const tb = Math.min(end, xToTick(px + 1, v));
-        if (tb <= ta) continue;
-        let fa = (c.offset + (ta - c.start) / tps) * fps;
-        const span = ((tb - ta) / tps) * fps;
-        if (c.loop) fa %= frames;
-        else if (fa >= frames) break; // the file ran out (end-of-file mark below)
-        const ia = Math.floor(fa / lv.framesPerPeak);
-        const ib = Math.max(ia + 1, Math.ceil((fa + span) / lv.framesPerPeak));
-        let lo = 127;
-        let hi = -127;
-        for (let i = ia; i < ib; i++) {
-          const k = c.loop ? i % pairs : i;
-          if (k >= pairs) break;
-          for (const ch of lv.data) {
-            if (ch[2 * k] < lo) lo = ch[2 * k];
-            if (ch[2 * k + 1] > hi) hi = ch[2 * k + 1];
-          }
-        }
-        if (hi < lo) continue;
-        const g = Math.min(1.5, env((ta + tb) / 2)) / 127;
-        const yTop = Math.max(top - 2, mid - hi * g * amp);
-        const yBot = Math.min(bottom + 1, mid - lo * g * amp);
-        ctx.fillRect(px, yTop, 1, Math.max(1, yBot - yTop));
-      }
-      ctx.globalAlpha = 1;
-    } else if (!pending.has(c.sampleId ?? -1) && c.sampleId !== null) {
-      // No peaks yet: a flat placeholder line.
-      ctx.globalAlpha = 0.4;
-      ctx.fillRect(xa, Math.round(mid), xb - xa, 1);
-      ctx.globalAlpha = 1;
-    }
-
-    // Fade ramps: the faded-out corner darkened, the ramp drawn as a line.
-    const ramp = (xs: number, ys: number, xe: number, ye: number, corner: [number, number]) => {
-      ctx.fillStyle = veil(false, 0.3);
-      ctx.beginPath();
-      ctx.moveTo(xs, ys);
-      ctx.lineTo(xe, ye);
-      ctx.lineTo(corner[0], corner[1]);
-      ctx.fill();
-      ctx.strokeStyle = C.onColor;
-      ctx.globalAlpha = 0.8;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(xs, ys);
-      ctx.lineTo(xe, ye);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    };
-    if (c.fadeIn > 0) {
-      const xf = tickToX(c.start + c.fadeIn, v);
-      ramp(x0, y + h, xf, y + 2, [x0, y + 2]);
-    }
-    if (c.fadeOut > 0) {
-      const xf = tickToX(end - c.fadeOut, v);
-      ramp(xf, y + 2, x1, y + h, [x1, y + 2]);
-    }
-
-    const marks = audioMarks(c, seconds, p.tempo);
-    if (marks.repeats.length) drawRepeats(ctx, marks.repeats, x0, x1, y, h, v);
-    if (marks.fileEnd !== null) {
-      // The file runs out before the clip ends (a tempo change): the rest is silent, darkened.
-      const xe = Math.round(tickToX(marks.fileEnd, v));
-      ctx.fillStyle = veil(false, 0.45);
-      ctx.fillRect(xe, y, x1 - xe, h);
-      ctx.fillStyle = C.onColor;
-      ctx.fillRect(xe, y, 1.5, h);
-      ctx.beginPath();
-      ctx.moveTo(xe, y + h);
-      ctx.lineTo(xe + 4, y + h);
-      ctx.lineTo(xe, y + h - 4);
-      ctx.fill();
-    }
-
-    if (st === 'missing' || st === 'failed') hatch(ctx, THEME.rec, 0.7, x0, x1, y, h);
-    else if (st === 'pending') hatch(ctx, C.onColor, 0.3, x0, x1, y, h);
-  }
 
   function drawRuler() {
     const cv = rulerCv;

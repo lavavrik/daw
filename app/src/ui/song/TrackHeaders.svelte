@@ -40,28 +40,16 @@
   // M / S / A buttons (lit: M --accent, S --play, A the track colour). Tokens
   // only; the track colour is data, passed in as --c.
   //
-  // VOLUME SLIDER (`track-vol-<slot>`, track rows only; the Master row has
-  // none). A skinned <input type="range"> bound to the track's mixer fader:
-  // the same value and the same action as the strip's fader (setMix 'fader'),
-  // so the two always agree. Its 0..1 travel is the fader law (mixMath
-  // faderPos / faderDb: 0 dB at 3/4, snapped to 0.1 dB), not linear dB.
-  // As on the Fader: a drag is one undo entry (the window's gesture
-  // bracket, history/gestures.ts, spans the native press .. release); Escape
-  // or Cmd/Ctrl+Z mid-drag (registerDragCancel) puts back the value from
-  // before the press and ignores the rest of that press; arrows ±1 dB (Shift
-  // 0.1 dB), Home −∞, End +6 dB; double-click 0 dB; an edit first overrides
-  // the fader's automation lane (autoBus.touch, as the Fader does). Chrome
-  // aligns pointer moves to frames, so a drag sends at most one value per
-  // frame without the Fader's own coalescing.
+  // VOLUME SLIDER: TrackVol.svelte (`track-vol-<slot>`, track rows only),
+  // the track's mixer fader; it follows the fader's automation lane.
   import { onDestroy } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
   import { removeTrack, selectTrack } from '../../state/actions';
-  import { setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
-  import { useAutoBus } from '../autoBus';
-  import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
+  import { toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import TrackVol from './TrackVol.svelte';
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import InlineConfirm from '../InlineConfirm.svelte';
@@ -121,66 +109,6 @@
   function remove(t: Track, anchor: HTMLElement) {
     releaseHeldKeys();
     asking = { track: t, anchor };
-  }
-
-  // ---- volume slider (see VOLUME SLIDER at the top) ---------------------------------
-  const bus = useAutoBus();
-  const FADER = { kind: 'mix', param: 'fader' } as const;
-  /** A track's fader (dB), as its mixer strip shows it. */
-  const faderOf = (t: Track) => p.mixer.channels[t.id]?.params[mixParam('fader').id] ?? mixParam('fader').default;
-  function setVol(t: Track, db: number) {
-    if (db === faderOf(t)) return;
-    bus?.touch(t.id, FADER);
-    setMix(p, engine, t.id, 'fader', db);
-  }
-  /** The slider press in progress: its track, the value before it, and whether Escape / Cmd+Z cancelled it. */
-  let vol: { trackId: string; db0: number; cancelled: boolean } | null = null;
-  function volDown(e: PointerEvent, t: Track) {
-    if (e.button !== 0) return;
-    vol = { trackId: t.id, db0: faderOf(t), cancelled: false };
-    // The native slider keeps the pointer: its release can land anywhere.
-    const end = () => {
-      vol = null;
-      window.removeEventListener('pointerup', end, true);
-      window.removeEventListener('pointercancel', end, true);
-    };
-    window.addEventListener('pointerup', end, true);
-    window.addEventListener('pointercancel', end, true);
-  }
-  function volInput(e: Event & { currentTarget: HTMLInputElement }, t: Track) {
-    if (vol?.cancelled && vol.trackId === t.id) {
-      e.currentTarget.value = String(faderPos(faderOf(t))); // the thumb stays at the restored value
-      return;
-    }
-    setVol(t, faderDb(e.currentTarget.valueAsNumber));
-  }
-  /** Abort the press: the value from before it, and the rest of the press is ignored. False when none is on. */
-  function volCancel(): boolean {
-    const v = vol;
-    if (!v || v.cancelled) return false;
-    v.cancelled = true;
-    const t = trackById.get(v.trackId);
-    // The old base back without a new override (as the Fader's Escape).
-    if (t && faderOf(t) !== v.db0) setMix(p, engine, t.id, 'fader', v.db0);
-    return true;
-  }
-  const unregisterVol = registerDragCancel(volCancel);
-  onDestroy(unregisterVol);
-  function volKey(e: KeyboardEvent, t: Track) {
-    let db: number | null = null;
-    if (e.key === 'Escape' && vol && !vol.cancelled) {
-      e.preventDefault();
-      e.stopPropagation();
-      volCancel();
-      return;
-    }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') db = faderKeyStep(faderOf(t), 1, e.shiftKey);
-    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') db = faderKeyStep(faderOf(t), -1, e.shiftKey);
-    else if (e.key === 'Home') db = FADER_MIN_DB;
-    else if (e.key === 'End') db = FADER_MAX_DB;
-    if (db === null) return;
-    e.preventDefault(); // not the native 0.001 step
-    setVol(t, db);
   }
 
   // ---- lane height (see LANE HEIGHT at the top) ----------------------------------
@@ -264,7 +192,6 @@
       {@const muted = flagOn(t, 'mute')}
       {@const soloed = flagOn(t, 'solo')}
       {@const open = laneView.open.has(t.id)}
-      {@const db = faderOf(t)}
       <div class="row" class:sel class:muted style:--c={t.color} style:height="{r.h}px">
         <span class="bar" aria-hidden="true"></span>
         <div class="body">
@@ -290,24 +217,8 @@
               <span class="kind">Drum track</span>
             {/if}
           </button>
-          <!-- The track's mixer fader (VOLUME SLIDER at the top); --c (the track colour) fills it. -->
-          <input
-            type="range"
-            class="vol"
-            min="0"
-            max="1"
-            step="0.001"
-            value={faderPos(db)}
-            style:--fill="{faderPos(db) * 100}%"
-            data-testid={`track-vol-${t.slot}`}
-            aria-label={`${t.name} volume`}
-            aria-valuetext={formatDb(db)}
-            title={`${t.name} volume: ${formatDb(db)} (the mixer fader) — double-click: 0 dB, arrows: ±1 dB (Shift: 0.1 dB)`}
-            onpointerdown={(e) => volDown(e, t)}
-            oninput={(e) => volInput(e, t)}
-            onkeydown={(e) => volKey(e, t)}
-            ondblclick={() => setVol(t, 0)}
-          />
+          <!-- The track's mixer fader (TrackVol.svelte); --c (the track colour) fills it. -->
+          <TrackVol {p} {engine} track={t} />
         </div>
         <span class="ms">
           <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${t.name}`} data-testid={`track-mute-${t.slot}`} title={muted ? `${t.name} is muted — click to unmute` : `Mute ${t.name}`} onclick={() => toggleMute(p, engine, t.id)}>M</button>
@@ -431,10 +342,6 @@
   .name { flex: none; max-width: 100%; color: var(--text); font-size: var(--fs-ctl); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
   .row:not(.sel) .name { font-weight: 600; color: var(--text-2); }
   .kind { min-width: 0; color: var(--text-2); font-size: var(--fs-lbl); opacity: 0.8; overflow: hidden; text-overflow: ellipsis; }
-  /* The thin volume slider: theme.css's range skin, scaled down (4 px groove, 10 px handle). */
-  .vol { display: block; width: calc(100% - 8px); height: 10px; margin-left: 10px; }
-  .vol::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; }
-  .vol::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -3px; }
   .x { width: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--text-2); font-size: 14px; cursor: pointer; opacity: 0; }
   .row:hover .x, .row:focus-within .x, .x:focus-visible { opacity: 1; }
   .x:hover { color: var(--rec); }

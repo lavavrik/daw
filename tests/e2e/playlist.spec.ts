@@ -111,3 +111,42 @@ test('a drum clip previews its pattern: a mark per hit under the name', async ({
   await page.getByTestId('step-0-8').click();
   await expect.poll(marks).toBeGreaterThan(0);
 });
+
+test('the header volume slider follows the fader lane in Song mode, and an edit overrides it', async ({ page }) => {
+  await start(page);
+  // A fader lane on the drum track: −40 dB at bar 1 to −20 dB at bar 2.
+  await page.evaluate((bar) => {
+    const d = (window as unknown as { __daw: { project: { tracks: { id: string }[] }; actions: Record<string, (...a: unknown[]) => unknown> } }).__daw;
+    const lane = d.actions.addLane(d.project.tracks[0].id, { kind: 'mix', param: 'fader' });
+    d.actions.drawLane(lane, [{ tick: 0, value: -40 }, { tick: bar, value: -20 }]);
+  }, BAR);
+  const vol = page.getByTestId('track-vol-0');
+  // Pattern mode (nothing ran yet): the lane does not apply; the slider shows the base.
+  await expect(vol).not.toHaveAttribute('data-auto', 'on');
+  expect(Number(await vol.inputValue())).toBeCloseTo(0.75, 3);
+  // Song mode (the song transport ran last), parked half way: about −29 dB (the lane interpolates on the fader law).
+  await page.getByTestId('play').click();
+  await page.getByTestId('play').click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: { project: { mode: string; playing: boolean } } }).__daw.project.mode)).toBe('song');
+  await page.evaluate((t) => (window as unknown as { __daw: { actions: { seek(t: number): void } } }).__daw.actions.seek(t), BAR / 2);
+  await expect(vol).toHaveAttribute('data-auto', 'on');
+  const heard = async () => Number(await vol.getAttribute('data-auto-value'));
+  await expect.poll(heard).toBeLessThan(-27);
+  expect(await heard()).toBeGreaterThan(-32);
+  const v = await heard();
+  const pos = Number(await vol.inputValue());
+  expect(pos).toBeLessThan(0.6); // well below 0 dB's 3/4
+  expect(pos).toBeGreaterThan(0.05);
+  await expect(vol).toHaveAttribute('aria-valuetext', /, automated \(base 0\.0 dB\)$/);
+  // Its strip fader draws the same heard value.
+  await page.getByTestId('mixer-tab').click();
+  const fader = page.getByTestId('strip-0').getByTestId('fader');
+  await expect.poll(async () => Number(await fader.getAttribute('data-auto-value'))).toBeCloseTo(v, 3);
+  // An arrow on the slider steps from the heard value and overrides the lane until its next point.
+  await vol.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(vol).toHaveAttribute('data-auto', 'suspended');
+  await expect(fader).toHaveAttribute('data-auto', 'suspended');
+  const want = Math.round((v + 1) * 10) / 10;
+  await expect(vol).toHaveAttribute('aria-valuetext', `−${(-want).toFixed(1)} dB`);
+});

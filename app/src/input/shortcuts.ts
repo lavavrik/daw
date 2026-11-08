@@ -49,7 +49,9 @@ export function tabFor(tab: PanelTab, kind: 'drum' | 'synth' | 'audio' | null): 
 export interface ShortcutOptions {
   /** Alt+1..5 / F6..F9: show a bottom-panel tab (the host handles disabled tabs: tabFor). */
   onTab?: (tab: PanelTab) => void;
-  /** Fires (with the new octave) on Z/X. */
+  /** Starting octave (default DEFAULT_OCTAVE); clamped to 0..8. */
+  initialOctave?: number;
+  /** Fires (with the new octave) on Z/X (not on setOctave: the caller already knows). */
   onOctave?: (o: number) => void;
   /** Space. The app passes its own (count-in, recorder stop tick); default togglePlay(p, sink). */
   onTogglePlay?: () => void;
@@ -103,6 +105,12 @@ export interface ShortcutHandlers {
   onVisibility(hidden: boolean): void;
   /** NOTE_OFF for every held piano key. */
   releaseAll(): void;
+  /**
+   * Set the octave from outside (the top bar's -/+ buttons). Clamps to 0..8,
+   * does not fire onOctave. Held notes are unaffected: they release through
+   * `held`, which stored the note actually started.
+   */
+  setOctave(o: number): void;
 }
 
 /**
@@ -114,7 +122,8 @@ export function createShortcutHandlers(
   p: Project, sink: CommandSink, input: NoteInput, opts: ShortcutOptions = {},
 ): ShortcutHandlers {
   const { onOctave } = opts;
-  let octave = DEFAULT_OCTAVE;
+  const clampOct = (o: number) => Math.min(8, Math.max(0, Math.round(o)));
+  let octave = clampOct(opts.initialOctave ?? DEFAULT_OCTAVE);
   // KeyboardEvent.code -> note that was actually started, so changing the
   // octave while a key is held still releases the right note.
   const held = new Map<string, number>();
@@ -209,6 +218,9 @@ export function createShortcutHandlers(
       if (hidden) releaseAll();
     },
     releaseAll,
+    setOctave(o) {
+      if (Number.isFinite(o)) octave = clampOct(o);
+    },
   };
 }
 
@@ -222,6 +234,11 @@ let installed: ShortcutHandlers | null = null;
  */
 export function releaseHeldKeys() {
   installed?.releaseAll();
+}
+
+/** Set the octave of the installed shortcuts (no-op when not installed). */
+export function setShortcutOctave(o: number) {
+  installed?.setOctave(o);
 }
 
 /** Returns an uninstall function. */

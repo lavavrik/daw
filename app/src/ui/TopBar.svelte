@@ -59,6 +59,7 @@
     p,
     engine,
     octave = DEFAULT_OCTAVE,
+    onOctave = () => {},
     midi = { state: 'no-devices', devices: [] },
     recorder,
     rec,
@@ -76,6 +77,8 @@
     p: Project;
     engine: AudioEngine;
     octave?: number;
+    /** Octave buttons / wheel: ask the App to change the octave (0..8). */
+    onOctave?: (o: number) => void;
     midi?: MidiStatus;
     recorder: Recorder;
     /** Recorder status, refreshed every frame by the App. */
@@ -349,7 +352,14 @@
       (no synth track)
     {/if}
   </span>
-  <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
+  <!-- The buttons blur after a click so Space keeps meaning play/stop (not "click the focused button"). -->
+  <span class="octave" onwheel={(e) => { onOctave(Math.min(8, Math.max(0, octave + (e.deltaY < 0 ? 1 : -1)))); }}>
+    <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
+      onclick={(e) => { onOctave(octave - 1); e.currentTarget.blur(); }}>−</button>
+    <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
+    <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
+      onclick={(e) => { onOctave(octave + 1); e.currentTarget.blur(); }}>+</button>
+  </span>
   <span class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
   <span class="spacer"></span>
   {#if engineError}
@@ -408,10 +418,12 @@
     .small, .seg button:not(.hist button) { padding: 4px 6px; }
     input { padding: 4px 6px; }
     .metro { padding: 4px 7px; }
+    /* Room for the octave -/+ buttons ("(no synth track)" is ~100 px). */
+    .pill.keys { max-width: 125px; }
   }
   @media (max-width: 1399px) {
     /* 90 / 72: room for the 64 px master spectrum at 1280 px. */
-    .pill.keys { max-width: 90px; }
+    .pill.keys { max-width: 80px; }
     .pill.midi { max-width: 72px; }
     .pill:not(.bad) .long, .unsaved .long { display: none; }
     .proj summary { max-width: 160px; }
@@ -457,6 +469,10 @@
   .lbl { font-size: 10px; letter-spacing: 0.06em; color: #7d808c; }
   input { width: 48px; }
   .pill { padding: 4px 6px; background: transparent; border-color: transparent; color: #9a9da8; font-variant-numeric: tabular-nums; }
+  /* Compact: the bar has to stay on one row at 1280 px (layout.spec). */
+  .octave { display: inline-flex; align-items: center; flex: none; }
+  .octave .pill { padding: 4px 1px; }
+  button.oct { padding: 2px; line-height: 1; border-color: transparent; }
   .pill.bad { color: #ff6b6b; font-weight: 600; }
   .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin: 0 5px 0 3px; vertical-align: -1px; }
   .pill.keys { color: #c9cbd3; }

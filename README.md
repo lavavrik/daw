@@ -497,7 +497,7 @@ still work there).
 |---|---|
 | **Space** | Play / Stop |
 | **A S D F G H J K L** / **W E T Y U O** | Keyboard piano: white / black keys |
-| **Z** / **X** | Octave down / up |
+| **Z** / **X** | Octave down / up (also the top bar's **−** / **+** or the wheel over **Oct**; remembered) |
 | **R** | Record arm |
 | **Shift+L** | PAT / SONG |
 | **Alt+1** … **Alt+5**, **F6** … **F9** | Bottom-panel tab: Step grid / Piano roll / Instrument / Mixer / Clip (the Clip tab has no F-key: F10 is the browser's menu key). A tab that doesn't fit the selected track shows a hint instead |

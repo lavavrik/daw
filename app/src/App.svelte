@@ -22,9 +22,9 @@
   import { setMix, setSidechain } from './state/mixer-actions';
   import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
   import { BUILTIN_PATCHES } from './state/patches';
-  import { installShortcuts, type PanelTab } from './input/shortcuts';
+  import { installShortcuts, setShortcutOctave, type PanelTab } from './input/shortcuts';
   import { connectMidi } from './input/midi';
-  import { DEFAULT_OCTAVE } from './input/qwertyPiano';
+  import { loadOctave, saveOctave } from './input/qwertyPiano';
   import { createNoteInput } from './input/noteInput';
   import type { NoteInput } from './input/noteInput';
   import { loadRecSettings, recorderFor, sameStatus, transportSync } from './state/recorder';
@@ -63,7 +63,14 @@
   let uninstall: (() => void) | null = null;
   let uninstallMidi: (() => void) | null = null;
   let uninstallLoads: (() => void) | null = null;
-  let octave = $state(DEFAULT_OCTAVE);
+  let octave = $state(loadOctave());
+  /** Every octave change (Z/X or the top bar buttons): state, key handlers, memory. */
+  function changeOctave(o: number, fromKeys = false) {
+    const n = Math.min(8, Math.max(0, o));
+    octave = n;
+    if (!fromKeys) setShortcutOctave(n); // Z/X already moved the handlers' own copy
+    saveOctave(n);
+  }
   let midi = $state<MidiStatus>({ state: 'no-devices', devices: [] });
   let recorder = $state.raw<Recorder | null>(null);
   /** The one note bus: QWERTY, MIDI (and later the piano roll) all play through it. */
@@ -573,7 +580,8 @@
     session = s;
     void checkAutosave(); // after audio started: a restore needs the engine
     uninstall = installShortcuts(project, live, input, {
-      onOctave: (o) => (octave = o),
+      initialOctave: octave,
+      onOctave: (o) => changeOctave(o, true),
       onTogglePlay: transportToggle,
       onToggleArm: toggleArm,
       onSave: () => void s.save(),
@@ -747,7 +755,7 @@
     {#if recorder && session}
       <TopBar
         bind:this={topBar}
-        p={project} {engine} {octave} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
+        p={project} {engine} {octave} onOctave={(o) => changeOctave(o)} {midi} {recorder} {rec} {session} {restoreOffer} {undoLabels}
         onTogglePlay={transportToggle} onToggleArm={toggleArm}
         onUndo={undo} onRedo={redo}
         {latencyHint} {restarting} onApplyAudio={applyAudioSettings}

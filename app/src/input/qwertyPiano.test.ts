@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { keyToNote } from './qwertyPiano';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { keyToNote, loadOctave, saveOctave } from './qwertyPiano';
 
 describe('keyToNote', () => {
   it('maps KeyA at octave 4 to middle C (60)', () => expect(keyToNote('KeyA', 4)).toBe(60));
@@ -8,4 +8,30 @@ describe('keyToNote', () => {
   it('maps KeyL at octave 8 to 122 (14 + 12*9; brief said 110, contradicting its own formula)', () => expect(keyToNote('KeyL', 8)).toBe(122));
   it('returns null for non-piano keys', () => expect(keyToNote('Digit1', 4)).toBeNull());
   it('returns null when out of the MIDI range', () => expect(keyToNote('KeyA', 11)).toBeNull());
+});
+
+describe('loadOctave / saveOctave', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const store = (init: Record<string, string> = {}) => {
+    const m = new Map(Object.entries(init));
+    vi.stubGlobal('localStorage', { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) });
+    return m;
+  };
+  it('round-trips through daw.octave', () => {
+    const m = store();
+    saveOctave(6);
+    expect(m.get('daw.octave')).toBe('6');
+    expect(loadOctave()).toBe(6);
+  });
+  it('falls back to 4 on garbage / missing / out-of-range / throwing storage', () => {
+    store();
+    expect(loadOctave()).toBe(4);
+    for (const bad of ['abc', '', '4.5', '-1', '9', 'NaN']) {
+      store({ 'daw.octave': bad });
+      expect(loadOctave()).toBe(4);
+    }
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } });
+    expect(loadOctave()).toBe(4);
+    expect(() => saveOctave(5)).not.toThrow();
+  });
 });

@@ -1051,3 +1051,23 @@ test('step cells toggle from the keyboard (Enter), as a press does', async ({ pa
   await cell.click();
   await expect(cell).toHaveAttribute('aria-pressed', 'true');
 });
+
+test('octave buttons: step, remembered across reload, Z steps, Space still plays after a click', async ({ page }) => {
+  await startAudio(page);
+  const pill = page.getByTestId('octave');
+  await expect(pill).toHaveText('Oct 4');
+  await page.getByTestId('octave-up').click();
+  await expect(pill).toHaveText('Oct 5');
+  await page.reload();
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await expect(pill).toHaveText('Oct 5'); // remembered (localStorage daw.octave)
+  await page.keyboard.press('KeyZ');
+  await expect(pill).toHaveText('Oct 4'); // Z steps from the stored value
+  // Focus must not stay on the clicked button: Space plays instead of re-clicking it.
+  await page.getByTestId('octave-up').click();
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(1);
+  await expect(pill).toHaveText('Oct 5');
+  await page.keyboard.press('Space');
+  await expect.poll(slot(page, 1)).toBe(0);
+});

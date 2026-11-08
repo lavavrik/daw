@@ -127,6 +127,36 @@ describe('shortcut handlers', () => {
     h.onKeyUp(key('KeyA'));
     expect(sent).toEqual([[Op.NOTE_OFF, 60]]);
   });
+  it('setOctave changes the next note and clamps, without firing onOctave', () => {
+    const { sent, octs, h } = mk();
+    h.setOctave(6);
+    h.onKeyDown(key('KeyA'));
+    expect(sent).toEqual([[Op.NOTE_ON, 84, 100]]);
+    h.onKeyUp(key('KeyA'));
+    h.setOctave(12);
+    sent.length = 0;
+    h.onKeyDown(key('KeyA'));
+    expect(sent).toEqual([[Op.NOTE_ON, 108, 100]]); // octave 8
+    expect(octs).toEqual([]);
+  });
+  it('setOctave while held releases the original note', () => {
+    const { sent, h } = mk();
+    h.onKeyDown(key('KeyA'));
+    h.setOctave(6);
+    sent.length = 0;
+    h.onKeyUp(key('KeyA'));
+    expect(sent).toEqual([[Op.NOTE_OFF, 60]]);
+  });
+  it('Z/X step from a set octave; initialOctave seeds it', () => {
+    const { octs, h } = mk();
+    h.setOctave(6);
+    h.onKeyDown(key('KeyX'));
+    h.onKeyDown(key('KeyZ', {})); h.onKeyDown(key('KeyZ'));
+    expect(octs).toEqual([7, 6, 5]);
+    const b = mk({ initialOctave: 2 } as any);
+    b.h.onKeyDown(key('KeyA'));
+    expect(b.sent).toEqual([[Op.NOTE_ON, 36, 100]]);
+  });
   it('a key whose pitch another held key already sounds (after an octave change) is ignored', () => {
     const { sent, heard, h } = mk();
     h.onKeyDown(key('KeyK')); // C5 at octave 4

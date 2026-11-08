@@ -320,6 +320,8 @@ impl AudioTracks {
     /// refused: the UI cannot know the engine rate, and a refused SOURCE
     /// would let the GAIN + SET that follow commit a stale staged source.
     /// (Negative or non-finite offsets never get here: `decode` refuses them.)
+    // `!(x > y)` is deliberate: unlike `x <= y` it also rejects NaN.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn stage_source(&mut self, slot: usize, idx: usize, sample: Option<u32>, offset: f64, looped: bool) -> Result<(), i32> {
         let frames = (offset * self.sample_rate as f64).round();
         if !(frames >= 0.0) {

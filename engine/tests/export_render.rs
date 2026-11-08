@@ -100,7 +100,11 @@ fn fnv1a(h: u32, bytes: &[u8]) -> u32 {
     bytes.iter().fold(h, |h, &b| (h ^ b as u32).wrapping_mul(16777619))
 }
 
+// SAFETY (whole body): `e` is the live pointer from `engine_new`, used
+// single-threaded and freed once at the end; the ffi exports are `unsafe fn`.
+#[allow(unused_unsafe)]
 fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
+  unsafe {
     let e = engine_new(job.sample_rate);
     for &(id, frames, channels, seed) in &job.samples {
         let data = sample_data(frames, channels, seed);
@@ -132,6 +136,7 @@ fn render(job: &Job, call: usize) -> (Vec<f32>, Vec<f32>) {
     }
     drop(unsafe { Box::from_raw(e) });
     (left.split_off(latency), right.split_off(latency))
+  }
 }
 
 fn hash(left: &[f32], right: &[f32]) -> u32 {

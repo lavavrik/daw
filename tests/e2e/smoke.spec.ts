@@ -828,60 +828,6 @@ test('dragging a knob coalesces param sends (at most one per frame + final)', as
   await expect(page.getByTestId('knob-4-cutoff')).toContainText('kHz');
 });
 
-/**
- * Perf budget: four synth tracks, each a gate-independent "drone" patch, so
- * every voice channel computes all the time (notes can't be held on four
- * tracks at once; SET_INPUT_TRACK releases the previous track's notes).
- *   MIDI In (8 voices) -> 2x Osc saw (unison 2) -> Mixer -> Filter LP24
- *   (reso 0.5, cv <- LFO, cv_amt 2) -> VCA (cv unconnected = unity) -> Out.
- * Built with raw commands (catalog kind ids, packed module*16+port).
- */
-test('four synth tracks stay under budget', async ({ page }) => {
-  await startAudio(page);
-  const before = await page.evaluate(() => {
-    const { engine, Op } = (window as unknown as DawWindow).__daw!;
-    const send = (op: number, a = 0, b = 0, c = 0, d = 0) => engine!.send(op, a, b, c, d);
-    const port = (m: number, p: number) => m * 16 + p;
-    const K = { midiIn: 0, osc: 1, filter: 3, vca: 5, lfo: 6, mixer: 7, out: 8 };
-    let ok = true;
-    const run = (r: boolean) => void (ok = ok && r);
-    for (let slot = 1; slot <= 4; slot++) {
-      run(send(Op.ADD_SYNTH_TRACK, slot));
-      // module indices: 0 midi, 1 osc, 2 osc, 3 mixer, 4 filter, 5 lfo, 6 vca, 7 out
-      [K.midiIn, K.osc, K.osc, K.mixer, K.filter, K.lfo, K.vca, K.out].forEach((k, i) =>
-        run(send(Op.RACK_ADD_MODULE, slot, i, k)));
-      run(send(Op.RACK_SET_PARAM, slot, 1, 6, 2)); // osc1 unison 2
-      run(send(Op.RACK_SET_PARAM, slot, 2, 6, 2)); // osc2 unison 2
-      run(send(Op.RACK_SET_PARAM, slot, 4, 2, 0.5)); // filter reso
-      run(send(Op.RACK_SET_PARAM, slot, 4, 3, 2)); // filter cv_amt
-      run(send(Op.RACK_CONNECT, slot, port(0, 0), port(1, 0))); // pitch -> osc1
-      run(send(Op.RACK_CONNECT, slot, port(0, 0), port(2, 0))); // pitch -> osc2
-      run(send(Op.RACK_CONNECT, slot, port(1, 0), port(3, 0))); // osc1 -> mixer in1
-      run(send(Op.RACK_CONNECT, slot, port(2, 0), port(3, 1))); // osc2 -> mixer in2
-      run(send(Op.RACK_CONNECT, slot, port(3, 0), port(4, 0))); // mixer -> filter in
-      run(send(Op.RACK_CONNECT, slot, port(5, 0), port(4, 1))); // lfo -> filter cv
-      run(send(Op.RACK_CONNECT, slot, port(4, 0), port(6, 0))); // filter -> vca in
-      run(send(Op.RACK_CONNECT, slot, port(6, 0), port(7, 0))); // vca -> out l
-      run(send(Op.RACK_CONNECT, slot, port(6, 0), port(7, 1))); // vca -> out r
-    }
-    return { ok, dropouts: engine!.dropouts() };
-  });
-  expect(before.ok).toBe(true);
-  const err0 = await slot(page, 7)();
-  // Telemetry CPU is written once per second by the worklet: wait >= 3 s.
-  await page.waitForTimeout(3500);
-  const cpu = await slot(page, 3)();
-  const drop = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
-  console.log(`PERF four synth tracks: cpu=${(cpu * 100).toFixed(1)}%`);
-  expect(await slot(page, 7)()).toBe(err0);
-  expect(cpu).toBeGreaterThan(0);
-  expect(cpu).toBeLessThan(0.6);
-  expect(drop).toBe(before.dropouts);
-  // The drones must actually be rendering (a silent graph would be cheap).
-  expect(await slot(page, 5)()).toBeGreaterThan(0); // peakL
-  expect(await slot(page, 6)()).toBeGreaterThan(0); // peakR
-});
-
 // ---- Recording (plan 3, Task 4) ----
 
 /** Notes in the recorded synth track's (only) pattern. */

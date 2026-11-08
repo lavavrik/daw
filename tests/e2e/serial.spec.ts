@@ -14,11 +14,12 @@ type DawWindow = {
       meters(): Float32Array;
       loadSample(id: number, channels: Float32Array[]): Promise<number>;
       dropouts(): number;
+      send(op: number, a?: number, b?: number, c?: number, d?: number): boolean;
       failure: string | null;
       sampleRate: number;
     } | null;
     Op: Record<string, number>;
-    project: { arenaFloats: number; mode: string; tracks: { id: string; slot: number; kind: string; rows?: { id: string }[]; clips?: unknown[] }[] };
+    project: { arenaFloats: number; mode: string; tracks: { id: string; slot: number; patchName?: string; kind: string; rows?: { id: string }[]; clips?: unknown[] }[] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: Record<string, (...args: any[]) => any>;
   };
@@ -815,4 +816,133 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
   const d1 = await page.evaluate(() => (window as unknown as VisWindow).__daw.vis.drawn());
   console.log(`VIS idle (stopped, top bar): ${d1 - d0} frames drawn in 2 s`);
   expect(d1).toBe(d0);
+});
+
+// ---- moved from smoke.spec.ts / house.spec.ts (plan 16 Task 6): real-time
+// assertions that flake when parallel workers compete for the CPU ----
+
+/**
+ * Perf budget: four synth tracks, each a gate-independent "drone" patch, so
+ * every voice channel computes all the time (notes can't be held on four
+ * tracks at once; SET_INPUT_TRACK releases the previous track's notes).
+ *   MIDI In (8 voices) -> 2x Osc saw (unison 2) -> Mixer -> Filter LP24
+ *   (reso 0.5, cv <- LFO, cv_amt 2) -> VCA (cv unconnected = unity) -> Out.
+ * Built with raw commands (catalog kind ids, packed module*16+port).
+ */
+test('four synth tracks stay under budget', async ({ page }) => {
+  await startAudio(page);
+  const before = await page.evaluate(() => {
+    const { engine, Op } = (window as unknown as DawWindow).__daw!;
+    const send = (op: number, a = 0, b = 0, c = 0, d = 0) => engine!.send(op, a, b, c, d);
+    const port = (m: number, p: number) => m * 16 + p;
+    const K = { midiIn: 0, osc: 1, filter: 3, vca: 5, lfo: 6, mixer: 7, out: 8 };
+    let ok = true;
+    const run = (r: boolean) => void (ok = ok && r);
+    for (let slot = 1; slot <= 4; slot++) {
+      run(send(Op.ADD_SYNTH_TRACK, slot));
+      // module indices: 0 midi, 1 osc, 2 osc, 3 mixer, 4 filter, 5 lfo, 6 vca, 7 out
+      [K.midiIn, K.osc, K.osc, K.mixer, K.filter, K.lfo, K.vca, K.out].forEach((k, i) =>
+        run(send(Op.RACK_ADD_MODULE, slot, i, k)));
+      run(send(Op.RACK_SET_PARAM, slot, 1, 6, 2)); // osc1 unison 2
+      run(send(Op.RACK_SET_PARAM, slot, 2, 6, 2)); // osc2 unison 2
+      run(send(Op.RACK_SET_PARAM, slot, 4, 2, 0.5)); // filter reso
+      run(send(Op.RACK_SET_PARAM, slot, 4, 3, 2)); // filter cv_amt
+      run(send(Op.RACK_CONNECT, slot, port(0, 0), port(1, 0))); // pitch -> osc1
+      run(send(Op.RACK_CONNECT, slot, port(0, 0), port(2, 0))); // pitch -> osc2
+      run(send(Op.RACK_CONNECT, slot, port(1, 0), port(3, 0))); // osc1 -> mixer in1
+      run(send(Op.RACK_CONNECT, slot, port(2, 0), port(3, 1))); // osc2 -> mixer in2
+      run(send(Op.RACK_CONNECT, slot, port(3, 0), port(4, 0))); // mixer -> filter in
+      run(send(Op.RACK_CONNECT, slot, port(5, 0), port(4, 1))); // lfo -> filter cv
+      run(send(Op.RACK_CONNECT, slot, port(4, 0), port(6, 0))); // filter -> vca in
+      run(send(Op.RACK_CONNECT, slot, port(6, 0), port(7, 0))); // vca -> out l
+      run(send(Op.RACK_CONNECT, slot, port(6, 0), port(7, 1))); // vca -> out r
+    }
+    return { ok, dropouts: engine!.dropouts() };
+  });
+  expect(before.ok).toBe(true);
+  const err0 = await slot(page, 7)();
+  // Telemetry CPU is written once per second by the worklet: wait >= 3 s.
+  await page.waitForTimeout(3500);
+  const cpu = await slot(page, 3)();
+  const drop = await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.dropouts());
+  console.log(`PERF four synth tracks: cpu=${(cpu * 100).toFixed(1)}%`);
+  expect(await slot(page, 7)()).toBe(err0);
+  expect(cpu).toBeGreaterThan(0);
+  expect(cpu).toBeLessThan(0.6);
+  expect(drop).toBe(before.dropouts);
+  // The drones must actually be rendering (a silent graph would be cheap).
+  expect(await slot(page, 5)()).toBeGreaterThan(0); // peakL
+  expect(await slot(page, 6)()).toBeGreaterThan(0); // peakR
+});
+
+async function addSynth(page: Page) {
+  await page.getByTestId('add-synth-track').click();
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await expect(page.getByTestId('patch-select')).toBeVisible();
+}
+
+const HOUSE_PATCHES = [
+  'Sax', 'Brass Stab', 'Arp Pluck', 'Tine Keys', 'Piano Stab', 'Garage Organ',
+  'Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass', 'Strings', 'Warm Pad',
+];
+
+/** Max peak (L, R) seen over `ms`, sampled every 4 ms. */
+function peaks(page: Page, ms: number) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<[number, number]>((resolve) => {
+        const eng = (window as unknown as DawWindow).__daw!.engine!;
+        let l = 0;
+        let r = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          const t = eng.telemetry();
+          l = Math.max(l, t[5]);
+          r = Math.max(r, t[6]);
+          if (performance.now() - t0 > ms) {
+            clearInterval(id);
+            resolve([l, r]);
+          }
+        }, 4);
+      }),
+    ms,
+  );
+}
+
+const status = (page: Page) =>
+  page.evaluate(() => {
+    const e = (window as unknown as DawWindow).__daw!.engine!;
+    return { drop: e.dropouts(), err: e.telemetry()[7] };
+  });
+
+test('every house patch loads and sounds', async ({ page }) => {
+  test.setTimeout(90_000);
+  await startAudio(page);
+  await addSynth(page);
+  // Spelled out (app code is not importable here); keep in sync with the
+  // 'House ·' groups in house.spec.ts BUILTIN_GROUPS.
+  const house = HOUSE_PATCHES;
+  expect(house).toHaveLength(12);
+  const before = await status(page);
+  for (const p of house) {
+    await page.getByTestId('patch-select').selectOption(p);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patchName))
+      .toBe(p);
+    // A chord (A, D, G = C4, E4, G4) works for mono patches too: last note wins.
+    for (const k of ['KeyA', 'KeyD', 'KeyG']) await page.keyboard.down(k);
+    const [l, r] = await peaks(page, 700);
+    for (const k of ['KeyA', 'KeyD', 'KeyG']) await page.keyboard.up(k);
+    expect(l, `${p} peak L`).toBeGreaterThan(0);
+    expect(r, `${p} peak R`).toBeGreaterThan(0);
+    // Let the release die out (the longest, Garage Organ's, is 0.45 s) before
+    // loading the next patch, so the load is not an edit while sounding and
+    // the dropout check below does not measure queued-edit bursts.
+    await expect
+      .poll(async () => Math.max(...(await peaks(page, 100))), { timeout: 5_000, intervals: [50] })
+      .toBeLessThan(1e-4);
+  }
+  const after = await status(page);
+  expect(after.err).toBe(before.err);
+  expect(after.drop).toBe(before.drop);
 });

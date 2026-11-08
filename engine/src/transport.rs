@@ -133,6 +133,8 @@ impl Transport {
     /// counts as that number, and a playhead that noise put a hair past
     /// `loop_end` still wraps (with a 0-frame piece) instead of escaping the
     /// loop.
+    // `!(x > y)` is deliberate: unlike `x <= y` it also rejects NaN.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn split(&self, t: f64, frames: usize, spt: f64) -> (usize, f64, bool) {
         let whole = (frames, t + frames as f64 / spt, false);
         let looping = self.playing && self.mode == Mode::Song && self.loop_on();
@@ -180,6 +182,8 @@ impl Default for Transport {
 /// yields nothing, and one crossing 0 only its events at ticks `>= 0`. (The
 /// metronome, which does click during the count-in, shifts its window by
 /// whole bars.)
+// `!(x > y)` is deliberate: unlike `x <= y` it also rejects NaN.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn events_in_window(
     t0: f64,
     t1: f64,

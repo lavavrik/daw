@@ -134,6 +134,12 @@ pub struct DrumRow {
     pub mute: bool,
 }
 
+impl Default for DrumRow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DrumRow {
     pub const fn new() -> DrumRow {
         DrumRow { sample: None, gain: 1.0, pan: 0.0, mute: false }
@@ -153,6 +159,12 @@ pub struct DrumPattern {
     pub swing: f32,
     /// Most recent `SetSwing`; becomes `swing` at the next pair boundary.
     pub swing_next: f32,
+}
+
+impl Default for DrumPattern {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DrumPattern {
@@ -388,6 +400,12 @@ pub struct DrumTrack {
     /// Queued live hits: velocity per row (0 = none), triggered at offset 0
     /// of the next block and then cleared (see "Live hits").
     pub live: [u8; MAX_ROWS],
+}
+
+impl Default for DrumTrack {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DrumTrack {

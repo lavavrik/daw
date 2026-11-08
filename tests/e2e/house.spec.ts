@@ -13,10 +13,9 @@ const BUILTIN_GROUPS = [
   { label: 'House · Pads', patches: ['Strings', 'Warm Pad'] },
 ];
 
-// Plan 11: the patch menu's groups, every built-in patch loading and sounding,
-// the Sax's Formant panel, and Save patch refusing a built-in name. Timing-free
-// (peaks are polled, not budgeted), so this file runs in the parallel project;
-// the four-house-tracks CPU case lives in serial.spec.ts.
+// Plan 11: the patch menu's groups, the Sax's Formant panel, and Save patch refusing a built-in name. The
+// every-patch-sounds and four-house-tracks cases are timing-sensitive and live
+// in serial.spec.ts.
 
 type DawWindow = {
   __daw?: {
@@ -39,35 +38,6 @@ async function addSynth(page: Page) {
   await expect(page.getByTestId('patch-select')).toBeVisible();
 }
 
-/** Max peak (L, R) seen over `ms`, sampled every 4 ms. */
-function peaks(page: Page, ms: number) {
-  return page.evaluate(
-    (ms) =>
-      new Promise<[number, number]>((resolve) => {
-        const eng = (window as unknown as DawWindow).__daw!.engine!;
-        let l = 0;
-        let r = 0;
-        const t0 = performance.now();
-        const id = setInterval(() => {
-          const t = eng.telemetry();
-          l = Math.max(l, t[5]);
-          r = Math.max(r, t[6]);
-          if (performance.now() - t0 > ms) {
-            clearInterval(id);
-            resolve([l, r]);
-          }
-        }, 4);
-      }),
-    ms,
-  );
-}
-
-const status = (page: Page) =>
-  page.evaluate(() => {
-    const e = (window as unknown as DawWindow).__daw!.engine!;
-    return { drop: e.dropouts(), err: e.telemetry()[7] };
-  });
-
 test('patch menu groups starter, sampler, then house', async ({ page }) => {
   await startAudio(page);
   await addSynth(page);
@@ -78,36 +48,6 @@ test('patch menu groups starter, sampler, then house', async ({ page }) => {
     })),
   );
   expect(groups).toEqual(BUILTIN_GROUPS.map((g) => ({ label: g.label, names: g.patches })));
-});
-
-test('every house patch loads and sounds', async ({ page }) => {
-  test.setTimeout(90_000);
-  await startAudio(page);
-  await addSynth(page);
-  const house = BUILTIN_GROUPS.filter((g) => g.label.startsWith('House')).flatMap((g) => g.patches);
-  expect(house).toHaveLength(12);
-  const before = await status(page);
-  for (const p of house) {
-    await page.getByTestId('patch-select').selectOption(p);
-    await expect
-      .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patchName))
-      .toBe(p);
-    // A chord (A, D, G = C4, E4, G4) works for mono patches too: last note wins.
-    for (const k of ['KeyA', 'KeyD', 'KeyG']) await page.keyboard.down(k);
-    const [l, r] = await peaks(page, 700);
-    for (const k of ['KeyA', 'KeyD', 'KeyG']) await page.keyboard.up(k);
-    expect(l, `${p} peak L`).toBeGreaterThan(0);
-    expect(r, `${p} peak R`).toBeGreaterThan(0);
-    // Let the release die out (the longest, Garage Organ's, is 0.45 s) before
-    // loading the next patch, so the load is not an edit while sounding and
-    // the dropout check below does not measure queued-edit bursts.
-    await expect
-      .poll(async () => Math.max(...(await peaks(page, 100))), { timeout: 5_000, intervals: [50] })
-      .toBeLessThan(1e-4);
-  }
-  const after = await status(page);
-  expect(after.err).toBe(before.err);
-  expect(after.drop).toBe(before.drop);
 });
 
 test('Sax rack shows a Formant', async ({ page }) => {

@@ -129,6 +129,8 @@ pub const VIS_VOICE_LEN: usize = 32 * 16 * 2;
 mod tests {
     use super::*;
 
+    // Constant asserts are the point: they pin layout constants against each other.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn constants_are_consistent() {
         assert_eq!(STEP_TICKS * 4.0, PPQ);

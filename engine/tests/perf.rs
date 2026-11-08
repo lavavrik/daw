@@ -46,6 +46,11 @@
 //! Reverb → Out with 8 voices held: the per-voice part (Osc, Filter) runs 8
 //! channels, the effects run once on the summed stereo signal.
 //!
+//! The Diode case ([`four_diode_synth_tracks_render_under_budget`], plan 17)
+//! is the four-track case with every filter switched to the Diode ladder
+//! (mode 5, drive 0.35 as in Acid Line): 4 × 8 voices through it, same 25%
+//! budget.
+//!
 //! The House patches ([`house_patches_render_under_budget`], plan 11) each
 //! run alone through the whole [`Engine`] (commands replayed from
 //! `fixtures/house_patches.txt`): poly patches with an 8-note chord held, mono
@@ -114,8 +119,12 @@ const CABLES: [((usize, usize), (usize, usize)); 17] = [
 const PARAMS: [(usize, usize, f32); 8] =
     [(1, 0, 1.0), (1, 6, 2.0), (2, 6, 2.0), (2, 2, 7.0), (12, 1, -1.0), (4, 3, 3.0), (4, 2, 0.5), (11, 1, 0.3)];
 
-/// Build the 13-module patch on track `slot` and hold 8 notes.
-fn build(s: &mut Synths, slot: usize) {
+/// Filter (module 4) mode Diode with some drive, as Acid Line uses it.
+const DIODE: [(usize, usize, f32); 2] = [(4, 0, 5.0), (4, 4, 0.35)];
+
+/// Build the 13-module patch on track `slot` (then `extra` params on top)
+/// and hold 8 notes.
+fn build(s: &mut Synths, slot: usize, extra: &[(usize, usize, f32)]) {
     s.add_track(slot);
     let ok = |code: i32| assert_eq!(code, OK);
     for (m, &kind) in MODULES.iter().enumerate() {
@@ -125,7 +134,7 @@ fn build(s: &mut Synths, slot: usize) {
     for (from, to) in CABLES {
         ok(r.connect(from, to));
     }
-    for (m, p, v) in PARAMS {
+    for &(m, p, v) in PARAMS.iter().chain(extra) {
         ok(r.set_param(m, p, v));
     }
     for (i, n) in [48u8, 52, 55, 59, 62, 65, 69, 72].into_iter().enumerate() {
@@ -142,9 +151,31 @@ fn build(s: &mut Synths, slot: usize) {
 #[test]
 #[ignore = "perf: run in release with --ignored --nocapture"]
 fn four_synth_tracks_render_under_budget() {
+    let ratio = four_tracks(&[]);
+    println!(
+        "perf: {TRACKS} tracks x 13 modules x 8 voices + 16-note patterns: {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(ratio < 0.25, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn four_diode_synth_tracks_render_under_budget() {
+    let ratio = four_tracks(&DIODE);
+    println!(
+        "perf (Diode): {TRACKS} tracks x 13 modules x 8 voices through the Diode filter + 16-note patterns: {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(ratio < 0.25, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+/// Renders the four-track case (each track's patch with `extra` params) for
+/// [`SECONDS`] after a warm-up; the elapsed share of real time.
+fn four_tracks(extra: &[(usize, usize, f32)]) -> f64 {
     let mut s = Synths::new(SR);
     for slot in 0..TRACKS {
-        build(&mut s, slot);
+        build(&mut s, slot, extra);
     }
     let bpm = 124.0f32;
     let tpf = bpm as f64 * 960.0 / 60.0 / SR as f64;
@@ -165,13 +196,8 @@ fn four_synth_tracks_render_under_budget() {
     }
     let elapsed = t0.elapsed().as_secs_f64();
     let audio = (blocks * BLOCK) as f64 / SR as f64;
-    let ratio = elapsed / audio;
-    println!(
-        "perf: {TRACKS} tracks x 13 modules x 8 voices + 16-note patterns: {elapsed:.3} s for {audio:.1} s of audio = {:.1}% of real time",
-        ratio * 100.0
-    );
     assert!(peak > 0.0 && peak.is_finite(), "patch must sound (peak {peak})");
-    assert!(ratio < 0.25, "over budget: {:.1}% of real time", ratio * 100.0);
+    elapsed / audio
 }
 
 /// One playing block: patterns get the transport window, then the playhead

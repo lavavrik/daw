@@ -76,6 +76,76 @@ and every edit sends its engine command (`pattern-actions.ts`,
   cross-track copy exists, lane moves can be allowed between tracks of the
   same kind.
 
+## Acid tab (step view of a note pattern)
+Plan 17 (spec addendum §2). The **Acid** tab (`ui/acid/AcidSteps.svelte`,
+the third bottom-panel tab, Alt+3, no F-key) shows a synth track's current
+pattern as steps. There is **no stored step format and no schema change**:
+the steps are *read* from `NotePatternState.notes` and every edit is
+*written* back as ordinary notes, so the piano roll, recording, clips, undo
+and export see nothing new. Pure code: `state/acidSteps.ts` (mapping and
+rewrite rule), `state/acidTools.ts` (randomize, mutate, shift),
+`state/acid-actions.ts` (applies a step list as one undo entry).
+
+**Mapping.** One step = `STEP_TICKS` = 240 ticks (1/16), 16 per bar; a
+pattern of 1..4 bars (at most 64 steps) can be shown, in rows of 16. A step
+is a note (key 0..11 and octave −1/0/+1 around the *base*, a MIDI C chosen in
+the tab, default 36 = C2: pitch = base + key + 12·oct, so the window is
+base−12 .. base+23), a rest, or a tie (holds the previous note on), plus an
+accent and a slide flag.
+
+| Steps | Note |
+|---|---|
+| note, accent | start 240·i, vel 120 (80 without accent) |
+| note + k ties | len (1+k)·240 − 120 (a plain note is 120: half a step) |
+| slide on the run's last step | len = next note's start − start + 60 (the overlap makes a mono legato patch glide) |
+
+Reading is the reverse: a note covers ceil(len/240) steps, capped before the
+next note's step; it is a slide when it runs past the next note's start; vel
+≥ 100 reads as an accent. Notes starting at/after the pattern end are
+ignored (kept, never shown). A slide before a rest or at the end can't be
+stored, so the Slide toggle is disabled there ("Slide needs a next note"); a
+tie after a rest is a rest. When the pattern doesn't read at the tab's base
+but fits one an octave around its lowest note, `readSteps` picks that base
+and the tab adopts it; the base −/+ buttons only offer bases the pattern
+reads at exactly.
+
+**Unshowable patterns** (a start off the grid, two starts on a step, a note
+reaching past the note after next, a pitch outside every candidate window,
+more than 4 bars) show "This pattern has notes the Acid tab can't show
+(<reason>)" and **Convert to steps**: one undo entry that cuts a longer
+pattern to 4 bars, snaps starts, keeps a chord's highest note and folds
+pitches into a window.
+
+**Rewrite rule. Reading never edits.** An edit (`planEdit`) compares the old
+reading with the new steps run by run and touches only what changed: a new
+run adds a canonical note, a run whose note step went away removes its note,
+and a kept run updates only the fields whose inputs changed (pitch ← key/oct;
+vel ← accent; len ← its tie count, its slide, and whether a note follows).
+So piano-roll lengths (240, 480, a 30-tick slide overlap) survive edits that
+don't concern them; turning the step after a slide into a rest shrinks the
+slid note back to its plain length.
+
+**Undo.** Every edit is one entry (`edit()`). Single-step edits pass a
+coalesce key `acid:<trackId>:<kind>` (kind pitch / oct / accent / slide /
+kind / entry), which rolls over after 1 s idle (`history/sweep.ts`), so
+keyboard toggles and step entry merge like MIDI CC sweeps. A mouse click is a
+pointer gesture (`history/gestures.ts`) and always its own entry. Tools
+(Randomize, Mutate, Shift, Transpose, Clear, Convert) never coalesce;
+Transpose that would take a pitch outside 0..127 is refused (the button is
+disabled).
+
+**Step entry.** With a step selected, each live note-on (QWERTY or MIDI;
+`input/lastNote.svelte.ts` counts them in `lastLive.seq`) sets that step:
+key = note mod 12, oct = clamp(floor(note/12) − base/12, −1, 1), accent and
+slide kept, coalesce kind `entry`; then the next step (wrapping) is
+selected. The note still sounds. While the tab has focus and a step is
+selected, the arrows move the selection, A/S/R/T toggle accent / slide /
+rest / tie and Esc deselects; those keys don't reach the QWERTY piano.
+
+**Slides depend on the patch:** the tab shows "Slides need a mono patch with
+glide, e.g. Acid Line" unless the track's MIDI In is Mono with glide > 0 and
+glide mode Legato. The playhead step is highlighted like the step grid's.
+
 ## Event generation and wrapping
 Each block, the engine finds the pattern events whose tick falls in the block's
 tick range and fires them at their sample offset. A note's off lands at

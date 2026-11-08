@@ -352,14 +352,14 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);
   const slot = await dropBelow(page, 'tone', 2);
-  // Alt+5 on a drum track only says why; on the audio track it opens the tab.
+  // Alt+6 on a drum track only says why; on the audio track it opens the tab.
   await page.getByTestId('track-0').click();
-  await page.keyboard.press('Alt+5');
+  await page.keyboard.press('Alt+6');
   await expect(page.getByTestId('flash-hint')).toHaveText('Select an audio track');
   await expect(page.getByTestId('cliptab-panel')).toBeHidden();
   await page.getByTestId(`clip-${slot}-0`).click({ position: { x: 20, y: 8 } });
   await page.getByTestId('mixer-tab').click();
-  await page.keyboard.press('Alt+5');
+  await page.keyboard.press('Alt+6');
   await expect(page.getByTestId('cliptab-panel')).toBeVisible();
   await expect(page.getByTestId('cliptab-info')).toContainText('tone');
   await expect(page.getByTestId('cliptab-info')).toContainText('mono');
@@ -427,7 +427,7 @@ test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) =>
   const slot = await dropBelow(page, 'tone', 2); // 2 bars = 8 beats = 7680 ticks
   await page.getByTestId(`clip-${slot}-0`).click({ position: { x: 20, y: 8 } });
   await page.getByTestId('mixer-tab').click();
-  await page.keyboard.press('Alt+5');
+  await page.keyboard.press('Alt+6');
   await expect(page.getByTestId('cliptab-panel')).toBeVisible();
   const c0 = async () => (await audioTracks(page))[0].clips[0];
   await expect(page.getByTestId('cliptab-handle-trim')).toBeVisible(); // placed after the first draw

@@ -159,7 +159,7 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
 - **Split** (`splitClips`): Cmd/Ctrl+E at the heard playhead (playing in
   Song mode) or the parked song position, and "Split here" at the beat
   under the right-click. Works on note clips too.
-- **Clip tab** (Alt+5, the fifth tab; no F-key, F10 is the browser's menu
+- **Clip tab** (Alt+6, the sixth tab; no F-key, F10 is the browser's menu
   key): the clip in `clipFocus` (set by clicking, placing or selecting one
   audio clip; clicking also selects its track). Gain fader in dB, fades in
   beats typed exactly, Loop to fill; every change is one `setAudioClip`.

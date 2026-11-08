@@ -539,9 +539,11 @@
     // notes are written into the old pattern while the engine still edits it.
     project.beforePatternSwitch = (trackId) => r.onPatternChanging(trackId, liveClock.heardTicks());
     // A played note-on wakes the idle visuals and is the last live note
-    // (the Sample Player's "Root ← last note").
+    // (the Sample Player's "Root ← last note"; the Acid tab's step entry
+    // watches the count).
     const input = createNoteInput(live, r, (note) => {
       lastLive.note = note;
+      lastLive.seq++;
       visWake().wake();
     });
     noteInput = input;

@@ -10,7 +10,7 @@ architecture notes per area in [docs/architecture/](docs/architecture/).
 
 **Contents:** [Getting started](#getting-started) ·
 [The first loop](#the-first-loop) · [Synth and rack](#synth-and-rack) ·
-[Recording](#recording) · [Piano roll](#piano-roll) ·
+[Recording](#recording) · [Piano roll](#piano-roll) · [Acid steps](#acid-steps) ·
 [Patterns and song](#patterns-and-song) · [Mixer](#mixer) ·
 [Save, open and export](#save-open-and-export) · [Library](#library) ·
 [Undo and redo](#undo-and-redo) · [Shortcuts](#shortcuts) ·
@@ -42,7 +42,7 @@ start audio from a click). The screen has four parts:
   the track) and **S** (solo: play only this track, plus any other soloed
   ones) — the same switches as the track's mixer strip;
 - the **bottom panel**: the selected track's editor (**Step grid** for drums;
-  **Piano roll** or **Instrument** for synths) and the **Mixer** tab.
+  **Piano roll**, **Acid** or **Instrument** for synths) and the **Mixer** tab.
 
 A new project starts at 124 BPM with one drum track that is already a
 playable kit: eight rows (Kick, Clap, Closed hat, Open hat, Snare, Rim,
@@ -213,6 +213,32 @@ The **Piano roll** tab edits the synth track's current pattern.
   Instrument tab, **Add example roll** next to **Patch** does the same for the
   loaded house patch and opens the Piano roll.
 
+## Acid steps
+
+The **Acid** tab (next to Piano roll, **Alt+3**) shows the same pattern as
+steps: 16 per row, one row per bar (1 to 4 bars). Nothing new is saved: the
+steps are the pattern's notes, so the piano roll, recording, clips and export
+all see them.
+
+- **A step** is a note (its name; ▲/▼ an octave up or down), a rest (—) or a
+  tie (~, holds the note before). **A** marks an accent (velocity 120 instead
+  of 80), **⤳** a slide into the next note (the note overlaps it, so a mono
+  patch with legato glide, like *Acid Line*, glides; the tab says so when the
+  patch can't). A slide needs a note right after it.
+- **Click a step** to select it, then click a key of the octave strip, or
+  play a note (keyboard piano or MIDI): it lands on the step and the next
+  step is selected. **Accent / Slide / Rest / Tie** and **▲/▼** change the
+  selected step. Keys while the tab has focus: **←/→** (**↑/↓**: a row) move
+  the selection, **A** accent, **S** slide, **R** rest, **T** tie, **Esc**
+  deselects.
+- **Toolbar:** the base octave (**−** C2 **+**: the keys' octave), **Root**
+  and **Scale** for **Randomize** (a new pattern) and **Mutate** (re-rolls a
+  few steps), **←/→** rotate the pattern a step, **Transpose** ±1/±12 and
+  **Clear**. Each is one undo step.
+- A pattern with notes the steps can't show (off the 1/16 grid, chords,
+  overlaps, too wide a range, longer than 4 bars) shows why and offers
+  **Convert to steps** (one undo step).
+
 ## Patterns and song
 
 Design notes: [docs/architecture/arrangement.md](docs/architecture/arrangement.md).
@@ -270,7 +296,7 @@ SONG mode, at their recorded speed.
 - **Tempo.** Clips are never stretched. After a tempo change a clip keeps
   its length in bars: the file then ends early (a yellow mark, silence
   after it) or is cut at the clip end.
-- **Clip tab** (**Alt+5**, or click / double-click a clip): the clip's sample,
+- **Clip tab** (**Alt+6**, or click / double-click a clip): the clip's sample,
   length and channels; **Gain** (−∞ to +12 dB; double-click resets),
   **Fade in** / **Fade out** in beats (type the exact value, Enter), and
   **Loop to fill**. Above them the clip's waveform with a beat grid, the gain
@@ -519,7 +545,7 @@ still work there).
 | **Z** / **X** | Octave down / up (also the top bar's **−** / **+** or the wheel over **Oct**; remembered) |
 | **R** | Record arm |
 | **Shift+L** | PAT / SONG |
-| **Alt+1** … **Alt+5**, **F6** … **F9** | Bottom-panel tab: Step grid / Piano roll / Instrument / Mixer / Clip (the Clip tab has no F-key: F10 is the browser's menu key). A tab that doesn't fit the selected track shows a hint instead |
+| **Alt+1** … **Alt+6**, **F6** … **F9** | Bottom-panel tab: Alt+1..6 Step grid / Piano roll / Acid / Instrument / Mixer / Clip; F6..F9 Step grid / Piano roll / Instrument / Mixer (Acid and Clip have no F-key; F10 is the browser's menu key). A tab that doesn't fit the selected track shows a hint instead |
 | **Cmd/Ctrl+Z** | Undo |
 | **Shift+Cmd/Ctrl+Z**, **Ctrl+Y** | Redo |
 | **Cmd/Ctrl+S** | Save |

@@ -688,7 +688,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
 
   // 8 scopes on the first synth track, each fed by its oscillator (Chord Stab: Osc 1; Scopes 6..13).
   await page.getByTestId(`track-${synths[0]}`).click();
-  await page.keyboard.press('Alt+3');
+  await page.keyboard.press('Alt+4');
   await expect(page.getByTestId('rack')).toBeVisible();
   for (let i = 0; i < 8; i++) {
     await addRackModule(page, 'scope');
@@ -754,7 +754,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
 
   // The Instrument tab without scopes: voice LEDs, the ADSR preview.
   await page.getByTestId(`track-${synths[1]}`).click();
-  await page.keyboard.press('Alt+3');
+  await page.keyboard.press('Alt+4');
   await expect(page.getByTestId('voice-leds')).toBeVisible();
   await expect(page.getByTestId('shape-adsr')).toBeVisible();
   await phase('instrument: voice LEDs + ADSR preview');
@@ -762,7 +762,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
   // 8 scopes, all on screen.
   await page.setViewportSize({ width: 3400, height: 900 });
   await page.getByTestId(`track-${synths[0]}`).click();
-  await page.keyboard.press('Alt+3');
+  await page.keyboard.press('Alt+4');
   await page.getByTestId('scope-6').scrollIntoViewIfNeeded();
   const onScreen = await page.evaluate(() => {
     const rail = document.querySelector('[data-testid="rail"]')!.getBoundingClientRect();
@@ -779,7 +779,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
 
   // The Clip tab: the stem's waveform at 1000 frames/px from its start, the playhead running through it.
   await page.getByTestId(`track-${stem}`).click();
-  await page.keyboard.press('Alt+5');
+  await page.keyboard.press('Alt+6');
   const wave = page.getByTestId('cliptab-wave');
   await expect(wave).toBeVisible();
   const fpp = async () => Number(await wave.locator('canvas').getAttribute('data-fpp'));

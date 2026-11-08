@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The bottom panel's Clip tab (plan 9; Alt+5): the audio clip the timeline
+  // The bottom panel's Clip tab (plan 9; Alt+6): the audio clip the timeline
   // last focused (song/clipFocus.svelte.ts) on the selected Audio track.
   //
   //   info      sample name, the clip's length (bars/beats), the file's

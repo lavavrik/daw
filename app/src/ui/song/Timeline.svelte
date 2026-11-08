@@ -41,7 +41,7 @@
   // non-audio lane keeps them where they are), their right edge stops at the
   // end of a one-shot file, and the left edge trims (trimAudioClipStart: the
   // audio stays put). Clicking an audio clip selects its track, so the
-  // bottom panel's Clip tab (ClipPanel.svelte, Alt+5) edits it (clipFocus).
+  // bottom panel's Clip tab (ClipPanel.svelte, Alt+6) edits it (clipFocus).
   //
   // AUTOMATION (plan 10; spec addendum §3.4). Rows are not uniform: the
   // layout map (tlMath.rowLayout) stacks, under each track's clip row
@@ -235,7 +235,7 @@
       if (isAudio(c)) {
         const secs = fileSeconds(p, c.sampleId);
         const file = secs === null ? '' : ` · ${secs.toFixed(2)} s file`;
-        return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)}${c.loop ? ' · loop' : ''}${file} · Alt+5 edits gain and fades`;
+        return `${t.name} · ${patNameOf(t, c)} · ${barRange(c.start, c.len)}${c.loop ? ' · loop' : ''}${file} · Alt+6 edits gain and fades`;
       }
       const reps = c.len / patLenOf(t, c);
       const times = Number.isInteger(reps) ? `×${reps}` : `×${reps.toFixed(2)}`;

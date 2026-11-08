@@ -260,22 +260,28 @@ describe('shortcut handlers', () => {
     }
   });
 
-  it('Alt+1..4 and F6..F9 pick the bottom-panel tabs (matched on e.code, default prevented)', () => {
+  it('Alt+1..5 follow the tab order and F6..F9 keep their tabs (matched on e.code, default prevented)', () => {
     const tabs: string[] = [];
     const { h } = mk({ onTab: (t) => tabs.push(t) });
     let prevented = 0;
     const pd = { preventDefault: () => prevented++ };
-    for (const c of ['Digit1', 'Digit2', 'Digit3', 'Digit4']) h.onKeyDown(key(c, { altKey: true, ...pd }));
+    for (const c of ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5']) h.onKeyDown(key(c, { altKey: true, ...pd }));
     for (const c of ['F6', 'F7', 'F8', 'F9']) h.onKeyDown(key(c, pd));
-    expect(tabs).toEqual(['step', 'pianoroll', 'instrument', 'mixer', 'step', 'pianoroll', 'instrument', 'mixer']);
-    expect(prevented).toBe(8);
+    expect(tabs).toEqual(['step', 'pianoroll', 'acid', 'instrument', 'mixer', 'step', 'pianoroll', 'instrument', 'mixer']);
+    expect(prevented).toBe(9);
   });
-  it('Alt+5 opens the Clip tab only for audio tracks', () => {
+  it('the Acid tab (Alt+3, no F-key) is for synth tracks only', () => {
+    expect(tabFor('acid', 'synth')).toEqual({ ok: true });
+    expect(tabFor('acid', 'drum')).toEqual({ hint: 'Select a synth track' });
+    expect(tabFor('acid', 'audio')).toEqual({ hint: 'Select a synth track' });
+    expect(tabFor('acid', null)).toEqual({ hint: 'Select a synth track' });
+  });
+  it('Alt+6 opens the Clip tab only for audio tracks', () => {
     const tabs: string[] = [];
     const { h } = mk({ onTab: (t) => tabs.push(t) });
     let prevented = 0;
     const pd = { preventDefault: () => prevented++ };
-    h.onKeyDown(key('Digit5', { altKey: true, ...pd }));
+    h.onKeyDown(key('Digit6', { altKey: true, ...pd }));
     expect(tabs).toEqual(['clip']);
     expect(prevented).toBe(1);
     // No F-key: F10 is the browser's menu key (Windows/Linux) and the F6..F9 row stays FL's.

@@ -259,7 +259,7 @@ test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await page.getByTestId('add-synth-track').click();
-  await page.keyboard.press('Alt+Digit3');
+  await page.keyboard.press('Alt+Digit4');
   await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
   await page.keyboard.press('Alt+Digit2');
   await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);

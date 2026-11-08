@@ -539,10 +539,11 @@ const REESE_BASS: Patch = {
 
 /**
  * Acid Line: an original squelchy acid bass (not a copy of any instrument).
- * One saw into a driven, resonant LP24 with a snappy filter envelope; the
- * accent is velocity (a harder note opens the filter further and is a little
- * louder) and the slide is legato glide (only overlapping notes slide). The
- * mod wheel adds to the cutoff, for the classic hands-on filter ride.
+ * One saw into a driven, resonant Diode ladder with a snappy filter envelope.
+ * The accent is velocity: an Accent module (vel >= 100) adds a sweep to the
+ * filter cv (a run of accents opens it further) and a little to the amp cv,
+ * on top of the envelopes' own velocity response. The slide is legato glide
+ * (only overlapping notes slide). The mod wheel adds to the cutoff.
  */
 const ACID_LINE: Patch = {
   name: 'Acid Line',
@@ -551,34 +552,47 @@ const ACID_LINE: Patch = {
     { idx: 0, id: 'midi_in', params: { mode: 1, glide: 0.06, glide_mode: 1 } },
     // A saw.
     { idx: 1, id: 'osc', params: { wave: 0 } },
-    // The squelch: resonant, driven LP24, swept up to 5 oct.
-    { idx: 2, id: 'filter', params: { mode: 0, cutoff: 200, reso: 0.78, cv_amt: 5, drive: 0.35 } },
+    // The squelch: resonant Diode ladder (mode 5), swept up to 5 oct. Moderate
+    // reso: it squelches, it doesn't scream.
+    { idx: 2, id: 'filter', params: { mode: 5, cutoff: 200, reso: 0.7, cv_amt: 5, drive: 0.35 } },
     // Filter envelope: snappy decay to nearly closed; velocity = accent (deeper sweep).
-    { idx: 3, id: 'adsr', params: { attack: 0.002, decay: 0.22, sustain: 0.08, release: 0.1, vel_amt: 0.75 } },
-    // Filter cv: the envelope plus the mod wheel (cutoff ride).
-    { idx: 4, id: 'mixer', params: { lvl1: 1, lvl2: 0.6 } },
+    { idx: 3, id: 'adsr', params: { attack: 0.002, decay: 0.22, sustain: 0.08, release: 0.1, vel_amt: 0.5 } },
+    // Filter cv: the envelope (in1), the mod wheel (in2, cutoff ride) and the
+    // accent sweep (in3, 0.35 = up to ~1.75 oct extra, on top of the envelope).
+    { idx: 4, id: 'mixer', params: { lvl1: 1, lvl2: 0.6, lvl3: 0.35 } },
     // Grit.
     { idx: 5, id: 'saturator', params: { drive: 0.5, mix: 0.8, tone: 0.55 } },
     // Amp.
     { idx: 6, id: 'vca' },
     // Amp envelope: quick, high sustain, short release; accent a little louder.
-    { idx: 7, id: 'adsr', params: { attack: 0.002, decay: 0.4, sustain: 0.85, release: 0.06, vel_amt: 0.35 } },
+    { idx: 7, id: 'adsr', params: { attack: 0.002, decay: 0.4, sustain: 0.85, release: 0.06, vel_amt: 0.2 } },
     // Out: sets the house level.
     { idx: 8, id: 'out', params: { level: 0.3 } },
+    // Accent: vel >= 100 (the Acid editor's accent, 120) charges a store that
+    // decays in 0.3 s, so a run of accents climbs and opens the filter further.
+    { idx: 9, id: 'accent', params: { threshold: 100 / 127, amount: 1, decay: 0.3 } },
+    // Amp cv: the amp envelope (in1) plus a little accent (in2, 0.25): an
+    // accented note is a bit louder, without a second VCA.
+    { idx: 10, id: 'mixer', params: { lvl1: 1, lvl2: 0.25 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
     { from: [0, 'gate'], to: [3, 'gate'] },
     { from: [0, 'gate'], to: [7, 'gate'] },
+    { from: [0, 'gate'], to: [9, 'gate'] },
     { from: [0, 'vel'], to: [3, 'vel'] },
     { from: [0, 'vel'], to: [7, 'vel'] },
+    { from: [0, 'vel'], to: [9, 'vel'] },
     { from: [0, 'mod'], to: [4, 'in2'] },
     { from: [3, 'env'], to: [4, 'in1'] },
+    { from: [9, 'cv'], to: [4, 'in3'] },
     { from: [4, 'out'], to: [2, 'cv'] },
     { from: [1, 'out'], to: [2, 'in'] },
     { from: [2, 'out'], to: [5, 'in'] },
     { from: [5, 'out'], to: [6, 'in'] },
-    { from: [7, 'env'], to: [6, 'cv'] },
+    { from: [7, 'env'], to: [10, 'in1'] },
+    { from: [9, 'cv'], to: [10, 'in2'] },
+    { from: [10, 'out'], to: [6, 'cv'] },
     { from: [6, 'out'], to: [8, 'l'] },
     { from: [6, 'out'], to: [8, 'r'] },
   ],

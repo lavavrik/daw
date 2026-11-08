@@ -917,6 +917,29 @@ fn acid_accent_and_slide() {
 }
 
 #[test]
+fn acid_line_accents_open_the_filter() {
+    // Two C2s, 1 s apart (the accent store has fully decayed between them):
+    // vel 80 (a plain step), then vel 120 (an accent). Same note, same
+    // window (first 200 ms): the accent must carry >= 3 dB more energy
+    // above 1 kHz (the Accent cv opens the Diode filter further).
+    let hi = |vel_a: u8, vel_b: u8| {
+        let ev = [(0.0, Ev::On(36, vel_a)), (0.25, Ev::Off(36)), (1.0, Ev::On(36, vel_b)), (1.25, Ev::Off(36))];
+        let r = run(&mut load("Acid Line"), &ev, 1.6);
+        let above = |t0: f32| -> f64 {
+            let p = spectrum(&r, onset(t0), onset(t0) + 0.2);
+            p.iter().enumerate().filter(|(i, _)| *i as f32 * BIN_HZ >= 1000.0).map(|x| *x.1).sum()
+        };
+        10.0 * (above(1.0) / above(0.0)).log10() as f32
+    };
+    let gain = hi(80, 120);
+    eprintln!("Acid accent: energy above 1 kHz, vel 120 vs vel 80: {gain:+.1} dB");
+    assert!(gain >= 3.0, "accent only {gain:.1} dB brighter above 1 kHz");
+    // Control: two plain notes match, so the gain above comes from the accent.
+    let flat = hi(80, 80);
+    assert!(flat.abs() <= 1.0, "two plain notes differ by {flat:.1} dB");
+}
+
+#[test]
 fn sub_bass_is_sub() {
     // C2, 0.2–1.0 s: the power below 200 Hz over the total.
     let r = play(&mut load("Sub Bass"), &[36], 100, 1.0, 0.0);

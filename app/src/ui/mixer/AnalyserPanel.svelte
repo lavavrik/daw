@@ -15,10 +15,10 @@
   import { analyserBus, type AnalyserSource } from '../vis/analyserBus';
   import Goniometer from '../vis/Goniometer.svelte';
   import Spectrum from '../vis/Spectrum.svelte';
+  import { THEME } from '../theme';
 
   let { p }: { p: Project } = $props();
 
-  const NEUTRAL = '#9aa6c4';
   let shown = $state<AnalyserSource>('master');
   $effect(() => analyserBus().onSelect((s) => (shown = s)));
 
@@ -33,12 +33,12 @@
 
 <section class="analyser" data-testid="analyser" data-source={shown} aria-label="Analyser">
   <header>
-    <b>Analyser</b> · <span class="src" style:color={source.color ?? '#e6e7ec'} data-testid="analyser-source">{source.name}</span>
+    <b>Analyser</b> · <span class="src" style:color={source.color ?? 'var(--text)'} data-testid="analyser-source">{source.name}</span>
     {#if shown !== 'master'}
       <button type="button" class="back" onclick={() => analyserBus().select('master')} title="Show the Master again (or press the strip's ∿ again)">Master</button>
     {/if}
   </header>
-  <Spectrum need="panel" width={320} height={140} color={source.color ?? NEUTRAL} />
+  <Spectrum need="panel" width={320} height={140} color={source.color ?? THEME.textDim} />
   {#if shown === 'master'}
     <Goniometer />
   {:else}
@@ -47,11 +47,11 @@
 </section>
 
 <style>
-  .analyser { width: 340px; flex: none; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 4px 10px 8px; background: #1c1d22; border: 1px solid #2a2c33; border-top: 3px solid #6b7080; border-radius: 3px; }
-  header { display: flex; align-items: baseline; gap: 4px; font-size: 12px; color: #a3a6b3; white-space: nowrap; min-width: 0; }
-  header b { color: #e6e7ec; }
+  .analyser { width: 340px; flex: none; box-sizing: border-box; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; background: var(--panel); border-radius: var(--r-lg); box-shadow: var(--lift); overflow: hidden; }
+  header { display: flex; align-items: baseline; gap: 4px; margin: 0 -10px; padding: 6px 10px; background: var(--raised) var(--gloss); font-size: var(--fs-ctl); color: var(--text-2); white-space: nowrap; min-width: 0; }
+  header b { color: var(--text); }
   .src { font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-  .back { margin-left: auto; font: 10px ui-sans-serif, system-ui, sans-serif; border: 1px solid #3a3d47; border-radius: 3px; background: #2a2c33; color: #c9cbd3; padding: 0 6px; cursor: pointer; }
-  .back:hover { background: #33353e; }
-  .note { margin: 0; font-size: 10px; color: #6b6e7a; }
+  .back { margin-left: auto; font: 600 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); box-shadow: var(--raised-shadow); color: var(--text); padding: 1px 8px; cursor: pointer; }
+  .back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .note { margin: 0; font-size: var(--fs-lbl); color: var(--text-2); }
 </style>

@@ -20,6 +20,7 @@
   // Drawn straight from the bus after each analysis (≤ 30 Hz, not through
   // Svelte state), only while on screen. data-corr exposes the shown value.
   import { onMount } from 'svelte';
+  import { THEME } from '../theme';
   import { analyserBus } from './analyserBus';
   import type { AnalyserBus } from './analyserBus';
 
@@ -41,10 +42,10 @@
   /** The graticule over a background fill of `alpha` (1: clean; less: fade the trace). */
   function frame(c: CanvasRenderingContext2D, alpha = 1) {
     c.globalAlpha = alpha;
-    c.fillStyle = '#15161a';
+    c.fillStyle = THEME.lcd;
     c.fillRect(0, 0, S, S);
     c.globalAlpha = 1;
-    c.strokeStyle = '#2c2e36';
+    c.strokeStyle = THEME.line;
     c.lineWidth = 1;
     c.beginPath();
     c.arc(S / 2, S / 2, R, 0, 2 * Math.PI);
@@ -55,15 +56,15 @@
     c.moveTo(S / 2 + d, S / 2 - d);
     c.lineTo(S / 2 - d, S / 2 + d);
     c.stroke();
-    c.strokeStyle = '#25272e';
+    c.strokeStyle = THEME.grid;
     c.beginPath();
     c.moveTo(S / 2 + 0.5, S / 2 - R);
     c.lineTo(S / 2 + 0.5, S / 2 + R);
     c.moveTo(S / 2 - R, S / 2 + 0.5);
     c.lineTo(S / 2 + R, S / 2 + 0.5);
     c.stroke();
-    c.fillStyle = '#6b6e7a';
-    c.font = '9px ui-sans-serif, system-ui, sans-serif';
+    c.fillStyle = THEME.textDim;
+    c.font = `9px ${THEME.fontUi}`;
     c.textBaseline = 'top';
     c.fillText('L', 4, 4);
     c.fillText('R', S - 9, 4);
@@ -91,7 +92,7 @@
       frame(c, resized || quiet > FADE_FRAMES ? 1 : 1 - KEEP);
       // Full scale (√2 in point units) = the radius.
       const k = R / Math.SQRT2;
-      c.fillStyle = '#7fd1ae';
+      c.fillStyle = THEME.play;
       c.globalAlpha = 0.55;
       for (let i = 0; i < n; i++) {
         const x = S / 2 + bus.gonX[i] * k;
@@ -142,11 +143,11 @@
   .gon { flex: none; }
   canvas { display: block; }
   .side { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; padding-top: 4px; }
-  .lbl { display: flex; justify-content: space-between; font-size: 10px; color: #a3a6b3; }
-  .val { color: #e6e7ec; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .corr { display: flex; align-items: center; gap: 4px; font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: #6b6e7a; }
-  .track { position: relative; flex: 1; height: 8px; border-radius: 2px; background: linear-gradient(to right, #e03131, #3a3d47 50%, #2f9e44); }
-  .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #8d90a0; }
-  .marker { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; border-radius: 1px; background: #f4f5f7; }
-  .hint { margin: 0; font-size: 9px; line-height: 1.3; color: #6b6e7a; white-space: normal; }
+  .lbl { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-2); }
+  .val { color: var(--text); font: 11px var(--font-mono); }
+  .corr { display: flex; align-items: center; gap: 4px; font: 9px/1 var(--font-mono); color: var(--text-dim); }
+  .track { position: relative; flex: 1; height: 8px; border-radius: 2px; background: linear-gradient(to right, var(--rec), var(--well) 50%, var(--play)); }
+  .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--text-dim); }
+  .marker { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; border-radius: 1px; background: var(--text); }
+  .hint { margin: 0; font-size: 9px; line-height: 1.3; color: var(--text-dim); white-space: normal; }
 </style>

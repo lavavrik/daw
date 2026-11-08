@@ -64,6 +64,7 @@
   let moved = false;
   let el = $state<HTMLElement | null>(null);
   let capEl = $state<HTMLElement | null>(null);
+  let fillEl = $state<HTMLElement | null>(null);
 
   const shown = $derived(dragging ? local : value);
   const readout = $derived(formatDb(shown));
@@ -98,6 +99,8 @@
     const v = autoValue ?? (dragging ? local : value);
     const pos = faderPos(v);
     if (capEl) capEl.style.bottom = `${pos * (height - CAP_H)}px`;
+    // The fill rises from the slot's foot to the cap's centre (the slot is inset CAP_H / 2).
+    if (fillEl) fillEl.style.height = `${pos * (height - CAP_H)}px`;
     if (el && autoStatus) {
       el.dataset.autoPos = autoValue === null ? '' : pos.toFixed(4);
       el.dataset.autoValue = autoValue === null ? '' : String(autoValue);
@@ -108,6 +111,7 @@
     void shown;
     void height;
     void capEl;
+    void fillEl;
     paint();
   });
   const automated = $derived(autoStatus !== null && autoStatus !== 'none');
@@ -260,7 +264,8 @@
     onkeydown={key}
     oncontextmenu={context}
   >
-    <div class="slot"></div>
+    <!-- The --well groove; the fill is the strip's track colour (--c), on the fader law. -->
+    <div class="slot"><div class="fill" bind:this={fillEl}></div></div>
     {#if automated}
       <div class="base" data-testid="auto-base" style:bottom="{baseBottom}px"></div>
       <span class="badge" data-testid="auto-badge" aria-hidden="true">A</span>
@@ -272,24 +277,31 @@
 </div>
 
 <style>
+  /* Look (spec §2/§4): a --well groove with a fill in the strip's track colour
+     (--c, set by Strip), and a white cap with a grooved grip. Tokens only. */
   .wrap { display: flex; flex-direction: column; align-items: center; }
-  .fader { position: relative; width: 26px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: 3px; }
-  .fader:focus-visible { box-shadow: 0 0 0 1px #f0a23a; }
-  .slot { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 4px; margin-left: -2px; background: #0e0f12; border-radius: 2px; box-shadow: inset 0 0 0 1px #2a2c33; }
+  .fader { position: relative; width: 26px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: var(--r-sm); }
+  .fader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .slot { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 6px; margin-left: -3px; background: var(--well); border-radius: 3px; box-shadow: var(--well-shadow); overflow: hidden; }
+  .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--c, var(--accent)) var(--gloss); }
   .cap {
-    position: absolute; left: 1px; right: 1px; border-radius: 3px;
-    background: linear-gradient(#5b5f6c, #3b3e48 45%, #e8e9ee 48%, #e8e9ee 52%, #3b3e48 55%, #2f3139);
-    box-shadow: 0 1px 2px #000a;
+    position: absolute; left: 1px; right: 1px; border-radius: 4px;
+    /* The handle recipe, with three grip grooves across the middle. */
+    background:
+      repeating-linear-gradient(to bottom, transparent 0 3px, rgba(0,0,0,.28) 3px 4px) center / 100% 8px no-repeat,
+      var(--handle);
+    box-shadow: var(--handle-shadow);
   }
-  .fader:hover .cap, .fader.dragging .cap { filter: brightness(1.2); }
+  .fader:hover .cap, .fader.dragging .cap { filter: brightness(1.06); }
   /* Automated: the base notch left of the slot, the A badge (grey while the lane plays nothing), a grey cap while suspended. */
-  .base { position: absolute; left: 3px; width: 6px; height: 2px; margin-bottom: -1px; background: #e8e9ee; border-radius: 1px; opacity: 0.85; }
-  .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 8px/10px ui-sans-serif, system-ui, sans-serif; width: 10px; text-align: center; border-radius: 2px; background: #f0a23a; color: #111; pointer-events: none; }
-  .fader.auto-off .badge { background: #6b6e7a; }
+  .base { position: absolute; left: 3px; width: 6px; height: 2px; margin-bottom: -1px; background: var(--text); border-radius: 1px; opacity: 0.85; }
+  .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 8px/10px var(--font-ui); width: 10px; text-align: center; border-radius: 2px; background: var(--accent); color: var(--on-color); pointer-events: none; }
+  .fader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
-  .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 7px/10px ui-sans-serif, system-ui, sans-serif; padding: 0 2px; border-radius: 2px; background: #3d8fd6; color: #fff; pointer-events: none; }
-  .fader.learning { outline: 2px solid #4fb3ff; outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
-  @keyframes learn-pulse { 50% { outline-color: rgba(79, 179, 255, 0.15); } }
+  .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 7px/10px var(--font-ui); padding: 0 2px; border-radius: 2px; background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
+  .fader.learning { outline: 2px solid var(--sig-cv); outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .fader.learning { animation: none; } }
   .fader.auto-susp .cap { filter: grayscale(1) brightness(0.8); }
+  .fader.auto-susp .fill { background-color: var(--text-dim); }
 </style>

@@ -70,7 +70,8 @@
 </div>
 
 <style>
-  .mixer { display: flex; align-items: flex-start; gap: 4px; overflow-x: auto; overflow-y: visible; padding-bottom: 4px; min-width: 0; }
-  .gap { width: 8px; flex: none; align-self: stretch; border-left: 1px dashed #3a3d47; margin-left: 4px; }
-  .empty { color: #7d808c; margin: 8px; flex: none; }
+  /* The --work canvas the strip cards sit on. */
+  .mixer { display: flex; align-items: flex-start; gap: 8px; overflow-x: auto; overflow-y: visible; padding: 8px 8px 12px; background: var(--work); min-width: 0; }
+  .gap { width: 8px; flex: none; align-self: stretch; border-left: 1px dashed var(--line); margin-left: 4px; }
+  .empty { color: var(--text-2); margin: 8px; flex: none; }
 </style>

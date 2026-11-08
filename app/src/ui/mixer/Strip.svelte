@@ -49,8 +49,8 @@
     onselect?: () => void;
   } = $props();
 
-  const NEUTRAL = '#9aa6c4';
-  const knobColor = $derived(color ?? NEUTRAL);
+  /** The strip colour: the track's, or a neutral for returns and the master. */
+  const knobColor = $derived(color ?? 'var(--text-dim)');
   const ch = $derived<ChannelState | undefined>(
     kind === 'track' ? p.mixer.channels[target] : p.mixer[target as 'reverb' | 'delay' | 'master'],
   );
@@ -158,7 +158,7 @@
   class="strip"
   class:sel={selected}
   class:neutral={color === null}
-  style:--c={color ?? '#6b7080'}
+  style:--c={color ?? 'var(--raised)'}
   data-testid={kind === 'track' ? `strip-${channel}` : `strip-${target}`}
 >
   <button
@@ -188,7 +188,7 @@
 
   <Section title="EQ" {name} testid="eq" on={val('eq_on') === 1} ontoggle={() => set('eq_on', val('eq_on') ? 0 : 1)}>
     {#each eqKnobs as d (d.id)}
-      <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
+      <Knob variant="slider" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
     {/each}
   </Section>
 
@@ -237,7 +237,7 @@
       {#each [['send_a', 'send_a_pre'], ['send_b', 'send_b_pre']] as [s, pre] (s)}
         {@const isPre = val(pre) === 1}
         <div class="send">
-          <Knob def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
+          <Knob variant="slider" def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
           <button type="button" class="pre" class:lit={isPre} aria-pressed={isPre} aria-label={`${name} ${mixParam(s).label} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}>{isPre ? 'pre' : 'post'}</button>
         </div>
       {/each}
@@ -246,11 +246,11 @@
 
   {#if kind !== 'master'}
     <div class="row">
-      <Knob def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" auto={autoOf('pan')} onchange={(v) => set('pan', v)} />
+      <Knob variant="slider" def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" auto={autoOf('pan')} onchange={(v) => set('pan', v)} />
     </div>
   {:else}
     <div class="row limiter" title="Master limiter: the output never exceeds the ceiling">
-      <Knob def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" auto={autoOf('limiter_ceiling')} onchange={(v) => set('limiter_ceiling', v)} />
+      <Knob variant="slider" def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" auto={autoOf('limiter_ceiling')} onchange={(v) => set('limiter_ceiling', v)} />
       <div class="grbox" title="Limiter gain reduction: how much the master is being turned down to stay under the ceiling">
         <span>Limiter GR</span>
         <span class="grv" bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span>
@@ -273,41 +273,43 @@
 </div>
 
 <style>
-  .strip { width: 118px; flex: none; display: flex; flex-direction: column; background: #1f2026; border: 1px solid #2a2c33; border-top: 3px solid var(--c); border-radius: 3px; padding: 0 3px 4px; box-sizing: border-box; }
-  .strip.sel { background: #282a33; box-shadow: inset 0 0 0 1px #4a4f63; }
-  .strip.neutral { background: #1c1d22; }
-  .name { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: transparent; padding: 3px 2px; font: inherit; text-align: left; cursor: pointer; border-radius: 2px; min-width: 0; }
+  /* A card (spec §4): --panel body with --lift, a track-colour header with
+     --gloss, a track-colour outline when selected. 132 px wide: the slider
+     variant needs ~112 px, so the strips stay compact. */
+  .strip { width: 132px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-radius: var(--r-lg); box-shadow: var(--lift); padding: 0 8px 8px; box-sizing: border-box; overflow: hidden; }
+  .strip.sel { outline: 2px solid var(--c); outline-offset: -1px; }
+  .name { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: var(--c) var(--gloss); color: var(--on-color); margin: 0 -8px 6px; padding: 5px 10px 4px; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
   .name:disabled { cursor: default; }
-  .name:not(:disabled):hover { background: #2c2e37; }
-  .name b { color: var(--c); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .neutral .name b { color: #e6e7ec; }
-  .sub { font-size: 10px; color: #8d90a0; }
-  .name:focus-visible { outline: 1px solid #f0a23a; }
-  .ms { display: flex; gap: 3px; padding: 2px 2px 4px; min-height: 20px; }
-  .ms button { width: 26px; height: 18px; font: 600 11px ui-sans-serif, system-ui, sans-serif; border: 1px solid #3a3d47; border-radius: 3px; background: #2a2c33; color: #c9cbd3; cursor: pointer; }
-  .ms .m.lit { background: #4dabf7; border-color: #4dabf7; color: #111; }
-  .ms .s.lit { background: #ffd43b; border-color: #ffd43b; color: #111; }
+  .name:not(:disabled):hover { filter: brightness(1.06); }
+  .name b { font-size: var(--fs-ctl); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .sub { font-size: var(--fs-lbl); opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .name:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ms { display: flex; gap: 3px; padding: 2px 0 4px; min-height: 22px; }
+  .ms button { width: 26px; height: 20px; font: 700 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); color: var(--text); cursor: pointer; box-shadow: var(--raised-shadow); }
+  .ms .m.lit { background: var(--sig-cv) var(--gloss); color: var(--on-color); }
+  .ms .s.lit { background: var(--track-7) var(--gloss); color: var(--on-color); }
   .ms .an { margin-left: auto; font-size: 13px; line-height: 1; }
-  .ms .an.lit { background: #7fd1ae; border-color: #7fd1ae; color: #111; }
-  .ms button:focus-visible { outline: 1px solid #f0a23a; }
-  .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: #d7d9e0; }
-  .gr { display: block; color: #a3a6b3; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .ms .an.lit { background: var(--play) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--play) 40%, transparent); }
+  .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .gr { display: block; color: var(--text-2); font: var(--fs-lbl) var(--font-mono); }
   .gr.dim { opacity: 0.5; }
-  .scpick { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; width: 100%; font-size: 10px; color: #a3a6b3; }
-  .scpick select { font: 11px ui-sans-serif, system-ui, sans-serif; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d47; border-radius: 3px; padding: 1px; width: 100%; }
-  .row { display: flex; justify-content: center; border-top: 1px solid #2a2c33; padding-top: 2px; }
-  .sends { justify-content: space-between; }
-  .send { display: flex; flex-direction: column; align-items: center; gap: 1px; }
-  .pre { font: 9px ui-sans-serif, system-ui, sans-serif; border: 1px solid #3a3d47; border-radius: 3px; background: #1a1b20; color: #8d90a0; padding: 0 4px; cursor: pointer; }
-  .pre.lit { background: #9775fa; border-color: #9775fa; color: #111; }
-  .limiter { flex-direction: column; align-items: center; gap: 2px; padding-bottom: 2px; }
-  .grbox { display: flex; align-items: center; gap: 4px; font-size: 10px; color: #a3a6b3; white-space: nowrap; }
-  .grv { font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; color: #ffd98a; background: #15161a; border-radius: 2px; padding: 0 3px; }
-  .fm { display: flex; justify-content: center; gap: 3px; border-top: 1px solid #2a2c33; padding-top: 6px; height: 132px; }
+  .scpick { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; width: 100%; font-size: var(--fs-lbl); color: var(--text-2); }
+  .scpick select { width: 100%; }
+  .row { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); padding-top: 4px; margin-top: 2px; }
+  /* A send: its slider, then the pre/post toggle under it, aligned right. */
+  .sends { gap: 2px; }
+  .send { display: flex; flex-direction: column; align-items: stretch; gap: 1px; }
+  .pre { align-self: flex-end; font: 600 9px var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--text-2); padding: 0 6px; cursor: pointer; }
+  .pre.lit { background: var(--sig-vel) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow); }
+  .pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .grbox { display: flex; align-items: center; gap: 4px; font-size: var(--fs-lbl); color: var(--text-2); white-space: nowrap; }
+  .grv { font: var(--fs-lbl)/1.3 var(--font-mono); color: var(--accent); background: var(--well); border-radius: var(--r-sm); padding: 0 4px; }
+  .fm { display: flex; justify-content: center; gap: 3px; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; height: 132px; }
   .scale { position: relative; width: 20px; margin: 9px 0; }
-  .scale span { position: absolute; right: 0; font: 9px/10px ui-monospace, SFMono-Regular, Menlo, monospace; color: #7d808c; }
+  .scale span { position: absolute; right: 0; font: 9px/10px var(--font-mono); color: var(--text-2); }
   /* Bottom padding = the fader cap's half height: meter 0 lines up with −∞. */
   .mtr { height: 100%; padding-bottom: 9px; box-sizing: border-box; }
-  .readout.auto { font-style: italic; color: #f0a23a; }
-  .readout { margin-top: 3px; align-self: center; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: #e6e7ec; background: #15161a; border-radius: 2px; padding: 0 5px; min-width: 56px; text-align: center; }
+  .readout { margin-top: 4px; align-self: center; font: var(--fs-ctl)/1.4 var(--font-mono); color: var(--text); background: var(--lcd); box-shadow: var(--well-shadow); border-radius: var(--r-sm); padding: 0 6px; min-width: 60px; text-align: center; }
+  .readout.auto { font-style: italic; color: var(--accent); }
 </style>

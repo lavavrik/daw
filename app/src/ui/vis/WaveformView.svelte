@@ -43,6 +43,7 @@
   // 'line' | 'dots') and data-fpp (frames per CSS px); the readout is
   // `wave-zoom-text`.
   import { onMount } from 'svelte';
+  import { THEME } from '../theme';
   import type { Snippet } from 'svelte';
   import { fineSamples } from '../../audio/fineSamples';
   import type { FineRequest } from '../../audio/fineSamples';
@@ -180,12 +181,14 @@
     const pad = Math.max(1, Math.round(dpr));
     const amp = laneH / 2 - pad;
     const mark = Math.max(2, Math.round(2 * dpr));
-    ctx.fillStyle = '#ffffff14';
+    // Centre lines and the lane divider: --line, faded.
+    ctx.fillStyle = THEME.line;
+    ctx.globalAlpha = 0.6;
     for (let l = 0; l < lanes; l++) ctx.fillRect(0, Math.round(l * laneH + laneH / 2), W, 1);
     if (lanes === 2) {
-      ctx.fillStyle = '#ffffff10';
       ctx.fillRect(0, Math.round(laneH), W, 1);
     }
+    ctx.globalAlpha = 1;
 
     if (src.floats && dv.framesPerPx < 1) {
       // A line through the samples (dots from 6 CSS px per sample).
@@ -226,7 +229,7 @@
             ctx.fill();
           }
           if (v >= 1 || v <= -1) {
-            ctx.fillStyle = '#ff4d5e';
+            ctx.fillStyle = THEME.rec;
             ctx.fillRect(Math.round(x - mark / 2), top, mark, mark);
             ctx.fillRect(Math.round(x - mark / 2), top + laneH - mark, mark, mark);
           }
@@ -249,7 +252,7 @@
         const y1 = Math.ceil(mid - Math.max(-1, lo[x]) * amp);
         ctx.fillRect(x, y0, 1, Math.max(1, y1 - y0));
       }
-      ctx.fillStyle = '#ff4d5e';
+      ctx.fillStyle = THEME.rec;
       for (let x = 0; x < W; x++) {
         if (!cols.over[x]) continue;
         ctx.fillRect(x, top, 1, mark);
@@ -411,15 +414,15 @@
 </div>
 
 <style>
-  .wv { position: relative; width: 100%; overflow: hidden; background: #131417; border: 1px solid #2a2c33; border-radius: 3px; box-sizing: border-box; }
-  .wv:focus-visible { outline: 2px solid #f0a23a; outline-offset: 1px; }
+  .wv { position: relative; width: 100%; overflow: hidden; background: var(--lcd); border-radius: var(--r-sm); box-shadow: var(--well-shadow); box-sizing: border-box; }
+  .wv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   canvas { display: block; width: 100%; }
-  .ph { position: absolute; top: 0; left: 0; width: 1px; height: 100%; background: #fff; pointer-events: none; will-change: transform; }
+  .ph { position: absolute; top: 0; left: 0; width: 1px; height: 100%; background: var(--text); pointer-events: none; will-change: transform; }
   .readout, .note {
-    position: absolute; top: 2px; padding: 0 4px; border-radius: 2px; background: #15161ad9;
-    font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; white-space: nowrap;
+    position: absolute; top: 2px; padding: 0 4px; border-radius: 2px; background: color-mix(in srgb, var(--lcd) 85%, transparent);
+    font: 10px/1.4 var(--font-mono); pointer-events: none; white-space: nowrap;
   }
-  .readout { right: 2px; color: #c9cbd3; }
-  .note { left: 2px; color: #ffd98a; }
+  .readout { right: 2px; color: var(--text-2); }
+  .note { left: 2px; color: var(--accent); }
   .note[hidden] { display: none; }
 </style>

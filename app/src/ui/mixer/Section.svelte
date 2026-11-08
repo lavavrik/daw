@@ -49,14 +49,15 @@
 </section>
 
 <style>
-  .sec { border-top: 1px solid #2a2c33; padding: 2px 0; }
+  .sec { border-top: 1px solid var(--line); padding: 3px 0; }
   .head { display: flex; align-items: center; gap: 4px; }
-  .exp { flex: 1; display: flex; align-items: center; gap: 3px; border: 0; background: transparent; color: #c9cbd3; font: 600 11px ui-sans-serif, system-ui, sans-serif; padding: 2px 2px; cursor: pointer; text-align: left; border-radius: 2px; }
-  .exp:hover { background: #262830; }
-  .tri { width: 9px; color: #8d90a0; font-size: 9px; }
-  .on { font: 10px ui-sans-serif, system-ui, sans-serif; border: 1px solid #3a3d47; background: #1a1b20; color: #8d90a0; border-radius: 3px; padding: 0 5px; cursor: pointer; min-width: 28px; }
-  .on.lit { background: #f0a23a; border-color: #f0a23a; color: #111; font-weight: 600; }
-  .exp:focus-visible, .on:focus-visible { outline: 1px solid #f0a23a; }
-  .summary { font-size: 10px; color: #a3a6b3; padding: 0 2px 1px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .body { display: grid; grid-template-columns: 1fr 1fr; justify-items: center; gap: 2px 0; padding: 2px 0; }
+  .exp { flex: 1; display: flex; align-items: center; gap: 3px; border: 0; background: transparent; color: var(--text); font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: .06em; text-transform: uppercase; padding: 2px 2px; cursor: pointer; text-align: left; border-radius: var(--r-sm); }
+  .exp:hover { background: color-mix(in srgb, var(--raised) 50%, transparent); }
+  .tri { width: 9px; color: var(--text-2); font-size: 9px; }
+  .on { font: 600 var(--fs-lbl) var(--font-ui); border: 0; background: var(--raised); color: var(--text); border-radius: var(--r-sm); padding: 1px 6px; cursor: pointer; min-width: 28px; box-shadow: var(--raised-shadow); }
+  .on.lit { background: var(--accent) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .exp:focus-visible, .on:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .summary { font-size: var(--fs-lbl); color: var(--text-2); padding: 0 2px 1px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Dials sit two per row; a slider spans the row (Knob's grid-column), so sliders stack. */
+  .body { display: grid; grid-template-columns: 1fr 1fr; justify-items: center; gap: 4px 0; padding: 3px 0; }
 </style>

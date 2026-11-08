@@ -15,7 +15,7 @@
   // directly; data-peak-db / data-hold-db expose the values to tests.
   import { MIX_METER_STRIDE } from '../../audio/protocol';
   import type { MeterBus } from './meterBus';
-  import { holdStep, isClip, linToDb, masterLight, meterPos, worseLight } from './mixMath';
+  import { faderPos, holdStep, isClip, linToDb, masterLight, meterPos, worseLight } from './mixMath';
   import type { Hold, MasterLight } from './mixMath';
 
   let { bus, channel, ceilingDb = 0, name, master = false }: {
@@ -29,6 +29,14 @@
     /** The master: amber LIMIT on limiter GR, red at the ceiling (see above). */
     master?: boolean;
   } = $props();
+
+  // The colour bands sit at fixed dB on the fader law (yellow from -12 dB, red
+  // from -3 dB), as positions in the full-height bar; the cover hides the part
+  // above the level, so the colours never stretch with the bar.
+  const YELLOW_AT = faderPos(-12);
+  const RED_AT = faderPos(-3);
+  const BLEND = 0.03;
+  const scale = `linear-gradient(to top, var(--play) ${((YELLOW_AT - BLEND) * 100).toFixed(1)}%, var(--track-7) ${(YELLOW_AT * 100).toFixed(1)}%, var(--track-7) ${((RED_AT - BLEND) * 100).toFixed(1)}%, var(--rec) ${(RED_AT * 100).toFixed(1)}%)`;
 
   let root = $state<HTMLElement | null>(null);
   const covers: (HTMLElement | null)[] = $state([null, null]);
@@ -102,7 +110,7 @@
   ></button>
   <div class="bars">
     {#each [0, 1] as c (c)}
-      <div class="bar" title={c === 0 ? 'Left' : 'Right'}>
+      <div class="bar" style:background-image={scale} title={c === 0 ? 'Left' : 'Right'}>
         <div class="cover" bind:this={covers[c]}></div>
         <div class="hold" bind:this={holdEls[c]}></div>
       </div>
@@ -114,16 +122,13 @@
   /* Clip light (6px) + gap (3px) = the fader's 9px top margin, so the bars
      span exactly the scale beside them (bottom margin set by the parent). */
   .meter { display: flex; flex-direction: column; align-items: stretch; gap: 3px; height: 100%; width: 14px; box-sizing: border-box; }
-  .clip { height: 6px; flex: none; padding: 0; border: 0; border-radius: 2px; background: #3a2226; cursor: pointer; }
-  .clip.on { background: #ff3b47; box-shadow: 0 0 4px #ff3b47; }
-  .clip.limit { background: #f0a43a; box-shadow: 0 0 4px #f0a43a; }
+  .clip { height: 6px; flex: none; padding: 0; border: 0; border-radius: 2px; background: color-mix(in srgb, var(--rec) 22%, var(--well)); box-shadow: var(--well-shadow); cursor: pointer; }
+  .clip.on { background: var(--rec); box-shadow: 0 0 10px color-mix(in srgb, var(--rec) 40%, transparent); }
+  .clip.limit { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
+  .clip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .bars { flex: 1; display: flex; gap: 2px; min-height: 0; }
-  .bar {
-    position: relative; flex: 1; overflow: hidden; border-radius: 1px;
-    /* Static scale colours; the cover hides everything above the level.
-       Stops follow the fader law: 0.75 = 0 dBFS, 0.63 ≈ −6 dBFS. */
-    background: linear-gradient(to top, #2fbf71 0%, #2fbf71 60%, #e4c23a 66%, #f08a3a 74%, #ff3b47 76%, #ff3b47 100%);
-  }
-  .cover { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: #121317; }
-  .hold { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; margin-bottom: -1px; background: #f2f3f7; visibility: hidden; }
+  /* The scale (green -> yellow -> red) is the inline background-image, built in the script. */
+  .bar { position: relative; flex: 1; overflow: hidden; border-radius: 2px; background-color: var(--well); }
+  .cover { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: var(--lcd); box-shadow: var(--well-shadow); }
+  .hold { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; margin-bottom: -1px; background: var(--text); visibility: hidden; }
 </style>

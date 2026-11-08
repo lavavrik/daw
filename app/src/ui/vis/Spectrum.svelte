@@ -20,11 +20,12 @@
   // what is already there (silence) is skipped. data-peak-db exposes the
   // loudest band level to tests.
   import { onMount } from 'svelte';
+  import { THEME } from '../theme';
   import { analyserBus } from './analyserBus';
   import type { AnalyserBus } from './analyserBus';
   import { DB_FLOOR, DB_TOP, dbToY, freqToX, hoverReadout, xToFreq } from './spectrum';
 
-  let { need, width, height, color = '#9aa6c4' }: {
+  let { need, width, height, color = THEME.textDim }: {
     need: 'panel' | 'mini';
     /** CSS px. */
     width: number;
@@ -60,37 +61,45 @@
 
   const hzLabel = (f: number) => (f >= 1000 ? `${f / 1000}k` : `${f}`);
 
+  /** The trace colour with a gloss: bright at the top, fading to nothing at the floor. */
+  function barFill(c: CanvasRenderingContext2D) {
+    const g = c.createLinearGradient(0, 0, 0, height);
+    g.addColorStop(0, color);
+    g.addColorStop(1, `color-mix(in srgb, ${color} 25%, transparent)`);
+    return g;
+  }
+
   function drawGrid() {
     const c = gridCanvas?.getContext('2d');
     if (!gridCanvas || !c) return;
     gridCanvas.width = width * dpr;
     gridCanvas.height = height * dpr;
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
-    c.fillStyle = '#15161a';
+    c.fillStyle = THEME.lcd;
     c.fillRect(0, 0, width, height);
     c.lineWidth = 1;
-    c.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    c.font = `9px ${THEME.fontMono}`;
     c.textBaseline = 'top';
     for (const f of GRID_HZ) {
       const x = Math.round(freqToX(f) * width) + 0.5;
-      c.strokeStyle = f === 100 || f === 1000 || f === 10000 ? '#34363f' : '#25272e';
+      c.strokeStyle = f === 100 || f === 1000 || f === 10000 ? THEME.line : THEME.grid;
       c.beginPath();
       c.moveTo(x, 0);
       c.lineTo(x, height);
       c.stroke();
       if (f < 20000) {
-        c.fillStyle = '#6b6e7a';
+        c.fillStyle = THEME.textDim;
         c.fillText(hzLabel(f), x + 2, height - 10);
       }
     }
     for (const db of GRID_DB) {
       const y = Math.round(dbToY(db, height)) + 0.5;
-      c.strokeStyle = db === 0 ? '#3a3d47' : '#25272e';
+      c.strokeStyle = db === 0 ? THEME.line : THEME.grid;
       c.beginPath();
       c.moveTo(0, y);
       c.lineTo(width, y);
       c.stroke();
-      c.fillStyle = '#6b6e7a';
+      c.fillStyle = THEME.textDim;
       c.fillText(db === 0 ? '0' : `−${-db}`, 2, y + 1);
     }
   }
@@ -124,9 +133,10 @@
     if (peakDb !== shownPeak) canvas.dataset.peakDb = shownPeak = peakDb;
 
     if (need === 'mini') {
-      c.fillStyle = '#15161a';
+      c.fillStyle = THEME.lcd;
       c.fillRect(0, 0, width, height);
-      c.fillStyle = color;
+      // Glossy bars: the colour fading toward the floor, as on the Mixer board.
+      c.fillStyle = barFill(c);
       const w = width / n;
       for (let i = 0; i < n; i++) {
         const y = dbToY(b.level[i], height);
@@ -141,8 +151,8 @@
     for (let i = 0; i < n; i++) c.lineTo(freqToX(bands.centre[i]) * width, dbToY(b.level[i], height));
     c.lineTo(width, height);
     c.closePath();
-    c.globalAlpha = 0.28;
-    c.fillStyle = color;
+    c.globalAlpha = 0.5;
+    c.fillStyle = barFill(c);
     c.fill();
     c.globalAlpha = 1;
     c.beginPath();
@@ -156,14 +166,14 @@
     c.lineWidth = 1.25;
     c.stroke();
     // Peak-hold dots.
-    c.fillStyle = '#e6e7ec';
+    c.fillStyle = THEME.text;
     for (let i = 0; i < n; i++) {
       if (b.peak[i] <= DB_FLOOR) continue;
       c.fillRect(freqToX(bands.centre[i]) * width - 1, dbToY(b.peak[i], height) - 1, 2, 2);
     }
     // Hover: a cursor line and the readout of the band under it.
     if (hoverX !== null && readoutEl) {
-      c.fillStyle = '#f0a23a';
+      c.fillStyle = THEME.accent;
       c.fillRect(Math.round(hoverX), 0, 1, height);
       const f = xToFreq(hoverX / width);
       readoutEl.textContent = hoverReadout(f, b.level[bands.bandOf(f)]);
@@ -210,5 +220,5 @@
   .spec { position: relative; flex: none; }
   .spec canvas { position: absolute; inset: 0; display: block; }
   .spec:not(.mini) canvas:not(.grid) { cursor: crosshair; }
-  .readout { position: absolute; top: 2px; right: 2px; padding: 0 4px; border-radius: 2px; background: #15161ad9; color: #ffd98a; font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; pointer-events: none; white-space: nowrap; }
+  .readout { position: absolute; top: 2px; right: 2px; padding: 0 4px; border-radius: 2px; background: color-mix(in srgb, var(--lcd) 85%, transparent); color: var(--accent); font: 10px/1.4 var(--font-mono); pointer-events: none; white-space: nowrap; }
 </style>

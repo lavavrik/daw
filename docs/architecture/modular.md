@@ -297,22 +297,28 @@ Params: `sample` (pool id 0..255, −1 = none), `gain` (0..2, smoothed),
 `root` (MIDI note, default 60) and, appended in plan 15, `end` (0..1,
 default 1), `loop` (Off/On), `loopStart` (0..1) and `fine` (−100..+100 ct).
 
-- A rising gate starts the voice at `s = floor(start · frames)`. It is a
-  one-shot (follow it with an ADSR + VCA for gated notes). A gate with no
+- A rising gate starts the voice at `s = floor(start · frames)`. Loop off it
+  is a one-shot (follow it with an ADSR + VCA for gated notes); loop on, the
+  gate also ends the loop. A gate with no
   playable sample starts nothing.
 - **Region** (`end`, `loop`, `loopStart` are read live, so markers and
-  automation act on sounding voices): the voice plays `[s, e)`,
-  `e = max(floor(end · frames), s + 1)` clamped to `frames` (so `start ≥ end`
-  plays one frame; nothing outside the sample is ever read). Loop off: at
+  automation act on sounding voices; `start` only at trigger): the voice
+  plays `[s, e)`, `e = max(floor(end · frames), s + 1)` clamped to
+  `frames` (so `start ≥ end` plays one frame; nothing outside the sample is ever read). Loop off: at
   `e` the last value is held and faded out over 2 ms.
-- **Loop** on: the loop region is `[ls, e)`, `ls = max(floor(loopStart ·
-  frames), s)`; the voice keeps looping while it plays (gate low too). The
-  seam has a fixed 10 ms (`xf`) equal-power crossfade inside the region:
-  over the last `xf` frames the tail fades out (cos) while the head
-  `[ls, ls + xf)` fades in (sin), then the read jumps to `ls + xf`. A loop
-  region shorter than `2 · xf` plays as loop off. Overshoot past `e` (high
-  rates, `end` moved under the position) wraps modulo the loop, so the
-  position stays in the region at any pitch.
+- **Loop** on (a *sustain* loop): the loop region is `[ls, e)`,
+  `ls = max(floor(loopStart · frames), s)`; the voice repeats it only while
+  its gate is high. Gate low: it stops looping, plays on to `e` and stops
+  with the 2 ms fade, so a looping voice always ends (the ADSR/VCA shapes
+  the release meanwhile). A release (or `loop` off) during a seam
+  crossfade finishes that seam first, so it never steps. The seam has a
+  fixed 10 ms (`xf`) equal-power crossfade inside the region: over the last
+  `xf` frames the tail fades out (cos) while the head `[ls, ls + xf)` fades
+  in (sin), then the read jumps to `ls + xf` — so after the first pass a
+  loop lasts `e − ls − xf` frames. A loop region shorter than `2 · xf`
+  plays as loop off. Overshoot past `e` (high rates, `end` moved under the
+  position) wraps modulo the loop, so the position stays in the region at
+  any pitch.
 - **Rate** `2^(pitch − (root − 60)/12 + fine/1200)` with `pitchTrack` on
   (per sample: bends follow), `2^(fine/1200)` off; exponent clamped to
   ±11 octaves. Reads use 4-point, 3rd-order Hermite (Catmull-Rom)

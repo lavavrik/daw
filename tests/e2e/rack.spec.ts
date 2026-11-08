@@ -435,3 +435,156 @@ test('dragging near the rail edge scrolls it', async ({ page }) => {
   await page.mouse.up();
   expect(await anyPos(page)).toBe(false);
 });
+
+// ---- Plan 20 Task 3: the slider variant (Filter reso) and ChoiceSeg (Filter mode) ----
+
+/** The default synth track (Deep Bass: its Filter is module 4) with the rack open. */
+async function loadDeepBass(page: Page) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Click to start audio' }).click();
+  await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
+  await page.getByTestId('add-synth-track').click();
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await expect(page.getByTestId('knob-4-reso')).toBeVisible();
+}
+
+/** Filter resonance: 0..1, lin, default 0.2 (engine/catalog.json); a slider here. */
+const resoValue = async (page: Page) => Number(await page.getByTestId('knob-4-reso').getAttribute('aria-valuenow'));
+const RESO_DEFAULT = 0.2;
+
+/** A point on the reso slider's track at `frac` of its width (the live rect: right for a scrolled rail). */
+async function onTrack(page: Page, frac: number) {
+  const b = (await page.getByTestId('knob-4-reso-track').boundingBox())!;
+  return { x: b.x + b.width * frac, y: b.y + b.height / 2, w: b.width };
+}
+
+/**
+ * The slider gestures, one undo entry each: typed entry, a relative drag
+ * (pressing away from the handle does not jump), Shift-fine, a click-jump,
+ * double-click reset, Cmd/Ctrl+Z mid-drag. Ends at 0.35.
+ */
+async function sliderGestures(page: Page) {
+  const slider = page.getByTestId('knob-4-reso');
+  await expect(slider).toHaveAttribute('role', 'slider');
+  await expect(slider).toHaveAttribute('aria-label', 'Filter Resonance');
+
+  // Typed entry.
+  await slider.getByTestId('knob-readout').click();
+  await slider.getByTestId('knob-entry').fill('35');
+  await slider.getByTestId('knob-entry').press('Enter');
+  await expect(slider.getByTestId('knob-readout')).toHaveText('35%');
+  await expect(slider).toHaveAttribute('aria-valuetext', '35%');
+  expect(await resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // Drag +50 % of the track, pressed at 80 %: relative (no jump at the press) -> 0.85.
+  let a = await onTrack(page, 0.8);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + a.w / 4, a.y + 4, { steps: 4 });
+  await page.mouse.move(a.x + a.w / 2, a.y, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.85, 2);
+  await page.keyboard.press('ControlOrMeta+z'); // one entry for the whole drag
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // Shift = 10x finer: +50 % of the track moves 5 %.
+  a = await onTrack(page, 0.35);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.keyboard.down('Shift');
+  await page.mouse.move(a.x + a.w / 2, a.y, { steps: 6 });
+  await page.keyboard.up('Shift');
+  await page.mouse.up();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.4, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // A click without travel jumps the value under the pointer: one entry.
+  a = await onTrack(page, 0.1);
+  await page.mouse.click(a.x, a.y);
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.1, 2);
+  // Under 3 px of travel is still a click: it jumps to where the pointer is let go.
+  a = await onTrack(page, 0.6);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 2, a.y);
+  await page.mouse.up();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.6 + 2 / a.w, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.1, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // Double-click (on the label row) resets to the default; one entry.
+  await slider.getByText('Resonance').dblclick();
+  await expect.poll(() => resoValue(page)).toBeCloseTo(RESO_DEFAULT, 5);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // Cmd/Ctrl+Z mid-drag cancels the drag: the value from before it, no entry.
+  a = await onTrack(page, 0.35);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + a.w / 4, a.y, { steps: 4 });
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.6, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await page.mouse.up();
+  await page.waitForTimeout(50);
+  expect(await resoValue(page)).toBeCloseTo(0.35, 5);
+
+  // Keys: ArrowRight +1 % of travel.
+  await slider.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.36, 5);
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+}
+
+test('slider param: drag, click-jump, typed entry, reset, undo', async ({ page }) => {
+  await loadDeepBass(page);
+  await sliderGestures(page);
+  // The hero dial stays a knob (no track).
+  await expect(page.getByTestId('knob-4-cutoff-track')).toHaveCount(0);
+});
+
+test('slider param in a horizontally scrolled rack', async ({ page }) => {
+  await loadDeepBass(page);
+  // Pin the Filter far right (a positioned rack scrolls sideways), then scroll it into view.
+  await dragHeader(page, 4, 1600, 0);
+  const rail = page.getByTestId('rail');
+  await expect.poll(() => rail.evaluate((r) => r.scrollWidth > r.clientWidth + 100)).toBe(true);
+  await page.getByTestId('knob-4-reso').evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'center' }));
+  expect(await rail.evaluate((r) => r.scrollLeft)).toBeGreaterThan(300);
+  await sliderGestures(page);
+});
+
+test('choice seg: click and arrow keys pick, one undo entry each', async ({ page }) => {
+  await loadDeepBass(page);
+  const group = page.getByTestId('knob-4-mode');
+  await expect(group).toHaveAttribute('role', 'radiogroup');
+  await expect(group).toHaveAttribute('aria-label', 'Filter Mode');
+  const opts = group.getByRole('radio');
+  await expect(opts).toHaveCount(6);
+  const checked = async () => (await opts.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked')))).indexOf('true');
+  const start = await checked();
+  const pick = start === 2 ? 3 : 2;
+
+  await page.getByTestId(`knob-4-mode-${pick}`).click();
+  await expect.poll(checked).toBe(pick);
+  await expect.poll(() => undoLabel(page)).toBe('Set Mode'); // a gesture's entry lands a task after the release
+  await expect(page.getByTestId(`knob-4-mode-${pick}`)).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(checked).toBe(pick + 1);
+  await expect(page.getByTestId(`knob-4-mode-${pick + 1}`)).toBeFocused(); // roving focus follows
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(checked).toBe(pick - 1);
+
+  // One entry per change: the three keys, then the click.
+  for (const want of [pick, pick + 1, pick, start]) {
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect.poll(checked).toBe(want);
+  }
+});

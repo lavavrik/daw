@@ -1,5 +1,6 @@
 // Knob maths (pure; unit-tested in knobMath.test.ts): value <-> knob position,
-// drag/keyboard steps, and the readout text.
+// drag/keyboard steps (the knob's vertical drag and the slider variant's
+// horizontal drag, click-jump and fill), and the readout text.
 //
 // "Position" is the knob's travel, 0..1 (bottom-left .. bottom-right). Every
 // gesture works in position space, so an Exp param (cutoff, envelope times)
@@ -91,6 +92,47 @@ export function fromPos(d: CurveDef, pos: number): number {
 /** New position after a vertical drag of `dy` px (screen y: negative = up = more). */
 export function dragPos(pos: number, dy: number, fine: boolean): number {
   return clamp01(pos - (dy / DRAG_PX) * (fine ? FINE : 1));
+}
+
+/**
+ * Slider variant (Knob.svelte `variant="slider"`, plan 20): the same position
+ * space, laid out horizontally. Pointer travel below CLICK_SLOP_PX (in any
+ * direction) between press and release is a click: it jumps the value to the
+ * pointer (sliderPosFromX). More is a relative drag (sliderDrag).
+ */
+export const CLICK_SLOP_PX = 3;
+
+/**
+ * Position 0..1 under `clientX` on a track whose live rect (getBoundingClientRect,
+ * taken at the moment it is needed, so a scrolled or zoomed container is
+ * already in it) is `rect`. Clamped; a collapsed track (width 0) gives 0.
+ */
+export function sliderPosFromX(clientX: number, rect: { left: number; width: number }): number {
+  if (!(rect.width > 0)) return 0;
+  return clamp01((clientX - rect.left) / rect.width);
+}
+
+/**
+ * New position after a horizontal drag of `dx` px (right = more) on a track
+ * `widthPx` wide: the track's width is the full range; `fine` (Shift) is 10x finer.
+ */
+export function sliderDrag(pos: number, dx: number, widthPx: number, fine: boolean): number {
+  if (!(widthPx > 0)) return pos;
+  return clamp01(pos + (dx / widthPx) * (fine ? FINE : 1));
+}
+
+/**
+ * The slider's filled part, [from, to] in positions. Bipolar params (an
+ * offset: min < 0 < max, like pan, EQ gains, cv amount, octave) fill from
+ * zero towards the value; the rest from the left. A 'fader' param (the sends'
+ * dB) is a level, not an offset, so it fills from the left even though its
+ * range crosses 0 dB.
+ */
+export function fillSpan(d: CurveDef, v: number): [number, number] {
+  const p = toPos(d, v);
+  if (d.curve === 'fader' || !(d.min < 0 && d.max > 0)) return [0, p];
+  const z = toPos(d, 0);
+  return [Math.min(z, p), Math.max(z, p)];
 }
 
 /**

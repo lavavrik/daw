@@ -43,6 +43,7 @@
   import type { RackModule, SampleMeta } from '../../state/project.svelte';
   import { delayClampNote } from '../mixer/mixMath';
   import { categoryColor } from './cables';
+  import ChoiceSeg from './ChoiceSeg.svelte';
   import Jack from './Jack.svelte';
   import Knob from './Knob.svelte';
   import ScopeView from './ScopeView.svelte';
@@ -154,6 +155,11 @@
    * with the mixer delay: same table, same rule). */
   const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
+  // Redesign rollout (plan 20): the Filter's reso is the first slider and its
+  // mode the first ChoiceSeg (Task 3); Task 9 moves the rest of the rack
+  // (every non-hero continuous/integer param a slider, every choice a seg).
+  const sliderParam = (name: string) => def.id === 'filter' && name === 'reso';
+  const segParam = (name: string) => def.id === 'filter' && name === 'mode';
   const color = $derived(categoryColor(def.category));
   const shown = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.i !== sampleIdx));
   const choices = $derived(shown.filter((x) => x.pd.choices.length));
@@ -207,12 +213,18 @@
   {#if def.params.length}
     <div class="params" style:grid-template-columns={`repeat(${cols}, auto)`}>
       {#each choices as { pd, i } (pd.name)}
-        <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-          note={noteFor(pd.name, module.params[i])} />
+        {#if segParam(pd.name)}
+          <ChoiceSeg def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+            note={noteFor(pd.name, module.params[i])} />
+        {:else}
+          <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+            note={noteFor(pd.name, module.params[i])} />
+        {/if}
       {/each}
       {#each knobs as { pd, i } (pd.name)}
         <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-          auto={owner && !scope ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null} />
+          auto={owner && !scope ? { owner, target: { kind: 'rack', module: module.idx, param: pd.name } } : null}
+          variant={sliderParam(pd.name) ? 'slider' : 'knob'} />
       {/each}
     </div>
   {/if}

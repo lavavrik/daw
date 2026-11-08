@@ -117,6 +117,26 @@ disabled when the rack already flows.
   snap (no swap; pushed-panel outline), equal row heights (no ratchet),
   edge auto-scroll.
 
+### Param controls (plan 20 redesign)
+
+A module's params draw as one of three controls (spec §3):
+- **Slider** (`Knob.svelte` with `variant="slider"`): label and value on one
+  row, a horizontal track below. Same behaviour, ARIA slider and test id as
+  the knob. A horizontal drag is relative (track width = full range, Shift
+  10× finer); a click with under 3 px of travel jumps to the pointer on the
+  track's live rect (so it lands under the pointer in a scrolled rail).
+  Bipolar params fill from zero. Maths: `knobMath.ts` `sliderPosFromX`,
+  `sliderDrag`, `fillSpan`, `CLICK_SLOP_PX`.
+- **Hero dial** (the knob): `filter.cutoff`, `sample_player.root`, `lfo.rate`.
+- **ChoiceSeg** (`ChoiceSeg.svelte`): a radiogroup `.seg` row for choice
+  params; the group keeps the control's test id (`knob-<m>-<param>`), each
+  option is `<testid>-<index>`; arrows move the pick, one undo entry each.
+
+Rollout: Task 3 switched only the Filter (`reso` slider, `mode` ChoiceSeg;
+`ModulePanel.svelte` `sliderParam` / `segParam`); Task 9 moves the rest.
+Tests: `rack.spec.ts` "slider param: …" (also in a horizontally scrolled
+rack) and "choice seg: …".
+
 ## Signals
 
 All signals are f32 buffers; the kind only matters for cable colour and docs.

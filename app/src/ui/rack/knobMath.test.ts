@@ -3,7 +3,7 @@ import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
-import { DRAG_PX, dragPos, formatValue, fromPos, keyStep, parseValue, toPos, ZERO_ZONE } from './knobMath';
+import { CLICK_SLOP_PX, DRAG_PX, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos, ZERO_ZONE } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
   const d = moduleDef(mod);
@@ -128,6 +128,54 @@ describe('dragPos', () => {
     expect(dragPos(0.5, 75, false)).toBeCloseTo(0);
     expect(dragPos(0.5, -150, true)).toBeCloseTo(0.6);
     expect(dragPos(0.9, -300, false)).toBe(1);
+  });
+});
+
+// Plan 20 Task 3: the slider variant's maths (horizontal, relative drag; click-jump; fill).
+describe('slider maths', () => {
+  const rect = { left: 100, width: 200 };
+
+  it('sliderPosFromX: the track\'s live rect maps clientX to 0..1, clamped', () => {
+    expect(sliderPosFromX(100, rect)).toBe(0);
+    expect(sliderPosFromX(150, rect)).toBeCloseTo(0.25);
+    expect(sliderPosFromX(300, rect)).toBe(1);
+    expect(sliderPosFromX(20, rect)).toBe(0);
+    expect(sliderPosFromX(999, rect)).toBe(1);
+    // A scrolled container just moves the rect: the same offset into it gives the same position.
+    expect(sliderPosFromX(150 - 640, { left: 100 - 640, width: 200 })).toBeCloseTo(0.25);
+    expect(sliderPosFromX(150, { left: 100, width: 0 })).toBe(0); // collapsed (hidden) track
+  });
+
+  it('sliderDrag: the track width is the full range, relative; Shift is 10x finer', () => {
+    expect(sliderDrag(0, 200, 200, false)).toBe(1);
+    expect(sliderDrag(0.2, 100, 200, false)).toBeCloseTo(0.7);
+    expect(sliderDrag(0.7, -100, 200, false)).toBeCloseTo(0.2);
+    expect(sliderDrag(0.5, 200, 200, true)).toBeCloseTo(0.6);
+    expect(sliderDrag(0.9, 400, 200, false)).toBe(1);
+    expect(sliderDrag(0.1, -400, 200, false)).toBe(0);
+    expect(sliderDrag(0.4, 50, 0, false)).toBe(0.4); // no width: no move
+  });
+
+  it('a slider drag in position space: exp params move logarithmically, like the knob', () => {
+    expect(fromPos(cutoff, sliderDrag(toPos(cutoff, 20), 100, 200, false))).toBeCloseTo(Math.sqrt(20 * 20000));
+  });
+
+  it('a click is less than CLICK_SLOP_PX of travel', () => {
+    expect(CLICK_SLOP_PX).toBe(3);
+  });
+
+  it('fillSpan: unipolar params fill from the left, bipolar ones from zero', () => {
+    expect(fillSpan(reso, 0.3)).toEqual([0, expect.closeTo(0.3)]);
+    const cvAmt = param('filter', 'cv_amt'); // -8..8
+    expect(fillSpan(cvAmt, 0)).toEqual([0.5, 0.5]);
+    expect(fillSpan(cvAmt, 4)).toEqual([0.5, expect.closeTo(0.75)]);
+    expect(fillSpan(cvAmt, -8)).toEqual([0, 0.5]);
+    const pan = mixParam('pan'); // -1..1
+    expect(fillSpan(pan, -0.5)).toEqual([expect.closeTo(0.25), 0.5]);
+    expect(fillSpan(octave, -3)).toEqual([0, 0.5]); // integer bipolar too
+    // A fader-taper level (the sends: dB up to +6) is a level, not an offset: from the left.
+    const send = mixParam('send_a');
+    expect(fillSpan(send, 0)).toEqual([0, expect.closeTo(toPos(send, 0))]);
   });
 });
 

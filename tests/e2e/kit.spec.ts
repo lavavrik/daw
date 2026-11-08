@@ -253,3 +253,45 @@ test('a selected drum track plays its rows from the MIDI keyboard', async ({ pag
   await peakAfter([0x80, 36, 0], 400); // NoteOff: ignored, the hit rings out
   expect(await maxPeak(page, 300)).toBeLessThan(0.01); // a one-shot: nothing stuck
 });
+
+test('a selected drum track plays its rows from the computer keyboard and records hits into steps', async ({ page }) => {
+  // Plan 15 ruling G: on a drum input track the octave's C key (KeyA) is row
+  // 1 (note 36), the keys up from it rows 2..15, at any octave. Armed and
+  // playing, a hit sets the nearest step of its row; Undo take removes it.
+  test.setTimeout(30_000);
+  type P = { tracks: { patterns: { id: string; steps: number[][] }[]; currentPatternId: string }[] };
+  const steps = () =>
+    page.evaluate(() => {
+      const t = ((window as unknown as { __daw: { project: P } }).__daw.project).tracks[0];
+      return t.patterns.find((x) => x.id === t.currentPatternId)!.steps.map((r) => r.filter((v) => v > 0).length);
+    });
+  await startAudio(page);
+  await expectKit(page);
+  await page.getByTestId('add-synth-track').click();
+  await page.getByTestId('track-0').click();
+  await expect(page.getByTestId('keys-target')).toContainText('Drums');
+  expect(await maxPeak(page, 300)).toBeLessThan(0.01);
+  const peak = maxPeak(page, 600);
+  await page.keyboard.down('KeyA'); // row 1: the Kick
+  await page.keyboard.up('KeyA');
+  expect(await peak).toBeGreaterThan(0.05);
+  expect(await maxPeak(page, 600)).toBeLessThan(0.01); // rang out, nothing stuck
+  const silent = maxPeak(page, 400);
+  await page.keyboard.down('KeyK'); // row 13: the kit has 8 rows, ignored
+  await page.keyboard.up('KeyK');
+  expect(await silent).toBeLessThan(0.01);
+  // Record: arm (R), play (Space), hit the Clap (KeyW = row 2), stop.
+  expect((await steps()).every((n) => n === 0)).toBe(true); // the kit starts empty
+  await page.keyboard.press('KeyR');
+  await page.keyboard.press('Space');
+  await expect(page.getByTestId('rec-button')).toContainText('REC');
+  await page.keyboard.down('KeyW');
+  await page.keyboard.up('KeyW');
+  await page.keyboard.press('Space');
+  const after = await steps();
+  expect(after[1]).toBe(1);
+  expect(after.reduce((a, b) => a + b, 0)).toBe(1);
+  await expect(page.getByTestId('undo-take')).toBeEnabled();
+  await page.getByTestId('undo-take').click();
+  expect((await steps()).every((n) => n === 0)).toBe(true);
+});

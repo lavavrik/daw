@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { BAR_TICKS, MAX_NOTES, Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
-import type { NotePatternState, SynthTrack } from './project.svelte';
+import type { DrumTrack, NotePatternState, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
-import { removeTrack, selectTrack, setTempo } from './actions';
-import { newPattern, selectPattern } from './pattern-actions';
+import { addDrumTrack, removeTrack, selectTrack, setStepCount, setTempo } from './actions';
+import { makeDrumPattern, newPattern, selectPattern } from './pattern-actions';
 import { setMode } from './song-actions';
 import { RECORD_LABEL, Recorder, loadRecSettings, recorderFor, saveRecSettings, transportSync, undoTakeTitle } from './recorder';
 import { createHistory } from '../history/history';
@@ -441,6 +441,112 @@ describe('Recorder: patterns and Song mode', () => {
   });
 });
 
+/** A plain drum track with `rows` rows and one pattern of `stepCount` steps. */
+function mkDrum(rows: number, stepCount: 16 | 32 | 64 = 16): DrumTrack {
+  const pat = makeDrumPattern(0, 'Pattern 1', stepCount, 0);
+  return {
+    kind: 'drum', id: 'd', slot: 0, name: 'Drums', color: '',
+    rows: Array.from({ length: rows }, (_, i) => ({ id: `r${i}`, name: `Row ${i + 1}`, sampleId: null, gain: 1, pan: 0, mute: false })),
+    patterns: [pat],
+    currentPatternId: pat.id,
+    clips: [],
+    automation: [],
+  };
+}
+
+/** Fake recorder over a drum target; `hits` logs every setStep as [row, step, vel, pass]. */
+function drumSetup(rows = 4, stepCount: 16 | 32 | 64 = 16) {
+  const clock = fakeClock();
+  const drum = mkDrum(rows, stepCount);
+  let song = false;
+  const hits: [row: string, step: number, vel: number, pass: number][] = [];
+  const rec = new Recorder({
+    clock,
+    target: () => drum,
+    songMode: () => song,
+    addNote: () => {
+      throw new Error('a drum target never gets notes');
+    },
+    setStep(trackId, patternId, rowId, step, vel, pass) {
+      expect([trackId, patternId]).toEqual([drum.id, drum.currentPatternId]);
+      hits.push([rowId, step, vel, pass]);
+      return true;
+    },
+  });
+  return { clock, rec, drum, hits, setSong: (v: boolean) => (song = v) };
+}
+
+describe('Recorder: drum hits (plan 15)', () => {
+  it('a hit lands on the nearest step of the current pattern, with its velocity', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 90, 0); // step 0
+    s.rec.noteOn(36, 100, 250); // 250 / 240 = 1.04 -> step 1
+    s.rec.noteOn(37, 110, 470); // 1.96 -> step 2, row 2 (C#2)
+    expect(s.hits.map(([r, st, v]) => [r, st, v])).toEqual([['r0', 0, 90], ['r0', 1, 100], ['r1', 2, 110]]);
+  });
+
+  it('a hit past the middle of the last step wraps to step 0; later loops wrap too', () => {
+    const s = drumSetup(4, 16);
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 15.6 * 240); // last step + 0.6 step
+    s.rec.noteOn(36, 100, 15.4 * 240); // still the last step
+    s.rec.noteOn(38, 100, 3 * 16 * 240 + 250); // fourth loop, step 1
+    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r0', 0], ['r0', 15], ['r2', 1]]);
+    // The step count is read at each hit (a 32-step pattern does not wrap at 16).
+    s.drum.patterns[0].stepCount = 32;
+    s.rec.noteOn(36, 100, 15.6 * 240);
+    expect(s.hits.at(-1)!.slice(0, 2)).toEqual(['r0', 16]);
+  });
+
+  it('only notes 36.. for rows the track has record; note-offs and the pedal change nothing', () => {
+    const s = drumSetup(4);
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(60, 100, 0); // not a drum note
+    s.rec.noteOn(35, 100, 0); // below row 1
+    s.rec.noteOn(40, 100, 0); // row 5: the track has 4
+    s.rec.noteOn(52, 100, 0); // past row 16
+    s.rec.noteOn(39, 100, 240); // row 4: recorded
+    s.rec.noteOff(39, 300);
+    s.rec.sustain(true, 300);
+    s.rec.sustain(false, 400);
+    s.rec.onTransport(false, 500);
+    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r3', 1]]);
+  });
+
+  it('nothing records in Song mode, unarmed, stopped or during the count-in', () => {
+    const s = drumSetup();
+    s.rec.noteOn(36, 100, 0); // not armed
+    s.rec.toggleArm();
+    s.rec.noteOn(36, 100, 0); // stopped
+    s.rec.onTransport(true, -BAR_TICKS);
+    s.rec.noteOn(36, 100, -500); // count-in
+    s.setSong(true);
+    s.rec.noteOn(36, 100, 240); // Song mode
+    expect(s.hits).toEqual([]);
+    s.setSong(false);
+    s.rec.noteOn(36, 100, -30); // grace window: step 0
+    expect(s.hits.map(([r, st]) => [r, st])).toEqual([['r0', 0]]);
+  });
+
+  it('every hit of a pass carries the pass number (one undo entry per pass)', () => {
+    const s = drumSetup();
+    s.rec.toggleArm();
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(36, 100, 0);
+    s.rec.noteOn(37, 100, 480);
+    s.rec.onTransport(false, 600);
+    s.rec.onTransport(true, 0);
+    s.rec.noteOn(38, 100, 0);
+    const passes = s.hits.map((h) => h[3]);
+    expect(passes[0]).toBe(passes[1]);
+    expect(passes[2]).toBe(passes[0] + 1);
+  });
+});
+
 describe('transportSync (App\'s per-frame telemetry watcher)', () => {
   it('UI Play starts the pass at once; frames before the engine confirms do not end it', () => {
     const s = setup(4);
@@ -601,5 +707,27 @@ describe('recorderFor (real project + actions)', () => {
     h.undo();
     expect(p.tempo).toBe(140);
     expect(tempo).not.toBe(140);
+  });
+
+  it('a drum input track: hits write SET_STEP into its current pattern, one "Record" entry per pass', () => {
+    const { sent, sink, p, rec, h } = rig();
+    const d = addDrumTrack(p, sink)!; // selected: the live input
+    setStepCount(p, sink, d.id, 32);
+    rec.toggleArm();
+    rec.onTransport(true, 0);
+    sent.length = 0;
+    rec.noteOn(36, 90, 250); // row 1, step 1
+    rec.noteOn(39, 127, 32 * 240 + 470); // row 4, second loop, step 2
+    rec.noteOn(40, 100, 0); // row 5: the track has 4 rows, ignored
+    rec.noteOff(36, 900);
+    const pat = currentPattern(d);
+    expect(pat.steps[0][1]).toBe(90);
+    expect(pat.steps[3][2]).toBe(127);
+    expect(sent).toEqual([[Op.SET_STEP, d.slot, 0, 1, 90], [Op.SET_STEP, d.slot, 3, 2, 127]]);
+    expect(h.labels.undo).toBe(RECORD_LABEL);
+    expect(rec.status().canUndoTake).toBe(true);
+    rec.undoLastTake(); // both hits in one entry
+    expect([pat.steps[0][1], pat.steps[3][2]]).toEqual([0, 0]);
+    expect(h.labels.undo).toBe('Step count');
   });
 });

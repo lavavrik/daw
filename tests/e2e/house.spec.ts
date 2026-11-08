@@ -6,6 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 // patch means updating this list, as patches.test.ts also pins the names).
 const BUILTIN_GROUPS = [
   { label: 'Starter', patches: ['Deep Bass', 'Chord Stab', 'Pad', 'Lead', 'Pluck'] },
+  { label: 'Sampler', patches: ['Sampler'] }, // plan 15: silent until a sample is dropped
   { label: 'House · Leads & Stabs', patches: ['Sax', 'Brass Stab', 'Arp Pluck'] },
   { label: 'House · Keys', patches: ['Tine Keys', 'Piano Stab', 'Garage Organ'] },
   { label: 'House · Bass', patches: ['Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass'] },
@@ -67,7 +68,7 @@ const status = (page: Page) =>
     return { drop: e.dropouts(), err: e.telemetry()[7] };
   });
 
-test('patch menu groups starter then house', async ({ page }) => {
+test('patch menu groups starter, sampler, then house', async ({ page }) => {
   await startAudio(page);
   await addSynth(page);
   const groups = await page.getByTestId('patch-select').evaluate((sel) =>
@@ -83,7 +84,7 @@ test('every house patch loads and sounds', async ({ page }) => {
   test.setTimeout(90_000);
   await startAudio(page);
   await addSynth(page);
-  const house = BUILTIN_GROUPS.slice(1).flatMap((g) => g.patches);
+  const house = BUILTIN_GROUPS.filter((g) => g.label.startsWith('House')).flatMap((g) => g.patches);
   expect(house).toHaveLength(12);
   const before = await status(page);
   for (const p of house) {

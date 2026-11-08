@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number } = {}, project: object = { playing: false }) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number } = {}, project: object = { playing: false, tracks: [] }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -82,6 +82,22 @@ describe('shortcut handlers', () => {
     h.onKeyDown(key('KeyA'));
     h.onKeyUp(key('KeyA'));
     expect(sent).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);
+  });
+  it('a drum input track: the octave\'s C key plays row 1 (note 36) and the next keys rows 2..15, for engine and recorder', () => {
+    // Plan 15 ruling G: note n -> 36 + (n - 12 * (octave + 1)), whatever the octave.
+    const drum = { playing: false, tracks: [{ kind: 'drum', id: 'd' }], selectedTrackId: 'd', lastSynthTrackId: null };
+    const { sent, heard, h } = mk({ initialOctave: 6 }, drum);
+    h.onKeyDown(key('KeyA', { timeStamp: 10 }));
+    h.onKeyDown(key('KeyL', { timeStamp: 11 }));
+    h.onKeyUp(key('KeyA', { timeStamp: 20 }));
+    h.onKeyUp(key('KeyL', { timeStamp: 21 }));
+    expect(sent).toEqual([[Op.NOTE_ON, 36, 100], [Op.NOTE_ON, 50, 100], [Op.NOTE_OFF, 36], [Op.NOTE_OFF, 50]]);
+    expect(heard.map((x) => x.slice(0, 2))).toEqual([['on', 36], ['on', 50], ['off', 36], ['off', 50]]);
+    // A synth input: the keys are a piano again.
+    (drum.tracks as { kind: string; id: string }[]).push({ kind: 'synth', id: 's' });
+    drum.selectedTrackId = 's';
+    h.onKeyDown(key('KeyA'));
+    expect(sent.at(-1)).toEqual([Op.NOTE_ON, 84, 100]);
   });
   it('piano notes go through the note input with the event timestamp', () => {
     const { heard, h } = mk();
@@ -216,7 +232,7 @@ describe('shortcut handlers', () => {
     try {
       const sent: number[][] = [];
       const sink = { send: (...a: number[]) => (sent.push(a), true) };
-      const uninstall = installShortcuts({ playing: false } as any, sink, createNoteInput(sink, null));
+      const uninstall = installShortcuts({ playing: false, tracks: [] } as any, sink, createNoteInput(sink, null));
       listeners.get('keydown')!(key('KeyA'));
       releaseHeldKeys();
       expect([...sent]).toEqual([[Op.NOTE_ON, 60, 100], [Op.NOTE_OFF, 60]]);

@@ -1,5 +1,6 @@
-// Live recording of played notes into the live-input synth track's current
-// pattern (Pattern mode only).
+// Live recording of played notes into the live-input track's current
+// pattern (Pattern mode only): notes on a synth track, step hits on a drum
+// track (plan 15, "Drum hits" below).
 //
 // Pure: the clock and the pattern actions are injected (recorderFor() wires
 // the real ones), so every timing rule below is unit-tested with fakes.
@@ -54,14 +55,21 @@
 //   stays "Record"; the Undo take tooltip names the absorbed edits
 //   (status().takeEdits, undoTakeTitle). An edit before the first note is
 //   its own entry.
-import { BAR_TICKS, MAX_NOTES } from '../audio/protocol';
+// - Drum hits (plan 15): when the target is a drum track, a note-on with
+//   pitch 36 + r (r = a row the track has, 0..15) sets row r's step
+//   round(tick / STEP_TICKS) mod stepCount of the current pattern to the
+//   note's velocity at once (overwriting it; the step count is read at each
+//   hit). There is nothing to hold, so note-offs, the pedal and closing do
+//   nothing; other pitches are ignored. Same gates (armed, playing, Pattern
+//   mode, count-in, grace window) and the same pass / undo entry as notes.
+import { BAR_TICKS, MAX_NOTES, STEP_TICKS } from '../audio/protocol';
 import { mod } from '../audio/audioClock';
-import { liveInputTrack } from './actions';
+import { liveInputTrack, setStep } from './actions';
 import type { CommandSink } from './actions';
 import { addNote } from './pattern-actions';
 import { edit } from './edits';
 import { currentPattern } from './project.svelte';
-import type { NotePatternState, Project, SynthTrack } from './project.svelte';
+import type { DrumPattern, DrumTrack, NotePatternState, Project, SynthTrack } from './project.svelte';
 import type { NoteListener } from '../input/noteInput';
 
 export const REC_OFFSET_MIN = -200;
@@ -80,6 +88,8 @@ const isPass = (key: string | null | undefined) => key?.startsWith('rec:') ?? fa
 export const REC_OFFSET_MAX = 200;
 /** Note-ons this many ticks before tick 0 still record (at 0): 1/64 note at 960 PPQ. */
 export const GRACE_TICKS = 60;
+/** MIDI note of drum row 0 (row r is DRUM_BASE_NOTE + r; the engine plays live drums the same way). */
+export const DRUM_BASE_NOTE = 36;
 
 /** The slice of AudioClock the recorder uses. */
 export interface RecorderClock {
@@ -89,8 +99,8 @@ export interface RecorderClock {
 
 export interface RecorderDeps {
   clock: RecorderClock;
-  /** Track that would receive a recording now (the live-input synth); its current pattern is the target. */
-  target(): SynthTrack | null;
+  /** Track that would receive a recording now (the live-input track); its current pattern is the target. */
+  target(): SynthTrack | DrumTrack | null;
   /**
    * Null when it could not be added (full, track gone, pattern no longer
    * current). `pass` numbers the recording pass (one undo entry each).
@@ -98,6 +108,13 @@ export interface RecorderDeps {
   addNote(
     trackId: string, patternId: string, o: { pitch: number; start: number; len: number; vel: number }, pass: number,
   ): { id: string } | null;
+  /**
+   * Drum target: set `rowId`'s `step` in pattern `patternId` to `vel`
+   * (one undo entry per `pass`, like addNote). False when it could not be
+   * written (track gone, pattern no longer current). Absent: drum hits are
+   * not recorded.
+   */
+  setStep?(trackId: string, patternId: string, rowId: string, step: number, vel: number, pass: number): boolean;
   /** Undo the newest history entry if it is a recording pass; false if it is not. */
   undoPass?(): boolean;
   /** True while the newest history entry is a recording pass. */
@@ -144,8 +161,8 @@ export class Recorder implements NoteListener {
   #offsetMs = 0;
   #playing = false;
   /** Pass state. */
-  #track: SynthTrack | null = null;
-  #pattern: NotePatternState | null = null;
+  #track: SynthTrack | DrumTrack | null = null;
+  #pattern: NotePatternState | DrumPattern | null = null;
   /** Numbers the passes (deps.addNote); bumped at each pass start. */
   #pass = 0;
   #fullReported = false;
@@ -238,7 +255,11 @@ export class Recorder implements NoteListener {
       this.#track = this.deps.target();
       this.#pattern = this.#track && currentPattern(this.#track);
     }
-    if (!this.#track) return; // no synth track to record into
+    if (!this.#track) return; // no track to record into
+    if (this.#track.kind === 'drum') {
+      this.#hit(this.#track, this.#pattern as DrumPattern, pitch, vel, tick);
+      return;
+    }
     const key = `${source}:${pitch}`;
     // Same key re-struck while still open (pedal-held, or two QWERTY keys on
     // one pitch): the first note ends here.
@@ -298,6 +319,14 @@ export class Recorder implements NoteListener {
     return { armed: this.armed, state, canUndoTake, takeEdits: canUndoTake ? (this.deps.passEdits?.() ?? 0) : 0 };
   }
 
+  /** A drum hit at heard tick `tick` (>= 0): written now, nothing stays open. */
+  #hit(t: DrumTrack, pat: DrumPattern, pitch: number, vel: number, tick: number) {
+    const r = pitch - DRUM_BASE_NOTE;
+    if (!Number.isInteger(r) || r < 0 || r >= t.rows.length || !(vel > 0)) return;
+    const step = mod(Math.round(tick / STEP_TICKS), pat.stepCount);
+    this.deps.setStep?.(t.id, pat.id, t.rows[r].id, step, vel, this.#pass);
+  }
+
   #beginPass() {
     this.deps.endPass?.();
     this.#pass++;
@@ -321,7 +350,8 @@ export class Recorder implements NoteListener {
     this.#open.delete(key);
     const t = this.#track;
     const pat = this.#pattern;
-    if (!t || !pat || !Number.isFinite(endTick)) return;
+    // Only a synth target opens notes (drum hits are written at note-on).
+    if (t?.kind !== 'synth' || !pat || !('notes' in pat) || !Number.isFinite(endTick)) return;
     const period = pat.bars * BAR_TICKS;
     const startAbs = Math.round(o.tick);
     const start = mod(startAbs, period);
@@ -372,12 +402,8 @@ export function transportSync(r: Recorder) {
 export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock, onFull?: () => void): Recorder {
   return new Recorder({
     clock,
-    // Only a synth input records notes for now (live drum hits are not
-    // recorded yet: plan 15 Task 3), so a drum input track is no target.
-    target: () => {
-      const t = liveInputTrack(p);
-      return t?.kind === 'synth' ? t : null;
-    },
+    // The live input: a synth records notes, a drum track step hits.
+    target: () => liveInputTrack(p),
     // One history entry per pass: every note of it merges into one "Record"
     // entry, and from the first written note on, the pass is held open, so
     // every other edit until the pass ends joins it too (holdOpen is
@@ -386,6 +412,16 @@ export function recorderFor(p: Project, sink: CommandSink, clock: RecorderClock,
       const n = edit(p, RECORD_LABEL, () => addNote(p, sink, trackId, o, patternId), { coalesce: passKey(pass) });
       if (n) p.history?.holdOpen(passKey(pass));
       return n;
+    },
+    // Drum hits: the same pass entry and hold as notes. setStep edits the
+    // track's current pattern, so a pattern that is no longer current (the
+    // recorder retargets on a switch, so only if that wiring broke) is skipped.
+    setStep: (trackId, patternId, rowId, step, vel, pass) => {
+      const t = p.tracks.find((x) => x.id === trackId);
+      if (t?.kind !== 'drum' || currentPattern(t).id !== patternId || !t.rows.some((r) => r.id === rowId)) return false;
+      edit(p, RECORD_LABEL, () => setStep(p, sink, trackId, rowId, step, vel), { coalesce: passKey(pass) });
+      p.history?.holdOpen(passKey(pass));
+      return true;
     },
     undoPass: () => (isPass(p.history?.undoKey) ? p.history!.undo() : false),
     canUndoPass: () => isPass(p.history?.undoKey),

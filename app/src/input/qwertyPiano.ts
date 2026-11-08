@@ -17,6 +17,18 @@ export function keyToNote(code: string, octave: number): number | null {
   return n >= 0 && n <= 127 ? n : null;
 }
 
+/**
+ * A QWERTY note on a drum input track (plan 15 ruling G): note `n` played at
+ * `octave` -> drum note 36 + (n - 12 * (octave + 1)), so the octave's C key
+ * (KeyA) is row 1 (MIDI 36, like a MIDI keyboard's C2) and the next keys are
+ * rows 2.. up the chromatic scale, at any octave. Null outside rows 1..16
+ * (36..51). The piano has 15 keys (KeyA..KeyL), so rows 1..15 are reachable.
+ */
+export function qwertyDrumNote(n: number, octave: number): number | null {
+  const d = 36 + n - 12 * (octave + 1);
+  return d >= 36 && d <= 51 ? d : null;
+}
+
 const OCTAVE_KEY = 'daw.octave';
 
 /**

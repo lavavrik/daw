@@ -110,9 +110,28 @@ a drum track replays nothing. Removing the track, or adding another kind
 over it, drops its queued hits and unsets the input (as for a synth);
 re-adding a drum track over it drops the queue and keeps it the input.
 
-Recording live drum hits is not wired yet: the recorder's target stays the
-synth input (`recorderFor` narrows `liveInputTrack`), so a drum input track
-records nothing (plan 15 Task 3).
+The computer keyboard plays rows too: while the input is a drum track,
+`input/shortcuts.ts` maps a QWERTY note `n` at octave `o` to
+`36 + (n - 12 * (o + 1))` (`qwertyPiano.ts` `qwertyDrumNote`), so the
+octave's C key (KeyA) is row 0 at any octave and the 14 keys above it rows
+1..14 (the piano has 15 keys, so row 15 is MIDI-only). The mapping happens
+where QWERTY notes enter, so the engine and the recorder both see the drum
+note, and the held-key map keeps the mapped pitch for its release.
+
+### Recording drum hits
+Code: `app/src/state/recorder.ts` (`Recorder.#hit`, `recorderFor` `setStep`).
+The recorder's target is `liveInputTrack`, so a drum input track records
+hits into its current pattern. A note-on of `36 + r` (a row the track has)
+sets that row's step `round(tick / STEP_TICKS) mod stepCount` (240 ticks,
+a 1/16; the step count is read at each hit, so a hit past the middle of the
+last step wraps to step 0) to the note's velocity through `setStep`,
+overwriting what was there. Other pitches and rows the track lacks are
+ignored; note-offs and the pedal do nothing (a hit is written at note-on, so
+nothing is ever held open). The gates are the note recorder's: armed,
+playing, Pattern mode, heard tick >= 0 with the 60-tick grace window. Every
+hit of a pass goes through the history with that pass's coalesce key, so a
+pass is one "Record" entry and **↶ Take** undoes its hits (and its absorbed
+edits) like notes.
 
 ## Song timeline (arrangement)
 Code: `engine/src/arrangement.rs` (clips), `transport.rs` (mode, loop,

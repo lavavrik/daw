@@ -87,8 +87,11 @@ Click **+ Synth track**: it gets the *Deep Bass* patch and opens the **Piano
 roll**. Play it with the computer keyboard (the home row A S D F G H J K L are
 white keys, W E T Y U O the black keys; **Z** / **X** change the octave, shown
 as **Oct** in the top bar) or a MIDI keyboard. The top bar's **Keys →** shows
-which synth track the keys play: the selected synth track or, while a drum
-track is selected, the synth track selected last.
+which track the keys play: the selected synth or drum track (with an audio
+track selected, the synth track selected last). A selected drum track takes
+the keys: MIDI notes 36–51 (C2 and up) play its rows 1–16, and on the
+computer keyboard the octave's C (**A**) is row 1 and the keys up from it
+(W S E D F T G Y H U J K O L) rows 2–15.
 
 The **Instrument** tab shows the track's rack: module panels joined by cables.
 Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
@@ -161,13 +164,16 @@ a **Glide mode** (Always, or Legato for slides on overlapping notes only).
 
 ## Recording
 
-1. Select a synth track (its name shows after **Keys →**).
+1. Select a synth or drum track (its name shows after **Keys →**).
 2. Arm with **R** or **● Rec** (it turns red). **Count-in** gives one bar of
    clicks before recording starts.
 3. Press **Space**. What you play is recorded into the track's current
    pattern, which loops; each loop overdubs. A note with the same pitch and
    start as one already in the pattern is not written again, so playing a
    part twice never stacks hidden duplicates. The sustain pedal works.
+   On a drum track each hit (MIDI 36–51 or the keys, see above) switches on
+   the nearest step of its row, at the hit's velocity; a hit just before the
+   pattern's end lands on step 1.
 4. **↶ Take** undoes the last recording pass (one pass is one undo step).
 
 Recording works in **PAT** mode only. Switching the Keys track or the pattern
@@ -587,4 +593,4 @@ restart; click it to grant access again.
   `--project=serial --no-deps --repeat-each=3`.
 - Follow-ups and decisions per plan: [docs/followups/](docs/followups/).
 - Sampler track: "+ Sampler track" on the timeline (drop a sample on it) makes a synth track on the Sampler patch; see [docs/architecture/modular.md](docs/architecture/modular.md#sampler-patch).
-- Drum pads from the MIDI keyboard: select a drum track and MIDI notes 36 (C2) and up play its rows 1–16 live, velocity-scaled; see [docs/architecture/sequencer.md](docs/architecture/sequencer.md#live-drum-input).
+- Drum pads from the MIDI keyboard (or the computer keyboard, from the octave's C): select a drum track and MIDI notes 36 (C2) and up play its rows 1–16 live, velocity-scaled, and record into steps while armed; see [docs/architecture/sequencer.md](docs/architecture/sequencer.md#live-drum-input).

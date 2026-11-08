@@ -2,12 +2,15 @@
 // down/up, Shift+L = PAT/SONG, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open,
 // Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
 // through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
-// timeStamp, so the recorder can place them at the heard time.
-import { togglePlay } from '../state/actions';
+// timeStamp, so the recorder can place them at the heard time. While the live
+// input is a drum track the keys play its rows instead (qwertyDrumNote: the
+// octave's C = row 1 = note 36); the note is mapped here, where QWERTY notes
+// enter, so the engine and the recorder both get the drum note.
+import { liveInputTrack, togglePlay } from '../state/actions';
 import { setMode } from '../state/song-actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
-import { DEFAULT_OCTAVE, keyToNote } from './qwertyPiano';
+import { DEFAULT_OCTAVE, keyToNote, qwertyDrumNote } from './qwertyPiano';
 import type { NoteInput } from './noteInput';
 
 const PIANO_VELOCITY = 100;
@@ -203,7 +206,8 @@ export function createShortcutHandlers(
         return;
       }
       if (e.repeat) return;
-      const note = keyToNote(e.code, octave);
+      const piano = keyToNote(e.code, octave);
+      const note = piano !== null && liveInputTrack(p)?.kind === 'drum' ? qwertyDrumNote(piano, octave) : piano;
       if (note === null || held.has(e.code)) return;
       // Another held key already sounds this pitch (K at octave 4 = A at
       // octave 5 after X): the first key owns it. Starting it twice would

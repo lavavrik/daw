@@ -421,11 +421,17 @@ test('selecting drums moves the keys to the drum track (plan 15), and back', asy
   await expect(page.getByTestId('track-0')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Step grid' })).toHaveClass(/active/);
   await expect(page.getByTestId('keys-target')).toContainText('Keys → Drums');
-  // KeyA is C4 (60): not a drum row (36..51), and the synth no longer gets it.
-  await page.keyboard.down('KeyA');
+  // The keys play drum rows now (ruling G: the octave's C = row 1): KeyK is
+  // row 13, which the kit lacks, so silence shows the synth no longer gets it...
+  await page.keyboard.down('KeyK');
   await page.waitForTimeout(300);
   expect(await slot(page, 5)()).toBeLessThan(0.001);
+  await page.keyboard.up('KeyK');
+  // ...and KeyA is row 1, the Kick.
+  await page.keyboard.down('KeyA');
+  await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05);
   await page.keyboard.up('KeyA');
+  await expect.poll(slot(page, 5), { timeout: 2_000 }).toBeLessThan(0.001); // the hit rings out
   await page.getByTestId('track-1').click();
   await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
   await page.keyboard.down('KeyA');
@@ -449,10 +455,12 @@ test('removing the synth track silences it and keys show no synth', async ({ pag
   await page.getByTestId('inline-confirm-ok').click();
   await expect(page.getByTestId('track-1')).toHaveCount(0);
   await expect(page.getByTestId('keys-target')).not.toContainText('Synth');
-  await page.keyboard.down('KeyA');
+  // The keys went to the drum track (plan 15 ruling G: KeyK = row 13, which
+  // the kit lacks): silence means nothing still plays the removed synth.
+  await page.keyboard.down('KeyK');
   await page.waitForTimeout(300);
   expect(await slot(page, 5)()).toBeLessThan(0.001);
-  await page.keyboard.up('KeyA');
+  await page.keyboard.up('KeyK');
 });
 
 // ---- Rack UI (Task 9): modules, knobs, jacks, cables -----------------------

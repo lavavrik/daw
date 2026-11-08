@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { keyToNote, loadOctave, saveOctave, wheelOctaveSteps } from './qwertyPiano';
+import { keyToNote, loadOctave, qwertyDrumNote, saveOctave, wheelOctaveSteps } from './qwertyPiano';
 
 describe('keyToNote', () => {
   it('maps KeyA at octave 4 to middle C (60)', () => expect(keyToNote('KeyA', 4)).toBe(60));
@@ -8,6 +8,21 @@ describe('keyToNote', () => {
   it('maps KeyL at octave 8 to 122 (14 + 12*9; brief said 110, contradicting its own formula)', () => expect(keyToNote('KeyL', 8)).toBe(122));
   it('returns null for non-piano keys', () => expect(keyToNote('Digit1', 4)).toBeNull());
   it('returns null when out of the MIDI range', () => expect(keyToNote('KeyA', 11)).toBeNull());
+});
+
+describe('qwertyDrumNote (plan 15 ruling G)', () => {
+  it("maps the octave's C to 36 (row 1) at any octave", () => {
+    for (let o = 0; o <= 8; o++) expect(qwertyDrumNote(keyToNote('KeyA', o)!, o)).toBe(36);
+  });
+  it('maps the next keys to rows 2.. (KeyW 37, KeyL 50)', () => {
+    expect(qwertyDrumNote(keyToNote('KeyW', 4)!, 4)).toBe(37);
+    expect(qwertyDrumNote(keyToNote('KeyL', 4)!, 4)).toBe(50);
+    expect(qwertyDrumNote(60 + 15, 4)).toBe(51); // row 16
+  });
+  it('is null outside rows 1..16', () => {
+    expect(qwertyDrumNote(59, 4)).toBeNull();
+    expect(qwertyDrumNote(76, 4)).toBeNull();
+  });
 });
 
 describe('loadOctave / saveOctave', () => {

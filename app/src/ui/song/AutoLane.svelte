@@ -1,8 +1,10 @@
 <script lang="ts">
   // One automation lane row of the song timeline (plan 10; spec addendum
   // §3.4). Timeline.svelte places it at its row of the layout map
-  // (tlMath.rowLayout: AUTO_H px under its owner's clip row); its header is
-  // in TrackHeaders.svelte.
+  // (tlMath.rowLayout: under its owner's clip row, `h` px tall: AUTO_H unless
+  // its header's grab strip resized it, laneView.heights, plan 19); its
+  // header is in TrackHeaders.svelte. Everything lane-local (drawing, point
+  // and segment hits, the rubber band, a drag's value per px) uses `h`.
   //
   // Drawing (its own canvas, so editing a lane never redraws the clips and
   // their waveforms): the curve in the owner's colour (the Master row's in
@@ -67,7 +69,7 @@
   import type { TlView } from './tlMath';
 
   let {
-    p, engine, lane, owner, def, color, view, width, dpr, top, testid, label, suspended = false, root = null, onhint,
+    p, engine, lane, owner, def, color, view, width, dpr, top, h, testid, label, suspended = false, root = null, onhint,
   }: {
     p: Project;
     engine: CommandSink;
@@ -80,6 +82,8 @@
     dpr: number;
     /** Content y of the row (tlMath.rowLayout). */
     top: number;
+    /** The row's height (Row.h). */
+    h: number;
     testid: string;
     label: string;
     suspended?: boolean;
@@ -92,7 +96,6 @@
   const STEP = BEAT / 4;
   const DRAG_SLOP = 3;
   const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const H = AUTO_H;
 
   let el = $state<HTMLDivElement | null>(null);
   let cv = $state<HTMLCanvasElement | null>(null);
@@ -127,6 +130,7 @@
     const c = cv;
     const v = view;
     const W = width;
+    const H = h;
     if (!c || W <= 0) return;
     const pw = Math.round(W * dpr);
     const ph = Math.round(H * dpr);
@@ -137,10 +141,10 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const col = suspended ? '#7d808c' : color;
-    const pts = lane.points.map((x) => ({ id: x.id, x: tickToX(x.tick, v), y: posToY(toPos(def, x.value)), hold: x.hold }));
+    const pts = lane.points.map((x) => ({ id: x.id, x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), H), hold: x.hold }));
     ctx.globalAlpha = lane.enabled ? 1 : 0.4;
     if (!pts.length) {
-      const y = Math.round(posToY(toPos(def, baseValue()))) + 0.5;
+      const y = Math.round(posToY(toPos(def, baseValue()), H)) + 0.5;
       ctx.strokeStyle = col;
       ctx.globalAlpha *= 0.6;
       ctx.setLineDash([3, 3]);
@@ -156,7 +160,7 @@
     } else {
       // The curve (tlMath.lanePolyline: what laneValueAt plays, flat before the first and after the last point).
       const path = new Path2D();
-      lanePolyline(lane.points, def, v, W).forEach(([x, y], i) => (i ? path.lineTo(x, y) : path.moveTo(x, y)));
+      lanePolyline(lane.points, def, v, W, H).forEach(([x, y], i) => (i ? path.lineTo(x, y) : path.moveTo(x, y)));
       const fill = new Path2D(path);
       fill.lineTo(W + 1, H);
       fill.lineTo(-1, H);
@@ -208,7 +212,7 @@
   // (64 retina-wide lanes would hold ~90 MB). An off-screen lane draws again,
   // at the current view, when it scrolls into the margin. A lane under a
   // gesture (or holding the pointer) is in view by definition.
-  const VIEW_MARGIN = 2 * H;
+  const VIEW_MARGIN = 2 * AUTO_H;
   let shown = $state(false);
   $effect(() => {
     const e = el;
@@ -261,12 +265,12 @@
     const r = el!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
-  const valueAt = (y: number) => fromPos(def, yToPos(y));
+  const valueAt = (y: number) => fromPos(def, yToPos(y, h));
   const pointById = (id: string) => lane.points.find((x) => x.id === id);
   /** The lane's owner as setPointCurve takes it: a track id or a Master row channel. */
   const ownerId = () => (isMasterChannel(owner) ? owner : owner.id);
   /** The point whose segment an Alt-press at (x, y) would bend, or null. */
-  const segmentAt = (x: number, y: number) => segmentHit(geom, x, y, view);
+  const segmentAt = (x: number, y: number) => segmentHit(geom, x, y, view, h);
 
   function startMove(id: string, x: number, y: number, placed: boolean, wasMulti: boolean) {
     const ids = sel.includes(id) ? sel : [id];
@@ -289,7 +293,7 @@
       drag = { kind: 'draw', samples: [{ tick: xToTick(x, v), value: valueAt(y) }] };
       stroke = [{ x, y }];
     } else {
-      const hit = pointHit(geom, x, y, v);
+      const hit = pointHit(geom, x, y, v, h);
       if (hit && e.shiftKey) {
         const s = new Set(sel);
         if (s.has(hit)) s.delete(hit);
@@ -339,7 +343,7 @@
     const { x, y } = local(e);
     const d = drag;
     if (!d) {
-      const hit = pointHit(geom, x, y, v);
+      const hit = pointHit(geom, x, y, v, h);
       const pt = hit ? pointById(hit) : null;
       const seg = !hit && e.altKey ? segmentAt(x, y) : null;
       cursor = hit ? 'grab' : seg ? 'ns-resize' : 'crosshair';
@@ -366,7 +370,7 @@
     if (d.kind === 'box') {
       box = { ...box!, x1: x, y1: y };
       const s = new Set(d.base);
-      for (const id of pointBox(geom, box.x0, box.y0, x, y, v)) s.add(id);
+      for (const id of pointBox(geom, box.x0, box.y0, x, y, v, h)) s.add(id);
       selected = s;
       return;
     }
@@ -376,7 +380,7 @@
     d.moved = true;
     const a = d.anchor;
     const dt = e.altKey ? Math.round(dx * v.ticksPerPx) : snap(a.tick + dx * v.ticksPerPx, STEP) - a.tick;
-    const dv = -dy / (H - 2 * AUTO_PAD); // knob position: the curve's travel is the row minus its padding
+    const dv = -dy / (h - 2 * AUTO_PAD); // knob position: the curve's travel is the row minus its padding
     const o = d.origin.get(a.id)!;
     tip = { x, y, text: formatValue(def, fromPos(def, toPos(def, o.value) + dv)) };
     const k = `${dt},${dv}`;
@@ -452,7 +456,7 @@
   function dbl(e: MouseEvent) {
     e.stopPropagation();
     const { x, y } = local(e);
-    const hit = pointHit(geom, x, y, view);
+    const hit = pointHit(geom, x, y, view, h);
     if (hit) deletePoints(p, engine, lane.id, [hit]);
   }
 
@@ -461,7 +465,7 @@
     e.stopPropagation();
     if (drag) return;
     const { x, y } = local(e);
-    const hit = pointHit(geom, x, y, view);
+    const hit = pointHit(geom, x, y, view, h);
     if (!hit) {
       menu = null;
       return;
@@ -550,7 +554,7 @@
   data-selected={sel.length}
   data-shown={shown ? 1 : 0}
   style:top="{top}px"
-  style:height="{H}px"
+  style:height="{h}px"
   style:cursor
   tabindex="0"
   role="application"
@@ -568,7 +572,7 @@
 >
   <canvas bind:this={cv} class="cv" aria-hidden="true"></canvas>
   {#if tip}
-    <span class="tip" data-testid="{testid}-tip" style:left="{Math.min(tip.x + 10, width - 70)}px" style:top="{tip.y < H / 2 ? tip.y + 8 : tip.y - 20}px">{tip.text}</span>
+    <span class="tip" data-testid="{testid}-tip" style:left="{Math.min(tip.x + 10, width - 70)}px" style:top="{tip.y < h / 2 ? tip.y + 8 : tip.y - 20}px">{tip.text}</span>
   {/if}
 </div>
 {#if menu}

@@ -328,8 +328,9 @@ changes nothing and sends nothing.
 
 - **Layout map.** `tlMath.rowLayout(tracks, open, masterRow)` lists the
   timeline's rows top to bottom: each track's clip row (`LANE_H` 28 px),
-  then its lanes (`AUTO_H` 48 px) while it is open (the header's **A**;
-  `ui/song/laneView.svelte.ts`, UI state, not saved), an open track without
+  then its lanes (`AUTO_H` 48 px unless resized, see *Lane height*) while
+  it is open (the header's **A**; `ui/song/laneView.svelte.ts`, UI state,
+  not saved), an open track without
   lanes showing one empty lane row (no `laneId`) for "+ Lane"; then the
   pinned Master row (28 px) and its lanes. Every y question goes through it
   (`rowAt`, `clipLaneAt`): drawing, clip hit tests and box selection,
@@ -388,6 +389,39 @@ changes nothing and sends nothing.
   target ("Filter · Cutoff", "Fader", "Master · Ceiling"; module titles as
   the rack shows them), the on/off dot, ×, and "+ Lane" on the owner's last
   lane row, listing `automatableParams` without a lane yet.
+
+### Lane height (plan 19 Task 2)
+
+- **UI state.** Each lane's row height lives in `laneView.heights`
+  (`ui/song/laneView.svelte.ts`), a `Map` keyed by lane id, holding only
+  heights other than the default. `laneHeight(id)` reads it (`AUTO_H`,
+  48 px, when absent); `setLaneHeight(id, h)` rounds to whole px and clamps
+  to `LANE_MIN_H` 32 .. `LANE_MAX_H` 240 (a non-finite `h` is 48). It is not
+  part of the project: not saved, never an undo entry, never dirty. A stale
+  id (a removed lane) matches nothing; undo brings a lane back with its old
+  id, so it gets its height back.
+- **Layout.** `rowLayout(tracks, open, masterRow, laneH)` asks `laneH(laneId)`
+  for each lane row's `h` (the timeline passes `laneHeight`); the empty
+  "+ Lane" row is always `AUTO_H`. The header column and the lane overlays
+  render the same rows, so they stay aligned while a height changes.
+- **Every lane-local helper takes the row's `h`** (`posToY`, `yToPos`,
+  `pointHit`, `pointBox`, `segmentHit`, `lanePolyline`), with no default, so
+  a forgotten height is a type error rather than a silent 48. `AutoLane`
+  gets `h` (its `Row.h`) and uses it for drawing, point and segment hits,
+  the rubber band, a click's value and a drag's value per px (the travel is
+  `h - 2 * AUTO_PAD`). Only its view margin (`IntersectionObserver`) stays
+  at `2 * AUTO_H`.
+- **The grab strip** (`TrackHeaders.svelte`): 5 px on the bottom edge of
+  each lane's header (not the empty row's), `role="separator"`,
+  `aria-orientation="horizontal"`, `aria-valuenow` = the height, focusable,
+  `cursor: row-resize`, `data-testid="lane-resize-<laneId>"`. A drag sets
+  the height live (the height before the press plus the pointer's travel).
+  Escape, a lost pointer capture, or Cmd/Ctrl+Z / redo mid-drag (it is
+  registered with `registerDragCancel`) put back the height from before the
+  drag. Double-click resets to 48. ArrowUp / ArrowDown change it by 8 px
+  (Shift: 1 px). Below 40 px the header's two lines close up so they fit.
+  The lane area on the right has no strip: the bottom few px of a lane are
+  where its lowest points sit and are grabbed.
 
 ## UI: knobs and faders (plan 10 Task 4)
 

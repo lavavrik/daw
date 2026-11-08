@@ -19,8 +19,11 @@ export const BEAT = 960;
 export const BAR = 3840;
 /** Clip row height (px): the Song pane is only ~0.5fr of the right column. */
 export const LANE_H = 28;
-/** Automation lane row height (px). */
+/** Automation lane row height (px): the default; a lane can be resized (plan 19, laneView.heights). */
 export const AUTO_H = 48;
+/** Resized lane row heights stay within these (px). */
+export const LANE_MIN_H = 32;
+export const LANE_MAX_H = 240;
 /** Width of the track-header column (px). */
 export const HEADER_W = 160;
 export const RULER_H = 20;
@@ -54,9 +57,10 @@ export const MASTER_GREY = '#9aa0ad';
 /**
  * One row of the timeline, top to bottom:
  * - `clips`: a track's clip lane (LANE_H);
- * - `lane`: an automation lane (AUTO_H) of track `trackId`, or of the Master
- *   row (trackId MASTER_ROW). Without `laneId` it is an open owner's empty
- *   lane row: no lane yet, its header offers "+ Lane";
+ * - `lane`: an automation lane (its own height: rowLayout's `laneH`, AUTO_H
+ *   by default) of track `trackId`, or of the Master row (trackId
+ *   MASTER_ROW). Without `laneId` it is an open owner's empty lane row
+ *   (always AUTO_H): no lane yet, its header offers "+ Lane";
  * - `master`: the Master row's own header row (LANE_H): no clips.
  * `track` is the owner's index in the track list (moveClips' lanes, ClipBox
  * lane), -1 for the Master row.
@@ -75,12 +79,15 @@ export interface Row {
  * (`open` has its id: the header's A toggle), one row per automation lane
  * (or one empty lane row when it has none). `masterRow` (null: no Master row)
  * is the Master row's lanes: its header row is pinned under the last track,
- * and its lanes follow while `open` has MASTER_ROW.
+ * and its lanes follow while `open` has MASTER_ROW. `laneH` is each lane
+ * row's height by lane id (the timeline passes laneView.laneHeight); every
+ * lane-local hit test and drawing must then use that row's `h`.
  */
 export function rowLayout(
   tracks: readonly { id: string; automation: readonly { id: string }[] }[],
   open: ReadonlySet<string>,
   masterRow: readonly { id: string }[] | null,
+  laneH: (laneId: string) => number = () => AUTO_H,
 ): Row[] {
   const rows: Row[] = [];
   let y = 0;
@@ -91,7 +98,7 @@ export function rowLayout(
   const lanes = (trackId: string, list: readonly { id: string }[], track: number) => {
     if (!open.has(trackId)) return;
     if (!list.length) push({ kind: 'lane', trackId, h: AUTO_H, track });
-    for (const l of list) push({ kind: 'lane', trackId, laneId: l.id, h: AUTO_H, track });
+    for (const l of list) push({ kind: 'lane', trackId, laneId: l.id, h: laneH(l.id), track });
   };
   tracks.forEach((t, i) => {
     push({ kind: 'clips', trackId: t.id, h: LANE_H, track: i });
@@ -362,10 +369,13 @@ export const AUTO_PAD = 6;
 export const POINT_R = 6;
 
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
+// Every helper below takes the lane row's height `h` (Row.h: a lane can be
+// resized, plan 19), with no default: a forgotten `h` must not silently mean
+// AUTO_H in a taller or shorter lane.
 /** Lane-local y of knob position `pos` (0 = bottom of the travel, 1 = top) in a row `h` tall. */
-export const posToY = (pos: number, h = AUTO_H) => AUTO_PAD + (1 - pos) * (h - 2 * AUTO_PAD);
-/** Knob position at lane-local y (clamped to 0..1). */
-export const yToPos = (y: number, h = AUTO_H) => clamp01(1 - (y - AUTO_PAD) / (h - 2 * AUTO_PAD));
+export const posToY = (pos: number, h: number) => AUTO_PAD + (1 - pos) * (h - 2 * AUTO_PAD);
+/** Knob position at lane-local y in a row `h` tall (clamped to 0..1). */
+export const yToPos = (y: number, h: number) => clamp01(1 - (y - AUTO_PAD) / (h - 2 * AUTO_PAD));
 
 /** What the point hit tests need of a lane: its points and its param's curve. */
 export interface LanePoints {
@@ -377,7 +387,7 @@ export interface LanePoints {
  * The point under lane-local (x, y) within POINT_R px (the nearest if several
  * are), or null. Values sit at their knob position, as the lane draws them.
  */
-export function pointHit(lane: LanePoints, x: number, y: number, v: TlView, h = AUTO_H): string | null {
+export function pointHit(lane: LanePoints, x: number, y: number, v: TlView, h: number): string | null {
   let best: string | null = null;
   let bestD = POINT_R * POINT_R;
   for (const pt of lane.points) {
@@ -393,7 +403,7 @@ export function pointHit(lane: LanePoints, x: number, y: number, v: TlView, h = 
 }
 
 /** Ids of the points inside the lane-local rectangle (any corner order). */
-export function pointBox(lane: LanePoints, x0: number, y0: number, x1: number, y1: number, v: TlView, h = AUTO_H): string[] {
+export function pointBox(lane: LanePoints, x0: number, y0: number, x1: number, y1: number, v: TlView, h: number): string[] {
   const xa = Math.min(x0, x1);
   const xb = Math.max(x0, x1);
   const ya = Math.min(y0, y1);
@@ -446,7 +456,7 @@ function curveSamples(x0: number, x1: number, dy: number, curve: number, W: numb
  * point's x, then steps.
  */
 export function lanePolyline(
-  points: readonly { tick: number; value: number; hold: boolean; curve?: number }[], def: CurveDef, v: TlView, W: number, h = AUTO_H,
+  points: readonly { tick: number; value: number; hold: boolean; curve?: number }[], def: CurveDef, v: TlView, W: number, h: number,
 ): [number, number][] {
   if (!points.length) return [];
   const pts = points.map((x) => ({ x: tickToX(x.tick, v), y: posToY(toPos(def, x.value), h), hold: x.hold, curve: x.curve ?? 0 }));
@@ -478,7 +488,7 @@ export const CURVE_PX = 100;
  */
 export function segmentHit(
   lane: { points: readonly { id: string; tick: number; value: number; hold: boolean; curve?: number }[]; def: CurveDef },
-  x: number, y: number, v: TlView, h = AUTO_H,
+  x: number, y: number, v: TlView, h: number,
 ): string | null {
   const pts = lane.points;
   for (let i = 0; i + 1 < pts.length; i++) {

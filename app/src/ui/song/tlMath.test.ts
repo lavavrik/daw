@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AUTO_H, BAR, BEAT, LANE_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
-  followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
+  AUTO_H, BAR, BEAT, LANE_H, LANE_MAX_H, LANE_MIN_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
+  clipLaneAt, followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
   snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
@@ -281,6 +281,46 @@ describe('automation rows (plan 10)', () => {
     expect(rowAt(rows, 284)).toBeNull();
   });
 
+  it('rows_use_lane_height', () => {
+    // Plan 19: each lane row is as tall as laneH(laneId) says (laneView.laneHeight);
+    // the empty-lane placeholder row (no laneId) and the default are AUTO_H.
+    expect([LANE_MIN_H, AUTO_H, LANE_MAX_H]).toEqual([32, 48, 240]);
+    const tracks = [tr('a', ['a1', 'a2']), tr('b'), tr('c')];
+    const hs: Record<string, number> = { a1: 160, m1: 32 };
+    const laneH = (id: string) => hs[id] ?? AUTO_H;
+    const rows = rowLayout(tracks, new Set(['a', 'b']), [{ id: 'm1' }], laneH).map((r) => [r.kind, r.trackId, r.laneId, r.y, r.h]);
+    expect(rows).toEqual([
+      ['clips', 'a', undefined, 0, LANE_H], ['lane', 'a', 'a1', 28, 160], ['lane', 'a', 'a2', 188, AUTO_H],
+      ['clips', 'b', undefined, 236, LANE_H], ['lane', 'b', undefined, 264, AUTO_H],
+      ['clips', 'c', undefined, 312, LANE_H], ['master', MASTER_ROW, undefined, 340, LANE_H],
+    ]);
+    const open = rowLayout(tracks, new Set([MASTER_ROW]), [{ id: 'm1' }], laneH);
+    expect(open.at(-1)).toMatchObject({ kind: 'lane', laneId: 'm1', y: 112, h: 32 });
+    expect(rowsHeight(open)).toBe(144);
+    // The hit tests go through the same rows: a y deep in the tall lane is still that lane.
+    const tall = rowLayout(tracks, new Set(['a']), null, laneH);
+    expect(rowAt(tall, 28 + 150)?.laneId).toBe('a1');
+    expect(clipLaneAt(tall, 28 + 150)).toBe(-1);
+    expect(clipLaneAt(tall, 28 + 160 + AUTO_H + 1)).toBe(1);
+  });
+
+  it('point and segment hits use the row height they are given (a 160 px lane)', () => {
+    const def = mixParam('pan'); // -1..1, linear
+    const h = 160;
+    const lane = { def, points: [{ id: 'q', tick: 3840, value: -0.5, hold: false, curve: 0 }, { id: 'r', tick: 3840 + 4800, value: 0.5, hold: false, curve: 0 }] };
+    const yq = posToY(0.25, h);
+    expect(yq).toBe(6 + 0.75 * 148);
+    expect(yToPos(yq, h)).toBeCloseTo(0.25, 9);
+    expect(pointHit(lane, 0, yq, view, h)).toBe('q');
+    expect(pointHit(lane, 0, yq, view, AUTO_H)).toBeNull(); // 48 px maths would look ~80 px higher
+    expect(pointBox(lane, -5, yq - 5, 5, yq + 5, view, h)).toEqual(['q']);
+    // Halfway along the straight q..r segment (x 0..120): its line sits at position 0.5.
+    expect(segmentHit(lane, 60, posToY(0.5, h), view, h)).toBe('q');
+    expect(segmentHit(lane, 60, posToY(0.5, h) + 12, view, h)).toBeNull();
+    const line = lanePolyline(lane.points, def, view, 200, h);
+    expect(line[1]).toEqual([0, yq]);
+  });
+
   it('clip hit tests, box select and cross-lane rows go through the layout map', () => {
     const rows = rowLayout([tr('a', ['a1']), tr('b')], new Set(['a']), null);
     const clips = [{ id: 'x', lane: 0, start: 3840, len: 3840 }, { id: 'y', lane: 1, start: 3840, len: 3840 }];
@@ -303,28 +343,29 @@ describe('automation rows (plan 10)', () => {
         { id: 'p2', tick: 3840 + 1920, value: -27 }, // x 48, middle
       ],
     };
-    const yMid = posToY(0.5);
-    expect(posToY(1)).toBeLessThan(posToY(0));
-    expect(yToPos(posToY(0.25))).toBeCloseTo(0.25, 9);
-    expect(yToPos(-100)).toBe(1);
-    expect(yToPos(1000)).toBe(0);
-    expect(pointHit(lane, 0, posToY(0), view)).toBe('p0');
-    expect(pointHit(lane, 24 + 3, posToY(1) + 3, view)).toBe('p1'); // within the grab radius
-    expect(pointHit(lane, 48, yMid, view)).toBe('p2');
-    expect(pointHit(lane, 36, yMid, view)).toBeNull(); // between points
-    expect(pointHit(lane, 48, posToY(1), view)).toBeNull(); // right tick, wrong value
+    const H = AUTO_H;
+    const yMid = posToY(0.5, H);
+    expect(posToY(1, H)).toBeLessThan(posToY(0, H));
+    expect(yToPos(posToY(0.25, H), H)).toBeCloseTo(0.25, 9);
+    expect(yToPos(-100, H)).toBe(1);
+    expect(yToPos(1000, H)).toBe(0);
+    expect(pointHit(lane, 0, posToY(0, H), view, H)).toBe('p0');
+    expect(pointHit(lane, 24 + 3, posToY(1, H) + 3, view, H)).toBe('p1'); // within the grab radius
+    expect(pointHit(lane, 48, yMid, view, H)).toBe('p2');
+    expect(pointHit(lane, 36, yMid, view, H)).toBeNull(); // between points
+    expect(pointHit(lane, 48, posToY(1, H), view, H)).toBeNull(); // right tick, wrong value
     // Two points within reach: the nearer wins.
     const close = { def, points: [{ id: 'a', tick: 3840, value: -27 }, { id: 'b', tick: 3840 + 160, value: -27 }] }; // 4 px apart
-    expect(pointHit(close, 1, yMid, view)).toBe('a');
-    expect(pointHit(close, 3, yMid, view)).toBe('b');
+    expect(pointHit(close, 1, yMid, view, H)).toBe('a');
+    expect(pointHit(close, 3, yMid, view, H)).toBe('b');
     // Box select: the points inside the rectangle, any corner order.
-    expect(pointBox(lane, -5, 0, 30, AUTO_H, view).sort()).toEqual(['p0', 'p1']);
-    expect(pointBox(lane, 60, AUTO_H, 20, yMid - 2, view)).toEqual(['p2']);
-    expect(pointBox(lane, 20, yMid + 2, 60, AUTO_H, view)).toEqual([]);
+    expect(pointBox(lane, -5, 0, 30, H, view, H).sort()).toEqual(['p0', 'p1']);
+    expect(pointBox(lane, 60, H, 20, yMid - 2, view, H)).toEqual(['p2']);
+    expect(pointBox(lane, 20, yMid + 2, 60, H, view, H)).toEqual([]);
     // Exp params place points by knob position (log), as the lane is drawn.
     const hz = mixParam('eq_mid_freq'); // 200..8000 Hz
     const exp = { def: hz, points: [{ id: 'k', tick: 3840, value: Math.sqrt(200 * 8000) }] };
-    expect(pointHit(exp, 0, yMid, view)).toBe('k');
+    expect(pointHit(exp, 0, yMid, view, H)).toBe('k');
   });
 });
 
@@ -349,10 +390,10 @@ describe('curved segments (plan 16)', () => {
           { tick: 3300, value: def.max, hold: false, curve: -c },
           { tick: 5200, value: def.min, hold: false, curve: 0 },
         ];
-        const line = lanePolyline(points, def, v, W);
+        const line = lanePolyline(points, def, v, W, AUTO_H);
         let worst = 0;
         for (let x = 0.25; x < W; x += 0.5) {
-          const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!));
+          const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!), AUTO_H);
           worst = Math.max(worst, Math.abs(yAt(line, x) - want));
         }
         expect(worst, `${def.name} curve ${c}`).toBeLessThan(0.5);
@@ -361,7 +402,7 @@ describe('curved segments (plan 16)', () => {
       }
     }
     // A segment far wider than the view (zoomed in) stays cheap.
-    const far = lanePolyline([{ tick: 0, value: -60, hold: false, curve: 1 }, { tick: 10_000_000, value: 6, hold: false }], mixParam('fader'), v, W);
+    const far = lanePolyline([{ tick: 0, value: -60, hold: false, curve: 1 }, { tick: 10_000_000, value: 6, hold: false }], mixParam('fader'), v, W, AUTO_H);
     expect(far.length).toBeLessThan(2 * W);
   });
 
@@ -373,16 +414,16 @@ describe('curved segments (plan 16)', () => {
       { id: 'c', tick: 5000, value: -30, hold: false, curve: 0 },
     ];
     const lane = { points, def };
-    const line = lanePolyline(points, def, v, 600);
+    const line = lanePolyline(points, def, v, 600, AUTO_H);
     // On the bent line between a and b (x 100..300): a.
-    expect(segmentHit(lane, 200, yAt(line, 200), v)).toBe('a');
-    expect(segmentHit(lane, 200, yAt(line, 200) + 4, v)).toBe('a');
-    expect(segmentHit(lane, 200, yAt(line, 200) + 12, v)).toBeNull();
+    expect(segmentHit(lane, 200, yAt(line, 200), v, AUTO_H)).toBe('a');
+    expect(segmentHit(lane, 200, yAt(line, 200) + 4, v, AUTO_H)).toBe('a');
+    expect(segmentHit(lane, 200, yAt(line, 200) + 12, v, AUTO_H)).toBeNull();
     // b holds: its flat run is no curve to bend.
-    expect(segmentHit(lane, 400, posToY(toPos(def, 6)), v)).toBeNull();
+    expect(segmentHit(lane, 400, posToY(toPos(def, 6), AUTO_H), v, AUTO_H)).toBeNull();
     // Before the first point and after the last: no segment.
-    expect(segmentHit(lane, 50, posToY(toPos(def, -60)), v)).toBeNull();
-    expect(segmentHit(lane, 550, posToY(toPos(def, -30)), v)).toBeNull();
+    expect(segmentHit(lane, 50, posToY(toPos(def, -60), AUTO_H), v, AUTO_H)).toBeNull();
+    expect(segmentHit(lane, 550, posToY(toPos(def, -30), AUTO_H), v, AUTO_H)).toBeNull();
   });
 
   it('curveDrag: 100 px is the full range, up bends the line up', () => {
@@ -424,7 +465,7 @@ describe('play follow and the drawn curve (plan 10 review)', () => {
       { def: glide, points: [{ tick: 500, value: 0, hold: false }, { tick: 5500, value: 2, hold: false }] },
     ];
     for (const { def, points } of cases) {
-      const line = lanePolyline(points, def, v, W);
+      const line = lanePolyline(points, def, v, W, AUTO_H);
       expect(line[0][0]).toBeLessThan(0);
       expect(line.at(-1)![0]).toBeGreaterThan(W);
       /** The polyline's y at x (the last vertex at x wins: a hold step is vertical). */
@@ -439,7 +480,7 @@ describe('play follow and the drawn curve (plan 10 review)', () => {
       for (let x = 0.5; x < W; x += 3) {
         const at = points.some((pt) => Math.abs(pt.tick / v.ticksPerPx - x) < 1) ? null : x;
         if (at === null) continue; // right at a hold step
-        const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!));
+        const want = posToY(toPos(def, laneValueAt(points, x * v.ticksPerPx, def)!), AUTO_H);
         expect(Math.abs(yAt(x) - want)).toBeLessThan(def === glide ? 1 : 1e-6);
       }
     }

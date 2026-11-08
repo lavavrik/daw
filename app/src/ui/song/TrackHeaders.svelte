@@ -23,6 +23,19 @@
   // SONG only. The Master row (pinned under the last track) holds the
   // master's and both returns' lanes; its own A, and × to hide it while it
   // has no lane (the timeline footer's "+ Master row" shows it).
+  //
+  // LANE HEIGHT (plan 19). Each lane row's header has a 5 px grab strip on
+  // its bottom edge (`lane-resize-<laneId>`, a focusable horizontal
+  // separator whose aria-valuenow is the height): dragging it sets the lane's
+  // height live (laneView.setLaneHeight: clamped to LANE_MIN_H..LANE_MAX_H;
+  // the timeline's layout map follows, so the header and the lane stay
+  // aligned); double-click resets it to AUTO_H; ArrowUp / ArrowDown change it
+  // by 8 px (Shift: 1 px). A height is UI state, not part of the project: no
+  // undo entry, not dirty. Escape, a lost pointer capture, or Cmd/Ctrl+Z
+  // mid-drag (registerDragCancel) put back the height from before the drag.
+  // The empty lane row (no lane yet) has no strip: it is always AUTO_H.
+  import { onDestroy } from 'svelte';
+  import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
@@ -37,8 +50,8 @@
   import { addLane, removeLane, setLaneEnabled } from '../../state/automation-actions';
   import type { AutoTarget, AutomationLane, MasterChannel } from '../../state/project.svelte';
   import { laneChoices, targetLabel } from './autoLabels';
-  import { laneView, setOpen } from './laneView.svelte';
-  import { MASTER_GREY, MASTER_ROW } from './tlMath';
+  import { laneHeight, laneView, setLaneHeight, setOpen } from './laneView.svelte';
+  import { AUTO_H, LANE_MAX_H, LANE_MIN_H, MASTER_GREY, MASTER_ROW } from './tlMath';
   import type { Row } from './tlMath';
 
   let { p, engine, rows }: { p: Project; engine: CommandSink; rows: readonly Row[] } = $props();
@@ -87,6 +100,49 @@
   function remove(t: Track, anchor: HTMLElement) {
     releaseHeldKeys();
     asking = { track: t, anchor };
+  }
+
+  // ---- lane height (see LANE HEIGHT at the top) ----------------------------------
+  /** The strip drag in progress: the lane, the press's y and the height before it. */
+  let resizing: { laneId: string; y0: number; h0: number } | null = null;
+  function resizeDown(e: PointerEvent, laneId: string) {
+    if (e.button !== 0) return;
+    e.preventDefault(); // no text selection, no native drag
+    const el = e.currentTarget as HTMLElement;
+    el.focus({ preventScroll: true }); // Escape reaches resizeKey
+    resizing = { laneId, y0: e.clientY, h0: laneHeight(laneId) };
+    el.setPointerCapture(e.pointerId);
+  }
+  function resizeMove(e: PointerEvent) {
+    const r = resizing;
+    if (r) setLaneHeight(r.laneId, r.h0 + e.clientY - r.y0);
+  }
+  function resizeUp() {
+    resizing = null; // first: the lostpointercapture that follows must not cancel
+  }
+  /** Abort the drag: the height from before it. False when no drag was on. */
+  function resizeCancel(): boolean {
+    const r = resizing;
+    if (!r) return false;
+    resizing = null;
+    setLaneHeight(r.laneId, r.h0);
+    return true;
+  }
+  // Cmd/Ctrl+Z or redo mid-drag cancels it like Escape (history/gestures.ts).
+  onDestroy(registerDragCancel(resizeCancel));
+  function resizeKey(e: KeyboardEvent, laneId: string) {
+    const take = () => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    if (e.key === 'Escape' && resizing) {
+      take();
+      resizeCancel();
+    } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      take();
+      const step = e.shiftKey ? 1 : 8;
+      setLaneHeight(laneId, laneHeight(laneId) + (e.key === 'ArrowDown' ? step : -step));
+    }
   }
 </script>
 
@@ -187,7 +243,7 @@
       {@const info = r.laneId ? laneInfo.get(r.laneId) : undefined}
       {@const key = ownerKey(r.trackId)}
       {@const color = r.trackId === MASTER_ROW ? MASTER_GREY : (trackById.get(r.trackId)?.color ?? MASTER_GREY)}
-      <div class="row lane" style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
+      <div class="row lane" class:compact={r.h < 40} style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
         {#if info}
           {@const label = targetLabel(info.owner, info.lane.target)}
           <div class="lrow">
@@ -208,6 +264,30 @@
           {#if isLastOfOwner(i)}{@render addSelect(r.trackId)}{/if}
           {#if p.mode === 'pattern' && info}<span class="pat" title="Lanes are editable in Pattern mode but play only in Song mode (SONG, Shift+L)">SONG only</span>{/if}
         </div>
+        {#if info && r.laneId}
+          {@const laneId = r.laneId}
+          <!-- The grab strip (LANE HEIGHT at the top): a focusable separator, so a window-splitter widget. -->
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+          <div
+            class="resize"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-valuenow={r.h}
+            aria-valuemin={LANE_MIN_H}
+            aria-valuemax={LANE_MAX_H}
+            aria-label={`Height of the ${targetLabel(info.owner, info.lane.target)} lane`}
+            tabindex="0"
+            data-testid={`lane-resize-${laneId}`}
+            title="Drag to resize the lane · double-click: default height ({AUTO_H} px) · ↑/↓: 8 px (Shift: 1 px)"
+            onpointerdown={(e) => resizeDown(e, laneId)}
+            onpointermove={resizeMove}
+            onpointerup={resizeUp}
+            onpointercancel={resizeCancel}
+            onlostpointercapture={resizeCancel}
+            ondblclick={() => setLaneHeight(laneId, AUTO_H)}
+            onkeydown={(e) => resizeKey(e, laneId)}
+          ></div>
+        {/if}
       </div>
     {/if}
   {/each}
@@ -255,7 +335,14 @@
   .a.has:not(.lit) { color: #8fd18f; border-color: #4d6b4d; }
   .main.static { cursor: default; }
   .row.master { background: #262830; }
-  .row.lane { flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 6px; background: #1b1c22; }
+  .row.lane { position: relative; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 6px; background: #1b1c22; }
+  /* Under 40 px (LANE_MIN_H is 32) the two header lines close up so they still fit. */
+  .row.lane.compact { gap: 0; }
+  .row.lane.compact .lrow, .row.lane.compact .add, .row.lane.compact .x, .row.lane.compact .en { height: 15px; line-height: 15px; }
+  /* bottom: -1px: over the row's bottom border too, so the strip ends at the row's edge. */
+  .resize { position: absolute; left: 0; right: 0; bottom: -1px; height: 5px; z-index: 1; cursor: row-resize; touch-action: none; outline: none; }
+  .resize:hover, .resize:active { box-shadow: inset 0 -2px 0 #f0a23a88; }
+  .resize:focus-visible { box-shadow: inset 0 -2px 0 #f0a23a; }
   .lrow { display: flex; align-items: center; gap: 4px; min-width: 0; height: 18px; }
   .target { flex: 1; min-width: 0; font-size: 10px; color: #c9cbd3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .target.none { color: #7d808c; }

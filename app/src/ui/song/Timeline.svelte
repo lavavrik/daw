@@ -45,8 +45,9 @@
   //
   // AUTOMATION (plan 10; spec addendum §3.4). Rows are not uniform: the
   // layout map (tlMath.rowLayout) stacks, under each track's clip row
-  // (LANE_H), its automation lanes (AUTO_H each) while the track is open (its
-  // header's A; laneView.open, UI state), and pins the Master row (the
+  // (LANE_H), its automation lanes while the track is open (its header's A;
+  // laneView.open, UI state; each lane AUTO_H tall unless its header's grab
+  // strip resized it: laneView.heights, plan 19), and pins the Master row (the
   // master's and the returns' lanes) under the last track once it has a lane
   // or "+ Master row" asked for it. EVERY y question goes through the map:
   // drawing, the clip hit tests and box selection (clip rows only), the
@@ -122,11 +123,11 @@
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
   import AutoLane from './AutoLane.svelte';
-  import { laneView, setOpen } from './laneView.svelte';
+  import { laneHeight, laneView, setOpen } from './laneView.svelte';
   import { targetLabel } from './autoLabels';
   import { targetDef } from '../../state/automation';
   import {
-    AUTO_H, BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
+    BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges, audioMarks,
     barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, fileTicks, followPage, hitTest, loopFromDrag, placeLen,
     repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX, xToTick, zoomAt,
   } from './tlMath';
@@ -177,7 +178,7 @@
   $effect(() => {
     if (p.mixer.automation.length > 0) untrack(() => (laneView.master = true));
   });
-  const layout = $derived(rowLayout(p.tracks, laneView.open, masterShown ? p.mixer.automation.map((x) => x.lane) : null));
+  const layout = $derived(rowLayout(p.tracks, laneView.open, masterShown ? p.mixer.automation.map((x) => x.lane) : null, laneHeight));
   const lanesH = $derived(rowsHeight(layout));
   /** Content y of each track's clip row, by track index (clip rows are in track order). */
   const clipY = $derived(layout.filter((r) => r.kind === 'clips').map((r) => r.y));
@@ -1444,10 +1445,10 @@
         <!-- Automation lane rows (AutoLane: own canvas, pointer and keys) and the Master row's own row. -->
         {#each autoRows as a ('empty' in a ? `new-${a.row.trackId}` : a.lane.id)}
           {#if 'empty' in a}
-            <div class="lane auto-empty" style:top="{a.row.y}px" style:height="{AUTO_H}px">Choose what to automate with + Lane on the left</div>
+            <div class="lane auto-empty" style:top="{a.row.y}px" style:height="{a.row.h}px">Choose what to automate with + Lane on the left</div>
           {:else if view}
             <AutoLane
-              {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y}
+              {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y} h={a.row.h}
               testid="auto-lane-{a.key}-{a.k}" label={a.label} suspended={laneView.suspended.has(a.lane.id)} root={scrollEl} onhint={flashHint}
             />
           {/if}

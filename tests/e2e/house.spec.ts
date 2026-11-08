@@ -97,7 +97,12 @@ test('every house patch loads and sounds', async ({ page }) => {
     for (const k of ['KeyA', 'KeyD', 'KeyG']) await page.keyboard.up(k);
     expect(l, `${p} peak L`).toBeGreaterThan(0);
     expect(r, `${p} peak R`).toBeGreaterThan(0);
-    await page.waitForTimeout(150);
+    // Let the release die out (the longest, Garage Organ's, is 0.45 s) before
+    // loading the next patch, so the load is not an edit while sounding and
+    // the dropout check below does not measure queued-edit bursts.
+    await expect
+      .poll(async () => Math.max(...(await peaks(page, 100))), { timeout: 5_000, intervals: [50] })
+      .toBeLessThan(1e-4);
   }
   const after = await status(page);
   expect(after.err).toBe(before.err);

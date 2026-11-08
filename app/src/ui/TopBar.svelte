@@ -361,13 +361,13 @@
       (no synth track)
     {/if}
   </span>
-  <!-- The buttons blur after a click so Space keeps meaning play/stop (not "click the focused button"). -->
+  <!-- mousedown is cancelled so a click never moves focus onto the button: Space keeps meaning play/stop (not "click the focused button") and the piano roll keeps its keyboard focus. -->
   <span class="octave" onwheel={onOctaveWheel}>
     <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
-      onclick={(e) => { onOctave(octave - 1); if (e.detail > 0) e.currentTarget.blur(); }}>−</button>
+      onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave - 1)}>−</button>
     <span class="pill" data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
     <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
-      onclick={(e) => { onOctave(octave + 1); if (e.detail > 0) e.currentTarget.blur(); }}>+</button>
+      onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
   </span>
   <span class="pill midi" data-testid="midi-status" class:bad={midi.state === 'denied'} title={midiTip}>MIDI: {midiLabel}</span>
   <span class="spacer"></span>

@@ -170,18 +170,32 @@
     // addModule pushes, so identity + length covers every structural edit
     // (param changes don't move jacks and are deliberately not tracked).
     void [track.modules, track.modules.length, track.cables, track.cables.length];
-    void tick().then(measure);
+    void tick().then(() => {
+      observeAll();
+      measure();
+    });
   });
-  $effect(() => {
-    if (!rail || !content) return;
-    const ro = new ResizeObserver(remeasure);
+  // Observes the rail, the content and every module panel: with a 100 %-wide
+  // content a panel that changes width (but not the row count) moves its
+  // row-mates without resizing `.content`, so the panels need their own entry.
+  let ro: ResizeObserver | null = null;
+  function observeAll() {
+    if (!ro || !rail || !content) return;
+    ro.disconnect(); // drop panels that were removed
     ro.observe(rail);
     ro.observe(content);
+    for (const el of content.children) if (el instanceof HTMLElement && el.dataset.testid?.startsWith('module-')) ro.observe(el);
+  }
+  $effect(() => {
+    if (!rail || !content) return;
+    ro = new ResizeObserver(remeasure);
+    observeAll();
     rail.addEventListener('scroll', remeasure, { passive: true });
     window.addEventListener('resize', remeasure);
     const r = rail;
     return () => {
-      ro.disconnect();
+      ro?.disconnect();
+      ro = null;
       r.removeEventListener('scroll', remeasure);
       window.removeEventListener('resize', remeasure);
       if (measureRaf) cancelAnimationFrame(measureRaf);

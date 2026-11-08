@@ -314,8 +314,8 @@ const TINE_KEYS: Patch = {
  * (vel 100, 48 kHz; 44.1/96 kHz within 0.2 dB): power below 300 Hz −5.0 dB of
  * the total (was −10.4), loudness −16.0 dBFS (was −16.4), vel-127 peak
  * 0.80–0.82 (was 0.76). The filter and hammer are
- * unchanged: the layers alone gave +5 dB. Added as idx 10–11 so the older
- * modules keep their idx.
+ * unchanged: the layers alone gave +5 dB. The two layers are idx 3–4, right
+ * after the oscillators, so the wrapped rack reads in signal-flow order.
  */
 const PIANO_STAB: Patch = {
   name: 'Piano Stab',
@@ -326,46 +326,46 @@ const PIANO_STAB: Patch = {
     { idx: 1, id: 'osc', params: { wave: 0 } },
     // Brightness: a square an octave up, 6 cents sharp (the slightly out-of-tune string pair).
     { idx: 2, id: 'osc', params: { wave: 1, octave: 1, fine: 6 } },
+    // Body: a triangle at the note (warmth at the fundamental).
+    { idx: 3, id: 'osc', params: { wave: 2 } },
+    // Depth: a sine an octave below (C3–B3 on chord4: low mids, not sub-bass).
+    { idx: 4, id: 'osc', params: { wave: 3, octave: -1 } },
     // Mix: saw, square, then the body layers (triangle, sub sine). The sub is a
     // touch louder: it carries most of the depth; much more and low chords boom.
-    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.35, lvl4: 0.4 } },
+    { idx: 5, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.35, lvl4: 0.4 } },
     // LP12 opened by the hammer envelope.
-    { idx: 4, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
+    { idx: 6, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
     // Hammer envelope: instant, decays over ~0.5 s; velocity → brighter.
-    { idx: 5, id: 'adsr', params: { attack: 0.001, decay: 0.5, sustain: 0.05, release: 0.2, vel_amt: 0.6 } },
+    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 0.5, sustain: 0.05, release: 0.2, vel_amt: 0.6 } },
     // Amp.
-    { idx: 6, id: 'vca' },
+    { idx: 8, id: 'vca' },
     // Amp envelope: struck, decays with no sustain (−20 dB at ~0.85 s); velocity → level.
-    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 1.7, sustain: 0, release: 0.25, vel_amt: 0.4 } },
+    { idx: 9, id: 'adsr', params: { attack: 0.001, decay: 1.7, sustain: 0, release: 0.25, vel_amt: 0.4 } },
     // Weight: a light, slightly bright saturation, half wet.
-    { idx: 8, id: 'saturator', params: { drive: 0.15, mix: 0.5, tone: 0.6 } },
+    { idx: 10, id: 'saturator', params: { drive: 0.15, mix: 0.5, tone: 0.6 } },
     // Out: sets the house level (0.27 → 0.25 with the body layers: loudness −16.0 dBFS, vel-127 peak ≤ 0.82).
-    { idx: 9, id: 'out', params: { level: 0.25 } },
-    // Body: a triangle at the note (warmth at the fundamental).
-    { idx: 10, id: 'osc', params: { wave: 2 } },
-    // Depth: a sine an octave below (C3–B3 on chord4: low mids, not sub-bass).
-    { idx: 11, id: 'osc', params: { wave: 3, octave: -1 } },
+    { idx: 11, id: 'out', params: { level: 0.25 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
     { from: [0, 'pitch'], to: [2, 'pitch'] },
-    { from: [0, 'pitch'], to: [10, 'pitch'] },
-    { from: [0, 'pitch'], to: [11, 'pitch'] },
-    { from: [10, 'out'], to: [3, 'in3'] },
-    { from: [11, 'out'], to: [3, 'in4'] },
-    { from: [0, 'gate'], to: [5, 'gate'] },
+    { from: [0, 'pitch'], to: [3, 'pitch'] },
+    { from: [0, 'pitch'], to: [4, 'pitch'] },
     { from: [0, 'gate'], to: [7, 'gate'] },
-    { from: [0, 'vel'], to: [5, 'vel'] },
+    { from: [0, 'gate'], to: [9, 'gate'] },
     { from: [0, 'vel'], to: [7, 'vel'] },
-    { from: [1, 'out'], to: [3, 'in1'] },
-    { from: [2, 'out'], to: [3, 'in2'] },
-    { from: [3, 'out'], to: [4, 'in'] },
-    { from: [5, 'env'], to: [4, 'cv'] },
-    { from: [4, 'out'], to: [6, 'in'] },
+    { from: [0, 'vel'], to: [9, 'vel'] },
+    { from: [1, 'out'], to: [5, 'in1'] },
+    { from: [2, 'out'], to: [5, 'in2'] },
+    { from: [3, 'out'], to: [5, 'in3'] },
+    { from: [4, 'out'], to: [5, 'in4'] },
+    { from: [5, 'out'], to: [6, 'in'] },
     { from: [7, 'env'], to: [6, 'cv'] },
     { from: [6, 'out'], to: [8, 'in'] },
-    { from: [8, 'out'], to: [9, 'l'] },
-    { from: [8, 'out'], to: [9, 'r'] },
+    { from: [9, 'env'], to: [8, 'cv'] },
+    { from: [8, 'out'], to: [10, 'in'] },
+    { from: [10, 'out'], to: [11, 'l'] },
+    { from: [10, 'out'], to: [11, 'r'] },
   ],
 };
 

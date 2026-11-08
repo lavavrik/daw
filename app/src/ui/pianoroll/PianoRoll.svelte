@@ -861,6 +861,13 @@
     e.stopPropagation();
     items[to].focus();
   }
+  /** Focus left the menu (Tab out): close it. Focus moving to the Examples button itself is left to its click. */
+  function exFocusOut(e: FocusEvent) {
+    const to = e.relatedTarget as Node | null;
+    if (to && (exMenu?.contains(to) || exBtn?.contains(to))) return;
+    if (!to) return; // window blur / clicked a non-focusable spot: the outside-click handler decides
+    exOpen = false;
+  }
   $effect(() => {
     if (!exOpen) return;
     const outside = (e: PointerEvent) => {
@@ -868,7 +875,7 @@
       if (!exMenu?.contains(t) && !exBtn?.contains(t)) exOpen = false;
     };
     window.addEventListener('pointerdown', outside, true);
-    void tick().then(() => exMenu?.querySelector<HTMLElement>('button:not(:disabled)')?.focus());
+    void tick().then(() => (exMenu?.querySelector<HTMLElement>('button:not(:disabled)') ?? exMenu)?.focus());
     return () => window.removeEventListener('pointerdown', outside, true);
   });
 
@@ -905,21 +912,24 @@
       />
     {/if}
     <div class="exwrap">
-      <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="menu" aria-expanded={exOpen}
+      <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="true" aria-expanded={exOpen}
         title="Example rolls for the house patches" onclick={() => (exOpen = !exOpen)}>Examples ▾</button>
       {#if exOpen}
-        <!-- svelte-ignore a11y_interactive_supports_focus -->
-        <div class="exmenu" role="menu" tabindex="-1" data-testid="examples-list" bind:this={exMenu} onkeydown={exKey}>
+        <!-- A plain popover (like the Rack add-menu's container, minus role=menu: its
+             children are headers and rows, not only menuitems). The container takes
+             focus when no button is enabled, so Escape still closes it. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="exmenu" role="group" aria-label="Example rolls" tabindex="-1" data-testid="examples-list" bind:this={exMenu} onkeydown={exKey} onfocusout={exFocusOut}>
           {#if patternsFull}<p class="full">{PATTERNS_FULL_TEXT}</p>{/if}
           {#if tracksFull}<p class="full">{TRACKS_FULL_TEXT}</p>{/if}
           {#each exGroups as g (g.label)}
             <div class="gh">{g.label}</div>
             {#each g.examples as ex (ex.name)}
               <div class="exrow">
-                <button role="menuitem" data-testid={`example-${slug(ex)}`} disabled={patternsFull}
+                <button data-testid={`example-${slug(ex)}`} disabled={patternsFull}
                   title={patternsFull ? PATTERNS_FULL_TEXT : `Add "${ex.name}" as a new pattern of ${track.name} (${ex.bars} ${ex.bars === 1 ? 'bar' : 'bars'})`}
                   onclick={() => pickExample(ex)}>{ex.name}</button>
-                <button role="menuitem" class="plus" data-testid={`example-track-${slug(ex)}`} disabled={tracksFull}
+                <button class="plus" data-testid={`example-track-${slug(ex)}`} disabled={tracksFull}
                   title={tracksFull ? TRACKS_FULL_TEXT : `New synth track with the ${ex.patch} patch and this example`}
                   onclick={() => exampleTrack(ex)}>+ track</button>
               </div>

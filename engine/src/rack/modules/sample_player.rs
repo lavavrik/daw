@@ -8,24 +8,30 @@
 //!   `s = floor(start · frames)` (at most the last frame) of sample `sample`
 //!   (`-1` = none); `start` is read at the trigger only. Loop off it is a
 //!   one-shot: what the gate does next does not matter (put an ADSR and VCA
-//!   after it for gated notes); loop on, the gate also ends the loop (below). A gate with no playable sample (none, not loaded yet)
-//!   starts nothing.
-//! * **Region** (`end`, `loop`, `loopStart`, read live every sample, so
-//!   moving a marker or automating it acts on sounding voices, while
-//!   `start` is read at the trigger only and stays the voice's low edge). The voice
-//!   plays `[s, e)` with `e = max(floor(end · frames), s + 1)` clamped to
-//!   `frames`, so `start ≥ end` still plays one frame and nothing is ever
-//!   read outside the sample. Loop off: at `e` the voice holds its last
-//!   output and fades it to 0 over 2 ms (the declick fade below), then ends.
-//! * **Loop** (a sustain loop). With `loop` on, the loop region is
-//!   `[ls, e)`, `ls = max(floor(loopStart · frames), s)`. The voice plays
-//!   from `s` into it and repeats it **while its gate is high**; when the
-//!   gate falls it stops looping, plays on from where it is to `e` and stops
-//!   there with the 2 ms fade, so a looping voice always ends (the ADSR/VCA
-//!   after it shapes the release meanwhile; at rate 1 that is at most
-//!   `e − ls` frames). A retrigger works as for any voice. A gate that falls
-//!   (or `loop` that goes off) during a seam crossfade lets that seam finish
-//!   first (one last wrap), so a release never cuts a crossfade short.
+//!   after it for gated notes); loop on, a falling gate also starts the
+//!   loop's release window (below). A gate with no playable sample (none,
+//!   not loaded yet) starts nothing.
+//! * **Region** (`end`, `loop`, `loopStart`, read live once per rack
+//!   sub-block (`RACK_BLOCK` samples), so moving a marker or automating it
+//!   acts on sounding voices, while `start` is read at the trigger only and
+//!   stays the voice's low edge). The voice plays `[s, e)` with
+//!   `e = max(floor(end · frames), s + 1)` clamped to `frames`, so
+//!   `start ≥ end` still plays one frame and nothing is ever read outside
+//!   the sample. Loop off: at `e` the voice holds its last output and fades
+//!   it to 0 over 2 ms (the declick fade below), then ends.
+//! * **Loop** (a sustain loop with a release window). With `loop` on, the
+//!   loop region is `[ls, e)`, `ls = max(floor(loopStart · frames), s)`. The
+//!   voice plays from `s` into it and repeats it **while its gate is high,
+//!   and for `LOOP_RELEASE_SECONDS` (10 s, the ADSR's longest release) after
+//!   the gate falls**, so the envelope after it (ADSR → VCA) shapes an
+//!   audible release instead of hearing the sample run out. Once the window
+//!   is over it stops looping, plays on from where it is to `e` and stops
+//!   there with the 2 ms fade, so a looping voice always ends (at rate 1,
+//!   within the window plus `e − ls` frames of the gate falling): CPU stays
+//!   bounded. A retrigger works as for any voice (the new voice loops while
+//!   its gate is high). A window that ends (or `loop` that goes off) during
+//!   a seam crossfade lets that seam finish first (one last wrap), so the
+//!   end of a loop never cuts a crossfade short.
 //!   The seam has a fixed 10 ms (`xf` frames) equal-power crossfade that
 //!   needs no material outside the region: over the last `xf` frames of the
 //!   region the tail fades out (`cos`) while the head `[ls, ls + xf)` fades
@@ -81,6 +87,10 @@ const MAX_OCTAVES: f32 = 11.0;
 const FADE_SECONDS: f32 = 0.002;
 /// Loop seam crossfade length (seconds).
 const XFADE_SECONDS: f32 = 0.010;
+/// How long a looping voice keeps looping after its gate falls (seconds):
+/// the ADSR's longest release, so the envelope's release is heard on the
+/// loop (plan 15 ruling K). Scaled by the sample rate in `SamplePlayer::new`.
+pub(crate) const LOOP_RELEASE_SECONDS: f32 = 10.0;
 
 /// The live region params (fractions of the sample) plus the crossfade
 /// length in frames; resolved per voice by `Voice::read`.
@@ -104,8 +114,11 @@ struct Voice {
     start: f64,
     /// Read position in frames.
     pos: f64,
-    /// This voice's gate is high: a sustain loop only loops while it is.
+    /// This voice's gate is high: a sustain loop loops while it is ...
     held: bool,
+    /// ... and for this many more samples after it falls (the release
+    /// window, counted down per sample once `held` is false).
+    release_left: u32,
     /// Inside a seam crossfade: the seam is finished (one more wrap) even if
     /// the gate falls or `loop` goes off meanwhile, so a release never cuts
     /// the crossfade (a step) short.
@@ -126,6 +139,7 @@ impl Voice {
         start: 0.0,
         pos: 0.0,
         held: false,
+        release_left: 0,
         seam: false,
         hold: false,
         last: 0.0,
@@ -161,7 +175,8 @@ impl Voice {
         let e = (r.end * n).floor().max(lo + 1.0).min(n);
         let ls = (r.loop_start * n).floor().max(lo);
         let xf = r.xfade;
-        let looping = e - ls >= 2.0 * xf && ((r.looping && self.held) || self.seam);
+        let sustain = self.held || self.release_left > 0;
+        let looping = e - ls >= 2.0 * xf && ((r.looping && sustain) || self.seam);
         // Frames jumped back at the seam: the loop minus the head the
         // crossfade already played.
         let jump = e - ls - xf;
@@ -172,7 +187,9 @@ impl Voice {
             self.pos = ls + xf + (self.pos - e) % jump;
             self.seam = false;
         }
-        let (lo_i, hi_i) = (lo as usize, e as usize - 1);
+        // `e >= 1` whenever `frames >= 1` (the pool never reports an empty
+        // sample); saturating anyway, so frames == 0 can never underflow.
+        let (lo_i, hi_i) = (lo as usize, (e as usize).saturating_sub(1));
         let mut x = hermite(data, frames, channels, lo_i, hi_i, self.pos);
         self.seam = looping && self.pos >= e - xf;
         if self.seam {
@@ -196,6 +213,9 @@ impl Voice {
     fn next(&mut self, smp: SampleView, rate: f64, fade: u32, region: Region) -> f32 {
         if !self.live {
             return 0.0;
+        }
+        if !self.held {
+            self.release_left = self.release_left.saturating_sub(1);
         }
         if !self.hold {
             let x = match smp.playable(self.sample) {
@@ -279,6 +299,8 @@ pub struct SamplePlayer {
     fade: u32,
     /// 10 ms in samples (the loop crossfade).
     xfade: f64,
+    /// `LOOP_RELEASE_SECONDS` in samples.
+    loop_release: u32,
 }
 
 impl SamplePlayer {
@@ -296,6 +318,7 @@ impl SamplePlayer {
             gain: Smooth::new(sr, default(K, GAIN)),
             fade: ((FADE_SECONDS * sr).round() as u32).max(1),
             xfade: (XFADE_SECONDS * sr).round().max(1.0) as f64,
+            loop_release: (LOOP_RELEASE_SECONDS * sr).round() as u32,
         }
     }
 
@@ -308,16 +331,17 @@ impl SamplePlayer {
 
     /// Start voice `ch` on `sample` at `start` (0..1); the sounding one fades.
     fn trigger(&mut self, ch: usize, sample: Option<usize>, start: f32, smp: SampleView) {
-        let (Some(active), Some(fading)) = (self.active.get_mut(ch), self.fading.get_mut(ch)) else { return };
+        let (Some(active), Some(fading)) = (self.active.get_mut(ch), self.fading.get_mut(ch)) else {
+            return;
+        };
         if active.live {
             *fading = *active;
-            fading.held = false;
+            fading.held = false; // a 2 ms fade: whether it loops does not matter
             fading.fade_out(self.fade);
             active.live = false;
         }
-        let Some((sample, (_, frames, _, generation))) = sample.and_then(|id| Some((id, smp.playable(id)?))) else {
-            return;
-        };
+        let playable = sample.and_then(|id| Some((id, smp.playable(id)?)));
+        let Some((sample, (_, frames, _, generation))) = playable else { return };
         let start = if start.is_finite() { start.clamp(0.0, 1.0) } else { 0.0 };
         let pos = ((start as f64) * frames as f64).floor().min(frames.saturating_sub(1) as f64);
         *active = Voice { live: true, sample, generation, start: pos, pos, held: true, ..Voice::OFF };
@@ -348,7 +372,9 @@ impl SamplePlayer {
             xfade: self.xfade,
         };
         // Rate exponent (octaves) -> rate; NaN reads as 0.
-        let rate_of = |oct: f32| (if oct.is_finite() { oct.clamp(-MAX_OCTAVES, MAX_OCTAVES) } else { 0.0 }).exp2() as f64;
+        let rate_of = |oct: f32| {
+            (if oct.is_finite() { oct.clamp(-MAX_OCTAVES, MAX_OCTAVES) } else { 0.0 }).exp2() as f64
+        };
         let fixed_rate = rate_of(fine_oct);
         let target = param(params, K, GAIN);
         let mut gain = [0.0f32; RACK_BLOCK];
@@ -363,8 +389,13 @@ impl SamplePlayer {
                     self.trigger(ch, sample, start, smp);
                 }
                 self.gate[ch] = on;
-                // Gate low ends a sustain loop (a retrigger sets it again).
-                self.active[ch].held &= on;
+                // Gate low starts the loop's release window (a retrigger
+                // starts a new, held voice).
+                let v = &mut self.active[ch];
+                if v.held && !on {
+                    v.held = false;
+                    v.release_left = self.loop_release;
+                }
                 // A silent channel (no live or fading voice) costs no exp2
                 // and no sample lookup.
                 if !self.active[ch].live && !self.fading[ch].live {
@@ -829,42 +860,71 @@ mod tests {
 
     #[test]
     fn loop_releases_at_gate_off() {
-        // A sustain loop: it loops only while the gate is high. Gate low: the
-        // voice plays on from where it is to `end` and stops (2 ms fade), so
-        // it is silent within (e − loopStart) frames + fade.
+        // A sustain loop with a release window (ruling K): after the gate
+        // falls it keeps looping for LOOP_RELEASE_SECONDS, then plays on from
+        // where it is to `end` and stops (2 ms fade), so it is silent within
+        // window + (e − loopStart) frames + fade of the gate falling.
         let (mut arena, mut pool) = (SampleArena::with_capacity(4 * N), SamplePool::new());
         load(&mut arena, &mut pool, 0, &[0.5; N], 1);
         let fade = (0.002 * SR) as usize;
+        let window = (LOOP_RELEASE_SECONDS * SR) as usize;
         let view = SampleView::new(&pool, &arena);
         let mut r = Rig::new();
         r.params[p("loop")] = 1.0;
         r.params[p("loopStart")] = 0.25;
         r.params[p("end")] = 0.75;
         let off = 3 * N;
-        let out = r.run(view, 5 * N, 1, |_| 0.0, |_, f| f < off, 0).remove(0);
+        let out = r.run(view, off + window + 2 * N, 1, |_| 0.0, |_, f| f < off, 0).remove(0);
         assert!(out[off - 64..off].iter().all(|&x| x > 0.3), "sounding while held");
-        let bound = off + N / 2 + fade + 1;
+        // Still looping near the end of the window (well past the sample).
+        assert!(out[off + window - 64..off + window].iter().all(|&x| x > 0.3), "loop ended before the window");
+        let bound = off + window + N / 2 + fade + 1;
         assert!(out[bound..].iter().all(|&x| x == 0.0), "still sounding after the release");
         assert!(!r.sp.active[0].live);
 
         // A release anywhere, also in the middle of the seam crossfade, is
-        // smooth: a seam under way is finished first, then the voice plays
-        // to `end`.
+        // smooth: a seam under way when the window ends is finished first,
+        // then the voice plays to `end`.
         let mut arena = SampleArena::with_capacity(4 * N);
         let mut pool = SamplePool::new();
         load(&mut arena, &mut pool, 0, &sine(N, 109.3, 0.0), 1);
         let view = SampleView::new(&pool, &arena);
         let e = (0.8711 * N as f64).floor() as usize;
+        let ls = (0.2137 * N as f64).floor() as usize;
         for off in [e - 400, e - 240, e - 30, e + 100, 2 * e - 900] {
             let mut r = Rig::new();
             r.params[p("loop")] = 1.0;
             r.params[p("loopStart")] = 0.2137;
             r.params[p("end")] = 0.8711;
-            let out = r.run(view, 4 * N, 1, |_| 0.0, |_, f| f < off, 0).remove(0);
+            let out = r.run(view, off + window + 2 * N, 1, |_| 0.0, |_, f| f < off, 0).remove(0);
             let plain = max_step(out[0], &out[..e - 480]);
-            assert!(max_step(out[0], &out) <= 2.0 * plain, "release at {off}: {} vs {plain}", max_step(out[0], &out));
-            let ls = (0.2137 * N as f64).floor() as usize;
-            assert!(out[off + (e - ls) + fade + 1..].iter().all(|&x| x == 0.0), "release at {off}: still sounding");
+            let step = max_step(out[0], &out);
+            assert!(step <= 2.0 * plain, "release at {off}: {step} vs {plain}");
+            let quiet = off + window + (e - ls) + fade + 1;
+            assert!(out[quiet..].iter().all(|&x| x == 0.0), "release at {off}: still sounding");
         }
+    }
+
+    #[test]
+    fn looped_voice_sounds_through_the_adsr_release() {
+        // The point of the release window: 0.25 s after the gate falls (the
+        // Sampler patch's ADSR release) a looped voice still sounds, though
+        // the loop region is only 0.05 s long, so the envelope's release is
+        // heard. A retrigger meanwhile starts a new, held voice as usual.
+        let (mut arena, mut pool) = (SampleArena::with_capacity(4 * N), SamplePool::new());
+        load(&mut arena, &mut pool, 0, &[0.5; N], 1);
+        let view = SampleView::new(&pool, &arena);
+        let mut r = Rig::new();
+        r.params[p("loop")] = 1.0;
+        r.params[p("loopStart")] = 0.25;
+        r.params[p("end")] = 0.75;
+        let off = 2 * N;
+        let at = off + (0.25 * SR) as usize;
+        let out = r.run(view, at + 640, 1, |_| 0.0, |_, f| f < off, 0).remove(0);
+        assert!(out[at..at + 640].iter().all(|&x| x > 0.3), "silent 0.25 s after the gate fell");
+        assert!(!r.sp.active[0].held && r.sp.active[0].release_left > 0);
+        let out = r.run(view, 640, 1, |_| 0.0, |_, _| true, at + 640).remove(0);
+        assert!(r.sp.active[0].held, "a retrigger is held again");
+        assert!(out.iter().all(|x| x.is_finite() && x.abs() <= 1.0));
     }
 }

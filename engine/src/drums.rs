@@ -731,11 +731,10 @@ fn render_row(
             .and_then(|steps| steps.get(h.step as usize))
             .copied()
             .unwrap_or(0);
-        if vel == 0 || row.mute {
-            continue;
-        }
-        let Some(id) = row.sample else { continue };
-        if pool.playable(arena, id as usize).is_none() {
+        // An empty step is no hit; mute, no sample or an unplayable one are
+        // trigger_row's to refuse (it renders up to `at` first either way,
+        // which is the same output as one longer segment).
+        if vel == 0 {
             continue;
         }
         let at = off.max(pos);

@@ -576,7 +576,9 @@ fn mixer_commands_do_not_allocate() {
 /// `OP_RESET_ALL` (project load) on a busy engine allocates nothing: tracks,
 /// racks with pooled effects and a Sample Player, a grown sample arena (the
 /// reset only frees its extra chunk), the mixer and the output fade. A
-/// Sample Player playing a sample also renders allocation-free.
+/// Sample Player playing a sample also renders allocation-free, looping
+/// (loopStart partway, so the seam crossfade and the wrap run while armed)
+/// and through its release window after the note-off.
 #[test]
 fn reset_all_does_not_allocate() {
     const SAMPLE_PLAYER: f64 = 16.0;
@@ -602,6 +604,11 @@ fn reset_all_does_not_allocate() {
         ok(e.command(OP_RACK_ADD_MODULE, 1., m as f64, *kind, 0.));
     }
     ok(e.command(OP_RACK_SET_PARAM, 1., 1., 0., 0.)); // sample 0
+    // Loop [0.1, 0.2) of the 1 s sample: the seam (at 0.2 s minus 10 ms)
+    // first runs after ~9100 frames, inside the 100 blocks below.
+    ok(e.command(OP_RACK_SET_PARAM, 1., 1., 5., 0.2)); // end
+    ok(e.command(OP_RACK_SET_PARAM, 1., 1., 6., 1.)); // loop on
+    ok(e.command(OP_RACK_SET_PARAM, 1., 1., 7., 0.1)); // loopStart
     for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (1, 1)), ((1, 0), (2, 0)), ((2, 0), (3, 0)), ((3, 0), (4, 0))] {
         ok(e.command(OP_RACK_CONNECT, 1., pk(fm, fp), pk(tm, tp), 0.));
     }
@@ -609,7 +616,10 @@ fn reset_all_does_not_allocate() {
     ok(e.command(OP_NOTE_ON, 60., 100., 0., 0.));
     ok(e.command(OP_PLAY, 0., 0., 0., 0.));
     let mut peak = 0.0f64;
-    for _ in 0..100 {
+    for b in 0..160 {
+        if b == 100 {
+            ok(e.command(OP_NOTE_OFF, 60., 0., 0., 0.)); // the release window: still looping
+        }
         e.process(&mut l, &mut r);
         peak = peak.max(e.telemetry()[5]);
     }

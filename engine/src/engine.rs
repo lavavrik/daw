@@ -1986,6 +1986,59 @@ mod tests {
     }
 
     #[test]
+    fn sampler_patch_sustains_a_short_loop_and_releases() {
+        // The Sampler patch's shape (app SAMPLER_PATCH): MIDI In -> Sample
+        // Player (loop on) -> VCA <- ADSR (gate, vel; release 0.25 s) -> Out.
+        // A 0.1 s sample looped over [0.25, 0.75): a 1 s note still sounds
+        // at its end; after the note-off the ADSR release is heard (the loop
+        // keeps going for its release window, plan 15 ruling K), and the
+        // track is silent within the release plus a bound (exactly 0 once the
+        // envelope idles: 3 × release, -120 dB).
+        const K_SAMPLE_PLAYER: f64 = 16.0;
+        const SP_RELEASE: f64 = 0.25;
+        let mut e = test_engine();
+        load_const(&mut e, 0, 4800, 0.5);
+        let slot = 2.0;
+        assert_eq!(e.command(OP_ADD_SYNTH_TRACK, slot, 0.0, 0.0, 0.0), OK);
+        for (m, kind) in [K_MIDI_IN, K_SAMPLE_PLAYER, K_ADSR, K_VCA, K_OUT].into_iter().enumerate() {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, slot, m as f64, kind, 0.0), OK);
+        }
+        for (from, to) in [
+            ((0, 0), (1, 0)), // pitch -> sample player pitch
+            ((0, 1), (1, 1)), // gate -> sample player gate
+            ((0, 1), (2, 0)), // gate -> adsr gate
+            ((0, 2), (2, 1)), // vel -> adsr vel
+            ((1, 0), (3, 0)), // sample player -> vca in
+            ((2, 0), (3, 1)), // env -> vca cv
+            ((3, 0), (4, 0)), // vca -> out l
+            ((3, 0), (4, 1)), // vca -> out r
+        ] {
+            assert_eq!(e.command(OP_RACK_CONNECT, slot, pk(from.0, from.1), pk(to.0, to.1), 0.0), OK);
+        }
+        // Sample Player: sample 0, end 0.75, loop on, loopStart 0.25.
+        for (i, v) in [(0, 0.0), (5, 0.75), (6, 1.0), (7, 0.25)] {
+            assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 1.0, i as f64, v), OK);
+        }
+        // ADSR as the patch: attack 2 ms, decay 0.2 s, sustain 1, release, vel_amt 0.7.
+        for (i, v) in [(0, 0.002), (1, 0.2), (2, 1.0), (3, SP_RELEASE), (5, 0.7)] {
+            assert_eq!(e.command(OP_RACK_SET_PARAM, slot, 2.0, i as f64, v), OK);
+        }
+        assert_eq!(e.command(OP_SET_INPUT_TRACK, slot, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0), OK);
+        let s = render(&mut e, 48000); // 1 s: ten times the sample
+        let tail = &s[s.len() - 4800..];
+        assert!(tail.iter().all(|&x| x > 0.1), "the held note died: {}", peak(tail));
+        assert_eq!(e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0), OK);
+        let s = render(&mut e, (0.8 * SR) as usize / 128 * 128);
+        let at = |t: f64| (t * SR as f64) as usize;
+        assert!(s[..at(0.1)].iter().all(|&x| x > 0.01), "release not heard: {}", s[at(0.1) - 1]);
+        // -60 dB 0.1 s after the release time (1% at 0.25 s, exponential) ...
+        assert!(peak(&s[at(SP_RELEASE + 0.1)..]) < 1e-3, "tail {}", peak(&s[at(SP_RELEASE + 0.1)..]));
+        // ... and exactly silent once the envelope idles.
+        assert!(s[at(3.0 * SP_RELEASE + 0.02)..].iter().all(|&x| x == 0.0), "still sounding");
+    }
+
+    #[test]
     fn velocity_zero_note_on_releases_synth_note() {
         let mut e = test_engine();
         synth_patch(&mut e, 0.0);
@@ -2079,7 +2132,8 @@ mod tests {
         assert_eq!(e.command(OP_SET_INPUT_TRACK, -1.0, 0.0, 0.0, 0.0), OK);
         e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
         assert!(render(&mut e, 4800).iter().all(|&x| x == 0.0));
-        // An input track that is a drum (or empty) slot plays nothing.
+        // A drum input track plays only its row notes (36 + r, plan 15): 69
+        // is not one, so nothing sounds; an empty slot (9) plays nothing.
         e.command(OP_ADD_DRUM_TRACK, 5.0, 0.0, 0.0, 0.0);
         assert_eq!(e.command(OP_SET_INPUT_TRACK, 5.0, 0.0, 0.0, 0.0), OK);
         e.command(OP_NOTE_ON, 69.0, 127.0, 0.0, 0.0);
@@ -2139,6 +2193,11 @@ mod tests {
         e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
         let s = render(&mut e, 128);
         assert!((s[0] - HIT * 0.5).abs() < 1e-4, "doubled: {}", s[0]);
+        // ... and the latest velocity of the block wins (127 then 64: 64).
+        e.command(OP_NOTE_ON, 37.0, 127.0, 0.0, 0.0);
+        e.command(OP_NOTE_ON, 37.0, 64.0, 0.0, 0.0);
+        let s = render(&mut e, 128);
+        assert!((s[0] - HIT * 0.5 * 64.0 / 127.0).abs() < 1e-4, "latest velocity: {}", s[0]);
     }
 
     #[test]

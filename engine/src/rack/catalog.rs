@@ -560,9 +560,10 @@ static SAMPLE_PLAYER: ModuleSpec = ModuleSpec {
         // The MIDI note at which the sample plays at its own speed.
         int("root", "Root", 0.0, 127.0, 60.0, ""),
         // Appended in plan 15 (never reorder the five above). `end`, `loop`
-        // and `loopStart` are read live, per sample; `start` at trigger.
-        // Playback stops (2 ms fade) at `end`, unless `loop` repeats
-        // [loopStart, end) with a 10 ms equal-power crossfade at the seam.
+        // and `loopStart` are read live, once per rack sub-block; `start` at
+        // trigger. Playback stops (2 ms fade) at `end`, unless `loop` repeats
+        // [loopStart, end) (10 ms equal-power crossfade at the seam) while
+        // the gate is high and for a 10 s release window after it falls.
         lin("end", "End", 0.0, 1.0, 1.0, false),
         choice("loop", "Loop", &["Off", "On"], 0.0),
         lin("loopStart", "Loop start", 0.0, 1.0, 0.0, false),

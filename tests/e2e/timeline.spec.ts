@@ -441,3 +441,19 @@ test('loop drag while playing sends the loop once, on release; Escape sends noth
   await page.waitForTimeout(100);
   expect(await sends()).toEqual([[2 * BAR, 5 * BAR]]);
 });
+
+test('clicking a note clip selects its track (as an audio clip does)', async ({ page }) => {
+  await start(page);
+  await page.getByTestId('add-synth-track').click(); // slot 1
+  await clickLane(page, 0, 100);
+  await clickLane(page, 1, 100);
+  const sel = () => page.evaluate(() => (window as any).__daw.project.selectedTrackId as string);
+  const ids = await page.evaluate(() => (window as any).__daw.project.tracks.map((t: { id: string }) => t.id) as string[]);
+  const a = (await clip(page, 0, 0).boundingBox())!;
+  await page.mouse.click(a.x + a.width / 2, a.y + a.height / 2);
+  await expect.poll(sel).toBe(ids[0]);
+  const b = (await clip(page, 1, 0).boundingBox())!;
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+  await expect.poll(sel).toBe(ids[1]);
+  await expect(clip(page, 1, 0)).toHaveAttribute('data-selected', 'true');
+});

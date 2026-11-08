@@ -316,3 +316,14 @@ test('rack: "Add example roll" adds the patch\'s example and opens the Piano rol
   await expect(page.getByTestId('panel-title')).toContainText('Brass Stab example');
   await expect(readout(page)).toContainText('64 notes');
 });
+
+test('examples menu fits a short window (plan 13 follow-up)', async ({ page }) => {
+  for (const h of [660, 480]) {
+    await page.setViewportSize({ width: 1280, height: h });
+    await openRoll(page);
+    await page.getByTestId('examples-menu').click();
+    const box = (await page.getByTestId('examples-list').boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(h);
+    await page.keyboard.press('Escape');
+  }
+});

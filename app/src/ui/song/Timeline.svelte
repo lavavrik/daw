@@ -799,6 +799,7 @@
       if (!selected.has(hit.id)) selected = new Set([hit.id]);
       const hf = byId.get(hit.id)!;
       if (isAudio(hf.c)) focusAudio(hf.t, hf.c);
+      else if (p.selectedTrackId !== hf.t.id) selectTrack(p, engine, hf.t.id); // a note clip selects its track too
       if (hit.part === 'body') {
         const orig = snapshot(sel);
         const audio = orig.every((o) => { const c = byId.get(o.id)?.c; return !!c && isAudio(c); });

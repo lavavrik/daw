@@ -806,6 +806,12 @@
 
   // ---- Examples ▾ -----------------------------------------------------------------
   let exOpen = $state(false);
+  /** Max height of the popover: the room below the button (it scrolls inside), so it never runs past a short window. */
+  let exMaxH = $state(0);
+  function toggleExamples() {
+    if (!exOpen && exBtn) exMaxH = Math.max(80, window.innerHeight - exBtn.getBoundingClientRect().bottom - 4 - 8);
+    exOpen = !exOpen;
+  }
   let exMenu = $state<HTMLElement | null>(null);
   let exBtn = $state<HTMLElement | null>(null);
   const patternsFull = $derived(track.patterns.length >= MAX_PATTERNS);
@@ -913,13 +919,13 @@
     {/if}
     <div class="exwrap">
       <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="true" aria-expanded={exOpen}
-        title="Example rolls for the house patches" onclick={() => (exOpen = !exOpen)}>Examples ▾</button>
+        title="Example rolls for the house patches" onclick={toggleExamples}>Examples ▾</button>
       {#if exOpen}
         <!-- A plain popover (like the Rack add-menu's container, minus role=menu: its
              children are headers and rows, not only menuitems). The container takes
              focus when no button is enabled, so Escape still closes it. -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="exmenu" role="group" aria-label="Example rolls" tabindex="-1" data-testid="examples-list" bind:this={exMenu} onkeydown={exKey} onfocusout={exFocusOut}>
+        <div class="exmenu" role="group" aria-label="Example rolls" tabindex="-1" data-testid="examples-list" style:max-height="{exMaxH}px" bind:this={exMenu} onkeydown={exKey} onfocusout={exFocusOut}>
           {#if patternsFull}<p class="full">{PATTERNS_FULL_TEXT}</p>{/if}
           {#if tracksFull}<p class="full">{TRACKS_FULL_TEXT}</p>{/if}
           {#each exGroups as g (g.label)}
@@ -975,7 +981,7 @@
   .bar button:hover:not(:disabled) { border-color: #4a4d59; color: #fff; }
   .bar button:disabled { opacity: 0.4; cursor: not-allowed; }
   .exwrap { position: relative; }
-  .exmenu { position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: flex; flex-direction: column; gap: 1px; min-width: 230px; max-height: 60vh; overflow-y: auto; padding: 6px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; }
+  .exmenu { box-sizing: border-box; position: absolute; z-index: 10; top: calc(100% + 4px); left: 0; display: flex; flex-direction: column; gap: 1px; min-width: 230px; max-height: 60vh; overflow-y: auto; padding: 6px; background: #1f2127; border: 1px solid #3a3d48; border-radius: 4px; box-shadow: 0 6px 20px #000a; }
   .exmenu .gh { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #8d90a0; border-bottom: 1px solid #3a3d48; margin: 6px 0 3px; padding-bottom: 1px; }
   .exmenu .gh:first-of-type { margin-top: 0; }
   .exrow { display: flex; align-items: center; gap: 4px; }

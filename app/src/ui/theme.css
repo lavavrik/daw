@@ -1,0 +1,329 @@
+/* House DAW theme: the design tokens (spec §2) and the skins for native
+   controls (spec §3). Imported once, globally, from main.ts.
+
+   Rules (docs/architecture/ui-theme.md has the long form):
+   - Every colour, shadow, radius and font in a component is a var(--…) from
+     the :root block below. ui/theme.ts mirrors the block for canvas code, and
+     theme.test.ts fails if the two disagree. Keep the :root block to custom
+     properties only.
+   - Every rule outside :root is wrapped in :where(), so it has zero
+     specificity: a component's own scoped style always wins over a skin
+     here, property by property. */
+
+:root {
+  /* Surfaces */
+  --top: #56626e;
+  --panel: #4a5662;
+  --work: #3e4954;
+  --raised: #6a7783;
+  --well: #2d3640;
+  --lcd: #232b33;
+  --line: #5d6a77;
+  --grid: #4b5763;
+
+  /* Text. --text-2 is secondary (>= 4.5:1 on --panel); --text-dim only on --well/--lcd. */
+  --text: #eef2f5;
+  --text-2: #d2d9e0;
+  --text-dim: #9fb0bf;
+
+  /* Accents. --on-color is text on any vivid colour. */
+  --play: #7ee081;
+  --accent: #ffb347;
+  --rec: #ff6b6b;
+  --on-color: #1d242b;
+
+  /* Depth: the only shadow and gradient recipes. A glow is written per use:
+     0 0 10px color-mix(in srgb, <c> 40%, transparent). */
+  --raised-shadow: inset 0 1px 0 rgba(255,255,255,.22), inset 0 -2px 0 rgba(0,0,0,.18), 0 1px 3px rgba(0,0,0,.3);
+  --gloss: linear-gradient(rgba(255,255,255,.3), rgba(255,255,255,0) 60%);
+  --well-shadow: inset 0 2px 5px rgba(0,0,0,.5), inset 0 -1px 0 rgba(255,255,255,.06);
+  --lift: inset 0 1px 0 rgba(255,255,255,.1), 0 6px 14px rgba(0,0,0,.28), 0 1px 2px rgba(0,0,0,.3);
+  --handle: linear-gradient(#fff, #cfd8df);
+  --handle-shadow: 0 1px 3px rgba(0,0,0,.5);
+
+  /* Radii: sm cells and small buttons, md buttons and inputs, lg cards and transport. */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  /* Type. Self-hosted (@fontsource, see main.ts); the stacks end in system
+     fonts so a blocked font degrades without breaking the layout. */
+  --font-ui: 'Inter Variable', Inter, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --fs-body: 13px;
+  --fs-ctl: 12px;
+  --fs-lbl: 10px;
+
+  /* Data colours (state/palette.ts, ui/theme.ts) for CSS that wants them by index or name. */
+  --track-0: #ff7a6b;
+  --track-1: #ffc145;
+  --track-2: #a6e06a;
+  --track-3: #4fd6c4;
+  --track-4: #5cc8ff;
+  --track-5: #9b8cff;
+  --track-6: #f47cc3;
+  --track-7: #e0d45a;
+  --cat-source: #ffb347;
+  --cat-filter: #5cc8ff;
+  --cat-modulation: #9b8cff;
+  --cat-utility: #a6e06a;
+  --cat-effect: #f47cc3;
+  --cat-output: #e6ebef;
+  --sig-audio: #ff9f43;
+  --sig-cv: #5cc8ff;
+  --sig-gate: #7ee081;
+  --sig-vel: #9b8cff;
+}
+
+/* Native widgets we don't skin (date pickers, number spinners) render dark,
+   and scrollbars take the slate colours. */
+:where(html) {
+  color-scheme: dark;
+  scrollbar-color: var(--raised) transparent;
+}
+
+/* ---------------------------------------------------------------- select --
+   Chrome's customizable select: the element stays a real <select>, so
+   keyboard handling, forms and Playwright's selectOption keep working. The
+   closed state is a --well field with a chevron; the open picker is a light
+   menu with the checked option in --accent and a check mark. */
+:where(select),
+:where(select)::picker(select) {
+  appearance: base-select;
+}
+:where(select) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--r-md);
+  /* base-select's UA style has a 24px minimum (a touch target); this is a
+     mouse UI with dense toolbars, so the padding sets the height. */
+  min-block-size: 0;
+  padding: 3px 6px 3px 8px;
+  background: var(--well);
+  box-shadow: var(--well-shadow);
+  color: var(--text);
+  font: 500 var(--fs-ctl) var(--font-ui);
+  cursor: pointer;
+}
+:where(select:disabled) { opacity: 0.5; cursor: default; }
+:where(select:focus-visible),
+:where(select:open) {
+  outline: none;
+  box-shadow: var(--well-shadow), 0 0 0 2px var(--accent);
+}
+:where(select)::picker-icon {
+  color: var(--text-2);
+  transition: rotate 0.12s;
+}
+:where(select:open)::picker-icon { rotate: 180deg; }
+:where(select)::picker(select) {
+  border: 0;
+  border-radius: 10px;
+  padding: 4px;
+  background: var(--text);
+  color: var(--on-color);
+  box-shadow: var(--lift);
+}
+:where(select option) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  font: 500 var(--fs-ctl) var(--font-ui);
+  text-transform: none;
+  letter-spacing: normal;
+}
+/* The check sits at the end of the row, as on the controls sheet. */
+:where(select option)::checkmark { order: 1; }
+:where(select option:hover),
+:where(select option:focus-visible) {
+  outline: none;
+  background: var(--text-2);
+}
+:where(select option:checked) {
+  background: var(--accent);
+  color: var(--on-color);
+  font-weight: 700;
+}
+:where(select option:disabled) { opacity: 0.45; }
+:where(select optgroup) {
+  padding-top: 4px;
+  font: 600 var(--fs-lbl) var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ----------------------------------------------------------------- range --
+   A --well groove, the filled part in --c (the colour of the thing the
+   slider belongs to) up to --fill (0..100%), and the white handle. The
+   component sets both, e.g. style:--fill="{pct}%" style:--c={trackColour};
+   without them the fill is --accent at 50%. */
+:where(input[type='range']) {
+  appearance: none;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+:where(input[type='range'])::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background:
+    var(--gloss) 0 0 / var(--fill, 50%) 100% no-repeat,
+    linear-gradient(var(--c, var(--accent)), var(--c, var(--accent))) 0 0 / var(--fill, 50%) 100% no-repeat,
+    var(--well);
+  box-shadow: var(--well-shadow);
+}
+:where(input[type='range'])::-webkit-slider-thumb {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -4.5px; /* centre on the 6px track */
+  border: 0;
+  border-radius: 50%;
+  background: var(--handle);
+  box-shadow: var(--handle-shadow);
+}
+:where(input[type='range']:focus-visible) { outline: none; }
+:where(input[type='range']:focus-visible)::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--handle-shadow);
+}
+:where(input[type='range']:disabled) { opacity: 0.5; cursor: default; }
+
+/* -------------------------------------------------------------- checkbox --
+   A switch, 34x20: --well when off, --play when on. Still a checkbox, so
+   check()/click()/Space work as before. */
+:where(input[type='checkbox']) {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--well);
+  box-shadow: var(--well-shadow);
+  vertical-align: middle;
+  cursor: pointer;
+  transition: background-color 0.12s;
+}
+:where(input[type='checkbox'])::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--handle);
+  box-shadow: var(--handle-shadow);
+  transition: translate 0.12s;
+}
+:where(input[type='checkbox']:checked) { background: var(--play); }
+:where(input[type='checkbox']:checked)::before { translate: 14px 0; }
+:where(input[type='checkbox']:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(input[type='checkbox']:disabled) { opacity: 0.5; cursor: default; }
+
+/* ----------------------------------------------------------- text inputs --
+   Recessed --well fields. Number inputs share the look until NumberField
+   (spec §3) replaces their spinners. */
+:where(input:not([type]), input[type='text'], input[type='search'], input[type='number'], input[type='url'], input[type='email'], textarea) {
+  border: 0;
+  border-radius: var(--r-md);
+  padding: 3px 8px;
+  background: var(--well);
+  box-shadow: var(--well-shadow);
+  color: var(--text);
+  font: var(--fs-ctl) var(--font-ui);
+}
+:where(input:not([type]):focus-visible, input[type='text']:focus-visible, input[type='search']:focus-visible, input[type='number']:focus-visible, input[type='url']:focus-visible, input[type='email']:focus-visible, textarea:focus-visible) {
+  outline: none;
+  box-shadow: var(--well-shadow), 0 0 0 2px var(--accent);
+}
+:where(input, textarea)::placeholder { color: var(--text-dim); }
+
+/* -------------------------------------------------------- shared classes --
+   .btn (raised), .btn.primary (--accent), .btn.quiet (outline); .seg and
+   .tabs (the selected child is light with dark text); .lbl, .mono, .well.
+   A selected child is marked by any of aria-checked/pressed/selected="true",
+   .on or .active, so existing markup and new radiogroups both work.
+   Sizes come from padding and line-height (no fixed heights), so markup
+   that already used one of these class names before the theme keeps its own
+   box when it sets its own padding and font. */
+:where(.btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px; /* 30px tall with the 16px line */
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--raised) var(--gloss);
+  box-shadow: var(--raised-shadow);
+  color: var(--text);
+  font: 500 var(--fs-ctl)/16px var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+:where(.btn:hover:not(:disabled)) { filter: brightness(1.08); }
+:where(.btn:active:not(:disabled)) { translate: 0 1px; }
+:where(.btn:disabled) { opacity: 0.45; cursor: default; }
+:where(.btn:focus-visible, .seg > button:focus-visible, .tabs > button:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(.btn.primary) {
+  background-color: var(--accent);
+  color: var(--on-color);
+  font-weight: 700;
+  box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+:where(.btn.quiet) {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+:where(.seg) {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--r-md);
+  background: var(--well);
+  box-shadow: var(--well-shadow);
+}
+:where(.seg > button, .tabs > button) {
+  padding: 5px 12px; /* 26px tall with the 16px line */
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font: 600 var(--fs-ctl)/16px var(--font-ui);
+  white-space: nowrap;
+  cursor: pointer;
+}
+:where(.tabs) { display: inline-flex; gap: 2px; }
+:where(.seg > button:hover:not(:disabled), .tabs > button:hover:not(:disabled)) { color: var(--text); }
+:where(.tabs > button:hover:not(:disabled)) { background: var(--raised); }
+:where(.seg > button:disabled, .tabs > button:disabled) { opacity: 0.45; cursor: default; }
+:where(.seg, .tabs) > :where([aria-checked='true'], [aria-pressed='true'], [aria-selected='true'], .on, .active) {
+  background: var(--text);
+  color: var(--on-color);
+}
+
+:where(.lbl) {
+  font: 600 var(--fs-lbl) var(--font-ui);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+:where(.mono) {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+:where(.well) {
+  border-radius: var(--r-md);
+  background: var(--well);
+  box-shadow: var(--well-shadow);
+}

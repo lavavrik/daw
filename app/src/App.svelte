@@ -848,8 +848,12 @@
 {/if}
 
 <style>
-  :global(html, body) { margin: 0; height: 100%; background: #16171b; color: #c9cbd3; font: 12px/1.4 ui-sans-serif, system-ui, sans-serif; }
-  .app { height: 100vh; display: flex; flex-direction: column; background: #16171b; }
+  /* The inherited size is --fs-ctl (12 px), not --fs-body: today's components
+     inherit it and are sized for 12 px (at 13 px the top bar wraps at 1400 px
+     and the piano roll loses a row). Body text opts into --fs-body as each
+     component moves onto the theme. */
+  :global(html, body) { margin: 0; height: 100%; background: var(--work); color: var(--text); font: var(--fs-ctl)/1.4 var(--font-ui); }
+  .app { height: 100vh; display: flex; flex-direction: column; background: var(--work); }
   .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; gap: 3px; padding: 3px; }
   /* The editor (piano roll / step grid / rack) gets the larger share: the roll
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */

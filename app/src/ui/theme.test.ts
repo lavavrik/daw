@@ -1,0 +1,77 @@
+// theme.ts is the canvas code's copy of the tokens in theme.css. This test
+// parses theme.css's :root block and checks the two agree in both
+// directions, so a colour changed in one file and not the other fails here
+// instead of drifting on screen.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { CATEGORY_COLORS, RADII, SIGNAL_COLORS, THEME, TRACK_COLORS, tokenName } from './theme';
+import { TRACK_COLORS as STATE_TRACK_COLORS } from '../state/palette';
+import { TRACK_COLORS as PROJECT_TRACK_COLORS } from '../state/project.svelte';
+
+const CSS = readFileSync(join(__dirname, 'theme.css'), 'utf8');
+
+/** The custom properties declared in the first top-level `:root { … }` block. */
+function rootTokens(css: string): Map<string, string> {
+  const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const m = /(^|\})\s*:root\s*\{([^}]*)\}/.exec(noComments);
+  if (!m) throw new Error('theme.css has no :root block');
+  const out = new Map<string, string>();
+  for (const decl of m[2].split(';')) {
+    const d = /^\s*(--[\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(decl);
+    if (d) out.set(d[1], d[2].replace(/\s+/g, ' '));
+  }
+  return out;
+}
+
+/** What theme.ts says the :root block holds, keyed by custom-property name. */
+function expected(): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [k, v] of Object.entries(THEME)) out.set(`--${tokenName(k)}`, v);
+  for (const [k, v] of Object.entries(RADII)) out.set(`--r-${k}`, `${v}px`);
+  TRACK_COLORS.forEach((c, i) => out.set(`--track-${i}`, c));
+  for (const [k, v] of Object.entries(CATEGORY_COLORS)) out.set(`--cat-${k}`, v);
+  for (const [k, v] of Object.entries(SIGNAL_COLORS)) out.set(`--sig-${k}`, v);
+  return out;
+}
+
+describe('theme tokens', () => {
+  const css = rootTokens(CSS);
+  const ts = expected();
+
+  it('every theme.ts value matches theme.css', () => {
+    const mismatched = [...ts].filter(([k, v]) => css.get(k) !== v).map(([k, v]) => `${k}: ts=${v} css=${css.get(k)}`);
+    expect(mismatched).toEqual([]);
+  });
+
+  it('every :root token in theme.css is in theme.ts', () => {
+    expect([...css.keys()].filter((k) => !ts.has(k))).toEqual([]);
+  });
+
+  it('pins the spec §2 values', () => {
+    expect(THEME.top).toBe('#56626e');
+    expect(THEME.work).toBe('#3e4954');
+    expect(THEME.text2).toBe('#d2d9e0');
+    expect(THEME.accent).toBe('#ffb347');
+    expect(THEME.onColor).toBe('#1d242b');
+    expect(TRACK_COLORS).toEqual(['#ff7a6b', '#ffc145', '#a6e06a', '#4fd6c4', '#5cc8ff', '#9b8cff', '#f47cc3', '#e0d45a']);
+    expect(RADII).toEqual({ sm: 6, md: 8, lg: 12 });
+  });
+
+  it('state and ui share one track palette', () => {
+    expect(STATE_TRACK_COLORS).toBe(TRACK_COLORS);
+    expect(PROJECT_TRACK_COLORS).toBe(TRACK_COLORS);
+  });
+
+  it('the font stacks fall back to system fonts', () => {
+    expect(THEME.fontUi).toMatch(/system-ui, sans-serif$/);
+    expect(THEME.fontMono).toMatch(/ui-monospace, monospace$/);
+  });
+
+  it('tokenName maps camelCase keys to the css names', () => {
+    expect(tokenName('text2')).toBe('text-2');
+    expect(tokenName('textDim')).toBe('text-dim');
+    expect(tokenName('raisedShadow')).toBe('raised-shadow');
+    expect(tokenName('fsBody')).toBe('fs-body');
+  });
+});

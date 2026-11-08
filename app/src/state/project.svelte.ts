@@ -16,11 +16,8 @@ export const MAX_SAMPLES = 256;
 /** Default loop range: bars 1-4. */
 export const DEFAULT_LOOP_END = 4 * BAR_TICKS;
 
-/** 8 colours that read well on the dark UI; track colour = TRACK_COLORS[slot % 8]. */
-export const TRACK_COLORS: string[] = [
-  '#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c',
-  '#38d9a9', '#4dabf7', '#9775fa', '#f783ac',
-];
+/** The track palette (spec §2); track colour = TRACK_COLORS[slot % 8]. Defined in palette.ts. */
+export { TRACK_COLORS } from './palette';
 
 export interface DrumRow {
   id: string;

@@ -459,7 +459,9 @@
   button:hover { background: #33353e; }
   button.on { background: #f0a23a; color: #111; border-color: #f0a23a; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
-  .seg { display: inline-flex; flex: none; }
+  /* Not the theme's .seg well (yet): its padding would push the bar onto two
+     rows at 1280 px. Plan 20's top-bar task replaces this group. */
+  .seg { display: inline-flex; flex: none; padding: 0; gap: 0; background: none; box-shadow: none; }
   .seg button { border-radius: 0; font-size: 11px; padding: 4px 8px; }
   .seg button:first-child { border-radius: 4px 0 0 4px; }
   .seg button:last-child { border-radius: 0 4px 4px 0; }

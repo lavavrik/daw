@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack, closeAddTrack, openAddTrack } from './addTrack';
 
 // Song timeline (plan 4, Task 5): placing / editing clips through the UI,
 // loop range and seek on the ruler, and what the engine plays in Song mode.
@@ -253,7 +254,7 @@ test('delete clip stops its sound', async ({ page }) => {
 
 test('clip edits: move, lane lock, edges, Escape revert, duplicate, nudge, box select', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click(); // slot 1, 4-bar pattern
+  await addTrack(page, 'synth'); // slot 1, 4-bar pattern
   await clickLane(page, 0, 100);
   await clickLane(page, 1, 100);
   expect(await pos(page, 1, 0)).toEqual({ start: 0, len: 4 * BAR }); // the synth pattern's length
@@ -386,10 +387,10 @@ test('timeline screenshot', async ({ page }) => {
   await page.getByTestId('pattern-picker').selectOption({ label: 'Pattern 2' });
   await clickLane(page, 0, 4 * BAR + 100);
   await resizeRight(page, 0, 1, 6 * BAR);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await clickLane(page, 1, 2 * BAR + 100);
   await clickLane(page, 1, 8 * BAR + 100);
-  await page.getByTestId('add-drum-track').click();
+  await addTrack(page, 'drum');
   await clickLane(page, 2, 4 * BAR + 100);
   await clickLane(page, 2, 5 * BAR + 100);
   const a = await at(page, 0, 100);
@@ -421,21 +422,26 @@ test('placing: Escape removes the just-placed clip; a tail click places after th
   expect((await pos(page, 0, 1)).start).toBe(BAR + BAR / 2);
 });
 
-test('the add-track buttons are disabled at 32 tracks and come back when one is removed', async ({ page }) => {
+test('the add-track items are disabled at 32 tracks and come back when one is removed', async ({ page }) => {
   await start(page);
   // The default drum track + 31 more = MAX_TRACKS (32).
   await page.evaluate(() => { for (let i = 0; i < 31; i++) (window as any).__daw.actions.addDrumTrack(); });
   await expect.poll(() => page.evaluate(() => (window as any).__daw.project.tracks.length)).toBe(32);
-  for (const id of ['add-drum-track', 'add-synth-track']) {
+  await openAddTrack(page);
+  for (const id of ['add-drum-track', 'add-synth-track', 'add-sampler-track', 'add-audio-track']) {
     await expect(page.getByTestId(id)).toBeDisabled();
     await expect(page.getByTestId(id)).toHaveAttribute('title', /32 tracks/);
   }
+  await expect(page.getByTestId('tl-master-toggle')).toBeEnabled(); // the Master row is not a track
+  await closeAddTrack(page);
   await page.evaluate(() => {
     const d = (window as any).__daw;
     d.actions.removeTrack(d.project.tracks[5].id);
   });
+  await openAddTrack(page);
   await expect(page.getByTestId('add-synth-track')).toBeEnabled();
   await page.getByTestId('add-synth-track').click();
+  await openAddTrack(page);
   await expect(page.getByTestId('add-drum-track')).toBeDisabled();
 });
 
@@ -472,7 +478,7 @@ test('loop drag while playing sends the loop once, on release; Escape sends noth
 
 test('clicking a note clip selects its track (as an audio clip does)', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click(); // slot 1
+  await addTrack(page, 'synth'); // slot 1
   await clickLane(page, 0, 100);
   await clickLane(page, 1, 100);
   const sel = () => page.evaluate(() => (window as any).__daw.project.selectedTrackId as string);

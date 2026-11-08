@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // Piano roll (plan 3, Task 5), driven through the UI with the real mouse.
 // The canvas publishes its view in data-view (prMath View + rulerH), so the
@@ -14,7 +15,7 @@ const BEAT = 960;
 async function openRoll(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
   await expect(page.getByTestId('pr-canvas')).not.toHaveAttribute('data-view', '');
 }
@@ -258,7 +259,7 @@ test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo
 test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F9 Mixer', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.keyboard.press('Alt+Digit4');
   await expect(page.getByRole('button', { name: 'Instrument' })).toHaveClass(/active/);
   await page.keyboard.press('Alt+Digit2');

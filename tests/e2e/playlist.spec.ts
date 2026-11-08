@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // The playlist look (plan 20 Task 7): the track header's volume slider is the
 // track's mixer fader (same value, same action, one undo entry per drag), and
@@ -73,7 +74,7 @@ test('the track header volume slider drives the mixer fader: one undo entry per 
   await page.keyboard.press('ArrowDown');
   await expect(vol).toHaveAttribute('aria-valuetext', '−2.0 dB');
   // The Master row has no slider.
-  await page.getByTestId('tl-master-toggle').click();
+  await addTrack(page, 'master');
   await expect(page.getByTestId('master-head')).toBeVisible();
   await expect(page.getByTestId('master-head').locator('input[type="range"]')).toHaveCount(0);
 });

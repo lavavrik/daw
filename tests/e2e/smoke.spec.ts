@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { openMore } from './topbar';
+import { addTrack } from './addTrack';
 
 // Minimal shape of what App.svelte exposes on window for tests.
 type DawWindow = {
@@ -333,7 +334,7 @@ test('engine failure is shown prominently and loads settle', async ({ page }) =>
 
 test('a command burst larger than the ring is delivered, in order, nothing dropped', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click(); // live input
+  await addTrack(page, 'synth'); // live input
   const backlog = await page.evaluate(() => {
     const { engine, Op } = (window as unknown as DawWindow).__daw!;
     // 3001 commands in one task (the ring holds 1023): only the last NOTE_ON
@@ -398,7 +399,7 @@ test('a deferred load evicted from the retry queue shows an error', async ({ pag
 
 test('add synth track, it plays from the keyboard', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const row = page.getByTestId('track-1');
   await expect(row).toContainText('Synth · Deep Bass');
   await expect(row).toHaveAttribute('aria-pressed', 'true');
@@ -417,7 +418,7 @@ test('add synth track, it plays from the keyboard', async ({ page }) => {
 
 test('selecting drums moves the keys to the drum track (plan 15), and back', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('track-0')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Step grid' })).toHaveClass(/active/);
@@ -442,7 +443,7 @@ test('selecting drums moves the keys to the drum track (plan 15), and back', asy
 
 test('removing the synth track silences it and keys show no synth', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByTestId('track-1').hover();
   await page.getByRole('button', { name: 'Remove track Synth' }).click();
   // Inline popover (no native dialog); focus starts on the safe choice, Cancel.
@@ -494,7 +495,7 @@ async function holdPeak(page: Page, keys: string[], ms = 700) {
 
 async function addSynth(page: Page) {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click(); // default tab is the Piano roll
   await expect(page.getByTestId('rack')).toBeVisible();
 }
@@ -840,7 +841,7 @@ const takeLen = (page: Page) => () =>
 
 test('record: R arms, played notes land in the pattern, a note held through Stop is closed, undo removes the take', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const rec = page.getByTestId('rec-button');
   await expect(rec).toHaveAttribute('data-state', 'off');
   await page.keyboard.press('KeyR'); // stopped: only arms
@@ -869,7 +870,7 @@ test('record: R arms, played notes land in the pattern, a note held through Stop
 
 test('record: Space stops through the recorder (held notes close at the heard tick, at once)', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const rec = page.getByTestId('rec-button');
   await page.keyboard.press('KeyR');
   await page.getByTestId('pattern-play').click();
@@ -892,7 +893,7 @@ test('record: Space stops through the recorder (held notes close at the heard ti
 
 test('count-in: Play while armed counts one bar in, then records; the setting persists', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const countIn = page.getByTestId('count-in');
   await countIn.click();
   await expect(countIn).toHaveAttribute('aria-pressed', 'true');
@@ -917,8 +918,8 @@ test('count-in: Play while armed counts one bar in, then records; the setting pe
 
 test('record: switching the input track mid-pass ends held notes there and records later notes on the new track', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click(); // slot 1
-  await page.getByTestId('add-synth-track').click(); // slot 2, selected: keys -> it
+  await addTrack(page, 'synth'); // slot 1
+  await addTrack(page, 'synth'); // slot 2, selected: keys -> it
   await page.keyboard.press('KeyR');
   await page.getByTestId('pattern-play').click();
   await expect(page.getByTestId('rec-button')).toHaveAttribute('data-state', 'recording');
@@ -951,7 +952,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   }, LATENCY_S);
 
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Metronome' }).click();
   await expect(page.getByRole('button', { name: 'Metronome' })).toHaveAttribute('aria-pressed', 'true');
   expect(await page.getByTestId('count-in').getAttribute('aria-pressed')).toBe('false');

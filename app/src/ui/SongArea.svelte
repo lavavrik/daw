@@ -1,6 +1,6 @@
 <script lang="ts">
   // Top-centre Song pane (layout B): the song timeline, whose left column is
-  // the track list (headers + add buttons).
+  // the track list (headers + the "+ Add track" list).
   import type { Project } from '../state/project.svelte';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';

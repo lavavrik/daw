@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Mixer view (plan 5, Task 4), driven through the UI. Meter values are read
 // from the strip meters' data-peak-db (what the user sees, updated by the
@@ -79,7 +80,7 @@ async function openMixer(page: Page) {
 
 /** Add a synth track (slot 1) and hold a note on it from the computer keyboard. */
 async function synthHoldingNote(page: Page) {
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByTestId('track-1')).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.down('KeyA');
 }
@@ -99,7 +100,7 @@ async function drumsLoopInSong(page: Page) {
 
 test('mixer shows strips for tracks + returns + master', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await openMixer(page);
   const ids = await page.locator('[data-testid="mixer"] > [data-testid^="strip-"]').evaluateAll((els) =>
     els.map((e) => e.getAttribute('data-testid')),
@@ -240,8 +241,8 @@ test('track header M and S mute / solo the track, in sync with the mixer strip',
 test('track header S is exclusive: it unsolos the others; Shift-click adds to the solo', async ({ page }) => {
   // Owner's note (plan 20 task 12). Three tracks: drums (0), synth (1), synth (2).
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
+  await addTrack(page, 'synth');
   const solo = (slot: number) => page.getByTestId(`track-solo-${slot}`);
   const pressed = async () => Promise.all([0, 1, 2].map(async (s) => (await solo(s).getAttribute('aria-pressed')) === 'true'));
   await expect(solo(0)).toHaveAttribute('title', /Shift-click: add it to the soloed ones/);
@@ -312,7 +313,7 @@ test('sidechain from kick ducks the synth', async ({ page }) => {
 
 test('timeline track headers switch the bottom panel from the mixer to that track\'s editor', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click(); // slot 1, Piano roll
+  await addTrack(page, 'synth'); // slot 1, Piano roll
   await openMixer(page);
   // Inside the mixer, a strip name selects the track but keeps the mixer open.
   await strip(page, 1).getByTestId('strip-name').click();

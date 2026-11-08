@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Pattern picker, the song and pattern transports (plan 20; the PAT/SONG
 // toggle until then) and song-aware playheads (plan 4, Task 4).
@@ -253,7 +254,7 @@ test('the pattern transport is disabled, with a reason, on an audio track or wit
   await expect(page.getByTestId('flash-hint')).toHaveText('Select a drum or synth track');
   await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
   // An audio track has no pattern.
-  await page.getByTestId('add-audio-track').click();
+  await addTrack(page, 'audio');
   await expect(page.getByTestId('pattern-play')).toBeDisabled();
   await expect(page.getByTestId('pattern-play')).toHaveAttribute('title', 'An audio track has no pattern: select a drum or synth track');
   // Space in the panel then plays nothing (it says why); the song transport still works.

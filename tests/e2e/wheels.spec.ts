@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // The on-screen Pitch / Mod wheels (ui/Wheels.svelte, input/wheels.svelte.ts):
 // they follow the hardware wheels (fed through window.__daw.midi.inject, the
@@ -13,7 +14,7 @@ async function start(page: Page) {
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByTestId('timeline')).toBeVisible();
   await page.waitForFunction(() => !!(window as Any).__daw?.midi);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByTestId('wheels')).toBeVisible();
 }
 

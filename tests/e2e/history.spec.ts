@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Undo/redo (plan 7 Task 1): every edit is an undo step, restored by a
 // minimal diff while the transport keeps playing. Sound is read from the
@@ -167,7 +168,7 @@ test('undo while playing releases removed notes', async ({ page }) => {
 
 test('a fader drag is one undo step', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByTestId('mixer-tab').click();
   const strip = page.getByTestId('strip-1');
   const fader = strip.getByTestId('fader');
@@ -193,7 +194,7 @@ test('a fader drag is one undo step', async ({ page }) => {
 // made, and no older entry is undone. Released, Cmd+Z is a normal undo.
 test('undo during a knob or fader drag cancels the drag', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
   await page.getByTestId('mixer-tab').click();
   const strip = page.getByTestId('strip-1');
@@ -284,7 +285,7 @@ test('undo during a step-grid paint is swallowed', async ({ page }) => {
 // undo (↶, ⌘Z) closes an open inline confirm (as its Cancel would) first.
 test('undo closes an open confirm', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   // The click's gesture has ended (its entry is named), so the next edit is its own step.
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add synth track/);
   await page.evaluate(() => {

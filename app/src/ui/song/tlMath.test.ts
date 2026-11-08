@@ -3,6 +3,7 @@ import {
   AUTO_H, BAR, BEAT, LANE_H, LANE_MAX_H, LANE_MIN_H, MASTER_ROW, barLabelStep, barRange, boxSelect, clampGroupDt, hitTest, loopFromDrag, placeLen,
   clipLaneAt, followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
   snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks, drumPreview, notePreview, periodStarts,
+  RULER_H, RULER_BAR_H, RULER_TIME_H, TIME_LABEL_MIN_PX, clockLabel, posReadout, tickSeconds, timeLabelStep, timeLabels,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
 import { moduleDef } from '../../audio/catalog';
@@ -181,6 +182,71 @@ describe('labels and view', () => {
     expect(barLabelStep(3840 / 28)).toBe(1);
     expect(barLabelStep(3840 / 20)).toBe(2);
     expect(barLabelStep(3840 / 5)).toBe(8);
+  });
+
+  it('the ruler is two rows: BAR over TIME', () => {
+    expect(RULER_BAR_H).toBe(18);
+    expect(RULER_TIME_H).toBe(14);
+    expect(RULER_H).toBe(32);
+  });
+
+  it('tickSeconds: song ticks to seconds at a tempo', () => {
+    expect(tickSeconds(BEAT, 120)).toBe(0.5);
+    expect(tickSeconds(31 * BAR, 124)).toBe(60); // bar 32 starts at 1:00 at 124 BPM
+    expect(tickSeconds(0, 90)).toBe(0);
+  });
+
+  it('timeLabelStep: the smallest of 1/2/5/10/15/30 s, 1/2/5/10… min that keeps labels >= 48 px apart', () => {
+    // 120 BPM: 1920 ticks per second.
+    expect(timeLabelStep(1920 / 100, 120)).toBe(1); // 100 px per second
+    expect(timeLabelStep(1920 / 48, 120)).toBe(1); // exactly 48 px
+    expect(timeLabelStep(1920 / 47, 120)).toBe(2);
+    expect(timeLabelStep(1920 / 20, 120)).toBe(5); // 2 s = 40 px, 5 s = 100 px
+    expect(timeLabelStep(1920 / 4, 120)).toBe(15); // 10 s = 40 px, 15 s = 60 px
+    expect(timeLabelStep(1920 / 1, 120)).toBe(60); // 30 s = 30 px
+    expect(timeLabelStep(1920 / 0.3, 120)).toBe(300); // 2 min = 36 px
+    // The zoom is in ticks: a faster tempo packs more ticks into a second, so seconds are wider.
+    expect(timeLabelStep(1920 / 47, 240)).toBe(1); // 94 px per second
+    expect(timeLabelStep(1920 / 47, 60)).toBe(5); // 23.5 px per second: 2 s = 47 px
+    // Never runs off the ladder: the most zoomed-out view still gets a step.
+    expect(timeLabelStep(1e9, 120)).toBeGreaterThan(0);
+    for (const tpp of [2, 7, 40, 133, 400]) for (const bpm of [60, 124, 200]) {
+      const step = timeLabelStep(tpp, bpm);
+      expect(fileTicks(step, bpm) / tpp).toBeGreaterThanOrEqual(TIME_LABEL_MIN_PX);
+    }
+  });
+
+  it('clockLabel: m:ss, rounded to the second', () => {
+    expect(clockLabel(0)).toBe('0:00');
+    expect(clockLabel(5)).toBe('0:05');
+    expect(clockLabel(59.9999)).toBe('1:00');
+    expect(clockLabel(60)).toBe('1:00');
+    expect(clockLabel(754)).toBe('12:34');
+    expect(clockLabel(3600)).toBe('60:00');
+  });
+
+  it('timeLabels: one label per step in [t0, t1], at the exact tick of that second', () => {
+    // 124 BPM, zoomed so a minute is in view: bar 32 (tick 31 * BAR) reads 1:00.
+    const tpp = (40 * BAR) / 1000; // 40 bars over 1000 px
+    const step = timeLabelStep(tpp, 124);
+    const ls = timeLabels(0, 40 * BAR, tpp, 124);
+    expect(ls[0]).toEqual({ t: 0, text: '0:00' });
+    expect(ls.find((l) => l.text === '1:00')?.t).toBe(31 * BAR);
+    expect(ls[1].t - ls[0].t).toBeCloseTo(fileTicks(step, 124));
+    // A scrolled view starts at the first label at or after t0.
+    const later = timeLabels(10 * BAR, 20 * BAR, tpp, 124);
+    expect(later[0].t).toBeGreaterThanOrEqual(10 * BAR);
+    expect(later[0].t - fileTicks(step, 124)).toBeLessThan(10 * BAR);
+    expect(later.at(-1)!.t).toBeLessThanOrEqual(20 * BAR);
+  });
+
+  it('posReadout: "Bar b.beat · m:ss.t" (1-based bar and beat; tenths floored)', () => {
+    expect(posReadout(0, 120)).toBe('Bar 1.1 · 0:00.0');
+    // Bar 5, beat 3 at 100 BPM: 18 beats = 10.8 s.
+    expect(posReadout(4 * BAR + 2 * BEAT, 100)).toBe('Bar 5.3 · 0:10.8');
+    expect(posReadout(4 * BAR + 2 * BEAT + BEAT - 1, 120)).toBe('Bar 5.3 · 0:09.4'); // still beat 3; 9.4997 s
+    expect(posReadout(31 * BAR, 124)).toBe('Bar 32.1 · 1:00.0');
+    expect(posReadout(-5, 120)).toBe('Bar 1.1 · 0:00.0'); // never negative
   });
 
   it('zoomAt keeps the tick under the pointer and clamps', () => {

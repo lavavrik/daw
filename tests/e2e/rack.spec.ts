@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // Plan 13 Task 2: the Instrument rack wraps into rows (like VCV Rack) instead
 // of one long horizontal rail, and the cables follow the jacks after a wrap and
@@ -8,7 +9,7 @@ async function loadSax(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await page.getByTestId('patch-select').selectOption('Sax');
   await expect(page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])').nth(9)).toBeVisible();
@@ -85,7 +86,7 @@ async function loadBrass(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await page.getByTestId('patch-select').selectOption('Brass Stab');
   await expect(page.getByTestId('module-9')).toBeVisible();
@@ -444,7 +445,7 @@ async function loadDeepBass(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByRole('button', { name: 'Click to start audio' })).toBeHidden();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('knob-4-reso')).toBeVisible();
   // The mouse helpers below aim at boundingBox() points: the slider must be on screen.

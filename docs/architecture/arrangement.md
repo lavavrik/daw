@@ -245,9 +245,30 @@ waveform, repeats, hatch), `TrackHeaders.svelte` (LOOK), `TrackVol.svelte`
   into a cached bitmap and stamped (one `drawImage` per period). Periods
   under 8 px get no preview; wider than the cap (deep zoom: a few in view)
   draw their marks directly.
+- **Ruler rows (plan 21).** The ruler is two labelled rows, named "Bar" /
+  "Time" in the header column's top-left cell (beside "TRACKS"): **BAR**
+  (18 px: a line and number every `barLabelStep` bars, beat ticks along its
+  bottom) over **TIME** (14 px, a shade darker: m:ss every
+  `tlMath.timeLabelStep` seconds, the smallest of 1/2/5/10/15/30 s,
+  1/2/5/10/15/30/60 min that keeps labels ≥ 48 px apart, each at the tick
+  where that second falls at `p.tempo`: one tempo per project, so time is
+  linear in ticks). The canvas mirrors the TIME labels in
+  `data-time-labels`. Hovering the lanes or the ruler shows a chip by the
+  pointer, "Bar 5.3 · 0:09.4" (`posReadout`: bar.beat, m:ss.tenths;
+  `tl-hover-readout`), hidden while a button is held (a clip, point or loop
+  drag). With tracks but no clips the lanes say "Drag a pattern from a
+  track, or click a lane to place its current pattern".
+- **Add track.** The footer's one "+ Add track" (`add-track`,
+  `AddTrackMenu.svelte`) opens a plain list: Drum, Synth, Sampler, Audio
+  track, Master row; the items keep the old footer buttons' test ids and
+  run `ui/addTrack.ts` (the menu bar's Add menu runs the same). A sample
+  dropped on the button makes a Sampler track with it.
 - **Ruler and playhead.** The loop range is an `--accent` bar along the
   ruler's top over a faint band (dim while the loop is off or the pattern
-  transport plays); bar numbers are in the mono font. The playhead is white
+  transport plays), with a "Loop" tab at its right end once it is ≥ 40 px
+  wide on screen (`data-loop-label`); bar numbers are in the mono font. The
+  playhead (and the parked position, dimmer) has a head on the ruler: a
+  downward triangle in the playhead colour. The playhead is white
   (`--text`) with a soft glow; the parked song position a dim line. With no
   PAT/SONG switch, the hidden `project.mode` (which transport ran last)
   never changes the stopped playlist: stopped, it is the song's view (loop

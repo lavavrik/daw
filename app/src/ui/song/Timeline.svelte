@@ -4,11 +4,12 @@
   //
   // Layout: one vertical scroll container (native scrolling, so headers and
   // lanes stay aligned when many tracks exist):
-  //   corner "Tracks"      | ruler canvas (sticky top): bar numbers, loop range
+  //   corner "TRACKS" +    | ruler canvas (sticky top), two rows (RULER below):
+  //     "Bar" / "Time"     |   BAR (bar numbers, beats, loop) over TIME (m:ss)
   //   track headers (HTML) | lanes: canvas (grid, loop shading, clips, playhead)
   //                        |        + transparent DOM overlays per lane / clip
   //   drop zone below the last lane (`tl-below`): drop audio for a new track
-  //   footer (sticky bottom): + Drum / Synth / Audio track, readout
+  //   footer (sticky bottom): + Add track (AddTrackMenu), time scrollbar, status
   // Time scrolls virtually (TlView.scrollTick); the canvases are DPR aware.
   // The DOM overlays (`tl-lane-<slot>`, `clip-<slot>-<idx>`) carry testids,
   // tooltips and labels; every pointer event bubbles to the lanes element and
@@ -41,6 +42,25 @@
   // range is an --accent bar on the ruler (dim while the loop is off or in
   // Pattern mode) over a faint band; the playhead is white (--text) with a
   // soft glow.
+  //
+  // RULER (plan 21 §6: "what of it is time?"). Two labelled rows (tlMath
+  // RULER_BAR_H / RULER_TIME_H; the corner cell names them "Bar" / "Time"):
+  //   - BAR: a line and the bar number every barLabelStep bars, beat ticks
+  //     along its bottom when beats are >= 8 px; the loop bar along its top,
+  //     with a "Loop" tab at the range's right end once the range is
+  //     LOOP_LABEL_MIN_PX wide on screen; the playhead head (a downward
+  //     triangle in the playhead colour, dim for the parked position);
+  //   - TIME (a shade darker): m:ss labels every timeLabelStep seconds
+  //     (1/2/5/10/15/30 s, 1/2/5… min; >= 48 px apart), placed at the tick
+  //     where that second falls at p.tempo (one tempo per project).
+  // The canvas mirrors the TIME labels in `data-time-labels` (tests can't
+  // read canvas text). HOVER READOUT: over the lanes and the ruler a small
+  // chip by the pointer says where it is, "Bar 5.3 · 0:09.4" (tlMath
+  // posReadout; `tl-hover-readout`). It hides while a button is held (a clip,
+  // point or loop drag), and when the pointer leaves. It listens in the
+  // capture phase on the lanes because AutoLane stops its pointermove.
+  // EMPTY STATE: with tracks but no clip at all, the lanes say how to start
+  // (`tl-empty-hint`).
   //
   // AUDIO LANES (plan 9; spec addendum §3.1/3.2). An Audio track's clips draw,
   // in the track colour: the min/max waveform from the sample's peaks
@@ -122,16 +142,13 @@
   import { onDestroy, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
-  import { TRACKS_FULL_TEXT, addDrumTrack, selectTrack } from '../../state/actions';
+  import { TRACKS_FULL_TEXT, selectTrack } from '../../state/actions';
   import type { ImportEngine } from '../../state/sampleImport';
   import { dropAudioFiles } from '../../state/audioDrop';
   import { pendingSampleIds, sampleFailed } from '../../state/sampleLoads';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
   import { clipFocus, sampleName } from './clipFocus.svelte';
-  import { addSynthTrack } from '../../state/rack-actions';
-  import { addSamplerTrack } from '../../state/sampler-actions';
-  import { STARTER_PATCHES } from '../../state/patches';
   import type { AudioClock } from '../../audio/audioClock';
   import type { AudioClip, AutomationLane, Clip, Project, Track } from '../../state/project.svelte';
   import type { AutoOwner } from '../../state/automation';
@@ -142,17 +159,18 @@
   import {
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips, transportPlaying,
   } from '../../state/song-actions';
-  import { addAudioTrack, fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
+  import { fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
   import AutoLane from './AutoLane.svelte';
-  import { laneHeight, laneView, setOpen } from './laneView.svelte';
+  import AddTrackMenu from './AddTrackMenu.svelte';
+  import { laneHeight, laneView } from './laneView.svelte';
   import { targetLabel } from './autoLabels';
   import { targetDef } from '../../state/automation';
   import {
-    BAR, BEAT, HEADER_W, LANE_H, MASTER_GREY, MASTER_ROW, MIN_CLIP_W, RULER_H, ZOOM, audioEdges,
-    barLabelStep, barRange, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, followPage, hitTest, loopFromDrag,
+    BAR, BEAT, HEADER_W, LANE_H, LOOP_LABEL_MIN_PX, MASTER_GREY, MIN_CLIP_W, RULER_BAR_H, RULER_H, RULER_TIME_H, ZOOM, audioEdges,
+    barLabelStep, barRange, posReadout, timeLabels, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, followPage, hitTest, loopFromDrag,
     notePreview, placeLen, repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX,
     xToTick, zoomAt,
   } from './tlMath';
@@ -162,7 +180,6 @@
 
   let { p, engine, clock }: { p: Project; engine: CommandSink & ImportEngine; clock: AudioClock | null } = $props();
 
-  const deepBass = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
   const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
   const FULL_TITLE = TRACKS_FULL_TEXT;
   /** What a drop on a drum or synth lane says (addendum §3.1). */
@@ -195,6 +212,14 @@
   let cursor = $state('default');
   /** Where a sample drag over the timeline would land (drawn as a highlight). */
   let dropHover = $state.raw<{ lane: number } | 'new' | null>(null);
+  /**
+   * The hover readout (RULER at the top): the pointer in .tl px (the chip
+   * sits right of it; `flip`: near the right edge, left of it) and
+   * in lanes x (what it reads: a time scroll or zoom under a still pointer
+   * updates the text, since it is derived from the view).
+   */
+  let pointer = $state.raw<{ x: number; y: number; flip: boolean; laneX: number } | null>(null);
+  const hoverText = $derived(pointer && view ? posReadout(xToTick(pointer.laneX, view), p.tempo) : '');
 
   type Found = { t: Track; c: Clip | AudioClip; lane: number };
   // The layout map (see AUTOMATION at the top): every row's y and height.
@@ -560,6 +585,7 @@
   }
   const STATE_TEXT = { missing: 'missing sample', failed: 'sample failed to load: stop and drop it again', pending: 'loads when playback stops' };
 
+  /** The two ruler rows (RULER at the top); `data-time-labels` mirrors the TIME row for tests. */
   function drawRuler() {
     const cv = rulerCv;
     const v = view;
@@ -569,14 +595,19 @@
     if (!ctx) return;
     const t0 = xToTick(0, v);
     const t1 = xToTick(W, v);
+    const TY = RULER_BAR_H; // the TIME row's top
     ctx.fillStyle = C.ruler;
     ctx.fillRect(0, 0, W, RULER_H);
+    ctx.fillStyle = veil(false, 0.14); // TIME a shade darker, so the rows read as two
+    ctx.fillRect(0, TY, W, RULER_TIME_H);
+    ctx.fillStyle = C.bar;
+    ctx.fillRect(0, TY, W, 1);
 
-    // Loop range: a faint band and the --accent bar along the top (bright while live, dim otherwise).
+    // Loop range: a faint band over both rows and the --accent bar along the top (bright while live, dim otherwise).
     const lx0 = tickToX(p.loop.start, v);
     const lx1 = tickToX(p.loop.end, v);
+    const live = loopLive();
     if (lx1 > 0 && lx0 < W) {
-      const live = loopLive();
       ctx.fillStyle = C.accent;
       ctx.globalAlpha = live ? 0.16 : 0.05;
       ctx.fillRect(lx0, 0, lx1 - lx0, RULER_H);
@@ -588,21 +619,54 @@
       ctx.globalAlpha = 1;
     }
 
+    // BAR row: beat ticks, then a line and the number at every labelled bar.
     ctx.textBaseline = 'middle';
     if (BEAT / v.ticksPerPx >= 8) {
       ctx.fillStyle = C.bar;
-      for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) if (t % BAR) ctx.fillRect(Math.round(tickToX(t, v)), RULER_H - 5, 1, 5);
+      for (let t = snapFloor(t0, BEAT); t <= t1; t += BEAT) if (t % BAR) ctx.fillRect(Math.round(tickToX(t, v)), TY - 5, 1, 5);
     }
     const step = barLabelStep(v.ticksPerPx);
     ctx.font = `500 10px ${THEME.fontMono}`;
     for (let t = snapFloor(t0, BAR * step); t <= t1; t += BAR * step) {
       const x = Math.round(tickToX(t, v));
       ctx.fillStyle = C.bar4;
-      ctx.fillRect(x, 0, 1, RULER_H);
+      ctx.fillRect(x, 0, 1, TY);
       ctx.fillStyle = C.rulerText;
-      ctx.fillText(String(t / BAR + 1), x + 4, RULER_H / 2 + 2);
+      ctx.fillText(String(t / BAR + 1), x + 4, TY / 2 + 2);
     }
 
+    // TIME row: a tick and m:ss at every label.
+    const labels = timeLabels(Math.max(0, t0), t1, v.ticksPerPx, p.tempo);
+    ctx.font = `500 9px ${THEME.fontMono}`;
+    for (const l of labels) {
+      const x = Math.round(tickToX(l.t, v));
+      ctx.fillStyle = C.bar4;
+      ctx.fillRect(x, TY, 1, RULER_TIME_H);
+      ctx.fillStyle = C.rulerText;
+      ctx.fillText(l.text, x + 3, TY + RULER_TIME_H / 2 + 1);
+    }
+    cv.dataset.timeLabels = labels.map((l) => l.text).join(' ');
+
+    // "Loop": a tab hanging from the loop bar at the range's right end (pinned
+    // to the view's edge while that end is off screen), drawn over the bar
+    // numbers, once the range is wide enough on screen.
+    const tabR = Math.min(lx1, W);
+    const loopLabel = tabR - Math.max(lx0, 0) >= LOOP_LABEL_MIN_PX;
+    if (loopLabel) {
+      ctx.font = `700 9px ${THEME.fontUi}`;
+      const tw = ctx.measureText('Loop').width + 8;
+      ctx.fillStyle = C.accent;
+      ctx.globalAlpha = live ? 0.9 : 0.35;
+      ctx.beginPath();
+      ctx.roundRect(tabR - tw - 2, 0, tw, 12, [0, 0, 3, 3]);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = live ? C.onColor : C.rulerText; // a dim tab is mostly the ruler: light text reads there
+      ctx.fillText('Loop', tabR - tw + 2, 6.5);
+    }
+    cv.dataset.loopLabel = loopLabel ? '1' : '0';
+
+    // The playhead head: a downward triangle on the BAR row, its line through both rows.
     const m = marker();
     if (m) {
       const x = tickToX(m.t, v);
@@ -1172,34 +1236,18 @@
     if (r.placed.length < r.imported) flashHint('Some files did not fit (song end or 256 clips per track)');
   }
 
-  // ---- "+ Sampler track": a sample dropped on the button makes the track ------
-  let samplerOver = $state(false);
-  function samplerDragOver(e: DragEvent) {
-    if (!isSampleDrag(e) || p.loading || tracksFull) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    samplerOver = true;
+  // ---- hover readout (RULER at the top) ------------------------------------------
+  /** Pointer moves over the lanes (capture: AutoLane stops its own) and the ruler; none while a button is held (a drag). */
+  function readoutMove(e: PointerEvent) {
+    if (!lanesEl || !root || e.buttons || drag || laneView.gesture) {
+      pointer = null;
+      return;
+    }
+    const r = root.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    pointer = { x, y: e.clientY - r.top, flip: x > r.width - 150, laneX: e.clientX - lanesEl.getBoundingClientRect().left };
   }
-  function samplerDrop(e: DragEvent) {
-    if (!isSampleDrag(e)) return;
-    e.preventDefault(); // handled here, never the window's "drop onto a row" error
-    e.stopPropagation();
-    samplerOver = false;
-    if (p.loading || tracksFull) return;
-    const pending = droppedFiles(e); // synchronously: the DataTransfer empties once this returns
-    void (async () => {
-      let files: File[];
-      try {
-        files = await pending;
-      } catch (err) {
-        banners.error = err instanceof Error ? err.message : String(err);
-        return;
-      }
-      if (!files[0]) return;
-      if (files.length > 1) flashHint('A sampler track takes one sample: using the first');
-      await addSamplerTrack(p, engine, files[0]);
-    })();
-  }
+  const readoutLeave = () => (pointer = null);
 
   // ---- keyboard (see KEYBOARD FOCUS RULE at the top) ---------------------------
   function nudge(dt: number) {
@@ -1288,12 +1336,18 @@
   data-playhead=""
   style:--header-w="{HEADER_W}px"
   style:--ruler-h="{RULER_H}px"
+  style:--ruler-bar-h="{RULER_BAR_H}px"
   style:--lane-h="{LANE_H}px"
 >
   <!-- Sample drops anywhere over the timeline (AUDIO LANES at the top). -->
   <div class="scroll" bind:this={scrollEl} role="presentation" ondragenter={dragOver} ondragover={dragOver} ondragleave={dragLeave} ondrop={drop}>
     <div class="grid">
-      <div class="corner lbl">Tracks</div>
+      <!-- The header column's top-left cell: what the column is, and the two ruler rows' names beside them. -->
+      <div class="corner" data-testid="tl-corner">
+        <span class="lbl">Tracks</span>
+        <span class="row-lbl bar-lbl">Bar</span>
+        <span class="row-lbl time-lbl">Time</span>
+      </div>
       <div class="ruler-wrap">
         <canvas
           bind:this={rulerCv}
@@ -1305,7 +1359,8 @@
           data-marker={patternRunning() ? 'none' : p.playing ? 'live' : 'parked'}
           title="Click: set the song position (Alt: exact). Drag: set the loop range."
           onpointerdown={rulerDown}
-          onpointermove={rulerMove}
+          onpointermove={(e) => { readoutMove(e); rulerMove(e); }}
+          onpointerleave={readoutLeave}
           onpointerup={up}
           onpointercancel={cancel}
           onlostpointercapture={cancel}
@@ -1324,10 +1379,11 @@
         aria-label="Song arrangement. Click a lane to place its pattern, drop audio files on it; Delete removes, Cmd+D duplicates, Cmd+E splits, arrows nudge."
         onpointerdown={down}
         onpointermove={move}
+        onpointermovecapture={readoutMove}
         onpointerup={up}
         onpointercancel={cancel}
         onlostpointercapture={cancel}
-        onpointerleave={() => { if (!drag) cursor = 'default'; }}
+        onpointerleave={() => { readoutLeave(); if (!drag) cursor = 'default'; }}
         ondblclick={dbl}
         oncontextmenu={context}
         onkeydown={key}
@@ -1390,6 +1446,9 @@
         {#each layout.filter((r) => r.kind === 'master') as r (r.trackId)}
           <div class="lane master-row" data-testid="tl-master-row" style:top="{r.y}px">Master row: lanes for the master and the returns (A)</div>
         {/each}
+        {#if p.tracks.length && !byId.size}
+          <div class="empty-hint" data-testid="tl-empty-hint">Drag a pattern from a track, or click a lane to place its current pattern</div>
+        {/if}
       </div>
       <!-- Below the last lane: a drop here makes a new Audio track (tlMath.dropTarget). -->
       <div class="below" class:over={dropHover === 'new'} data-testid="tl-below">
@@ -1397,24 +1456,8 @@
       </div>
     </div>
     <div class="foot">
-      <!-- Disabled at MAX_TRACKS (the engine has 32 slots), with a reason. -->
-      <button class="btn" data-testid="add-drum-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a drum track'} onclick={() => addDrumTrack(p, engine)}>+ Drum track</button>
-      <button class="btn" data-testid="add-synth-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add a synth track (Deep Bass)'} onclick={() => addSynthTrack(p, engine, undefined, deepBass)}>+ Synth track</button>
-      <button
-        class="btn" data-testid="add-sampler-track" class:over={samplerOver} disabled={tracksFull}
-        title={tracksFull ? FULL_TITLE : 'Add a sampler track: drop a sample here or on its Sample Player'}
-        onclick={() => { if (!tracksFull) void addSamplerTrack(p, engine); }}
-        ondragover={samplerDragOver} ondragleave={() => (samplerOver = false)} ondrop={samplerDrop}
-      >+ Sampler track</button>
-      {#if !p.mixer.automation.length}
-        <!-- The Master row (automation of the master and the returns); it stays once it has a lane. -->
-        <button
-          class="btn quiet" data-testid="tl-master-toggle" aria-pressed={laneView.master}
-          title={laneView.master ? 'Hide the Master row' : 'Show the Master row: automation lanes for the master, reverb and delay'}
-          onclick={() => { laneView.master = !laneView.master; if (laneView.master) setOpen(MASTER_ROW, true); }}
-        >{laneView.master ? '− Master row' : '+ Master row'}</button>
-      {/if}
-      <button class="btn" data-testid="add-audio-track" disabled={tracksFull} title={tracksFull ? FULL_TITLE : 'Add an audio track: drop audio files on its lane'} onclick={() => { if (addAudioTrack(p, engine)) p.mixerOpen = false; }}>+ Audio track</button>
+      <!-- One "+ Add track" list (its items are disabled at MAX_TRACKS, with the reason); a sample dropped on it makes a Sampler track. -->
+      <AddTrackMenu {p} {engine} onhint={flashHint} />
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
         class="hscroll"
@@ -1431,6 +1474,9 @@
       <output class="readout" class:hint={!!hint} data-testid="tl-readout">{readoutText}</output>
     </div>
   </div>
+  {#if pointer && hoverText}
+    <div class="hover-readout" class:flip={pointer.flip} data-testid="tl-hover-readout" aria-hidden="true" style:left="{pointer.x}px" style:top="{pointer.y}px">{hoverText}</div>
+  {/if}
   {#if menu && menuClip}
     <div
       class="menu"
@@ -1478,7 +1524,12 @@
   .scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; }
   .grid { display: grid; grid-template-columns: var(--header-w) minmax(0, 1fr); flex: 1 0 auto; align-content: start; }
   .corner, .ruler-wrap { position: sticky; top: 0; z-index: 2; height: var(--ruler-h); background: var(--panel); border-bottom: 1px solid var(--line); }
-  .corner { box-sizing: border-box; line-height: var(--ruler-h); padding-left: 10px; border-right: 1px solid var(--line); }
+  /* "TRACKS" on the left; "Bar" / "Time" on the right, each centred on its ruler row (RULER_BAR_H / RULER_TIME_H). */
+  .corner { box-sizing: border-box; display: grid; grid-template-columns: 1fr auto; grid-template-rows: var(--ruler-bar-h) 1fr; align-items: center; padding: 0 8px 0 10px; border-right: 1px solid var(--line); }
+  .corner .lbl { grid-row: 1 / -1; }
+  .row-lbl { grid-column: 2; font: 500 var(--fs-xs) var(--font-ui); color: var(--text-2); text-align: right; }
+  .bar-lbl { grid-row: 1; }
+  .time-lbl { grid-row: 2; }
   .ruler-wrap { min-width: 0; }
   .ruler { display: block; width: 100%; height: var(--ruler-h); cursor: text; touch-action: none; }
   .lanes { position: relative; min-width: 0; overflow: hidden; outline: none; touch-action: none; background: var(--work); }
@@ -1487,14 +1538,18 @@
   .lanes-cv.ov { pointer-events: none; z-index: 1; }
   .lane { position: absolute; left: 0; right: 0; height: var(--lane-h); }
   .clip { position: absolute; top: 2px; height: 23px; }
+  .empty-hint { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; padding: 0 12px; text-align: center; font-size: var(--fs-ctl); color: var(--text-2); pointer-events: none; }
+  /*
+   * The hover readout: a small chip right of the pointer, at its height (left of it near the right edge).
+   * Beside, not under: the global tooltip of the lane / ruler opens below the element, so the two never overlap.
+   */
+  .hover-readout { position: absolute; z-index: 3; translate: 14px -50%; padding: 2px 6px; border-radius: var(--r-sm); background: var(--lcd); color: var(--text); font: 500 var(--fs-lbl)/14px var(--font-mono); white-space: nowrap; box-shadow: var(--lift); pointer-events: none; }
+  .hover-readout.flip { translate: calc(-100% - 14px) -50%; }
   .auto-empty, .master-row { display: flex; align-items: center; padding-left: 8px; font-size: var(--fs-lbl); color: var(--text-2); pointer-events: none; }
   .below { grid-column: 1 / -1; min-height: calc(var(--lane-h) * 2); display: flex; align-items: center; justify-content: center; border-top: 1px dashed transparent; color: var(--text-2); font-size: 11px; opacity: 0.7; }
   .below.over { opacity: 1; background: color-mix(in srgb, var(--accent) 12%, transparent); border-top-color: var(--accent); color: var(--accent); }
   .menu .check { display: inline-block; width: 14px; }
   .foot { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--panel); border-top: 1px solid var(--line); }
-  /* Pills (.btn), smaller than the default 30 px. */
-  .foot .btn { padding: 4px 10px; font-size: 11px; }
-  .foot .btn.over { box-shadow: var(--raised-shadow), 0 0 0 2px var(--accent); }
   .hscroll { width: 140px; flex: none; margin-left: 8px; --c: var(--text-dim); }
   .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--font-ui); color: var(--text-2); }
   .readout.hint { color: var(--accent); }

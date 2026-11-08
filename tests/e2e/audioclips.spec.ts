@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Audio clips on the timeline (plan 9 Task 5): drops from Finder, the
 // library and the starter kit onto audio lanes, waveform overviews, clip
@@ -176,7 +177,7 @@ test('drop a WAV below the lanes makes an audio track', async ({ page }) => {
   await page.keyboard.press(undoKey);
   await expect.poll(async () => (await audioTracks(page))[0].clips.length).toBe(1);
   // + Audio track in the footer.
-  await page.getByTestId('add-audio-track').click();
+  await addTrack(page, 'audio');
   await expect.poll(async () => (await audioTracks(page)).length).toBe(2);
   const slot2 = (await audioTracks(page))[1].slot;
 
@@ -329,7 +330,7 @@ test('library and kit samples drop onto an audio lane', async ({ page }) => {
   );
   try {
     await expect(page.getByTestId('lib-sample-loop.wav')).toBeVisible();
-    await page.getByTestId('add-audio-track').click();
+    await addTrack(page, 'audio');
     const slot = (await audioTracks(page))[0].slot;
     await expect(page.getByTestId(`tl-lane-${slot}`)).toBeVisible();
     // Library sample at bar 2 (snapped to the beat).

@@ -27,7 +27,16 @@ export const LANE_MIN_H = 32;
 export const LANE_MAX_H = 240;
 /** Width of the track-header column (px): colour bar, name over the volume slider, M/S/A, ×. */
 export const HEADER_W = 176;
-export const RULER_H = 20;
+/**
+ * The ruler (plan 21 §6): two labelled rows, BAR on top (bar numbers, beat
+ * ticks, the loop bar and the playhead head) and TIME under it (m:ss labels,
+ * timeLabels). The header column's top-left cell labels them "Bar" / "Time".
+ */
+export const RULER_BAR_H = 18;
+export const RULER_TIME_H = 14;
+export const RULER_H = RULER_BAR_H + RULER_TIME_H;
+/** The loop range's bar says "Loop" once it is at least this wide on screen (px). */
+export const LOOP_LABEL_MIN_PX = 40;
 /** Resize handles: the outer EDGE_ZONE px at each end of a clip. */
 export const EDGE_ZONE = 6;
 /** Zoom limits (ticks per px): a beat at most 480 px wide; 999 bars fit ~10 000 px. */
@@ -364,6 +373,53 @@ export function barLabelStep(ticksPerPx: number): number {
   let step = 1;
   while (step * pxPerBar < 28 && step < 1024) step *= 2;
   return step;
+}
+
+// ---- song time (the ruler's TIME row and the hover readout) ---------------------
+// The tempo is one value per project (no tempo map), so seconds are linear in
+// ticks: seconds = ticks * 60 / (tempo * BEAT). fileTicks (below) is the inverse.
+
+/** Seconds from the song start to tick `t` at `tempo` BPM. */
+export const tickSeconds = (t: number, tempo: number) => (t * 60) / (tempo * BEAT);
+
+/** TIME labels sit at least this far apart (px): "12:34" in the 9 px mono font plus air. */
+export const TIME_LABEL_MIN_PX = 48;
+/** Seconds per TIME label, smallest first: round clock values only. */
+const TIME_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+
+/** Seconds per TIME label: the smallest TIME_STEPS entry whose labels sit >= TIME_LABEL_MIN_PX apart (the last one when none does). */
+export function timeLabelStep(ticksPerPx: number, tempo: number): number {
+  const pxPerSec = (tempo * BEAT) / 60 / ticksPerPx;
+  return TIME_STEPS.find((s) => s * pxPerSec >= TIME_LABEL_MIN_PX) ?? TIME_STEPS[TIME_STEPS.length - 1];
+}
+
+/** "m:ss", rounded to the nearest second (minutes run past 59: "75:00"). */
+export function clockLabel(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** The TIME labels for ticks t0..t1: every timeLabelStep seconds from 0:00, each at the tick where that second falls. */
+export function timeLabels(t0: number, t1: number, ticksPerPx: number, tempo: number): { t: number; text: string }[] {
+  const step = timeLabelStep(ticksPerPx, tempo);
+  const out: { t: number; text: string }[] = [];
+  for (let s = Math.max(0, Math.ceil(tickSeconds(t0, tempo) / step - 1e-9)) * step; ; s += step) {
+    const t = fileTicks(s, tempo);
+    if (t > t1) break;
+    out.push({ t, text: clockLabel(s) });
+  }
+  return out;
+}
+
+/** The hover readout: "Bar 5.3 · 0:09.4" (1-based bar.beat, then m:ss.t with the tenths floored). */
+export function posReadout(tick: number, tempo: number): string {
+  const t = Math.max(0, tick);
+  const bar = Math.floor(t / BAR) + 1;
+  const beat = Math.floor((t % BAR) / BEAT) + 1;
+  const tenths = Math.floor(tickSeconds(t, tempo) * 10 + 1e-6);
+  const m = Math.floor(tenths / 600);
+  const sec = (tenths % 600) / 10;
+  return `Bar ${bar}.${beat} · ${m}:${sec.toFixed(1).padStart(4, '0')}`;
 }
 
 /** Zoom by `factor` (< 1 = in) around pointer x; scroll never goes below 0. */

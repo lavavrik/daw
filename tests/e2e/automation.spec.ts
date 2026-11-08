@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import mixerCatalog from '../../engine/mixer_catalog.json' with { type: 'json' };
+import { addTrack, closeAddTrack, openAddTrack } from './addTrack';
 
 // Automation lanes on the timeline (plan 10 Task 3): the A toggle opens a
 // track's lanes under its clip row, "+ Lane" picks a target, clicks add
@@ -295,7 +296,7 @@ test('master row lane on the limiter ceiling', async ({ page }) => {
   await setTempo(page, 240);
   await dropBelow(page, 'tone', 4);
   await expect(page.getByTestId('tl-master-row')).toHaveCount(0);
-  await page.getByTestId('tl-master-toggle').click();
+  await addTrack(page, 'master');
   await expect(page.getByTestId('tl-master-row')).toBeVisible();
   const lane = await addLane(page, 'master', 'Master · Ceiling');
   await expect(page.getByTestId('auto-head-m-0')).toContainText('Master · Ceiling');
@@ -307,8 +308,11 @@ test('master row lane on the limiter ceiling', async ({ page }) => {
   const [l] = await savedLanes(page, 'master');
   expect(l).toMatchObject({ channel: 'master', target: { mix: 'limiter_ceiling' }, enabled: true });
   expect(l.points).toEqual([[0, -6, 1], [BAR, 0, 0]]);
-  // The Master row stays while it has a lane: no toggle to hide it.
+  // The Master row stays while it has a lane: the add-track list has no Master row item then.
+  await openAddTrack(page);
+  await expect(page.getByTestId('add-drum-track')).toBeVisible();
   await expect(page.getByTestId('tl-master-toggle')).toHaveCount(0);
+  await closeAddTrack(page);
 
   const rec = await playSong(page, 2200);
   const held = peakIn(rec, 600, BAR);
@@ -320,7 +324,7 @@ test('master row lane on the limiter ceiling', async ({ page }) => {
 
 test('removing a module removes its lane, undo restores it', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const t = (await tracks(page)).at(-1)!;
   expect(t.kind).toBe('synth');
   const lane = await addLane(page, t.slot, 'Filter · Cutoff');
@@ -437,7 +441,7 @@ test('the play-follow page flip waits for a lane gesture to end', async ({ page 
 test('a loaded Master row stays when its last lane goes; the 64-lane cap is shown', async ({ page }) => {
   test.setTimeout(60_000);
   await start(page);
-  await page.getByTestId('tl-master-toggle').click();
+  await addTrack(page, 'master');
   await addLane(page, 'master', 'Master · Ceiling');
   const name = `e2e-auto-master-${test.info().workerIndex}`;
   await page.evaluate(async (name) => {
@@ -486,7 +490,7 @@ test('knob ring follows a cutoff lane while playing', async ({ page }) => {
   test.setTimeout(60_000);
   await start(page);
   await setTempo(page, 240);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const t = (await tracks(page)).at(-1)!;
   const lane = await addLane(page, t.slot, 'Filter · Cutoff');
   await clickLane(page, lane, 0, 0.1);

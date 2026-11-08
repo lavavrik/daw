@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { addTrack } from './addTrack';
 
 // Timing-sensitive e2e tests. The "serial" Playwright project runs this file
 // alone, after all parallel tests are done (playwright.config.ts), so CPU
@@ -132,7 +133,7 @@ test('deferred drop while playing: notice, loads on Stop, engine keeps running a
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
   // Select a synth track first: the step grid unmounts, but the pending load
   // is session state (state/sampleLoads.ts) and must still land on Stop.
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByTestId('pianoroll')).toBeVisible();
   await expect(page.getByTestId('row-0')).toHaveCount(0);
   await page.keyboard.press('Space'); // Stop -> retry (grows memory)
@@ -628,7 +629,7 @@ async function patch(page: Page, from: string, to: string) {
  */
 test('scope edits while playing cause no dropouts', async ({ page }) => {
   await startAudio(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('rack')).toBeVisible();
   const track = await page.evaluate(() => {
@@ -905,7 +906,7 @@ test('four synth tracks stay under budget', async ({ page }) => {
 });
 
 async function addSynth(page: Page) {
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('patch-select')).toBeVisible();
 }

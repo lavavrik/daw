@@ -1,9 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
+import { closeAddTrack, openAddTrack } from './addTrack';
 
-// "+ Sampler track" (plan 15 Task 4): a sample dropped on the button makes a
-// synth track on the Sampler patch named after the file, with the sample on
-// its Sample Player; MIDI plays it.
+// "+ Sampler track" (plan 15 Task 4): a sample dropped on the add button
+// makes a synth track on the Sampler patch named after the file, with the
+// sample on its Sample Player; MIDI plays it. Since plan 21 the button is the
+// footer's one "+ Add track" (its list has "Sampler track").
 
 type Daw = {
   engine: { telemetry(): Float32Array } | null;
@@ -19,18 +21,20 @@ const daw = (page: Page) => page.evaluate(() => {
   return { sel: d.selectedTrackId, tracks: d.tracks.map((t) => ({ id: t.id, kind: t.kind, name: t.name, patch: t.patchName })), samples: [...d.sampleFiles.values()].map((f) => f.name) };
 });
 
-test('a sample dropped on + Sampler track makes a playable sampler track', async ({ page }) => {
+test('a sample dropped on + Add track makes a playable sampler track', async ({ page }) => {
   test.setTimeout(30_000);
   await page.goto('/');
   await page.getByRole('button', { name: 'Click to start audio' }).click();
   await expect(page.getByTestId('timeline')).toBeVisible();
   await page.waitForFunction(() => !!(window as unknown as { __daw?: { midi?: unknown } }).__daw?.midi);
-  await expect(page.getByTestId('add-sampler-track')).toHaveText('+ Sampler track');
-  await expect(page.getByTestId('add-sampler-track')).toHaveAttribute('title', 'Add a sampler track: drop a sample here or on its Sample Player');
+  await expect(page.getByTestId('add-track')).toHaveAttribute('title', /Drop a sample here for a Sampler track/);
+  await openAddTrack(page);
+  await expect(page.getByTestId('add-sampler-track')).toHaveText('Sampler track');
+  await closeAddTrack(page);
 
   const bytes = [...makeWav(220, 600)];
   await page.evaluate((bytes) => {
-    const el = document.querySelector('[data-testid="add-sampler-track"]')!;
+    const el = document.querySelector('[data-testid="add-track"]')!;
     const dt = new DataTransfer();
     dt.items.add(new File([new Uint8Array(bytes)], 'Bell Tone.wav', { type: 'audio/wav' }));
     for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));
@@ -79,7 +83,7 @@ test('the Sample Player strip shows the sample and its handles edit start / end 
 
   const bytes = [...makeWav(220, 600)];
   await page.evaluate((bytes) => {
-    const el = document.querySelector('[data-testid="add-sampler-track"]')!;
+    const el = document.querySelector('[data-testid="add-track"]')!;
     const dt = new DataTransfer();
     dt.items.add(new File([new Uint8Array(bytes)], 'Strip Tone.wav', { type: 'audio/wav' }));
     for (const t of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true }));

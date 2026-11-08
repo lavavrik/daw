@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { openMore } from './topbar';
+import { addTrack } from './addTrack';
 
 // The built-in starter kit (plan 8 Task 4): a fresh session — first start
 // and Project ▸ New — starts with the default drum track filled from the
@@ -224,7 +225,7 @@ test('a selected drum track plays its rows from the MIDI keyboard', async ({ pag
   await expectKit(page);
   await page.waitForFunction(() => !!(window as unknown as { __daw: M }).__daw?.midi);
   // A synth takes the keys when added; selecting the drum track moves them.
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await expect(page.getByTestId('keys-target')).not.toContainText('Drums');
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('keys-target')).toContainText('Drums');
@@ -269,7 +270,7 @@ test('a selected drum track plays its rows from the computer keyboard and record
     });
   await startAudio(page);
   await expectKit(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('keys-target')).toContainText('Drums');
   expect(await maxPeak(page, 300)).toBeLessThan(0.01);

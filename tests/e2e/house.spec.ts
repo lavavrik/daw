@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // The menu's contract, in order (app/src/state/patches.ts BUILTIN_GROUPS and
 // housePatches.ts HOUSE_GROUPS; app code is not importable here because of
@@ -33,7 +34,7 @@ async function startAudio(page: Page) {
 }
 
 async function addSynth(page: Page) {
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('patch-select')).toBeVisible();
 }

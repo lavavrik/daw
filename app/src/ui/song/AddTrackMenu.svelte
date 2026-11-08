@@ -1,0 +1,177 @@
+<script lang="ts">
+  // "+ Add track" (plan 21 §8): the playlist footer's one add button. It
+  // opens a plain list (Drum, Synth, Sampler, Audio track; Master row): the
+  // same items, actions and disabled reasons as the menu bar's Add menu
+  // (ui/addTrack.ts runs both). Each item keeps the test id of the footer
+  // button it replaced (`add-drum-track`, `add-synth-track`,
+  // `add-sampler-track`, `add-audio-track`, and `tl-master-toggle` for the
+  // Master row), so a test opens the menu (tests/e2e/addTrack.ts) and clicks
+  // it. A full project (MAX_TRACKS) disables the track items with the reason
+  // as their tooltip; the Master row item is gone once the row has a lane
+  // (it stays then), and disabled while it is shown without one (its header's
+  // × hides it).
+  //
+  // Keyboard (spec §1's menu rule: an `aria-expanded` button over a list of
+  // plain buttons, no role=menu): opening focuses the first enabled item,
+  // Up / Down / Home / End move, Escape closes and gives the focus back to
+  // the button (and is stopped: only the topmost layer closes), a click
+  // outside closes. The list is position: fixed above the button, so the
+  // song pane's overflow never clips it.
+  //
+  // Dropping a sample (a Finder file or a library sample) on the button makes
+  // a Sampler track with it, as the old "+ Sampler track" button did.
+  import Plus from 'phosphor-svelte/lib/Plus';
+  import GridFour from 'phosphor-svelte/lib/GridFour';
+  import PianoKeys from 'phosphor-svelte/lib/PianoKeys';
+  import Waveform from 'phosphor-svelte/lib/Waveform';
+  import FileAudio from 'phosphor-svelte/lib/FileAudio';
+  import FadersHorizontal from 'phosphor-svelte/lib/FadersHorizontal';
+  import type { Component } from 'svelte';
+  import Icon from '../Icon.svelte';
+  import type { Project } from '../../state/project.svelte';
+  import { MAX_TRACKS } from '../../state/project.svelte';
+  import type { CommandSink } from '../../state/actions';
+  import type { ImportEngine } from '../../state/sampleImport';
+  import { addSamplerTrack } from '../../state/sampler-actions';
+  import { banners } from '../../state/banners.svelte';
+  import { droppedFiles, isSampleDrag } from '../../library/drag';
+  import { ADD_ITEMS, addBlocked, addTrack } from '../addTrack';
+  import type { AddKind } from '../addTrack';
+
+  let { p, engine, onhint }: { p: Project; engine: CommandSink & ImportEngine; onhint: (text: string) => void } = $props();
+
+  /** Each item's old footer test id and its icon. */
+  const ITEM: Record<AddKind, { testid: string; icon: Component<any> }> = {
+    drum: { testid: 'add-drum-track', icon: GridFour },
+    synth: { testid: 'add-synth-track', icon: PianoKeys },
+    sampler: { testid: 'add-sampler-track', icon: Waveform },
+    audio: { testid: 'add-audio-track', icon: FileAudio },
+    master: { testid: 'tl-master-toggle', icon: FadersHorizontal },
+  };
+  /** The Master row item only while the row has no lane (with a lane it stays: nothing to toggle). */
+  const items = $derived(ADD_ITEMS.filter((it) => it.kind !== 'master' || !p.mixer.automation.length));
+  const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
+
+  let open = $state(false);
+  let btn = $state<HTMLButtonElement | null>(null);
+  let list = $state<HTMLDivElement | null>(null);
+  /** Where the list sits (fixed, viewport px): its left edge and its bottom 4 px above the button. */
+  let at = $state({ left: 0, bottom: 0 });
+
+  const buttons = () => [...(list?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+
+  function show() {
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    at = { left: r.left, bottom: window.innerHeight - r.top + 4 };
+    open = true;
+    queueMicrotask(() => buttons()[0]?.focus());
+  }
+  function close(refocus: boolean) {
+    open = false;
+    if (refocus) btn?.focus();
+  }
+  function pick(kind: AddKind) {
+    close(false);
+    addTrack(p, engine, kind);
+  }
+
+  function listKey(e: KeyboardEvent) {
+    const bs = buttons();
+    const i = bs.indexOf(document.activeElement as HTMLButtonElement);
+    const go = (k: number) => {
+      e.preventDefault();
+      bs[(k + bs.length) % bs.length]?.focus();
+    };
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation(); // only this layer closes
+      close(true);
+    } else if (e.key === 'ArrowDown') go(i + 1);
+    else if (e.key === 'ArrowUp') go(i < 0 ? -1 : i - 1);
+    else if (e.key === 'Home') go(0);
+    else if (e.key === 'End') go(-1);
+    else if (e.key === 'Tab') close(false); // the focus moves on: the list goes
+  }
+
+  // A press outside the button and the list closes it; so does a resize (the list is placed once).
+  $effect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (!btn?.contains(t) && !list?.contains(t)) close(false);
+    };
+    const resize = () => close(false);
+    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('resize', resize);
+    };
+  });
+
+  // ---- a sample dropped on the button: a Sampler track with it ------------------
+  let over = $state(false);
+  function dragOver(e: DragEvent) {
+    if (!isSampleDrag(e) || p.loading || tracksFull) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    over = true;
+  }
+  function drop(e: DragEvent) {
+    if (!isSampleDrag(e)) return;
+    e.preventDefault(); // handled here, never the window's "drop onto a row" error
+    e.stopPropagation(); // nor the timeline's audio drop
+    over = false;
+    if (p.loading || tracksFull) return;
+    const pending = droppedFiles(e); // synchronously: the DataTransfer empties once this returns
+    void (async () => {
+      let files: File[];
+      try {
+        files = await pending;
+      } catch (err) {
+        banners.error = err instanceof Error ? err.message : String(err);
+        return;
+      }
+      if (!files[0]) return;
+      if (files.length > 1) onhint('A sampler track takes one sample: using the first');
+      await addSamplerTrack(p, engine, files[0]);
+    })();
+  }
+</script>
+
+<button
+  bind:this={btn}
+  class="btn add"
+  class:over
+  data-testid="add-track"
+  aria-expanded={open}
+  aria-haspopup="true"
+  title="Add a track or the Master row. Drop a sample here for a Sampler track"
+  onclick={() => (open ? close(false) : show())}
+  ondragover={dragOver}
+  ondragleave={() => (over = false)}
+  ondrop={drop}
+><Icon icon={Plus} size={14} />Add track</button>
+
+{#if open}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="list" bind:this={list} data-testid="add-track-menu" style:left="{at.left}px" style:bottom="{at.bottom}px" onkeydown={listKey}>
+    {#each items as it (it.kind)}
+      {@const why = addBlocked(p, it.kind)}
+      <button data-testid={ITEM[it.kind].testid} disabled={!!why} title={why ?? it.title} onclick={() => pick(it.kind)}>
+        <Icon icon={ITEM[it.kind].icon} />{it.label}
+      </button>
+    {/each}
+  </div>
+{/if}
+
+<style>
+  /* A footer pill (Timeline's .foot .btn size), icon + text. */
+  .add { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-size: 11px; }
+  .add.over { box-shadow: var(--raised-shadow), 0 0 0 2px var(--accent); }
+  .list { position: fixed; z-index: 50; min-width: 170px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .list button { display: flex; align-items: center; gap: 8px; font: var(--fs-ctl) var(--font-ui); text-align: left; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .list button:hover:not(:disabled), .list button:focus-visible { background: var(--raised); outline: none; }
+  .list button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
+</style>

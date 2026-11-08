@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // MIDI learn (plan 14 Task 3; docs/architecture/midi.md "UI"): right-click a
 // knob or fader ▸ "MIDI learn", the next CC binds to it, later CCs move it
@@ -46,7 +47,7 @@ const midiMap = (page: Page) => page.evaluate(() => JSON.parse(JSON.stringify((w
 
 test('MIDI learn a rack knob: sweep, undo, forget', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const t = await page.evaluate(() => {
     const x = (window as Any).__daw.project.tracks.at(-1);
     return { id: x.id as string, slot: x.slot as number };
@@ -149,7 +150,7 @@ test('MIDI learn a mixer fader; Esc cancels learning', async ({ page }) => {
 // The MIDI popover (plan 14 Task 4): devices, last CC, the mapping list.
 test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const slot = await page.evaluate(() => (window as Any).__daw.project.tracks.at(-1).slot as number);
   await page.getByTestId(`track-${slot}`).click();
   await page.getByRole('button', { name: 'Instrument' }).click();
@@ -206,7 +207,7 @@ test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async (
 // Removing a track drops its mappings (spec §2.3).
 test('removing a mapped track drops its mapping', async ({ page }) => {
   await start(page);
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const t = await page.evaluate(() => (window as Any).__daw.project.tracks.at(-1).id as string);
   await page.getByTestId(`track-${await page.evaluate(() => (window as Any).__daw.project.tracks.at(-1).slot)}`).click();
   await page.getByRole('button', { name: 'Instrument' }).click();

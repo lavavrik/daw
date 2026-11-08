@@ -22,7 +22,7 @@
   // row with just the select. While the pattern transport ran last (Pattern
   // mode) a lane header says lanes play with the song only. The Master row (pinned under the last track) holds the
   // master's and both returns' lanes; its own A, and × to hide it while it
-  // has no lane (the timeline footer's "+ Master row" shows it).
+  // has no lane (the timeline footer's "+ Add track" list shows it: "Master row").
   //
   // LANE HEIGHT (plan 19). Each lane row's header has a 5 px grab strip on
   // its bottom edge (`lane-resize-<laneId>`, a focusable horizontal

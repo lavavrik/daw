@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
 import { openMore } from './topbar';
+import { addTrack } from './addTrack';
 
 // Project ▸ Export WAV… end to end: the real render Worker running
 // engine.wasm. showSaveFilePicker is replaced (before the app loads) by a
@@ -334,7 +335,7 @@ test('automation round-trips through save, undo, restart and export', async ({ p
   await bpm.press('Enter');
   await expect.poll(() => page.evaluate(() => (window as unknown as Win).__daw.project.tempo)).toBe(240);
 
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const synth = await page.evaluate(() => {
     const { actions: a, project } = (window as unknown as Win).__daw;
     const t = project.tracks.at(-1)!;

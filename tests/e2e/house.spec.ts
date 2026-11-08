@@ -61,7 +61,7 @@ test('Sax rack shows a Formant', async ({ page }) => {
   const fi = 4; // the Sax's Formant (housePatches.ts idx 4; house_patches.rs checks the same)
   const panel = page.getByTestId(`module-${fi}`);
   await expect(panel).toBeVisible();
-  // Ten param controls: sliders, segmented choices, selects (a slider's
+  // Ten param controls: knobs, faders, LED choices, selects (a fader's
   // `-track` part has no role and is not one; nor is the Formant's own
   // `track` param's track, `knob-4-track-track`).
   await expect(panel.locator(`:is([role=slider], [role=radiogroup], select)[data-testid^="knob-${fi}-"]`)).toHaveCount(10);

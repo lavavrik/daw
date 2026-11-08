@@ -17,9 +17,16 @@
   // - Undo: every change is one `onchange`, so one entry: a click lands
   //   inside its pointer gesture, a key press is an edit of its own.
   // - No automation lane or MIDI learn: choice params have neither.
+  // - `look="led"` (plan 21 Task 10; spec §11, the board "Rack, mechanical
+  //   faceplates"; the rack and the mixer strips): each option is a raised
+  //   push-button (.mech-btn, theme.css) with an LED dot above it (.led); the
+  //   picked one is pressed in and its LED glows in `color`. The row wraps
+  //   and is centred, with the engraved label under it, as on the board. The
+  //   radiogroup, the radios and their test ids, the keys and the undo are
+  //   the same as the seg row's; the LED is decoration (aria-hidden).
   import type { KnobDef } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color, testid, note = '' }: {
+  let { def, value, onchange, moduleName = '', color, testid, note = '', look = 'seg' }: {
     /** The param: its label and choices (value = the choice's index). */
     def: Pick<KnobDef, 'label' | 'choices'>;
     value: number;
@@ -31,7 +38,10 @@
     testid?: string;
     /** Extra line under the row, e.g. the Delay's "(max 2 s)"; "" = none. */
     note?: string;
+    /** A flat seg row, or LED push-buttons (header comment). */
+    look?: 'seg' | 'led';
   } = $props();
+  const led = $derived(look === 'led');
 
   const name = $derived(`${moduleName} ${def.label}`.trim());
   const picked = $derived(Math.round(value));
@@ -52,10 +62,25 @@
   }
 </script>
 
-<div class="choice">
-  <span class="label">{def.label}</span>
+{#snippet option(c: string, i: number)}
+  <button
+    type="button"
+    class:mech-btn={led}
+    role="radio"
+    aria-checked={i === picked}
+    tabindex={i === picked ? 0 : -1}
+    data-testid={testid ? `${testid}-${i}` : undefined}
+    onclick={(e) => {
+      e.currentTarget.focus();
+      if (i !== picked) onchange(i);
+    }}
+  >{c}</button>
+{/snippet}
+
+<div class="choice" class:mech={led}>
+  {#if !led}<span class="label">{def.label}</span>{/if}
   <div
-    class="seg"
+    class={led ? 'leds' : 'seg'}
     role="radiogroup"
     tabindex="-1"
     aria-label={name}
@@ -65,19 +90,14 @@
     style:--c={color}
   >
     {#each def.choices as c, i (i)}
-      <button
-        type="button"
-        role="radio"
-        aria-checked={i === picked}
-        tabindex={i === picked ? 0 : -1}
-        data-testid={testid ? `${testid}-${i}` : undefined}
-        onclick={(e) => {
-          e.currentTarget.focus();
-          if (i !== picked) onchange(i);
-        }}
-      >{c}</button>
+      {#if led}
+        <span class="opt"><span class="led" class:lit={i === picked} aria-hidden="true"></span>{@render option(c, i)}</span>
+      {:else}
+        {@render option(c, i)}
+      {/if}
     {/each}
   </div>
+  {#if led}<span class="engr">{def.label}</span>{/if}
   {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
 </div>
 
@@ -93,4 +113,8 @@
     box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--c) 40%, transparent);
   }
   .note { padding: 0 2px; font-size: var(--fs-lbl); color: var(--accent); }
+  /* LED look: a centred, wrapping row of LED-over-button columns. */
+  .choice.mech { align-items: center; gap: 6px; }
+  .leds { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 5px; outline: none; }
+  .opt { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 </style>

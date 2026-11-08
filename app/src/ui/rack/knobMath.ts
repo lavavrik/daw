@@ -121,6 +121,39 @@ export function sliderPosFromX(clientX: number, rect: { left: number; width: num
 }
 
 /**
+ * Vertical fader variant (Knob.svelte `variant="vfader"`, plan 21): position
+ * 0..1 under `clientY` on a slot whose live rect is `rect`, bottom = 0, top
+ * = 1. Clamped; a collapsed slot (height 0) gives 0. Its drag is
+ * sliderDrag with the upward travel (-dy) and the slot's height, and a click
+ * is isClickTravel on the y axis.
+ */
+export function sliderPosFromY(clientY: number, rect: { top: number; height: number }): number {
+  if (!(rect.height > 0)) return 0;
+  return clamp01((rect.top + rect.height - clientY) / rect.height);
+}
+
+/** Mech dial sizes in px (plan 21, spec §11): the hero param, the default, compact (mixer strips, beside faders). */
+export const MECH_DIAL_PX = { lg: 86, md: 58, sm: 46 } as const;
+export type MechSize = keyof typeof MECH_DIAL_PX;
+
+/**
+ * The mech dial's ring of 11 ticks, as one SVG path in its 100×100 box
+ * (centre 50,50): from 135° (bottom-left) clockwise over the 270° travel,
+ * radius 45 out to 48, every 5th (min, centre, max) out to 50. The board's
+ * geometry ("Rack, mechanical faceplates").
+ */
+export const MECH_TICKS = (() => {
+  let d = '';
+  for (let i = 0; i <= 10; i++) {
+    const a = ((135 + 27 * i) * Math.PI) / 180;
+    const r2 = i % 5 === 0 ? 50 : 48;
+    const p = (r: number) => `${(50 + r * Math.cos(a)).toFixed(1)} ${(50 + r * Math.sin(a)).toFixed(1)}`;
+    d += `M${p(45)}L${p(r2)}`;
+  }
+  return d;
+})();
+
+/**
  * New position after a horizontal drag of `dx` px (right = more) on a track
  * `widthPx` wide: the track's width is the full range; `fine` (Shift) is 10x finer.
  */

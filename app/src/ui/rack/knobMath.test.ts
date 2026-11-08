@@ -3,7 +3,10 @@ import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
-import { CLICK_SLOP_PX, DRAG_PX, isClickTravel, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos, ZERO_ZONE } from './knobMath';
+import {
+  CLICK_SLOP_PX, DRAG_PX, MECH_DIAL_PX, MECH_TICKS, isClickTravel, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY,
+  toPos, ZERO_ZONE,
+} from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
   const d = moduleDef(mod);
@@ -158,6 +161,23 @@ describe('slider maths', () => {
 
   it('a slider drag in position space: exp params move logarithmically, like the knob', () => {
     expect(fromPos(cutoff, sliderDrag(toPos(cutoff, 20), 100, 200, false))).toBeCloseTo(Math.sqrt(20 * 20000));
+  });
+
+  it('sliderPosFromY (vertical fader): the bottom of the live rect is 0, the top 1, clamped', () => {
+    const r = { top: 50, height: 100 };
+    expect(sliderPosFromY(150, r)).toBe(0);
+    expect(sliderPosFromY(50, r)).toBe(1);
+    expect(sliderPosFromY(125, r)).toBeCloseTo(0.25);
+    expect(sliderPosFromY(400, r)).toBe(0);
+    expect(sliderPosFromY(-10, r)).toBe(1);
+    expect(sliderPosFromY(125 - 300, { top: 50 - 300, height: 100 })).toBeCloseTo(0.25); // scrolled
+    expect(sliderPosFromY(80, { top: 50, height: 0 })).toBe(0); // collapsed
+  });
+
+  it('a vertical fader drag is sliderDrag with the travel up: the slot height is the full range', () => {
+    // Knob.svelte passes -dy (screen y grows downward).
+    expect(sliderDrag(0.2, -(-50), 100, false)).toBeCloseTo(0.7);
+    expect(sliderDrag(0.2, -(-50), 100, true)).toBeCloseTo(0.25);
   });
 
   it('a click is less than CLICK_SLOP_PX of horizontal travel; vertical travel does not count', () => {
@@ -374,5 +394,34 @@ describe('parseValue (typed entry)', () => {
         expect(formatValue(d, back!)).toBe(formatValue(d, v));
       }
     }
+  });
+});
+
+describe('mech dial geometry', () => {
+  it('sizes: lg (hero) 86, md 58, sm 46 px (spec §11)', () => {
+    expect(MECH_DIAL_PX).toEqual({ lg: 86, md: 58, sm: 46 });
+  });
+
+  it('the tick ring: 11 ticks over the 270° travel, every 5th longer', () => {
+    const ticks = MECH_TICKS.match(/M[^M]+/g)!;
+    expect(ticks).toHaveLength(11);
+    const seg = (t: string) => t.match(/-?[\d.]+/g)!.map(Number);
+    const len = (t: string) => {
+      const [x1, y1, x2, y2] = seg(t);
+      return Math.hypot(x2 - x1, y2 - y1);
+    };
+    expect(len(ticks[0])).toBeCloseTo(5, 0);
+    expect(len(ticks[5])).toBeCloseTo(5, 0);
+    expect(len(ticks[1])).toBeCloseTo(3, 0);
+    // First tick bottom-left (135°), the middle one straight up, the last bottom-right.
+    const [x0, y0] = seg(ticks[0]);
+    expect(x0).toBeLessThan(50);
+    expect(y0).toBeGreaterThan(50);
+    const [xm, ym] = seg(ticks[5]);
+    expect(xm).toBeCloseTo(50, 1);
+    expect(ym).toBeCloseTo(5, 1);
+    const [xl, yl] = seg(ticks[10]);
+    expect(xl).toBeCloseTo(100 - x0, 1);
+    expect(yl).toBeCloseTo(y0, 1);
   });
 });

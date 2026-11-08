@@ -785,9 +785,9 @@ test('loading the Chord Stab patch replaces the rack and plays chords', async ({
 test('a cable can also be drawn from an empty input to an output; a full rack says so', async ({ page }) => {
   await addSynth(page);
   const cables = page.locator('[data-testid="cables"] path.cable');
-  // Mixer in3 <- the ADSR's env: both sit in the rack's second row at 1280 px
+  // Mixer in3 <- Oscillator 1's out: both sit in the rack's first row at 1280 px
   // (the cards' widths decide the rows), so both ends are on screen together.
-  await dragTo(page, 'jack-3-in-in3', await centre(page, 'jack-5-out-env'));
+  await dragTo(page, 'jack-3-in-in3', await centre(page, 'jack-1-out-out'));
   await expect(cables).toHaveCount(12);
   // Deep Bass has 8 modules; fill the other 24 slots through the menu.
   const addBtn = page.getByRole('button', { name: '+ Add module' });

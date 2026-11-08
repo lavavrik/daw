@@ -15,6 +15,14 @@
   // the fader coalesce their sends to one per animation frame. Every
   // continuous knob and the fader follow their automation lane (`auto`,
   // plan 10 Task 4) and offer "Automate" on right-click.
+  //
+  // Look (plan 21 Task 10; spec §11: the rack's mechanical faceplate on the
+  // mixer "patches"): a .mech-panel with four corner screws and a header
+  // strip (.mech-head) in the track colour; M / S / ∿ are LED push-buttons
+  // (.mech-btn under a .led that glows in the button's colour when on); the
+  // EQ, Comp, return, send, pan and limiter knobs are mech knobs, compact
+  // ('sm', 46 px), two per row; the fader is the mech fader (Fader.svelte).
+  // Meters unchanged.
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
@@ -158,15 +166,17 @@
 </script>
 
 <div
-  class="strip"
+  class="strip mech-panel"
   class:sel={selected}
   class:neutral={color === null}
   style:--c={color ?? 'var(--raised)'}
   data-testid={kind === 'track' ? `strip-${channel}` : `strip-${target}`}
 >
+  <span class="screw" style:left="3px" style:top="42px"></span><span class="screw" style:right="3px" style:top="42px"></span>
+  <span class="screw" style:left="3px" style:bottom="4px"></span><span class="screw" style:right="3px" style:bottom="4px"></span>
   <button
     type="button"
-    class="name"
+    class="name mech-head"
     data-testid="strip-name"
     disabled={!onselect}
     aria-pressed={onselect ? selected : undefined}
@@ -177,21 +187,27 @@
     {#if subtitle}<span class="sub">{subtitle}</span>{/if}
   </button>
 
+  <!-- Everything above the fader: scrolls inside the strip when the mixer is too short for it, so the fader stays in view. -->
+  <div class="upper">
+  <!-- LED push-buttons: the LED (decoration) glows in the button's colour (--c on its column) while it is on. -->
   <div class="ms">
     {#if kind !== 'master'}
-      <button type="button" class="m" class:lit={muted} aria-pressed={muted} aria-label={`Mute ${name}`} title={muted ? `${name} is muted — click to unmute` : `Mute ${name}`} data-testid="mute" onclick={() => toggleMute(p, engine, target)}>M</button>
+      <span class="lb m"><span class="led" class:lit={muted} aria-hidden="true"></span>
+        <button type="button" class="mech-btn" aria-pressed={muted} aria-label={`Mute ${name}`} title={muted ? `${name} is muted — click to unmute` : `Mute ${name}`} data-testid="mute" onclick={() => toggleMute(p, engine, target)}>M</button></span>
     {/if}
     {#if kind === 'track'}
-      <button type="button" class="s" class:lit={soloed} aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloTitle(name, soloed, '; returns keep playing')} data-testid="solo" onclick={(e) => toggleSolo(p, engine, target, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button>
+      <span class="lb s"><span class="led" class:lit={soloed} aria-hidden="true"></span>
+        <button type="button" class="mech-btn" aria-pressed={soloed} aria-label={`Solo ${name}`} title={soloTitle(name, soloed, '; returns keep playing')} data-testid="solo" onclick={(e) => toggleSolo(p, engine, target, { additive: e.metaKey || e.ctrlKey || e.shiftKey })}>S</button></span>
     {/if}
     {#if kind !== 'master'}
-      <button type="button" class="an" class:lit={analysed} aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}><Icon icon={Waveform} size={12} /></button>
+      <span class="lb an"><span class="led" class:lit={analysed} aria-hidden="true"></span>
+        <button type="button" class="mech-btn" aria-pressed={analysed} aria-label={`Show ${name} in analyser`} title="Show in analyser" data-testid={`analyser-strip-${channel}`} onclick={() => analyserBus().toggle(channel, target)}><Icon icon={Waveform} size={12} /></button></span>
     {/if}
   </div>
 
   <Section title="EQ" icon={Equalizer} {name} testid="eq" on={val('eq_on') === 1} ontoggle={() => set('eq_on', val('eq_on') ? 0 : 1)}>
     {#each eqKnobs as d (d.id)}
-      <Knob variant="slider" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
+      <Knob variant="mech" size="sm" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
     {/each}
   </Section>
 
@@ -220,7 +236,7 @@
         </select>
       </label>
       {#each compKnobs as d (d.id)}
-        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
+        <Knob variant="mech" size="sm" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)} />
       {/each}
     </Section>
   {/if}
@@ -229,7 +245,7 @@
     <Section title={target === 'reverb' ? 'Reverb' : 'Delay'} {name} testid="fx">
       {#each fxKnobs as d (d.id)}
         <!-- Synced delay times are clamped to 2 s by the engine: say so. -->
-        <Knob def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)}
+        <Knob variant="mech" size="sm" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)}
           note={d.name === 'delay_time' ? delayClampNote(val(d.name), p.tempo) : ''} />
       {/each}
     </Section>
@@ -240,8 +256,8 @@
       {#each [['send_a', 'send_a_pre'], ['send_b', 'send_b_pre']] as [s, pre] (s)}
         {@const isPre = val(pre) === 1}
         <div class="send">
-          <Knob variant="slider" def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
-          <button type="button" class="pre" class:lit={isPre} aria-pressed={isPre} aria-label={`${name} ${mixParam(s).label} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}>{isPre ? 'pre' : 'post'}</button>
+          <Knob variant="mech" size="sm" def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
+          <button type="button" class="pre mech-btn" aria-pressed={isPre} aria-label={`${name} ${mixParam(s).label} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}><span class="led" class:lit={isPre} aria-hidden="true"></span>{isPre ? 'pre' : 'post'}</button>
         </div>
       {/each}
     </div>
@@ -249,17 +265,18 @@
 
   {#if kind !== 'master'}
     <div class="row">
-      <Knob variant="slider" def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" auto={autoOf('pan')} onchange={(v) => set('pan', v)} />
+      <Knob variant="mech" size="sm" def={mixParam('pan')} value={val('pan')} color={knobColor} moduleName={name} testid="knob-pan" auto={autoOf('pan')} onchange={(v) => set('pan', v)} />
     </div>
   {:else}
     <div class="row limiter" title="Master limiter: the output never exceeds the ceiling">
-      <Knob variant="slider" def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" auto={autoOf('limiter_ceiling')} onchange={(v) => set('limiter_ceiling', v)} />
+      <Knob variant="mech" size="sm" def={mixParam('limiter_ceiling')} value={val('limiter_ceiling')} color={knobColor} moduleName="Master limiter" testid="knob-limiter_ceiling" auto={autoOf('limiter_ceiling')} onchange={(v) => set('limiter_ceiling', v)} />
       <div class="grbox" title="Limiter gain reduction: how much the master is being turned down to stay under the ceiling">
-        <span>Limiter GR</span>
+        <span class="engr">Lim GR</span>
         <span class="grv" bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span>
       </div>
     </div>
   {/if}
+  </div>
 
   <div class="fm">
     <Fader value={fader} name={`${name} volume`} auto={autoOf('fader')} onchange={(v) => set('fader', v)} />
@@ -276,46 +293,57 @@
 </div>
 
 <style>
-  /* A card (spec §4): --panel body with --lift, a track-colour header with
-     --gloss, a track-colour outline when selected. 132 px wide: the slider
-     variant needs ~112 px, so the strips stay compact. */
-  .strip { width: 132px; flex: none; display: flex; flex-direction: column; background: var(--panel); border-radius: var(--r-lg); box-shadow: var(--lift); padding: 0 8px 8px; box-sizing: border-box; overflow: hidden; }
+  /* The faceplate (spec §11; .mech-panel / .mech-head / .screw in theme.css):
+     the gradient panel, a 36 px header strip in the track colour (--c), four
+     corner screws, a track-colour outline when selected. 132 px wide: two
+     compact (46 px) mech knobs per row fit the 112 px inside. */
+  .strip { position: relative; width: 132px; max-height: 100%; flex: none; display: flex; flex-direction: column; padding: 0 10px 12px; box-sizing: border-box; overflow: hidden; }
+  /* The controls above the fader shrink first: in a short mixer they scroll
+     (wheel, or the focus moving into them) and the fader, the dB scale, the
+     meter and the readout stay in view. No scrollbar: a classic one would
+     take ~11 px of the 112 px the two-knob rows need. */
+  .upper { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden auto; scrollbar-width: none; }
+  .fm, .readout { flex: none; }
   .strip.sel { outline: 2px solid var(--c); outline-offset: -1px; }
-  .name { display: flex; flex-direction: column; align-items: flex-start; border: 0; background: var(--c) var(--gloss); color: var(--on-color); margin: 0 -8px 6px; padding: 5px 10px 4px; font: inherit; text-align: left; cursor: pointer; min-width: 0; }
+  .screw { z-index: 1; }
+  .name { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; height: 36px; flex: none; box-sizing: border-box; border: 0; margin: 0 -10px 4px; padding: 0 12px; text-align: left; cursor: pointer; min-width: 0; }
   .name:disabled { cursor: default; }
   .name:not(:disabled):hover { filter: brightness(1.06); }
-  .name b { font-size: var(--fs-ctl); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .sub { font-size: var(--fs-lbl); opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .name b { font-size: var(--fs-lbl); line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .sub { font: 600 var(--fs-xs)/12px var(--font-ui); letter-spacing: 0.04em; text-transform: none; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   /* Returns and master sit on --raised: light text at full opacity (dark text and the dimmed subtitle lack contrast there). */
   .neutral .name { color: var(--text); }
   .neutral .sub { opacity: 1; }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .ms { display: flex; gap: 3px; padding: 2px 0 4px; min-height: 22px; }
-  .ms button { width: 26px; height: 20px; font: 700 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); color: var(--text); cursor: pointer; box-shadow: var(--raised-shadow); }
-  .ms .m.lit { background: var(--sig-cv) var(--gloss); color: var(--on-color); }
-  .ms .s.lit { background: var(--track-7) var(--gloss); color: var(--on-color); }
-  .ms .an { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-body); line-height: 1; }
-  .ms .an.lit { background: var(--play) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--play) 40%, transparent); }
-  .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* M / S / ∿: LED-over-button columns, centred (clear of the screws). The LED's colour per button. */
+  .ms { display: flex; justify-content: center; gap: 6px; padding: 0 0 4px; }
+  .lb { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .lb.m { --c: var(--sig-cv); }
+  .lb.s { --c: var(--track-7); }
+  .lb.an { --c: var(--play); }
+  .ms .mech-btn { min-width: 28px; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-lbl); }
   .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .gr { display: block; color: var(--text-2); font: var(--fs-lbl) var(--font-mono); }
   .gr.dim { opacity: 0.5; }
   .scpick { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; width: 100%; font-size: var(--fs-lbl); color: var(--text-2); }
   .scpick select { width: 100%; }
-  .row { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--line); padding-top: 4px; margin-top: 2px; }
-  /* A send: its slider, then the pre/post toggle under it, aligned right. */
-  .sends { gap: 2px; }
-  .send { display: flex; flex-direction: column; align-items: stretch; gap: 1px; }
-  .pre { align-self: flex-end; font: 600 var(--fs-xs) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow); color: var(--text-2); padding: 0 6px; cursor: pointer; }
-  .pre.lit { background: var(--sig-vel) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow); }
-  .pre:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .grbox { display: flex; align-items: center; gap: 4px; font-size: var(--fs-lbl); color: var(--text-2); white-space: nowrap; }
-  .grv { font: var(--fs-lbl)/1.3 var(--font-mono); color: var(--accent); background: var(--well); border-radius: var(--r-sm); padding: 0 4px; }
-  .fm { display: flex; justify-content: center; gap: 3px; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 4px; height: 132px; }
-  .scale { position: relative; width: 20px; margin: 9px 0; }
-  .scale span { position: absolute; right: 0; font: var(--fs-xs)/10px var(--font-mono); color: var(--text-2); }
+  /* A row under an engraved divider (--mech-divider). */
+  .row { display: flex; flex-direction: column; align-items: center; gap: 4px; box-shadow: var(--mech-divider); padding-top: 5px; margin-top: 1px; }
+  /* Sends: the two knobs side by side, each with its pre/post button under it. */
+  .sends { display: grid; grid-template-columns: 1fr 1fr; justify-items: center; gap: 0; }
+  .send { display: flex; flex-direction: column; align-items: center; gap: 2px; --c: var(--sig-vel); }
+  .pre { display: inline-flex; align-items: center; gap: 3px; min-width: 0; height: 16px; padding: 0 5px; font-size: var(--fs-xs); }
+  .pre .led { width: 5px; height: 5px; }
+  /* Master: the limiter's ceiling knob beside its GR readout. */
+  .limiter { flex-direction: row; justify-content: center; }
+  .grbox { display: flex; flex-direction: column; align-items: center; gap: 3px; white-space: nowrap; }
+  .grv { font: var(--fs-lbl)/14px var(--font-mono); color: var(--accent); background: var(--mech-recess); box-shadow: var(--mech-chip-shadow); border-radius: var(--r-xs); padding: 1px 5px; }
+  .fm { display: flex; justify-content: center; gap: 3px; box-shadow: var(--mech-divider); padding-top: 6px; margin-top: 2px; height: 132px; }
+  .scale { position: relative; width: 20px; margin: 8px 0; }
+  .scale span { position: absolute; right: 0; font: var(--fs-xs)/10px var(--font-mono); color: var(--mech-label); text-shadow: var(--mech-label-shadow); }
   /* Bottom padding = the fader cap's half height: meter 0 lines up with −∞. */
-  .mtr { height: 100%; padding-bottom: 9px; box-sizing: border-box; }
-  .readout { margin-top: 4px; align-self: center; font: var(--fs-ctl)/1.4 var(--font-mono); color: var(--text); background: var(--lcd); box-shadow: var(--well-shadow); border-radius: var(--r-sm); padding: 0 6px; min-width: 60px; text-align: center; }
+  .mtr { height: 100%; padding-bottom: 8px; box-sizing: border-box; }
+  /* The value chip (--mech-recess), as under the rack's controls. */
+  .readout { margin-top: 4px; align-self: center; font: var(--fs-ctl)/1.4 var(--font-mono); color: var(--mech-chip-text); background: var(--mech-recess); box-shadow: var(--mech-chip-shadow); border-radius: var(--r-xs); padding: 0 6px; min-width: 60px; text-align: center; }
   .readout.auto { font-style: italic; color: var(--accent); }
 </style>

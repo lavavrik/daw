@@ -7,8 +7,8 @@
   // rack's ModulePanel does directly, so a caller that passes any param def
   // (the mixer's delay time) still gets the right control.
   //
-  // The dial's size is the CSS custom property --dial (default 30 px), set by
-  // the caller on an ancestor: the rack's hero dials are bigger (ModulePanel).
+  // The flat dial's size is the CSS custom property --dial (default 30 px),
+  // set by the caller on an ancestor; the mech dial sets it from `size`.
   //
   // Slider variant (`variant="slider"`, plan 20 Task 3; spec §3): the same
   // control drawn as a label and a mono value readout on one row, and below
@@ -33,6 +33,31 @@
   // - bipolar params (min < 0 < max) fill from zero (knobMath fillSpan).
   // While automated, the fill and handle show the heard value and a thin
   // tick on the track marks the base, as the knob's ring and base tick do.
+  //
+  // Mech variant (`variant="mech"`, plan 21 Task 10; spec §11, the board
+  // "Rack, mechanical faceplates"): the knob drawn as hardware, for the rack
+  // and the mixer strips. A ring of 11 ticks (knobMath MECH_TICKS), the
+  // coloured value arc on a dark track, a dark cap (the --mech-cap
+  // gradients, an HTML circle between the two SVG layers) with a white
+  // pointer; under it an engraved label (.engr) and the mono value chip.
+  // `size` picks the dial: 'lg' 86 px (a module's hero param), 'md' 58,
+  // 'sm' 46 (knobMath MECH_DIAL_PX). Behaviour, ARIA and test ids are the
+  // knob's, exactly.
+  //
+  // Vertical fader variant (`variant="vfader"`, plan 21 Task 10): the
+  // slider's behaviour turned upright, drawn as a fader: a recessed slot
+  // (--mech-slot, 8 px) with scale ticks beside it, a lit strip in `color`
+  // with a glow, and the grooved metal cap (28×16, --mech-fader-cap); the
+  // engraved label and the value chip under it. The slot's height (CSS
+  // --vf-h, default 110 px) is the full range. Pointer rules as the slider's,
+  // on the y axis: a press does not move the value; CLICK_SLOP_PX of
+  // VERTICAL travel makes it a relative drag (upwards = more; Shift 10x
+  // finer); a release before that jumps to the pointer (knobMath
+  // sliderPosFromY on the slot's live rect); a press on the cap is a drag
+  // from the first pixel and never jumps. Keys as every variant (Up/Down,
+  // and Left/Right too). The fill is moved by a transform (translateY +
+  // scaleY from its foot) and the cap by translateY in cqb (the slot is a
+  // size container): paint-only, so automation never re-lays out the rack.
   //
   // Knob gestures (maths in knobMath.ts, unit-tested):
   // - vertical drag, 150 px = full range in the param's curve space (the
@@ -94,10 +119,12 @@
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
   import ChoiceParam from './ChoiceParam.svelte';
-  import { dragPos, fillSpan, formatValue, fromPos, isClickTravel, keyStep, parseValue, sliderDrag, sliderPosFromX, toPos } from './knobMath';
-  import type { KnobDef } from './knobMath';
+  import {
+    MECH_DIAL_PX, MECH_TICKS, dragPos, fillSpan, formatValue, fromPos, isClickTravel, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY, toPos,
+  } from './knobMath';
+  import type { KnobDef, MechSize } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color = 'var(--accent)', testid, note = '', auto = null, variant = 'knob' }: {
+  let { def, value, onchange, moduleName = '', color = 'var(--accent)', testid, note = '', auto = null, variant = 'knob', size = 'md' }: {
     /** A rack ParamDef or a mixer MixParamDef. */
     def: KnobDef;
     value: number;
@@ -111,10 +138,24 @@
     note?: string;
     /** What an automation lane on this knob targets (null: not automatable here). */
     auto?: { owner: MixChannelTarget; target: AutoTarget } | null;
-    /** A dial, or a horizontal slider (header comment). Choice params ignore it (ChoiceParam). */
-    variant?: 'knob' | 'slider';
+    /**
+     * A dial, a horizontal slider, the mech dial or the vertical fader
+     * (header comment). Choice params go to ChoiceParam: as LED buttons for
+     * the mech variants, a seg row otherwise.
+     */
+    variant?: 'knob' | 'slider' | 'mech' | 'vfader';
+    /** The mech dial's size (ignored by the other variants). */
+    size?: MechSize;
   } = $props();
   const slider = $derived(variant === 'slider');
+  const vfader = $derived(variant === 'vfader');
+  const mech = $derived(variant === 'mech');
+  /** The pointer works on a track (slider, vfader), not on the whole control (dials). */
+  const linear = $derived(slider || vfader);
+  /** The mech variants draw the engraved label and the value chip. */
+  const engraved = $derived(mech || vfader);
+  /** The dial's centre in its viewBox: the mech dial is drawn in 100×100, the flat one in 32×32. */
+  const centre = $derived(mech ? 50 : 16);
 
   const name = $derived(`${moduleName} ${def.label}`.trim());
 
@@ -156,8 +197,15 @@
     const pos = toPos(def, v);
     const a = -135 + 270 * pos;
     valEl?.setAttribute('stroke-dasharray', `${(a + 135).toFixed(1)} 360`);
-    ptrEl?.setAttribute('transform', `rotate(${a.toFixed(1)} 16 16)`);
-    if (fillEl && handleEl) {
+    ptrEl?.setAttribute('transform', `rotate(${a.toFixed(1)} ${centre} ${centre})`);
+    if (fillEl && handleEl && vfader) {
+      // Upright: the fill is the slot's full height, scaled from its foot to
+      // the span and lifted to its start (no clip-path: it would clip the
+      // glow); the cap rises by translateY in the slot's height (cqb).
+      const [from, to] = fillSpan(def, v);
+      fillEl.style.transform = `translateY(${(-from * 100).toFixed(2)}%) scaleY(${(to - from).toFixed(4)})`;
+      handleEl.style.transform = `translateY(${(-pos * 100).toFixed(2)}cqb)`;
+    } else if (fillEl && handleEl) {
       // Paint-only properties, so an automation tick never re-lays out the
       // rack: the full-width fill is clipped to its span (clip-path keeps the
       // 3 px round ends; a scaleX would squash them), and the handle moves by
@@ -224,7 +272,9 @@
   // of horizontal travel, not on the handle), and the track's width at the
   // press (the drag's full range).
   let downX = 0;
+  let downY = 0;
   let clicking = false;
+  /** The track's length along its axis at the press (slider: width; vfader: height). */
   let trackW = 0;
 
   const shown = $derived(dragging ? local : value);
@@ -262,20 +312,23 @@
     lastSent = value;
     startValue = value;
     pos = toPos(def, from);
-    lastY = e.clientY;
+    lastY = downY = e.clientY;
     lastX = downX = e.clientX;
     // On the handle it is a drag from the start: no jump on release.
-    clicking = slider && !handleEl?.contains(e.target as Node);
-    trackW = railEl?.getBoundingClientRect().width ?? 0;
+    clicking = linear && !handleEl?.contains(e.target as Node);
+    const r = railEl?.getBoundingClientRect();
+    trackW = (vfader ? r?.height : r?.width) ?? 0;
   }
   function move(e: PointerEvent) {
     if (!dragging) return;
-    if (slider) {
+    if (linear) {
       // Relative from the press: the travel accumulates from the start, but
-      // nothing moves until the pointer has left the click slop.
-      pos = sliderDrag(pos, e.clientX - lastX, trackW, e.shiftKey);
+      // nothing moves until the pointer has left the click slop (on the
+      // track's axis: travel across it never counts).
+      pos = sliderDrag(pos, vfader ? lastY - e.clientY : e.clientX - lastX, trackW, e.shiftKey);
       lastX = e.clientX;
-      if (clicking && isClickTravel(downX, e.clientX)) return;
+      lastY = e.clientY;
+      if (clicking && (vfader ? isClickTravel(downY, e.clientY) : isClickTravel(downX, e.clientX))) return;
       clicking = false;
     } else {
       pos = dragPos(pos, e.clientY - lastY, e.shiftKey);
@@ -294,7 +347,8 @@
       // A slider click: jump to the pointer, measured on the track's rect as
       // it is now (a scrolled or zoomed rail included). Nothing was sent yet.
       dragging = false;
-      send(fromPos(def, sliderPosFromX(e.clientX, railEl.getBoundingClientRect())));
+      const r = railEl.getBoundingClientRect();
+      send(fromPos(def, vfader ? sliderPosFromY(e.clientY, r) : sliderPosFromX(e.clientX, r)));
       return;
     }
     flush();
@@ -397,7 +451,7 @@
 </script>
 
 {#if def.choices.length}
-  <ChoiceParam {def} {value} {onchange} {moduleName} {color} {testid} {note} />
+  <ChoiceParam {def} {value} {onchange} {moduleName} {color} {testid} {note} look={engraved ? 'led' : 'seg'} />
 {:else}
   <!-- The tags, and the readout or the typed-entry field: shared by both variants. -->
   {#snippet tags()}
@@ -436,11 +490,12 @@
   <!-- The root is the same ARIA slider in both variants (role, name, value,
        testid); the knob takes the pointer on the whole control, the slider on its track. -->
   <div
-    class={slider ? 'slider' : 'knob'}
+    class={slider ? 'slider' : vfader ? 'vfader' : mech ? 'knob mech' : 'knob'}
     class:dragging
     role="slider"
     tabindex="0"
     aria-label={name}
+    aria-orientation={vfader ? 'vertical' : undefined}
     aria-valuemin={def.min}
     aria-valuemax={def.max}
     aria-valuenow={ariaAuto ?? shown}
@@ -449,7 +504,7 @@
       : note ? `${readout} ${note}` : readout}
     title={(automated
       ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
-      : `${name}: ${readout} — ${slider ? 'drag left/right (Shift = fine), click the track to jump' : 'drag up/down (Shift = fine)'}, double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
+      : `${name}: ${readout} — ${slider ? 'drag left/right (Shift = fine), click the track to jump' : vfader ? 'drag up/down (Shift = fine), click the slot to jump' : 'drag up/down (Shift = fine)'}, double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
     class:auto-on={autoStatus === 'on'}
@@ -458,12 +513,13 @@
     class:learning={learningMe}
     data-learning={learningMe ? '' : undefined}
     style:--c={color}
+    style:--dial={mech ? `${MECH_DIAL_PX[size]}px` : undefined}
     bind:this={knobEl}
-    onpointerdown={slider ? undefined : down}
-    onpointermove={slider ? undefined : move}
-    onpointerup={slider ? undefined : up}
-    onpointercancel={slider ? undefined : cancel}
-    onlostpointercapture={slider ? undefined : cancel}
+    onpointerdown={linear ? undefined : down}
+    onpointermove={linear ? undefined : move}
+    onpointerup={linear ? undefined : up}
+    onpointercancel={linear ? undefined : cancel}
+    onlostpointercapture={linear ? undefined : cancel}
     ondblclick={() => { if (value !== def.default) change(def.default); }}
     onkeydown={key}
     oncontextmenu={context}
@@ -486,6 +542,47 @@
           <b class="handle" bind:this={handleEl}></b>
         </div>
       </div>
+      {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
+    {:else if vfader}
+      <div class="vbody">
+        <!-- Scale ticks beside the slot: decoration (the chip has the value). -->
+        <div class="scale" aria-hidden="true"><i></i><i class="minor"></i><i></i><i class="minor"></i><i></i></div>
+        <!-- The hit area: around the slot, covering the cap's overhang. Pointer
+             only: the root is the ARIA slider and takes the keys. -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="hit" onpointerdown={down} onpointermove={move} onpointerup={up} onpointercancel={cancel} onlostpointercapture={cancel}>
+          <div class="slot" bind:this={railEl} data-testid={testid ? `${testid}-track` : undefined}>
+            <i class="fill" bind:this={fillEl}></i>
+            {#if automated}
+              <i class="base" data-testid="auto-base" style:bottom={`${(toPos(def, shown) * 100).toFixed(2)}%`}></i>
+            {/if}
+            <b class="handle" bind:this={handleEl}></b>
+          </div>
+        </div>
+      </div>
+      {@render tags()}
+      <span class="engr cut">{def.label}</span>
+      {@render readoutField()}
+      {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
+    {:else if mech}
+      <div class="mdial" aria-hidden="true">
+        <!-- The tick ring, the arc track and the value arc (painted by
+             paint(): the lane's value while it applies), the base tick; then
+             the cap (HTML: CSS gradients); then the pointer on top. -->
+        <svg viewBox="0 0 100 100">
+          <path class="ticks" d={MECH_TICKS} />
+          <circle class="track" cx="50" cy="50" r="39" pathLength="360" stroke-dasharray="270 360" transform="rotate(135 50 50)" />
+          <circle class="val" bind:this={valEl} cx="50" cy="50" r="39" pathLength="360" transform="rotate(135 50 50)" />
+          {#if automated}
+            <line class="base" data-testid="auto-base" x1="50" y1="4" x2="50" y2="17" transform={`rotate(${angle.toFixed(1)} 50 50)`} />
+          {/if}
+        </svg>
+        <i class="mcap"></i>
+        <svg viewBox="0 0 100 100"><line class="ptr" bind:this={ptrEl} x1="50" y1="42" x2="50" y2="26" /></svg>
+      </div>
+      {@render tags()}
+      <span class="engr cut">{def.label}</span>
+      {@render readoutField()}
       {#if note}<span class="note" data-testid="knob-note">{note}</span>{/if}
     {:else}
       <svg class="dial" viewBox="0 0 32 32" aria-hidden="true">
@@ -522,12 +619,12 @@
   /* Automated: the base (own value) tick, the A badge; grey while the lane is idle / suspended. */
   .base { stroke: var(--text); stroke-width: 1.5; stroke-linecap: round; opacity: 0.8; }
   .badge { position: absolute; top: 1px; right: 4px; width: 10px; font: 700 var(--fs-tag)/10px var(--font-ui); text-align: center; border-radius: var(--r-xs); background: var(--c); color: var(--on-color); pointer-events: none; }
-  .knob.auto-off .badge, .slider.auto-off .badge { background: var(--text-dim); }
+  .knob.auto-off .badge, .slider.auto-off .badge, .vfader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline (cv blue: a controller). */
   .cc { position: absolute; top: 1px; left: 3px; padding: 0 2px; font: 700 var(--fs-tag)/10px var(--font-ui); border-radius: var(--r-xs); background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
-  .knob.learning, .slider.learning { outline: 2px solid var(--sig-cv); outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
+  .knob.learning, .slider.learning, .vfader.learning { outline: 2px solid var(--sig-cv); outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
   @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
-  @media (prefers-reduced-motion: reduce) { .knob.learning, .slider.learning { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .knob.learning, .slider.learning, .vfader.learning { animation: none; } }
   .knob.auto-susp .val { stroke: var(--text-dim); }
   .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
   .note { font-size: var(--fs-lbl); color: var(--accent); white-space: nowrap; }
@@ -562,6 +659,51 @@
   .handle { position: absolute; top: 50%; left: 0; width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; border-radius: 50%; background: var(--handle); box-shadow: var(--handle-shadow); cursor: grab; }
   .slider.dragging .handle { cursor: grabbing; }
   .slider:focus-visible .handle { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--handle-shadow); }
+  /* ---- mech variants (plan 21 Task 10) ----
+     The engraved label (.engr, theme.css) cut to the control's width (the
+     title has the full name), the value chip (--mech-recess well, light mono
+     text) instead of the flat readout. */
+  .cut { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mech .readout, .vfader .readout { min-width: 0; padding: 1px 5px; background: var(--mech-recess); box-shadow: var(--mech-chip-shadow); color: var(--mech-chip-text); }
+  .mech .readout.entry, .vfader .readout.entry { width: 60px; box-shadow: var(--mech-chip-shadow), 0 0 0 1px var(--accent); }
+  .mech .readout.entry.bad, .vfader .readout.entry.bad { background: color-mix(in srgb, var(--rec) 25%, var(--mech-recess)); box-shadow: var(--mech-chip-shadow), 0 0 0 1px var(--rec); }
+  .mech .readout.auto, .vfader .readout.auto { color: var(--c); }
+  /* Mech dial: --dial (from `size`) square; the cell is 12 px wider for the label. */
+  .knob.mech { width: calc(var(--dial) + 12px); gap: 3px; }
+  .mdial { position: relative; width: var(--dial); height: var(--dial); flex: none; }
+  .mdial svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .mdial .ticks { fill: none; stroke: var(--mech-tick); stroke-width: 2.4; stroke-linecap: round; }
+  .mech .track, .mech .val { stroke-width: 7; }
+  .mech .track { stroke: var(--mech-recess); }
+  /* The cap: r 28 of the 100 box (inset 22 %), its top face r 21 (inset 12.5 % of the cap), a rim in the minor tick colour. */
+  .mcap { position: absolute; inset: 22%; border-radius: 50%; background: var(--mech-cap); box-shadow: var(--mech-cap-shadow), inset 0 0 0 1px var(--mech-tick-minor); }
+  .mcap::after { content: ''; position: absolute; inset: 12.5%; border-radius: 50%; background: var(--mech-cap-top); }
+  .mech .ptr { stroke: var(--mech-pointer); stroke-width: 4; }
+  .mech .base { stroke: var(--mech-pointer); stroke-width: 3; }
+  .knob.mech:hover .readout, .knob.mech.dragging .readout, .knob.mech:focus-visible .readout { color: var(--accent); }
+  .knob.mech:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  /* Vertical fader: scale ticks | the hit area around the 8 px slot. */
+  .vfader { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 44px; padding: 2px 0; border-radius: var(--r-sm); user-select: none; outline: none; }
+  .vfader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .vfader:hover .readout, .vfader.dragging .readout, .vfader:focus-visible .readout { color: var(--accent); }
+  .vbody { display: flex; align-items: stretch; }
+  .scale { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; margin: 9px 0; }
+  .scale i { display: block; width: 6px; height: 1px; background: var(--mech-tick); }
+  .scale i.minor { width: 4px; background: var(--mech-tick-minor); }
+  .vfader .hit { padding: 9px 11px 9px 5px; cursor: ns-resize; }
+  .slot { position: relative; width: 8px; height: var(--vf-h, 110px); border-radius: 4px; background: var(--mech-slot); box-shadow: var(--mech-slot-shadow); container-type: size; }
+  /* The lit strip: full height, moved by paint() (transform from its foot). */
+  .vfader .fill { position: absolute; left: 2px; right: 2px; top: 0; bottom: 0; border-radius: 2px; clip-path: none; transform-origin: bottom; transform: scaleY(0); background: var(--c); box-shadow: 0 0 6px color-mix(in srgb, var(--c) 66%, transparent); opacity: 0.85; }
+  .vfader.auto-susp .fill { background: var(--text-dim); box-shadow: none; }
+  /* The grooved metal cap, centred on the slot's foot; paint() raises it. */
+  .vfader .handle { position: absolute; top: auto; left: 50%; bottom: -8px; width: 28px; height: 16px; margin: 0 0 0 -14px; border-radius: var(--r-xs); background: var(--mech-fader-cap); box-shadow: var(--mech-fader-cap-shadow); cursor: grab; }
+  .vfader.dragging .handle { cursor: grabbing; }
+  .vfader:focus-visible .handle { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 55%, transparent), var(--mech-fader-cap-shadow); }
+  .vfader.auto-susp .handle { filter: grayscale(1) brightness(0.8); }
+  /* Automated: the base (own value) notch left of the slot. */
+  .vfader .base { position: absolute; left: -7px; width: 5px; height: 2px; margin-bottom: -1px; border-radius: 1px; background: var(--text); opacity: 0.85; }
+  .vfader .badge { top: 0; right: 0; }
+  .vfader .cc { top: 0; left: 0; }
   /* Automated: the base (own value) tick across the groove. */
   .slider .base { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: 0.8; }
 </style>

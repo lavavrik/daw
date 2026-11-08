@@ -117,15 +117,27 @@ disabled when the rack already flows.
   snap (no swap; pushed-panel outline), equal row heights (no ratchet),
   edge auto-scroll.
 
-### Look and param controls (plan 20 redesign)
+### Look and param controls (plan 20 redesign; plan 21 mechanical faceplates)
 
-The rack follows the design board "Instrument rack" (spec §2–§4). Every
+The rack follows the design board "Instrument rack" (spec §2–§4), redrawn
+as mechanical faceplates in plan 21. Every
 colour, shadow, radius and font is a `theme.css` token; the rack files have
 no hex literals (`noHexColors.test.ts`).
 
-- **Cards** (`ModulePanel.svelte`): `--lift`, 12 px corners, `--panel` body;
-  a glossy header (`--c` + `--gloss`, `--on-color` text) in the module's
-  category colour.
+- **Faceplates** (`ModulePanel.svelte`; plan 21 Task 10, spec 2026-11-15
+  §11, the board `.superpowers/design/boards/RackMechanical.dc.html`): a
+  `.mech-panel` (gradient, 8 px corners) with four `.screw`s (under the
+  header and in the bottom corners), a 30 px `.mech-head` strip in the
+  module's category colour (uppercase, letter-spaced, `--on-color` text),
+  the params, then a footer under an engraved divider (`--mech-divider`):
+  inputs left, outputs right. Recipes: `docs/architecture/ui-theme.md`
+  "Mechanical faceplates". Plan 20's boxed output plate and the vertical
+  "in"/"out" labels are gone (the board has neither); the inputs/outputs are
+  `role="group"`s named "<module> inputs/outputs".
+- **Jacks** (`Jack.svelte`): an 18 px metal socket (`--mech-jack`) with a
+  2 px ring in the signal colour; the engraved name sits ABOVE the socket
+  (the board puts it below; cables sag down from the socket and would cross
+  it). The Rack still measures the `.hole`'s centre.
 - **Category colours** (`ui/theme.ts` `moduleColor`): the spec has six
   (source, filter, modulation, utility, effect, output) and the catalog four
   (`source/shaping/utility/effect`). `CATALOG_CATEGORIES` maps the catalog's
@@ -139,42 +151,55 @@ no hex literals (`noHexColors.test.ts`).
   velocity ports are plain `cv` ports named `vel`, so the name gives them the
   vel colour. A cable takes its output's colour. `theme.test.ts` checks
   every catalog module, category and port gets one.
-- **Widths.** Cards are at least 180 px; a module with more than five
-  sliders lays them out two per row (Formant, Oscillator, ADSR, EQ), so
-  cards run about 180–280 px. Wider cards than before mean the flow layout
-  wraps sooner and a positioned row pushes its neighbours (the layout
-  re-measures). The card has no negative margins: Chrome sizes them
+- **Widths and heights.** Cards are at least 180 px and as wide as their
+  knob grid (`max-content` when positioned); with the mech controls a row of
+  modules is ~420–440 px tall, so the rail scrolls vertically sooner. The
+  positioned layout re-measures as before (`rackLayout`); tests that drop a
+  module into another row scroll that row into view first (`rack.spec.ts`
+  `dragToGridX`). The card has no negative margins: Chrome sizes them
   differently for a flex item (flow) and a `width: max-content` panel
   (positioned), and the two widths must agree for `moveTo`'s snapping.
 
-A module's params draw as one of these controls (spec §3), in this order:
-choices, the hero dial, the sliders. Every one keeps the test id
-`knob-<m>-<param>`.
-- **Choice params** (`ChoiceParam.svelte`): 6 or fewer choices
-  (`knobMath.SEG_MAX_CHOICES`) are a `ChoiceSeg.svelte` radiogroup `.seg`
-  row (the group carries the test id, each option `<testid>-<index>`;
-  arrows move the pick, a click focuses its option; one undo entry each);
-  more (Delay and LFO/Scope divisions) are a skinned `<select>` carrying the
-  test id (letters are swallowed: they are the QWERTY piano). `Knob.svelte`
-  hands a choice def to `ChoiceParam` too, so a caller that passes any
-  param (the mixer's delay time) gets the same controls.
-- **Hero dial** (the knob, 60 px through the `--dial` custom property):
-  `filter.cutoff`, `sample_player.root`, `lfo.rate` (`ModulePanel` `HERO`).
-- **Slider** (`Knob.svelte` with `variant="slider"`): every other continuous
-  or integer param. Label and value on one row, a horizontal track below.
-  Same behaviour, ARIA slider and test id as the knob. A horizontal drag is
-  relative (track width = full range, Shift 10× finer). A click with under
-  3 px of *horizontal* travel (vertical wobble does not count:
-  `knobMath.isClickTravel`) jumps to the pointer on the track's live rect, so
-  it lands under the pointer in a scrolled rail; a press on the handle itself
-  never jumps (letting go of it unmoved changes nothing). Integer params
-  round on the way (the handle snaps to the value). Bipolar params fill from
-  zero. Maths: `knobMath.ts` `sliderPosFromX`, `sliderDrag`, `fillSpan`,
-  `CLICK_SLOP_PX`, `isClickTravel`.
+Which control draws each param is `app/src/ui/rack/controlMap.ts` (pure,
+`controlMap.test.ts`); `ModulePanel` draws `panelControls(def)` in this
+order, every control keeping the test id `knob-<m>-<param>`:
+- **Choices** (`ChoiceParam look="led"`): 6 or fewer
+  (`knobMath.SEG_MAX_CHOICES`) are LED push-buttons (`ChoiceSeg`: a
+  `.mech-btn` per choice under an LED that glows in the module colour when
+  picked; the radiogroup, its radios `<testid>-<i>`, the arrow keys and one
+  undo entry per change are as before); more (Delay and LFO/Scope
+  divisions) are a skinned `<select>` carrying the test id (letters are
+  swallowed: they are the QWERTY piano). Full width, centred, the engraved
+  label under the buttons.
+- **Vertical faders** (`Knob variant="vfader"`), side by side in one row,
+  for levels and envelope stages: `VFADERS` lists ADSR
+  attack/decay/sustain/release, the Mixer's `lvl1..4`, Out `level`, VCA
+  `level`, Noise `level`; a module not listed gets one for a continuous,
+  linear, 0..1 param named `level` (the rule). Sample Player's gain (0..2)
+  and Formant's g2/g3 stay knobs. The slot (110 px, CSS `--vf-h`) is the
+  full range: a vertical drag is relative (Shift 10× finer); a release with
+  under 3 px of *vertical* travel jumps to the pointer on the slot's live
+  rect (`knobMath.sliderPosFromY`), so a sideways wobble is still a click; a
+  press on the cap never jumps. Bipolar params would fill from zero.
+- **Mech knobs** (`Knob variant="mech"`) for everything else, in a grid of
+  `knobColumns(n)` columns (1–2 side by side, ≤ 4 in two, ≤ 9 in three,
+  more in four). Sizes: the `HERO` param (`filter.cutoff`,
+  `sample_player.root`, `lfo.rate`) is `lg` (86 px) and first; knobs that
+  share the card with faders, or more than `COMPACT_OVER` (6) knobs
+  (Oscillator, Formant), are `sm` (46 px); else `md` (58 px). Same
+  behaviour as plan 20's dial: vertical drag (150 px = full range), typed
+  entry by clicking the value chip, double-click reset, keys, automation
+  follow, the control menu, MIDI learn, one undo entry per gesture.
 
-Tests (`rack.spec.ts`): "slider param: …" (also in a horizontally scrolled
-rack), "choice seg: …", "slider: a press on the handle never jumps; …",
-"integer slider: …", "a choice with more than 6 options is a select; …".
+The plan 20 slider (`variant="slider"`) is no longer used in the rack; it
+stays in `Knob.svelte` for the top bar's Master.
+
+Tests (`rack.spec.ts`, plan 21 Task 10): "mech knob: …", "vertical fader:
+…" (also in a horizontally scrolled rack, and "a press on the cap never
+jumps; …"), "mech knob and vertical fader: MIDI learn ring and CC tag, the
+control menu, automation follow", "LED choice: …", "integer mech knob: …",
+"a choice with more than 6 options is a select; the faceplate".
+
 
 ## Signals
 
@@ -740,11 +765,12 @@ Modules are enum-dispatched (no trait objects, no allocation):
    `UPDATE_CATALOG=1 cargo test -p daw-engine catalog`, and review the diff
    to `engine/catalog.json`. The kind-id test in `catalog.rs` must be extended.
 5. Nothing else in the UI has to change: it imports `engine/catalog.json`,
-   so the module shows in "+ Add module", with sliders, choices and cable
-   colours, automatically. Its header colour comes from its catalog category
+   so the module shows in "+ Add module", with knobs, faders, choices and
+   cable colours, automatically. Its header colour comes from its catalog category
    (`ui/theme.ts` `CATALOG_CATEGORIES`); add a `MODULE_CATEGORIES` entry if
-   its role differs (a `shaping` envelope is modulation, say), and a `HERO`
-   entry in `ModulePanel.svelte` if one param should stay a dial. A new
+   its role differs (a `shaping` envelope is modulation, say), a `HERO`
+   entry in `rack/controlMap.ts` if one param should be the big dial, and a
+   `VFADERS` entry there for params that read as levels. A new
    catalog category or signal kind fails `theme.test.ts` until it is mapped.
 
 ## Live input routing

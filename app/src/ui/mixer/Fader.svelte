@@ -1,5 +1,9 @@
 <script lang="ts">
   // Vertical channel fader in dB (catalog param "fader": −60 = −∞ .. +6).
+  // Look (plan 21 Task 10; spec §11, the board "Rack, mechanical
+  // faceplates"): the rack's vertical fader — a recessed 8 px slot
+  // (--mech-slot), a lit strip in the track colour with a glow, the grooved
+  // metal cap (28×16, --mech-fader-cap). Behaviour unchanged.
   // The travel follows the fader law in mixMath.ts (0 dB at 3/4 height,
   // perceptual spacing), shared with the meter and scale beside it.
   //
@@ -52,7 +56,8 @@
     auto?: { owner: MixChannelTarget; target: AutoTarget } | null;
   } = $props();
 
-  const CAP_H = 18;
+  /** The cap's height: the slot is inset by half of it top and bottom, so its height is the cap's travel. */
+  const CAP_H = 16;
   let dragging = $state(false);
   let local = $state(0);
   let pos = 0;
@@ -267,7 +272,7 @@
     onkeydown={key}
     oncontextmenu={context}
   >
-    <!-- The --well groove; the fill is the strip's track colour (--c), on the fader law. -->
+    <!-- The --mech-slot groove; the lit strip is the strip's track colour (--c), on the fader law. -->
     <div class="slot"><div class="fill" bind:this={fillEl}></div></div>
     {#if automated}
       <div class="base" data-testid="auto-base" style:bottom="{baseBottom}px"></div>
@@ -280,24 +285,18 @@
 </div>
 
 <style>
-  /* Look (spec §2/§4): a --well groove with a fill in the strip's track colour
-     (--c, set by Strip), and a white cap with a grooved grip. Tokens only. */
+  /* Look (spec §11): the --mech-slot groove with a lit strip in the strip's
+     track colour (--c, set by Strip) and the grooved metal cap. Tokens only. */
   .wrap { display: flex; flex-direction: column; align-items: center; }
-  .fader { position: relative; width: 26px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: var(--r-sm); }
+  .fader { position: relative; width: 30px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: var(--r-sm); }
   .fader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-  .slot { position: absolute; left: 50%; top: 9px; bottom: 9px; width: 6px; margin-left: -3px; background: var(--well); border-radius: 3px; box-shadow: var(--well-shadow); overflow: hidden; }
-  .fill { position: absolute; inset: 0; transform-origin: bottom; transform: scaleY(0); background: var(--c, var(--accent)) var(--gloss); }
-  .cap {
-    position: absolute; left: 1px; right: 1px; bottom: 0; border-radius: 4px;
-    /* The handle recipe, with grip grooves (1 px every 4 px) over the middle 8 px band: two lines. */
-    background:
-      repeating-linear-gradient(to bottom, transparent 0 3px, color-mix(in srgb, var(--well) 40%, transparent) 3px 4px) center / 100% 8px no-repeat,
-      var(--handle);
-    box-shadow: var(--handle-shadow);
-  }
+  /* Inset by CAP_H / 2 (8 px) top and bottom: the slot's height is the cap's travel. */
+  .slot { position: absolute; left: 50%; top: 8px; bottom: 8px; width: 8px; margin-left: -4px; background: var(--mech-slot); border-radius: 4px; box-shadow: var(--mech-slot-shadow); }
+  .fill { position: absolute; left: 2px; right: 2px; top: 0; bottom: 0; border-radius: 2px; transform-origin: bottom; transform: scaleY(0); background: var(--c, var(--accent)); box-shadow: 0 0 6px color-mix(in srgb, var(--c, var(--accent)) 66%, transparent); opacity: 0.85; }
+  .cap { position: absolute; left: 1px; right: 1px; bottom: 0; border-radius: var(--r-xs); background: var(--mech-fader-cap); box-shadow: var(--mech-fader-cap-shadow); }
   .fader:hover .cap, .fader.dragging .cap { filter: brightness(1.06); }
   /* Automated: the base notch left of the slot, the A badge (grey while the lane plays nothing), a grey cap while suspended. */
-  .base { position: absolute; left: 3px; width: 6px; height: 2px; margin-bottom: -1px; background: var(--text); border-radius: 1px; opacity: 0.85; }
+  .base { position: absolute; left: 2px; width: 6px; height: 2px; margin-bottom: -1px; background: var(--text); border-radius: 1px; opacity: 0.85; }
   .badge { position: absolute; top: -2px; right: -4px; z-index: 1; font: 700 var(--fs-tag)/10px var(--font-ui); width: 10px; text-align: center; border-radius: var(--r-xs); background: var(--accent); color: var(--on-color); pointer-events: none; }
   .fader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
@@ -306,5 +305,5 @@
   @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .fader.learning { animation: none; } }
   .fader.auto-susp .cap { filter: grayscale(1) brightness(0.8); }
-  .fader.auto-susp .fill { background-color: var(--text-dim); }
+  .fader.auto-susp .fill { background-color: var(--text-dim); box-shadow: none; }
 </style>

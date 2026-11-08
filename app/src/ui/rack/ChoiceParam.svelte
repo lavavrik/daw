@@ -12,12 +12,15 @@
   // pick with the pointer it gives the keys back (blur), like the rack's
   // other selects; a pick from the keyboard (arrows, Enter) keeps focus, so a
   // keyboard user can go on stepping through the options or Tab onwards.
+  //
+  // `look="led"` (plan 21 Task 10: the rack and the mixer strips): the row is
+  // ChoiceSeg's LED push-buttons, and the select's label is engraved.
   import ChoiceSeg from './ChoiceSeg.svelte';
   import { releaseSelect, selectKey } from '../selectKey';
   import { SEG_MAX_CHOICES } from './knobMath';
   import type { KnobDef } from './knobMath';
 
-  let { def, value, onchange, moduleName = '', color, testid, note = '' }: {
+  let { def, value, onchange, moduleName = '', color, testid, note = '', look = 'seg' }: {
     def: Pick<KnobDef, 'label' | 'choices'>;
     value: number;
     onchange: (i: number) => void;
@@ -28,6 +31,8 @@
     testid?: string;
     /** Extra line under the control, e.g. the Delay's "(max 2 s)"; "" = none. */
     note?: string;
+    /** A flat seg row, or the mechanical faceplates' LED push-buttons. */
+    look?: 'seg' | 'led';
   } = $props();
 
   const name = $derived(`${moduleName} ${def.label}`.trim());
@@ -48,10 +53,10 @@
 </script>
 
 {#if def.choices.length <= SEG_MAX_CHOICES}
-  <ChoiceSeg {def} {value} {onchange} {moduleName} {color} {testid} {note} />
+  <ChoiceSeg {def} {value} {onchange} {moduleName} {color} {testid} {note} {look} />
 {:else}
-  <div class="choice">
-    <span class="label">{def.label}</span>
+  <div class="choice" class:mech={look === 'led'}>
+    <span class={look === 'led' ? 'engr' : 'label'}>{def.label}</span>
     <select data-testid={testid} aria-label={name} value={String(picked)} onchange={pick} onkeydown={onkey} onpointerdown={() => (byPointer = true)}>
       {#each def.choices as c, i (i)}
         <option value={String(i)}>{c}</option>
@@ -66,5 +71,7 @@
   .choice { display: flex; flex-direction: column; gap: 4px; grid-column: 1 / -1; padding: 2px 0; }
   .label { padding: 0 2px; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
   select { align-self: stretch; }
+  .choice.mech { align-items: center; }
+  .choice.mech select { align-self: center; }
   .note { padding: 0 2px; font-size: var(--fs-lbl); color: var(--accent); }
 </style>

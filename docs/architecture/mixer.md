@@ -234,6 +234,38 @@ plays (serial e2e). Test ids: `analyser`, `analyser-strip-<channel>` (the
 ∿), `analyser-spectrum`, `analyser-readout`. See *Analyser* in
 `docs/architecture/visuals.md`.
 
+## Strip look (plan 21 Task 10)
+
+The strips (`app/src/ui/mixer/Strip.svelte`) wear the rack's mechanical
+faceplate (spec 2026-11-15 §11: the owner's "same should apply to mixer
+'patches' too"; recipes in `docs/architecture/ui-theme.md` "Mechanical
+faceplates"):
+
+- a `.mech-panel` 132 px wide with four corner screws; the name button is a
+  36 px `.mech-head` strip in the track colour (returns and the master on
+  `--raised` with light text);
+- M / S / ∿ are LED push-buttons: a `.mech-btn` under an LED that glows
+  while it is on (M `--sig-cv`, S `--track-7`, ∿ `--play`). Test ids,
+  `aria-pressed` and titles are unchanged;
+- every knob is a compact mech dial (`Knob variant="mech" size="sm"`, 46
+  px), two per row: EQ, Comp, the returns' effects, the two sends (side by
+  side, each with its pre/post `.mech-btn` and a small LED under it), pan,
+  the master's limiter ceiling beside its GR chip. The Delay's 12-way time
+  division stays a skinned select; a ≤ 6-choice param would be LED buttons;
+- the fader (`Fader.svelte`) is the mech fader: an 8 px `--mech-slot`, a
+  lit strip in the track colour with a glow, the grooved 28×16 metal cap
+  (`CAP_H` 16; the slot is inset 8 px, the meter's bottom padding matches).
+  Behaviour, keys, automation and MIDI learn unchanged. The dB scale is
+  engraved; the readout is a value chip. Meters unchanged.
+
+**Height.** The dials are taller than plan 20's sliders: a track strip is
+~520 px of content. The strip is at most the mixer's height
+(`max-height: 100%`), and everything above the fader (`.upper`: M/S/∿,
+the sections, sends, pan) shrinks and scrolls inside the strip (no
+scrollbar: it would eat the two-knob rows' width; wheel or focus scroll
+it), so the fader, scale, meter and readout always stay in view. At
+1280×720 a track strip's pan sits below the sends, scrolled.
+
 ## Engine reset
 
 `OP_RESET_ALL` calls `Mixer::reset_all`: every strip is rebuilt in place

@@ -28,6 +28,7 @@ them.
 | Radii | `--r-xs` 3 · `--r-sm` 6 · `--r-md` 8 · `--r-lg` 12 · `--r-menu` 10 | `RADII.xs/sm/md/lg/menu` (numbers) |
 | Type | `--font-ui --font-mono --fs-body` 13 · `--fs-ctl` 12 · `--fs-lbl` 10 · `--fs-xs` 9 · `--fs-tag` 8 | `THEME.fontUi` … |
 | Data | `--track-0..7`, `--cat-<category>`, `--sig-<signal>` | `TRACK_COLORS`, `CATEGORY_COLORS`, `SIGNAL_COLORS` |
+| Mechanical (rack and mixer only) | `--mech-*` (below, "Mechanical faceplates") | `THEME.mechPanel` … `THEME.mechLedHot` |
 
 `THEME` keys map to CSS names by `tokenName` (`textDim` → `--text-dim`,
 `text2` → `--text-2`). Change a value in both files; the test fails otherwise.
@@ -150,6 +151,40 @@ out of a skin with `appearance: auto`.
    a custom property (`--c`), never as a literal.
 4. Check it in Chrome, including focus-visible and disabled states.
 
+## Mechanical faceplates (plan 21 Task 10)
+The rack modules and the mixer strips are drawn as hardware (spec
+2026-11-15 §11, the owner-approved board
+`.superpowers/design/boards/RackMechanical.dc.html`). Everywhere else keeps
+the flat look. The recipes are `--mech-*` tokens (mirrored in `THEME`,
+checked by `theme.test.ts`) and zero-specificity classes in `theme.css`:
+
+| Class / token | What |
+|---|---|
+| `.mech-panel` (`--mech-panel`, `--mech-panel-shadow`) | the faceplate: a vertical gradient with an inset top light, a dark lower lip and a drop shadow; 8 px corners; `position: relative` for the screws |
+| `.mech-head` (`--mech-head-gloss`, `--mech-head-shadow`) | the header strip: `--c` (category or track colour) under a stronger gloss, 800 11 px uppercase, `.1em` tracking, `--on-color` text |
+| `.screw` (`--mech-screw`, `--mech-screw-shadow`) | a 7 px corner screw; the owner places it (`left/right/top/bottom`) |
+| `.engr` (`--mech-label`, `--mech-label-shadow`) | an engraved label: 9 px, 700, uppercase, `.09em`, dark text shadow |
+| `.mech-chip` (`--mech-recess`, `--mech-chip-text`, `--mech-chip-shadow`) | the mono value chip under a control (Knob styles its own readout with the same tokens) |
+| `.mech-btn` (`--mech-btn`, `--mech-btn-on`, their shadows, `--mech-btn-text`) | a raised push-button; pressed (`aria-checked`/`aria-pressed="true"`, `.on`) it drops 1 px with a short shadow |
+| `.led` / `.led.lit` (`--mech-led-off`, `--mech-led-off-shadow`, `--mech-led-hot`) | the LED above a push-button; lit it is `--c` with a `0 0 6px var(--c)` glow and a white core |
+| `.mech-slot` (`--mech-slot`, `--mech-slot-shadow`) | the recessed well a fader cap runs in |
+| `--mech-tick`, `--mech-tick-minor` | a dial's tick ring and a fader's scale (the minor ticks, and the dial cap's rim) |
+| `--mech-cap`, `--mech-cap-top`, `--mech-cap-shadow`, `--mech-pointer` | the dial's cap (two radial gradients) and its white pointer |
+| `--mech-fader-cap`, `--mech-fader-cap-shadow` | the grooved metal fader cap (28×16) |
+| `--mech-jack`, `--mech-jack-shadow` | the metal jack socket (18 px); its ring is the signal colour, per use |
+| `--mech-divider` | the engraved line over a footer or a strip row (an inset box-shadow, no border) |
+
+Rules: the class name `.led` is the LED dot — don't use it as a modifier on
+anything else (a `class:led` on a container turns the container into a
+7 px dot). Gradients sized in px (`--mech-jack`) are for their element's
+size only.
+
+The controls: `Knob.svelte` `variant="mech"` (sizes `lg` 86 / `md` 58 /
+`sm` 46 px) and `variant="vfader"`, `ChoiceSeg`/`ChoiceParam` `look="led"`,
+`Jack.svelte`, `mixer/Fader.svelte`. Which param gets which control:
+`rack/controlMap.ts` (`docs/architecture/modular.md`). The mixer strip:
+`docs/architecture/mixer.md` "Strip look".
+
 ## Controls that move every frame
 A control that follows automation or a drag repaints up to 60 times a
 second, so its moving parts change only paint-time properties, never layout:
@@ -157,6 +192,13 @@ second, so its moving parts change only paint-time properties, never layout:
   `clip-path: inset(… round 3px)` (a `scaleX` would squash the round ends);
   the handle moves by `transform: translateX(<pos × 100>cqi)`: the rail is
   an inline-size container, so `cqi` is a percent of the rail.
+- `Knob` (mech variant): the value arc's `stroke-dasharray` and the
+  pointer's `transform` attribute (an SVG rotate about 50,50), as the flat
+  dial.
+- `Knob` (vfader variant): the lit strip is the slot's full height under
+  `transform: translateY(-from%) scaleY(to − from)` from its foot (no
+  clip-path: it would clip the glow); the cap rises by
+  `transform: translateY(-<pos × 100>cqb)`: the slot is a size container.
 - `Fader` (mixer): the fill is the slot's full height under
   `transform: scaleY(pos)` from its foot; the cap sits at the bottom and rises
   by `translateY`.
@@ -204,8 +246,11 @@ of these class names keeps its own box when it sets its own padding and font.
   `--panel` card with the lift for popovers with their own controls (the
   Rack's add-module menu, the piano roll's Examples, `InlineConfirm`). Both
   use `--r-menu` / `--r-md` and `--lift`.
-- Mixer returns' effect params (Reverb, Delay) stay dials; the Delay's
-  12-way division is a skinned select (`ChoiceParam`).
+- The rack and the mixer strips are mechanical faceplates (plan 21 Task
+  10, above), reversing plan 20 §3's "sliders instead of dials" there only.
+  Every mixer strip knob (EQ, Comp, the returns' effects, sends, pan, the
+  limiter ceiling) is a compact mech dial; the Delay's 12-way division is a
+  skinned select (`ChoiceParam`). The top bar's Master stays a flat slider.
 
 ## The hex guard
 `noHexColors.test.ts` fails when a `.svelte` file outside its `ALLOWED` list

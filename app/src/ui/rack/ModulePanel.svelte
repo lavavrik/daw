@@ -1,18 +1,19 @@
 <script lang="ts">
-  // One module in the rack (plan 20 Task 9; spec §4 "Rack", the design
-  // board "Instrument rack"): a --lift card with a glossy header in its
-  // category colour (ui/theme.ts moduleColor: source, filter, modulation,
-  // utility, effect, output) holding the module's name and a × to remove it;
-  // then its params; then the input jacks (left) and the output jacks (right,
-  // on a recessed plate: VCV's convention, outputs are the boxed ones).
+  // One module in the rack, as a mechanical faceplate (plan 21 Task 10;
+  // spec §11, the board "Rack, mechanical faceplates"): the gradient panel
+  // (.mech-panel) with four corner screws, a header strip in its category
+  // colour (ui/theme.ts moduleColor: source, filter, modulation, utility,
+  // effect, output; uppercase, letter-spaced, .mech-head) holding the
+  // module's name and a × to remove it; then its params; then, under an
+  // engraved divider, the input jacks (left) and the output jacks (right).
   //
-  // Params (spec §3), in this order:
-  // - choice params: ChoiceParam (a ChoiceSeg row up to 6 choices, a
-  //   <select> past that), full width;
-  // - the module's hero param, if it has one (HERO below): a big dial;
-  // - every other continuous or integer param: a slider, one column, or two
-  //   when the module has more than SLIDER_ONE_COLUMN of them (keeps the
-  //   card short: the Formant has ten).
+  // Params: controlMap.ts decides each one's control (its header has the
+  // rule), in this order:
+  // - choice params: LED push-buttons up to 6 choices (ChoiceParam
+  //   look="led"), a skinned <select> past that; full width, centred;
+  // - vertical faders (envelope stages, levels) side by side in one row;
+  // - mech knobs in a grid (the hero, 'lg', first; 'sm' beside faders or in
+  //   a crowded module; 'md' otherwise).
   // Every control keeps the test id `knob-<idx>-<param>`.
   //
   // Sample Player: its `sample` param (a sample-pool id, -1 = none) is a
@@ -64,6 +65,7 @@
   import ShapePreview from './ShapePreview.svelte';
   import X from 'phosphor-svelte/lib/X';
   import Icon from '../Icon.svelte';
+  import { panelControls } from './controlMap';
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onparams, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
@@ -164,30 +166,27 @@
    * with the mixer delay: same table, same rule). */
   const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
-  /** The one param per module kind that stays a dial (spec §3 "Where each is used"). */
-  const HERO: Record<string, string> = { filter: 'cutoff', sample_player: 'root', lfo: 'rate' };
-  /** Up to this many sliders stack in one column; more go two per row. */
-  const SLIDER_ONE_COLUMN = 5;
   const color = $derived(moduleColor(def));
-  const shown = $derived(def.params.map((pd, i) => ({ pd, i })).filter((x) => x.i !== sampleIdx));
-  const choices = $derived(shown.filter((x) => x.pd.choices.length));
-  const hero = $derived(shown.find((x) => !x.pd.choices.length && HERO[def.id] === x.pd.name) ?? null);
-  const sliders = $derived(shown.filter((x) => !x.pd.choices.length && x !== hero));
-  const twoCols = $derived(sliders.length > SLIDER_ONE_COLUMN);
+  /** Choices, faders and knobs (controlMap.ts), without the Sample Player's `sample` (its dropdown). */
+  const controls = $derived(panelControls(def, sampleIdx));
   /** Continuous knobs follow their automation lanes (not a Scope's: its params only change the view). */
   const autoFor = (name: string) => (owner && !scope ? { owner, target: { kind: 'rack' as const, module: module.idx, param: name } } : null);
 </script>
 
 <div
-  class="panel" class:dropping class:placed={!!place} class:lifted={!!shift} data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
+  class="panel mech-panel" class:dropping class:placed={!!place} class:lifted={!!shift} data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
   style:left={place ? `${place.left}px` : undefined} style:top={place ? `${place.top}px` : undefined}
   style:min-height={place?.height ? `${place.height}px` : undefined}
   style:transform={shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined}
   ondragenter={over} ondragover={over} ondragleave={() => (dropping = false)} ondrop={drop}
 >
+  <!-- The corner screws (decoration): under the header strip and in the bottom corners. -->
+  <span class="screw" style:left="6px" style:top="36px"></span><span class="screw" style:right="6px" style:top="36px"></span>
+  <span class="screw" style:left="6px" style:bottom="6px"></span><span class="screw" style:right="6px" style:bottom="6px"></span>
   <!-- The drag handle (plan 18): pointer drag, or Alt+arrows when focused. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <header
+    class="mech-head"
     data-testid={`module-header-${module.idx}`} tabindex="0" role="group" aria-roledescription="draggable module"
     aria-label={`${title}: drag to move, or Alt+arrow keys`} onpointerdown={headerDown} onkeydown={onheaderkey}
   >
@@ -200,7 +199,7 @@
   <div class="body">
     {#if samples && sampleIdx >= 0}
       <label class="smp" title="Drop a sample here (library or Finder), or pick one the project has">
-        <span class="lbl">Sample</span>
+        <span class="engr">Sample</span>
         <select
           data-testid={`sample-${module.idx}`} value={sampleValue} onchange={pickSample} onkeydown={selectKey}
           onfocus={onsamplesopen} onpointerdown={onsamplesopen}
@@ -224,21 +223,22 @@
     {#if def.id === 'adsr' || def.id === 'lfo'}
       <ShapePreview {def} idx={module.idx} params={module.params} {owner} {tempo} {color} />
     {/if}
-    {#if shown.length}
-      <div class="params" class:two={twoCols}>
-        {#each choices as { pd, i } (pd.name)}
-          <ChoiceParam def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-            note={noteFor(pd.name, module.params[i])} />
+    {#each controls.choices as { pd, i } (pd.name)}
+      <ChoiceParam look="led" def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+        note={noteFor(pd.name, module.params[i])} />
+    {/each}
+    {#if controls.faders.length}
+      <div class="faders">
+        {#each controls.faders as { pd, i } (pd.name)}
+          <Knob variant="vfader" def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+            auto={autoFor(pd.name)} />
         {/each}
-        {#if hero}
-          {@const { pd, i } = hero}
-          <div class="hero">
-            <Knob def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
-              auto={autoFor(pd.name)} />
-          </div>
-        {/if}
-        {#each sliders as { pd, i } (pd.name)}
-          <Knob variant="slider" def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
+      </div>
+    {/if}
+    {#if controls.knobs.length}
+      <div class="knobs" style:--cols={controls.cols}>
+        {#each controls.knobs as { pd, i, size } (pd.name)}
+          <Knob variant="mech" {size} def={pd} value={module.params[i]} onchange={(v) => onparam(i, v)} moduleName={title} {color} testid={`knob-${module.idx}-${pd.name}`}
             auto={autoFor(pd.name)} />
         {/each}
       </div>
@@ -253,11 +253,10 @@
     {/if}
   </div>
   <div class="spacer" data-stretch></div>
-  <!-- inputs, then outputs (boxed); side by side when they fit, keeps the rail short -->
+  <!-- Under the engraved divider: inputs left, outputs right; side by side when they fit, keeps the rail short. -->
   <div class="ports">
     {#if def.inputs.length}
-      <div class="group ins">
-        <span class="dir">in</span>
+      <div class="group ins" role="group" aria-label={`${title} inputs`}>
         <div class="jacks">
           {#each def.inputs as port, pi (port.name)}
             <Jack m={module.idx} port={pi} dir="in" name={port.name} signal={port.signal} moduleName={title}
@@ -268,8 +267,7 @@
       </div>
     {/if}
     {#if def.outputs.length}
-      <div class="group outs">
-        <span class="dir">out</span>
+      <div class="group outs" role="group" aria-label={`${title} outputs`}>
         <div class="jacks">
           {#each def.outputs as port, pi (port.name)}
             <Jack m={module.idx} port={pi} dir="out" name={port.name} signal={port.signal} moduleName={title}
@@ -283,38 +281,37 @@
 </div>
 
 <style>
-  /* The card (spec §4 "Rack"): --lift, 12 px corners, a glossy header in the
-     category colour (--c) with dark text. Tokens only. */
-  .panel { flex: none; display: flex; flex-direction: column; min-width: 180px; border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--lift); color: var(--text); }
+  /* The faceplate (spec §11; .mech-panel / .mech-head / .screw in theme.css):
+     the gradient panel, 8 px corners, a 30 px header strip in the category
+     colour (--c), the screws below it and in the bottom corners. Tokens only. */
+  .panel { flex: none; display: flex; flex-direction: column; min-width: 180px; color: var(--text); }
   .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
-  header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 12px; border-radius: var(--r-lg) var(--r-lg) 0 0; background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); cursor: grab; touch-action: none; user-select: none; }
+  .screw { z-index: 1; }
+  header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 18px; border-radius: var(--r-md) var(--r-md) 0 0; cursor: grab; touch-action: none; user-select: none; }
   header:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel).
      border-box: the row's min-height is a measured offsetHeight. */
   .panel.placed { position: absolute; width: max-content; box-sizing: border-box; }
-  .panel.lifted { z-index: 3; box-shadow: var(--lift), var(--lift); opacity: 0.92; }
+  .panel.lifted { z-index: 3; box-shadow: var(--mech-panel-shadow), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
-  .title { flex: 1; font: 700 var(--fs-ctl) var(--font-ui); white-space: nowrap; }
+  .title { flex: 1; white-space: nowrap; }
   .x { display: inline-flex; align-items: center; padding: 2px 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
   .panel:hover .x, .x:focus-visible { opacity: 0.85; }
   .x:hover { opacity: 1; }
   .x:focus-visible { outline: 2px solid var(--on-color); }
-  .body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+  /* Clear of the screws: 16 px each side (the screws sit 6 px in, 7 px wide). */
+  .body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 10px; }
   .smp { display: flex; flex-direction: column; gap: 4px; }
   .smp select { max-width: 200px; }
   .root-last { align-self: center; padding: 4px 10px; font-size: var(--fs-lbl); }
-  /* Choices and the hero span the grid; sliders take a cell each (Knob's
-     slider spans the row by default: in two columns it takes one). */
-  .params { display: grid; grid-template-columns: minmax(150px, 1fr); gap: 8px 14px; }
-  .params.two { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
-  .params.two > :global(.slider) { grid-column: auto; }
-  .hero { grid-column: 1 / -1; display: flex; justify-content: center; --dial: 60px; }
+  /* Faders side by side; knobs in --cols columns (controlMap knobColumns), each cell its knob's width. */
+  .faders { display: flex; justify-content: center; gap: 6px; }
+  .knobs { display: grid; grid-template-columns: repeat(var(--cols), auto); justify-content: center; justify-items: center; align-items: start; gap: 12px 10px; }
   /* The spacer (data-stretch, a direct child) is the only part that grows: Rack measures the natural height without it. */
   .spacer { flex: 1; }
-  /* Inputs left, outputs right on a recessed plate; they wrap when the card is narrow. */
-  .ports { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
-  .group { display: flex; align-items: center; gap: 2px; padding: 2px 4px; }
-  .outs { margin-left: auto; border-radius: var(--r-md); background: var(--work); box-shadow: var(--well-shadow); }
-  .dir { writing-mode: vertical-rl; transform: rotate(180deg); font: 600 var(--fs-xs) var(--font-ui); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
-  .jacks { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; }
+  /* The footer: an engraved divider (--mech-divider), inputs left, outputs right; they wrap when the card is narrow. */
+  .ports { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 6px 10px; padding: 8px 16px 14px; box-shadow: var(--mech-divider); }
+  .group { display: flex; align-items: center; }
+  .outs { margin-left: auto; }
+  .jacks { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
 </style>

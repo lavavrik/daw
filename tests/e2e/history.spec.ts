@@ -199,19 +199,20 @@ test('undo during a knob or fader drag cancels the drag', async ({ page }) => {
   await page.getByTestId('mixer-tab').click();
   const strip = page.getByTestId('strip-1');
 
-  // Slider (pan): drag along its track, Cmd+Z with the mouse still down, keep moving, release.
+  // Mech knob (pan): drag its dial up, Cmd+Z with the mouse still down, keep moving, release.
   const knob = strip.getByTestId('knob-pan');
   await expect(knob).toHaveAttribute('aria-valuenow', '0');
-  const rail = (await knob.locator('.rail').boundingBox())!;
-  const y = rail.y + rail.height / 2;
-  const x0 = rail.x + rail.width / 2;
+  await knob.scrollIntoViewIfNeeded(); // a short mixer scrolls the controls above the fader
+  const dial = (await knob.locator('.mdial').boundingBox())!;
+  const x0 = dial.x + dial.width / 2;
+  const y = dial.y + dial.height / 2;
   await page.mouse.move(x0, y);
   await page.mouse.down();
-  for (let i = 1; i <= 6; i++) await page.mouse.move(x0 + i * 8, y);
+  for (let i = 1; i <= 6; i++) await page.mouse.move(x0, y - i * 8);
   await expect(knob).not.toHaveAttribute('aria-valuenow', '0');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(knob).toHaveAttribute('aria-valuenow', '0');
-  await page.mouse.move(x0 + 60, y, { steps: 4 }); // the cancelled drag moves nothing
+  await page.mouse.move(x0, y - 60, { steps: 4 }); // the cancelled drag moves nothing
   await page.mouse.up();
   await page.waitForTimeout(100);
   await expect(knob).toHaveAttribute('aria-valuenow', '0');

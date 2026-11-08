@@ -50,6 +50,42 @@ export const THEME = {
   /** Below the spec's sizes: captions (jack names, scales) and badges (A, CC). */
   fsXs: '9px',
   fsTag: '8px',
+  // Mechanical faceplates (plan 21 Task 10, spec §11): rack modules and mixer strips only.
+  mechPanel: 'linear-gradient(#56626e, #46525e)',
+  mechPanelShadow: 'inset 0 1px 0 rgba(255,255,255,.14), inset 0 -2px 0 rgba(0,0,0,.25), 0 8px 18px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4)',
+  mechHeadGloss: 'linear-gradient(rgba(255,255,255,.35), rgba(255,255,255,0) 70%)',
+  mechHeadShadow: 'inset 0 1px 0 rgba(255,255,255,.5), inset 0 -2px 0 rgba(0,0,0,.18)',
+  /** The footer's engraved line over the jacks. */
+  mechDivider: 'inset 0 1px 0 rgba(0,0,0,.25), inset 0 2px 0 rgba(255,255,255,.06)',
+  mechScrew: 'radial-gradient(circle at 35% 30%, #c9d1d8, #6f7a85 70%)',
+  mechScrewShadow: '0 1px 1px rgba(0,0,0,.5)',
+  mechLabel: '#cfd6dd',
+  mechLabelShadow: '0 1px 0 rgba(0,0,0,.45)',
+  /** The value chip and a dial's arc track. */
+  mechRecess: '#1f262d',
+  mechChipText: '#f4f7f9',
+  mechChipShadow: 'inset 0 1px 2px rgba(0,0,0,.6)',
+  mechTick: '#aeb8c2',
+  mechTickMinor: '#8994a0',
+  mechCap: 'radial-gradient(80% 80% at 40% 30%, #5d6873, #262e36)',
+  mechCapTop: 'radial-gradient(80% 80% at 40% 30%, #4b5560, #2c343c)',
+  mechCapShadow: '0 2px 3px rgba(0,0,0,.5)',
+  mechPointer: '#fff',
+  mechSlot: '#11171c',
+  mechSlotShadow: 'inset 0 2px 4px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.08)',
+  mechFaderCap: 'linear-gradient(#f4f6f8 0%, #c9d1d8 40%, #5c6670 48%, #5c6670 52%, #c9d1d8 60%, #e8ecef 100%)',
+  mechFaderCapShadow: '0 3px 4px rgba(0,0,0,.55), inset 0 1px 0 #fff',
+  mechJack: 'radial-gradient(circle, #0f1418 0 4px, #9aa4ae 5px, #d7dde2 6px, #7d8892 8px)',
+  mechJackShadow: '0 1px 2px rgba(0,0,0,.55)',
+  mechBtn: 'linear-gradient(#7a8692, #5c6874)',
+  mechBtnShadow: 'inset 0 1px 0 rgba(255,255,255,.25), 0 2px 0 #2b333b, 0 3px 4px rgba(0,0,0,.35)',
+  mechBtnOn: 'linear-gradient(#6c7884, #53606c)',
+  mechBtnOnShadow: 'inset 0 1px 0 rgba(255,255,255,.15), 0 1px 0 #2b333b, 0 1px 2px rgba(0,0,0,.35)',
+  mechBtnText: '#e6ebef',
+  mechLedOff: '#2b333b',
+  mechLedOffShadow: 'inset 0 1px 1px rgba(0,0,0,.7)',
+  /** A lit LED's white core (its glow is the owner's colour, per use). */
+  mechLedHot: 'inset 0 0 2px #fff',
 } as const;
 
 /**

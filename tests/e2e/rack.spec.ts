@@ -146,6 +146,14 @@ async function dragToGridX(page: Page, idx: number, gx: number, rowMate?: number
   await rail.evaluate((r, t) => { r.scrollLeft = t - r.clientWidth / 2; }, target);
   let y = a.y;
   if (rowMate !== undefined) {
+    // The row mate's header to the rail's middle too: rows are tall (the
+    // mechanical faceplates, plan 21), so it may be scrolled out of view, and
+    // a pointer past the rail's edge would auto-scroll it.
+    await rail.evaluate((r, hdr) => {
+      const h = document.querySelector(`[data-testid="${hdr}"]`)!.getBoundingClientRect();
+      const rr = r.getBoundingClientRect();
+      r.scrollTop += h.top + h.height / 2 - (rr.top + r.clientHeight / 2);
+    }, `module-header-${rowMate}`);
     const m = (await page.getByTestId(`module-header-${rowMate}`).boundingBox())!;
     y = m.y + m.height / 2;
   }
@@ -436,9 +444,11 @@ test('dragging near the rail edge scrolls it', async ({ page }) => {
   expect(await anyPos(page)).toBe(false);
 });
 
-// ---- Plan 20 Task 3: the slider variant (Filter reso) and ChoiceSeg (Filter mode) ----
+// ---- Plan 21 Task 10: mechanical faceplates — mech knobs, vertical faders, LED choices ----
+// (Plan 20's horizontal slider is gone from the rack; it stays on the top
+// bar's Master, covered in topbar.spec.ts. Its maths are unit-tested.)
 
-/** The default synth track (Deep Bass: its Filter is module 4) with the rack open. */
+/** The default synth track (Deep Bass: MIDI In 0, Filter 4, ADSR 5) with the rack open. */
 async function loadDeepBass(page: Page) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
@@ -446,134 +456,357 @@ async function loadDeepBass(page: Page) {
   await addTrack(page, 'synth');
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('knob-4-reso')).toBeVisible();
-  // The mouse helpers below aim at boundingBox() points: the slider must be on screen.
-  await page.getByTestId('knob-4-reso').scrollIntoViewIfNeeded();
 }
 
-/** Filter resonance: 0..1, lin, default 0.2 (engine/catalog.json); a slider here. */
-const resoValue = async (page: Page) => Number(await page.getByTestId('knob-4-reso').getAttribute('aria-valuenow'));
+/** Scroll a control to the middle of the rail: the mouse helpers aim at boundingBox() points. */
+const centreOn = (page: Page, testid: string) =>
+  page.getByTestId(testid).evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'center' }));
+
+const valueOf = async (page: Page, testid: string) => Number(await page.getByTestId(testid).getAttribute('aria-valuenow'));
+
+/** Filter resonance: 0..1, lin, default 0.2 (engine/catalog.json); a mech knob. */
+const RESO = 'knob-4-reso';
 const RESO_DEFAULT = 0.2;
+/** ADSR sustain: 0..1, lin, default 0.7; a vertical fader (controlMap VFADERS). */
+const SUSTAIN = 'knob-5-sustain';
+const SUSTAIN_DEFAULT = 0.7;
 
-/** A point on the reso slider's track at `frac` of its width (the live rect: right for a scrolled rail). */
-async function onTrack(page: Page, frac: number) {
-  const b = (await page.getByTestId('knob-4-reso-track').boundingBox())!;
-  return { x: b.x + b.width * frac, y: b.y + b.height / 2, w: b.width };
+/** The centre of a mech knob's dial (viewport px). */
+async function dialCentre(page: Page, testid: string) {
+  const b = (await page.getByTestId(testid).locator('.mdial').boundingBox())!;
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 }
+
+/** A point on the sustain fader's slot at `frac` of its height from the bottom (the live rect). */
+async function onSlot(page: Page, frac: number) {
+  const b = (await page.getByTestId(`${SUSTAIN}-track`).boundingBox())!;
+  return { x: b.x + b.width / 2, y: b.y + b.height * (1 - frac), h: b.height };
+}
+
+test('mech knob: drag, Shift-fine, typed entry, reset, keys, cancel; one undo entry each', async ({ page }) => {
+  await loadDeepBass(page);
+  await centreOn(page, RESO);
+  const knob = page.getByTestId(RESO);
+  await expect(knob).toHaveAttribute('role', 'slider');
+  await expect(knob).toHaveAttribute('aria-label', 'Filter Resonance');
+  await expect(knob).toHaveClass(/mech/);
+  await expect(page.getByTestId(`${RESO}-track`)).toHaveCount(0); // a dial: no track
+  // md: a 58 px dial (knobMath MECH_DIAL_PX); the hero (cutoff) is lg, 86 px.
+  expect(Math.round((await knob.locator('.mdial').boundingBox())!.width)).toBe(58);
+  expect(Math.round((await page.getByTestId('knob-4-cutoff').locator('.mdial').boundingBox())!.width)).toBe(86);
+
+  // Typed entry through the value chip.
+  await knob.getByTestId('knob-readout').click();
+  await knob.getByTestId('knob-entry').fill('35');
+  await knob.getByTestId('knob-entry').press('Enter');
+  await expect(knob.getByTestId('knob-readout')).toHaveText('35%');
+  expect(await valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // A click on the dial without moving changes nothing (no click-jump on a knob).
+  const label0 = await undoLabel(page);
+  let c = await dialCentre(page, RESO);
+  await page.mouse.click(c.x, c.y);
+  await page.waitForTimeout(100);
+  expect(await valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+  expect(await undoLabel(page)).toBe(label0);
+
+  // Drag up 75 px (half of DRAG_PX = 150): +0.5, one entry.
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.down();
+  await page.mouse.move(c.x + 3, c.y - 40, { steps: 4 });
+  await page.mouse.move(c.x, c.y - 75, { steps: 4 });
+  await page.mouse.up();
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.85, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // Shift = 10x finer: 75 px moves 0.05.
+  c = await dialCentre(page, RESO);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.down();
+  await page.keyboard.down('Shift');
+  await page.mouse.move(c.x, c.y - 75, { steps: 6 });
+  await page.keyboard.up('Shift');
+  await page.mouse.up();
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.4, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // Double-click resets to the default; one entry.
+  await knob.locator('.mdial').dblclick();
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(RESO_DEFAULT, 5);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // Cmd/Ctrl+Z mid-drag cancels the drag: the value from before it, no entry.
+  c = await dialCentre(page, RESO);
+  await page.mouse.move(c.x, c.y);
+  await page.mouse.down();
+  await page.mouse.move(c.x, c.y - 30, { steps: 4 });
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.55, 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+  await page.mouse.move(c.x, c.y - 60, { steps: 4 }); // the cancelled drag moves nothing
+  await page.mouse.up();
+  await page.waitForTimeout(50);
+  expect(await valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // Keys: ArrowUp +1 % of travel, ArrowDown back.
+  await knob.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.36, 5);
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+});
 
 /**
- * The slider gestures, one undo entry each: typed entry, a relative drag
- * (pressing away from the handle does not jump), Shift-fine, a click-jump,
- * double-click reset, Cmd/Ctrl+Z mid-drag. Ends at 0.35.
+ * The vertical fader's gestures, one undo entry each: typed entry, a
+ * relative drag (pressing away from the cap does not jump), Shift-fine, a
+ * click-jump, double-click reset, Cmd/Ctrl+Z mid-drag, keys. Ends at 0.35.
  */
-async function sliderGestures(page: Page) {
-  const slider = page.getByTestId('knob-4-reso');
-  await expect(slider).toHaveAttribute('role', 'slider');
-  await expect(slider).toHaveAttribute('aria-label', 'Filter Resonance');
+async function vfaderGestures(page: Page) {
+  const f = page.getByTestId(SUSTAIN);
+  await expect(f).toHaveAttribute('role', 'slider');
+  await expect(f).toHaveAttribute('aria-label', /Sustain$/);
+  await expect(f).toHaveAttribute('aria-orientation', 'vertical');
 
-  // Typed entry.
-  await slider.getByTestId('knob-readout').click();
-  await slider.getByTestId('knob-entry').fill('35');
-  await slider.getByTestId('knob-entry').press('Enter');
-  await expect(slider.getByTestId('knob-readout')).toHaveText('35%');
-  await expect(slider).toHaveAttribute('aria-valuetext', '35%');
-  expect(await resoValue(page)).toBeCloseTo(0.35, 5);
+  // Typed entry through the value chip.
+  await f.getByTestId('knob-readout').click();
+  await f.getByTestId('knob-entry').fill('35');
+  await f.getByTestId('knob-entry').press('Enter');
+  await expect(f.getByTestId('knob-readout')).toHaveText('35%');
+  expect(await valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
-  // Drag +50 % of the track, pressed at 80 %: relative (no jump at the press) -> 0.85.
-  let a = await onTrack(page, 0.8);
+  // Drag up 50 % of the slot, pressed at 80 % (away from the cap): relative, no jump at the press -> 0.85.
+  let a = await onSlot(page, 0.8);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
-  await page.mouse.move(a.x + a.w / 4, a.y + 4, { steps: 4 });
-  await page.mouse.move(a.x + a.w / 2, a.y, { steps: 4 });
+  await page.mouse.move(a.x + 4, a.y - a.h / 4, { steps: 4 });
+  await page.mouse.move(a.x, a.y - a.h / 2, { steps: 4 });
   await page.mouse.up();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.85, 2);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.85, 2);
   await page.keyboard.press('ControlOrMeta+z'); // one entry for the whole drag
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
-  // Shift = 10x finer: +50 % of the track moves 5 %.
-  a = await onTrack(page, 0.35);
+  // Shift = 10x finer: 50 % of the slot moves 5 %.
+  a = await onSlot(page, 0.35);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.keyboard.down('Shift');
-  await page.mouse.move(a.x + a.w / 2, a.y, { steps: 6 });
+  await page.mouse.move(a.x, a.y - a.h / 2, { steps: 6 });
   await page.keyboard.up('Shift');
   await page.mouse.up();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.4, 2);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.4, 2);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
   // A click without travel jumps the value under the pointer: one entry.
-  a = await onTrack(page, 0.1);
+  a = await onSlot(page, 0.1);
   await page.mouse.click(a.x, a.y);
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.1, 2);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.1, 2);
   // Under 3 px of travel is still a click: it jumps to where the pointer is let go.
-  a = await onTrack(page, 0.6);
+  a = await onSlot(page, 0.6);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
-  await page.mouse.move(a.x + 2, a.y);
+  await page.mouse.move(a.x, a.y - 2);
   await page.mouse.up();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.6 + 2 / a.w, 2);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.6 + 2 / a.h, 2);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.1, 2);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.1, 2);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
-  // Double-click (on the label row) resets to the default; one entry.
-  await slider.getByText('Resonance').dblclick();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(RESO_DEFAULT, 5);
+  // Double-click (on the label) resets to the default; one entry.
+  await f.getByText('Sustain', { exact: true }).dblclick();
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(SUSTAIN_DEFAULT, 5);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
   // Cmd/Ctrl+Z mid-drag cancels the drag: the value from before it, no entry.
-  a = await onTrack(page, 0.35);
+  a = await onSlot(page, 0.35);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
-  await page.mouse.move(a.x + a.w / 4, a.y, { steps: 4 });
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.6, 2);
+  await page.mouse.move(a.x, a.y - a.h / 4, { steps: 4 });
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.6, 2);
   await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
   await page.mouse.up();
   await page.waitForTimeout(50);
-  expect(await resoValue(page)).toBeCloseTo(0.35, 5);
+  expect(await valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 
-  // Keys: ArrowRight +1 % of travel.
-  await slider.focus();
-  await page.keyboard.press('ArrowRight');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.36, 5);
-  await page.keyboard.press('ArrowLeft');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(0.35, 5);
+  // Keys: ArrowUp +1 % of travel, ArrowDown back.
+  await f.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.36, 5);
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(0.35, 5);
 }
 
-test('slider param: drag, click-jump, typed entry, reset, undo', async ({ page }) => {
+test('vertical fader: drag, click-jump, typed entry, reset, keys, cancel; one undo entry each', async ({ page }) => {
   await loadDeepBass(page);
-  await sliderGestures(page);
-  // The hero dial stays a knob (no track).
-  await expect(page.getByTestId('knob-4-cutoff-track')).toHaveCount(0);
+  await centreOn(page, SUSTAIN);
+  await vfaderGestures(page);
+  // The envelope's four stages are faders; its delay and velocity amount are compact knobs.
+  for (const p of ['attack', 'decay', 'sustain', 'release']) await expect(page.getByTestId(`knob-5-${p}-track`)).toHaveCount(1);
+  for (const p of ['delay', 'vel_amt']) {
+    await expect(page.getByTestId(`knob-5-${p}`)).toHaveClass(/mech/);
+    expect(Math.round((await page.getByTestId(`knob-5-${p}`).locator('.mdial').boundingBox())!.width)).toBe(46);
+  }
 });
 
-test('slider param in a horizontally scrolled rack', async ({ page }) => {
+test('vertical fader in a horizontally scrolled rack', async ({ page }) => {
   await loadDeepBass(page);
-  // Pin the Filter far right (a positioned rack scrolls sideways), then scroll it into view.
-  await dragHeader(page, 4, 1600, 0);
+  // Pin the ADSR far right (a positioned rack scrolls sideways), then scroll it into view.
+  await dragHeader(page, 5, 1600, 0);
   const rail = page.getByTestId('rail');
   await expect.poll(() => rail.evaluate((r) => r.scrollWidth > r.clientWidth + 100)).toBe(true);
-  await page.getByTestId('knob-4-reso').evaluate((e) => e.scrollIntoView({ block: 'center', inline: 'center' }));
+  await centreOn(page, SUSTAIN);
   expect(await rail.evaluate((r) => r.scrollLeft)).toBeGreaterThan(300);
-  await sliderGestures(page);
+  await vfaderGestures(page);
 });
 
-test('choice seg: click and arrow keys pick, one undo entry each', async ({ page }) => {
+test('vertical fader: a press on the cap never jumps; sideways wobble is still a click', async ({ page }) => {
   await loadDeepBass(page);
+  await centreOn(page, SUSTAIN);
+  const v0 = await valueOf(page, SUSTAIN);
+  const label0 = await undoLabel(page);
+  const cap = page.getByTestId(SUSTAIN).locator('.handle');
+
+  // Pressed and let go on the cap, off its centre: nothing changes, no entry.
+  let h = (await cap.boundingBox())!;
+  await page.mouse.click(h.x + h.width / 2 + 6, h.y + h.height / 2 + 3);
+  await page.waitForTimeout(100);
+  expect(await valueOf(page, SUSTAIN)).toBe(v0);
+  expect(await undoLabel(page)).toBe(label0);
+
+  // Grabbed by the cap, a drag is relative from the first pixel: +25 % of the slot.
+  const len = (await onSlot(page, 0)).h;
+  h = (await cap.boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2 + 6, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(h.x + h.width / 2 + 6, h.y + h.height / 2 - len / 4, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(Math.min(1, v0 + 0.25), 2);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(v0, 5);
+
+  // A click that wobbles sideways (no vertical travel) is still a click: it jumps.
+  const frac = v0 > 0.5 ? 0.1 : 0.9;
+  const a = await onSlot(page, frac);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 8, a.y, { steps: 3 });
+  await page.mouse.move(a.x - 5, a.y - 1, { steps: 3 });
+  await page.mouse.up();
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(frac + 1 / a.h, 2);
+  await page.keyboard.press('ControlOrMeta+z'); // one entry
+  await expect.poll(() => valueOf(page, SUSTAIN)).toBeCloseTo(v0, 5);
+});
+
+/** Feed raw MIDI bytes (window.__daw.midi.inject, as midi.spec.ts), then wait two frames. */
+async function inject(page: Page, bytes: number[]) {
+  await page.evaluate(
+    (b) =>
+      new Promise<void>((resolve) => {
+        (window as unknown as { __daw: { midi: { inject: (b: number[]) => void } } }).__daw.midi.inject(b);
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+    bytes,
+  );
+}
+
+type AutoDaw = {
+  project: { tracks: { id: string; automation?: { id: string; target: { module?: number; param: string } }[] }[] };
+  actions: {
+    addLane: (owner: string, target: { kind: 'rack'; module: number; param: string }) => string | null;
+    drawLane: (lane: string, samples: { tick: number; value: number }[]) => unknown;
+    seek: (ticks: number) => unknown;
+  };
+};
+
+test('mech knob and vertical fader: MIDI learn ring and CC tag, the control menu, automation follow', async ({ page }) => {
+  await loadDeepBass(page);
+  await page.waitForFunction(() => !!(window as unknown as { __daw: { midi?: unknown } }).__daw.midi);
+  const cases = [
+    { testid: RESO, module: 4, param: 'reso', cc: 21 },
+    { testid: SUSTAIN, module: 5, param: 'sustain', cc: 22 },
+  ];
+  for (const { testid, cc } of cases) {
+    await centreOn(page, testid);
+    const ctl = page.getByTestId(testid);
+    const before = await valueOf(page, testid);
+    await ctl.click({ button: 'right' });
+    await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Automate');
+    await expect(page.getByTestId('auto-ctl-midi')).toHaveText('MIDI learn');
+    await page.getByTestId('auto-ctl-midi').click();
+    await expect(ctl).toHaveClass(/learning/);
+    await inject(page, [0xb0, cc, 64]); // binds only
+    await expect(ctl).not.toHaveClass(/learning/);
+    await expect(page.getByTestId(`${testid}-cc`)).toBeVisible();
+    await expect(ctl).toHaveAttribute('title', new RegExp(`MIDI CC ${cc}`));
+    expect(await valueOf(page, testid)).toBe(before);
+    await inject(page, [0xb0, cc, 127]);
+    await expect.poll(() => valueOf(page, testid)).toBe(1);
+    await page.keyboard.press('ControlOrMeta+z'); // the sweep is one entry
+    await expect.poll(() => valueOf(page, testid)).toBe(before);
+  }
+
+  // Automate from the vertical fader's menu: a lane for it, then "Show automation".
+  await centreOn(page, SUSTAIN);
+  const sus = page.getByTestId(SUSTAIN);
+  await sus.click({ button: 'right' });
+  await page.getByTestId('auto-ctl-automate').click();
+  await expect(sus).toHaveAttribute('data-auto', 'idle');
+  await expect(sus.getByTestId('auto-badge')).toBeVisible();
+  await sus.click({ button: 'right' });
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Show automation');
+  await page.keyboard.press('Escape');
+
+  // Ramps on both (the knob's lane added directly), then Song mode at 0: each follows its lane's first point.
+  await page.evaluate(() => {
+    const d = (window as unknown as { __daw: AutoDaw }).__daw;
+    const t = d.project.tracks.at(-1)!;
+    const sustain = t.automation!.find((l) => l.target.param === 'sustain')!.id;
+    d.actions.drawLane(sustain, [{ tick: 0, value: 0.9 }, { tick: 3840, value: 0.2 }]);
+    const reso = d.actions.addLane(t.id, { kind: 'rack', module: 4, param: 'reso' })!;
+    d.actions.drawLane(reso, [{ tick: 0, value: 0.1 }, { tick: 3840, value: 0.8 }]);
+  });
+  await page.getByTestId('play').click(); // the song transport ran last: Song mode
+  await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('play').click();
+  await page.evaluate(() => (window as unknown as { __daw: AutoDaw }).__daw.actions.seek(0));
+  const knob = page.getByTestId(RESO);
+  await expect(knob).toHaveAttribute('data-auto', 'on');
+  await expect(sus).toHaveAttribute('data-auto', 'on');
+  expect(Number(await knob.getAttribute('data-auto-pos'))).toBeCloseTo(0.1, 2);
+  expect(Number(await sus.getAttribute('data-auto-pos'))).toBeCloseTo(0.9, 2);
+  // The heard value is drawn: the knob's pointer, the fader's cap; the chips show it in italics.
+  await expect(knob.locator('.ptr')).toHaveAttribute('transform', 'rotate(-108.0 50 50)'); // -135 + 270 * 0.1
+  await expect(sus.locator('.handle')).toHaveAttribute('style', /translateY\(-90(\.0+)?cqb\)/);
+  await expect(knob.getByTestId('knob-readout')).toHaveAttribute('data-auto', 'on');
+  await expect(knob.getByTestId('knob-readout')).toHaveText('10%');
+  await expect(sus.getByTestId('knob-readout')).toHaveText('90%');
+});
+
+test('LED choice: click and arrow keys pick, one undo entry each', async ({ page }) => {
+  await loadDeepBass(page);
+  await centreOn(page, 'knob-4-mode');
   const group = page.getByTestId('knob-4-mode');
   await expect(group).toHaveAttribute('role', 'radiogroup');
   await expect(group).toHaveAttribute('aria-label', 'Filter Mode');
   const opts = group.getByRole('radio');
   await expect(opts).toHaveCount(6);
+  await expect(opts.first()).toHaveClass(/mech-btn/); // LED push-buttons (6 or fewer choices)
   const checked = async () => (await opts.evaluateAll((els) => els.map((e) => e.getAttribute('aria-checked')))).indexOf('true');
+  /** Which LED is lit (the one above the picked button). */
+  const lit = async () => (await group.locator('.led').evaluateAll((els) => els.map((e) => e.classList.contains('lit')))).indexOf(true);
   const start = await checked();
+  expect(await lit()).toBe(start);
   const pick = start === 2 ? 3 : 2;
 
   await page.getByTestId(`knob-4-mode-${pick}`).click();
   await expect.poll(checked).toBe(pick);
+  await expect.poll(lit).toBe(pick);
   await expect.poll(() => undoLabel(page)).toBe('Set Mode'); // a gesture's entry lands a task after the release
   await expect(page.getByTestId(`knob-4-mode-${pick}`)).toBeFocused();
   await page.keyboard.press('ArrowRight');
@@ -590,83 +823,26 @@ test('choice seg: click and arrow keys pick, one undo entry each', async ({ page
   }
 });
 
-// ---- Plan 20 Task 9: the whole rack on sliders, segs and selects ----
-
-test('slider: a press on the handle never jumps; vertical wobble is still a click', async ({ page }) => {
-  await loadDeepBass(page);
-  const v0 = await resoValue(page);
-  const label0 = await undoLabel(page);
-  const handle = page.getByTestId('knob-4-reso').locator('.handle');
-
-  // Pressed and let go on the handle, off its centre: nothing changes, no entry.
-  let h = (await handle.boundingBox())!;
-  await page.mouse.click(h.x + h.width / 2 + 4, h.y + h.height / 2);
-  await page.waitForTimeout(100);
-  expect(await resoValue(page)).toBe(v0);
-  expect(await undoLabel(page)).toBe(label0);
-
-  // Grabbed by the handle, a drag is relative from the first pixel: +25 % of the track.
-  const w = (await onTrack(page, 0)).w;
-  h = (await handle.boundingBox())!;
-  await page.mouse.move(h.x + h.width / 2 + 4, h.y + h.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(h.x + h.width / 2 + 4 + w / 4, h.y + h.height / 2, { steps: 5 });
-  await page.mouse.up();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(Math.min(1, v0 + 0.25), 2);
-  await page.keyboard.press('ControlOrMeta+z');
-  await expect.poll(() => resoValue(page)).toBeCloseTo(v0, 5);
-
-  // A click that wobbles up and down (no sideways travel) is still a click: it jumps.
-  const frac = v0 > 0.5 ? 0.1 : 0.9;
-  const a = await onTrack(page, frac);
-  await page.mouse.move(a.x, a.y);
-  await page.mouse.down();
-  await page.mouse.move(a.x, a.y + 8, { steps: 3 });
-  await page.mouse.move(a.x + 1, a.y - 5, { steps: 3 });
-  await page.mouse.up();
-  await expect.poll(() => resoValue(page)).toBeCloseTo(frac + 1 / a.w, 2);
-  await page.keyboard.press('ControlOrMeta+z'); // one entry
-  await expect.poll(() => resoValue(page)).toBeCloseTo(v0, 5);
-});
-
-test('integer slider: a click-jump rounds, the handle snaps, one undo entry', async ({ page }) => {
+test('integer mech knob: a drag steps whole values, one undo entry', async ({ page }) => {
   await loadDeepBass(page);
   const voices = page.getByTestId('knob-0-voices'); // MIDI In voices: 1..16, integer
-  await voices.scrollIntoViewIfNeeded();
+  await centreOn(page, 'knob-0-voices');
   await expect(voices).toHaveAttribute('role', 'slider');
-  const v0 = Number(await voices.getAttribute('aria-valuenow'));
-  const track = page.getByTestId('knob-0-voices-track');
-  const handleX = async () => {
-    const b = (await voices.locator('.handle').boundingBox())!;
-    return b.x + b.width / 2;
-  };
-  const t = (await track.boundingBox())!;
-  const at = (frac: number) => ({ x: t.x + t.width * frac, y: t.y + t.height / 2 });
-
-  // 1 + 15 * 0.32 = 5.8 -> 6; the handle sits on 6, not under the pointer.
-  const want = v0 === 6 ? 13 : 6;
-  const frac = want === 6 ? 0.32 : 0.81; // 0.81 -> 13.15 -> 13
-  await page.mouse.click(at(frac).x, at(frac).y);
-  await expect(voices).toHaveAttribute('aria-valuenow', String(want));
-  await expect(voices.getByTestId('knob-readout')).toHaveText(String(want));
-  expect(Math.abs((await handleX()) - (t.x + (t.width * (want - 1)) / 15))).toBeLessThan(1.5);
-
-  // A relative drag of two steps' width moves two whole steps.
-  const p = at(want === 6 ? 0.9 : 0.1);
-  await page.mouse.move(p.x, p.y);
+  await expect(voices).toHaveClass(/mech/);
+  const v0 = await valueOf(page, 'knob-0-voices');
+  // 15 steps over DRAG_PX (150 px): 10 px a voice. Up 21 px -> two more voices.
+  const c = await dialCentre(page, 'knob-0-voices');
+  await page.mouse.move(c.x, c.y);
   await page.mouse.down();
-  await page.mouse.move(p.x + (2 * t.width) / 15 + 1, p.y, { steps: 6 });
+  await page.mouse.move(c.x, c.y - 21, { steps: 6 });
   await page.mouse.up();
-  await expect(voices).toHaveAttribute('aria-valuenow', String(want + 2));
-  expect(Math.abs((await handleX()) - (t.x + (t.width * (want + 1)) / 15))).toBeLessThan(1.5);
-
-  for (const v of [want, v0]) {
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect(voices).toHaveAttribute('aria-valuenow', String(v));
-  }
+  await expect(voices).toHaveAttribute('aria-valuenow', String(v0 + 2));
+  await expect(voices.getByTestId('knob-readout')).toHaveText(String(v0 + 2));
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(voices).toHaveAttribute('aria-valuenow', String(v0));
 });
 
-test('a choice with more than 6 options is a select; the hero dial stays a knob', async ({ page }) => {
+test('a choice with more than 6 options is a select; the faceplate', async ({ page }) => {
   await loadDeepBass(page);
   await page.getByRole('button', { name: '+ Add module' }).click();
   await page.getByTestId('add-lfo').click(); // Deep Bass has 8 modules: the LFO is 8
@@ -682,9 +858,17 @@ test('a choice with more than 6 options is a select; the hero dial stays a knob'
   await expect.poll(() => undoLabel(page)).toBe('Set Division');
   await page.keyboard.press('ControlOrMeta+z');
   await expect(checked).toHaveText(t0);
-  // Wave (4 choices) is a seg row; Rate is the LFO's hero dial; Depth a slider.
+  // Wave (4 choices) is LED buttons; Rate is the LFO's hero (lg) dial; Depth a mech knob.
   await expect(page.getByTestId('knob-8-wave')).toHaveAttribute('role', 'radiogroup');
   await expect(page.getByTestId('knob-8-rate')).toHaveAttribute('role', 'slider');
-  await expect(page.getByTestId('knob-8-rate-track')).toHaveCount(0);
-  await expect(page.getByTestId('knob-8-depth-track')).toHaveCount(1);
+  expect(Math.round((await page.getByTestId('knob-8-rate').locator('.mdial').boundingBox())!.width)).toBe(86);
+  await expect(page.getByTestId('knob-8-depth')).toHaveClass(/mech/);
+  await expect(page.getByTestId('knob-8-depth-track')).toHaveCount(0);
+  // The faceplate: four screws, the header strip, metal jack sockets.
+  const panel = page.getByTestId('module-8');
+  await expect(panel).toHaveClass(/mech-panel/);
+  await expect(panel.locator('.screw')).toHaveCount(4);
+  await expect(page.getByTestId('module-header-8')).toHaveClass(/mech-head/);
+  const hole = (await panel.locator('[data-jack] .hole').first().boundingBox())!;
+  expect(Math.round(hole.width)).toBe(18);
 });

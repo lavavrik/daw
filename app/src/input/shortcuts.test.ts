@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onToggleSong?: () => void; onTogglePattern?: () => void; inBottomPanel?: (t: EventTarget | null) => boolean; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number; pointerDown?: () => boolean } = {}, project: object = { playing: false, tracks: [] }) => {
+const mk = (opts: { onStop?: () => void; onToggleSong?: () => void; onTogglePattern?: () => void; inBottomPanel?: (t: EventTarget | null) => boolean; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number; pointerDown?: () => boolean } = {}, project: object = { playing: false, tracks: [] }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -152,6 +152,18 @@ describe('shortcut handlers', () => {
     expect(calls).toEqual(['song', 'pattern', 'song']);
     expect(prevented).toBe(4); // no page scroll, no focused-button click
     expect(sent).toEqual([]);
+  });
+  it('Space while a transport plays stops it, whatever has the focus', () => {
+    const calls: string[] = [];
+    const p = { playing: true, mode: 'song', tracks: [] };
+    const { h } = mk({
+      onStop: () => calls.push('stop'), onToggleSong: () => calls.push('song'), onTogglePattern: () => calls.push('pattern'),
+      inBottomPanel: () => true,
+    }, p);
+    h.onKeyDown(key('Space', { target: { tagName: 'BUTTON' } }));
+    p.mode = 'pattern';
+    h.onKeyDown(key('Space'));
+    expect(calls).toEqual(['stop', 'stop']);
   });
   it('Space in a text, number or select field (in the panel or not) is left to the field: no transport', () => {
     const calls: string[] = [];

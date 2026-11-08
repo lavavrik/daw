@@ -13,7 +13,8 @@
   import { AudioEngine } from './audio/engine';
   import { hintLabel, restartAudio, saveLatencyHint } from './audio/restart';
   import type { LatencyHint } from './audio/restart';
-  import { Project, isPatternTrack } from './state/project.svelte';
+  import { Project } from './state/project.svelte';
+  import { noPatternReason } from './ui/patternReadout';
   import { addDrumTrack, addRow, liveInputTrack, removeTrack, setRowGain, setRowSample, setStep, stop } from './state/actions';
   import { addSynthTrack, loadPatch, rollbackRefusedAdd } from './state/rack-actions';
   import { addDefaultDrumTrack, appKitDeps, loadDefaultKit } from './state/defaultKit';
@@ -417,26 +418,45 @@
     stopTransport(project, engine, transportHooks(recorder, clock));
     refreshRec();
   }
-  /** The selected track's pattern can play (the pattern transport is disabled otherwise). */
-  const hasPatternTrack = () => {
-    const t = project.tracks.find((x) => x.id === project.selectedTrackId);
-    return !!t && isPatternTrack(t);
-  };
-  /** Top bar Play / Stop, and Space outside the bottom panel. */
+  /** Why the pattern transport can't run for the selection (its disabled buttons' tooltip), or null. */
+  const noPattern = () => noPatternReason(project.tracks.find((x) => x.id === project.selectedTrackId)?.kind ?? null);
+  /** Top bar Play / Stop, and Space (stopped) outside the bottom panel. */
   function toggleSong() {
     if (transportPlaying(project, 'song')) stopAny();
     else startTransport('song');
   }
-  /** Space inside the bottom panel: as the panel's Play / Stop (a disabled Play only says why). */
+  /** Space (stopped) inside the bottom panel: as the panel's Play (a disabled Play only says why). */
   function togglePattern() {
     if (transportPlaying(project, 'pattern')) stopAny();
-    else if (!hasPatternTrack()) flashHint('Select a drum or synth track to play its pattern');
+    else if (noPattern()) flashHint('Select a drum or synth track to play its pattern');
     else startTransport('pattern');
   }
-  /** Focus is inside the bottom panel (Space then means the pattern transport). */
+
+  /**
+   * Does a Space belong to the bottom panel (the pattern transport)? Yes when
+   * the key's target or the focused element is inside it. Many panel controls
+   * give the focus back after use (the pattern picker, rack selects, number
+   * fields blur on commit), leaving it on <body>; then the area used last
+   * decides: `lastInPanel` follows every pointerdown and focusin (capture
+   * phase, on the window, so nothing can stop it first).
+   */
   let bottomEl = $state<HTMLElement | null>(null);
-  const inBottomPanel = (t: EventTarget | null) =>
-    !!bottomEl && ((t instanceof Node && bottomEl.contains(t)) || bottomEl.contains(document.activeElement));
+  let lastInPanel = false;
+  const inPanel = (t: EventTarget | null) => !!bottomEl && t instanceof Node && bottomEl.contains(t);
+  const inBottomPanel = (t: EventTarget | null) => {
+    if (inPanel(t) || inPanel(document.activeElement)) return true;
+    const a = document.activeElement;
+    return (!a || a === document.body) && lastInPanel;
+  };
+  onMount(() => {
+    const note = (e: Event) => (lastInPanel = inPanel(e.target));
+    window.addEventListener('pointerdown', note, true);
+    window.addEventListener('focusin', note, true);
+    return () => {
+      window.removeEventListener('pointerdown', note, true);
+      window.removeEventListener('focusin', note, true);
+    };
+  });
 
   /**
    * Live-input switches (select, remove, add a synth track — from any code
@@ -454,13 +474,20 @@
   });
 
   /**
-   * R / the pattern transport's Rec. Recording is Pattern-mode only: while
-   * the song plays arming is refused (say so briefly); stopped in Song mode
+   * R / the pattern transport's Rec, with the Rec button's guards (R must
+   * not do what the disabled button can't): with no drum or synth track
+   * selected it only says why; recording is Pattern-mode only, so while the
+   * song plays arming is refused (say so briefly), and stopped in Song mode
    * (the song ran last) arming switches to Pattern mode first, so the next
-   * pattern Play records (and counts in).
+   * pattern Play records (and counts in). Disarming always works.
    */
   function toggleArm() {
     if (project.loading || !recorder) return;
+    const why = recorder.armed ? null : noPattern();
+    if (why) {
+      flashHint(why);
+      return;
+    }
     if (project.mode === 'song' && !recorder.armed) {
       if (project.playing) {
         flashHint('Recording works with the pattern transport: stop the song first');

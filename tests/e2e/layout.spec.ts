@@ -6,8 +6,9 @@ import { expect, test } from '@playwright/test';
 // where a wrap would move the editors when playback starts). The essentials
 // stay visible at every width.
 
-// (Rec and Count-in moved to the bottom panel's pattern transport in plan 20.)
-const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'settings-button'];
+// (Rec and Count-in moved to the bottom panel's pattern transport in plan 20;
+// rec-button stands for it.)
+const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'rec-button', 'settings-button'];
 
 for (const width of [1440, 1280, 1024]) {
   test(`top bar fits at ${width} px: no control is clipped`, async ({ page }) => {
@@ -89,3 +90,36 @@ for (const width of [1440, 1400, 1280]) {
   });
 }
 
+
+// The bottom panel's header (plan 20: the pattern transport made it wider):
+// one row from 1280 px, wrapped below that, never wider than the panel.
+for (const width of [1280, 1024]) {
+  test(`bottom panel header fits at ${width} px: every tab reachable, no horizontal scroll`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Click to start audio' }).click();
+    await page.getByTestId('add-synth-track').click(); // the longer title ("Deep Bass · Pattern 1")
+    await expect(page.getByTestId('pattern-play')).toBeEnabled();
+    const out = await page.evaluate(() => {
+      const head = document.querySelector('section.pane > .head') as HTMLElement;
+      const tabs = [...head.querySelectorAll('.tabs > button')].map((b) => b.getBoundingClientRect());
+      const h = head.getBoundingClientRect();
+      return {
+        docWidth: document.documentElement.scrollWidth,
+        overflow: head.scrollWidth - head.clientWidth,
+        tabsInside: tabs.every((r) => r.left >= h.left - 0.5 && r.right <= h.right + 0.5),
+        height: h.height,
+      };
+    });
+    expect(out.docWidth).toBeLessThanOrEqual(width);
+    expect(out.overflow).toBeLessThanOrEqual(0);
+    expect(out.tabsInside).toBe(true);
+    if (width >= 1280) expect(out.height, 'one row at 1280 px').toBeLessThan(40);
+    for (const name of ['Step grid', 'Piano roll', 'Acid', 'Instrument', 'Mixer', 'Clip']) {
+      await expect(page.locator('section.pane > .head .tabs').getByRole('button', { name, exact: true })).toBeInViewport();
+    }
+    for (const id of ['pattern-play', 'pattern-stop', 'rec-button', 'count-in', 'pattern-pos', 'pattern-picker']) {
+      await expect(page.getByTestId(id)).toBeInViewport();
+    }
+  });
+}

@@ -93,9 +93,10 @@
 
   // Song-mode hint: shown while the edited pattern is not playing at the
   // playhead (no clip of it under the playhead, or stopped). It flips on and
-  // off during playback, so it lives in the header's status line (fixed
-  // height, toggled with visibility): the editor below must never move
-  // because of it (a jumping grid causes misclicks).
+  // off during playback, so it is an overlay pill just under the header's
+  // right end (toggled with visibility, clicks pass through): the editor
+  // below must never move because of it (a jumping grid causes misclicks).
+  // Since the pattern transport (plan 20) the header has no room for it.
   let songIdle = $state(false);
   onMount(() => {
     let raf = 0;
@@ -138,14 +139,12 @@
     {#if ptrack}
       <PatternPicker {p} {engine} track={ptrack} />
     {/if}
-    <!-- Status line: the Song-mode hint (hidden while a flashed hint shows). -->
-    <span class="status">
-      <span class="hint" class:off={!songIdle || banners.hint !== null} data-testid="song-hint" title={songHint} aria-hidden={!songIdle || banners.hint !== null}>{songHint}</span>
-    </span>
+    <!-- The Song-mode hint: an overlay under the header's right end (hidden while a flashed hint shows). -->
+    <span class="songhint" class:off={!songIdle || banners.hint !== null} data-testid="song-hint" title={songHint} aria-hidden={!songIdle || banners.hint !== null}>{songHint}</span>
     <!-- A flashed hint (banners.hint) overlays the header's right end for its
-         few seconds: since the pattern transport (plan 20) the status line can
-         be ~0 px wide at 1280 px, which clipped it. It never moves the layout
-         and lets clicks through to the tabs under it. -->
+         few seconds (the header has no free room since the pattern transport,
+         plan 20). It never moves the layout and lets clicks through to the
+         tabs under it. -->
     {#if banners.hint !== null}
       <span class="flash" data-testid="flash-hint" role="status">{banners.hint}</span>
     {/if}
@@ -225,15 +224,24 @@
 
 <style>
   .pane { background: #1b1c21; border: 1px solid #2a2c33; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  /* One row from 1280 px (the title ellipsizes first); narrower, the tabs wrap
+     onto a second row instead of running off the panel (layout.spec at 1024). */
   .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #2a2c33; }
+  .head > * { flex: none; }
+  .head > b { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 1279px) { .head { flex-wrap: wrap; row-gap: 4px; } }
   .swatch { width: 12px; height: 12px; border-radius: 3px; }
   .none { color: #7d808c; }
-  .tabs { display: flex; gap: 2px; }
+  .tabs { display: flex; gap: 2px; margin-left: auto; }
   /* Takes the free space between the picker and the tabs; children are
      absolutely placed, so their text never changes the header's size. */
-  .status { position: relative; flex: 1 1 0; min-width: 0; align-self: stretch; }
-  .status .hint { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); color: #9aa6c4; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .status .hint.off { visibility: hidden; }
+  .songhint {
+    position: absolute; top: calc(100% + 4px); right: 8px; z-index: 2;
+    max-width: calc(100% - 16px); padding: 2px 8px; border-radius: var(--r-sm);
+    background: color-mix(in srgb, var(--well) 85%, transparent); color: var(--text-dim);
+    font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  }
+  .songhint.off { visibility: hidden; }
   .flash {
     position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 2;
     max-width: calc(100% - 16px); padding: 3px 10px; border-radius: var(--r-sm);

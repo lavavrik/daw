@@ -167,7 +167,7 @@ test('song and pattern transports: starting either stops the other; the readout 
   await expect.poll(state).toBe('pattern:stopped');
 });
 
-test('Space plays the pattern with focus in the bottom panel, the song elsewhere; it types in a text field', async ({ page }) => {
+test('Space stops what plays; stopped, it plays the pattern with focus in the bottom panel, the song elsewhere; it types in a text field', async ({ page }) => {
   await start(page);
   const state = () => page.evaluate(() => {
     const p = (window as any).__daw.project;
@@ -188,12 +188,35 @@ test('Space plays the pattern with focus in the bottom panel, the song elsewhere
   await page.getByTestId('play').focus();
   await page.keyboard.press('Space');
   await expect.poll(state).toBe('song:playing');
-  // Space in the panel now switches to the pattern (starting one stops the other).
+  // While a transport plays, Space stops it, wherever the focus is (here: in the panel).
   await page.getByTestId('step-0-3').focus();
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('song:stopped');
+  await page.keyboard.press('Space'); // stopped, in the panel: the pattern
+  await expect.poll(state).toBe('pattern:playing');
+  await page.getByTestId('play').focus();
+  await page.keyboard.press('Space'); // the pattern plays: Space (from the top bar) stops it
+  await expect.poll(state).toBe('pattern:stopped');
+
+  // Controls that give the focus back (the pattern picker blurs after a pick)
+  // leave it on the page: the panel, used last, still owns Space.
+  await page.getByTestId('pattern-new').click(); // Pattern 2
+  await page.getByTestId('play').focus(); // the top bar was used last
+  const picker = page.getByTestId('pattern-picker');
+  await picker.focus();
+  await picker.selectOption({ label: 'Pattern 1' });
+  await expect(picker).not.toBeFocused();
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
   await page.keyboard.press('Space');
   await expect.poll(state).toBe('pattern:playing');
   await page.keyboard.press('Space');
   await expect.poll(state).toBe('pattern:stopped');
+  // ... and once the top bar is used (a click there), the song again.
+  await page.getByTestId('keys-target').click(); // a non-focusable pill: the focus stays on the page
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('song:playing');
+  await page.keyboard.press('Space');
+  await expect.poll(state).toBe('song:stopped');
 
   // The pattern-name field (Rename) is inside the panel: Space types a space, no transport.
   await page.getByTestId('pattern-rename').click();
@@ -205,12 +228,12 @@ test('Space plays the pattern with focus in the bottom panel, the song elsewhere
   await expect(input).toHaveValue('Main groove');
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('panel-title')).toContainText('· Main groove');
-  expect(await state()).toBe('pattern:stopped');
+  expect(await state()).toBe('song:stopped');
   // A select in the panel (the pattern picker) keeps Space too.
   await page.getByTestId('pattern-picker').focus();
   await page.keyboard.press('Space');
   await page.keyboard.press('Escape');
-  expect(await state()).toBe('pattern:stopped');
+  expect(await state()).toBe('song:stopped');
 });
 
 test('the pattern transport is disabled, with a reason, on an audio track or with no track selected', async ({ page }) => {
@@ -224,6 +247,10 @@ test('the pattern transport is disabled, with a reason, on an audio track or wit
   for (const id of ['pattern-play', 'pattern-stop', 'rec-button', 'count-in']) await expect(page.getByTestId(id)).toBeDisabled();
   await expect(page.getByTestId('pattern-play')).toHaveAttribute('title', 'Select a drum or synth track');
   await expect(page.getByTestId('pattern-pos')).toHaveText('– / –');
+  // R follows Rec's guard: nothing to record into, so it only says why.
+  await page.locator('body').press('r');
+  await expect(page.getByTestId('flash-hint')).toHaveText('Select a drum or synth track');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
   // An audio track has no pattern.
   await page.getByTestId('add-audio-track').click();
   await expect(page.getByTestId('pattern-play')).toBeDisabled();

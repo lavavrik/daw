@@ -744,8 +744,7 @@ test('visuals stay under 5% of the main thread', async ({ page }) => {
   const seek0 = () => page.evaluate(() => (window as unknown as VisWindow).__daw.actions.seek(0));
 
   await blur(page); // Space on a focused jack would pick it up
-  await page.keyboard.press('Space'); // focus outside the bottom panel: the song transport
-  await expect.poll(slot(page, 1)).toBe(1);
+  await start(page, 'song'); // (the rack was used last: Space would start the pattern transport)
   expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.project.mode)).toBe('song');
   await page.waitForTimeout(2000); // warm-up
 

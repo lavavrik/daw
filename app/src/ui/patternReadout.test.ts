@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { patternReadout } from './patternReadout';
+import { noPatternReason, patternReadout } from './patternReadout';
 
 const BAR = 3840;
 
@@ -19,5 +19,14 @@ describe('patternReadout', () => {
     expect(patternReadout(-100, 4 * BAR)).toBe('– / 4');
     expect(patternReadout(NaN, BAR)).toBe('– / 1');
     expect(patternReadout(10, 0)).toBe('– / 1');
+  });
+});
+
+describe('noPatternReason', () => {
+  it('drum and synth tracks play patterns; no track or an audio track says why', () => {
+    expect(noPatternReason('drum')).toBeNull();
+    expect(noPatternReason('synth')).toBeNull();
+    expect(noPatternReason(null)).toBe('Select a drum or synth track');
+    expect(noPatternReason('audio')).toBe('An audio track has no pattern: select a drum or synth track');
   });
 });

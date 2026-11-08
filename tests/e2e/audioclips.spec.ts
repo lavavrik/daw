@@ -399,7 +399,8 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await expect.poll(async () => [(await c0()).fadeIn, (await c0()).fadeOut]).toEqual([BEAT / 2, 4 * BEAT]);
 
   // The fade-out lowers the last beat's peak (per-beat meter peaks over one pass).
-  // (Focus is on the page: the Space below is the song transport.)
+  // Focus on the top bar (the panel's Clip tab was used last): the Space below is the song transport.
+  await page.getByTestId('play').focus();
   const perBeat = await page.evaluate(
     ({ slot, beat }) =>
       new Promise<number[]>((resolve) => {

@@ -1,6 +1,7 @@
-// Global keyboard shortcuts: Space = play/stop (the pattern transport while
-// focus is inside the bottom panel, the song transport otherwise; plan 20
-// removed the Shift+L PAT/SONG toggle), R = record arm, Z/X = octave
+// Global keyboard shortcuts: Space = stop whichever transport plays; when
+// stopped, start the pattern transport while focus is inside the bottom
+// panel, the song transport otherwise (plan 20, which also removed the
+// Shift+L PAT/SONG toggle), R = record arm, Z/X = octave
 // down/up, Cmd/Ctrl+S save (+Shift: save as), Cmd/Ctrl+O open,
 // Cmd/Ctrl+Z undo, Shift+Cmd/Ctrl+Z or Ctrl+Y redo, home-row/top-row keys = piano (see qwertyPiano.ts). Piano notes go
 // through the note input bus (noteInput.ts) stamped with the KeyboardEvent's
@@ -9,7 +10,7 @@
 // octave's C = row 1 = note 36); the note is mapped here, where QWERTY notes
 // enter, so the engine and the recorder both get the drum note.
 import { liveInputTrack } from '../state/actions';
-import { toggleTransport } from '../state/song-actions';
+import { stopTransport, toggleTransport } from '../state/song-actions';
 import type { CommandSink } from '../state/actions';
 import type { Project } from '../state/project.svelte';
 import { DEFAULT_OCTAVE, keyToNote, qwertyDrumNote } from './qwertyPiano';
@@ -61,17 +62,27 @@ export interface ShortcutOptions {
   /** Fires (with the new octave) on Z/X (not on setOctave: the caller already knows). */
   onOctave?: (o: number) => void;
   /**
-   * Space outside the bottom panel: start / stop the song transport. The app
-   * passes its own (recorder stop tick); default toggleTransport(p, sink, 'song').
+   * Space while a transport plays: stop it, whichever it is and wherever the
+   * focus is. The app passes its own (recorder stop tick); default
+   * stopTransport(p, sink).
+   */
+  onStop?: () => void;
+  /**
+   * Space while stopped, focus outside the bottom panel: start the song
+   * transport. Default toggleTransport(p, sink, 'song').
    */
   onToggleSong?: () => void;
   /**
-   * Space with focus inside the bottom panel: start / stop the pattern
+   * Space while stopped, focus inside the bottom panel: start the pattern
    * transport. The app passes its own (count-in, recorder); default
    * toggleTransport(p, sink, 'pattern').
    */
   onTogglePattern?: () => void;
-  /** Is the key's target inside the bottom panel? (App: its root holds the target or document.activeElement.) Default: no. */
+  /**
+   * Does the key belong to the bottom panel? (App: the target or the focused
+   * element is inside it, or, with nothing focused, the panel was used last.)
+   * Default: no.
+   */
   inBottomPanel?: (target: EventTarget | null) => boolean;
   /** R: toggle record arm. */
   onToggleArm?: () => void;
@@ -215,7 +226,8 @@ export function createShortcutHandlers(
         if (isSelect(e.target)) return; // the select opens its list
         e.preventDefault(); // no page scroll / focused-button activation
         if (e.repeat) return;
-        if (opts.inBottomPanel?.(e.target)) (opts.onTogglePattern ?? (() => toggleTransport(p, sink, 'pattern')))();
+        if (p.playing) (opts.onStop ?? (() => stopTransport(p, sink)))();
+        else if (opts.inBottomPanel?.(e.target)) (opts.onTogglePattern ?? (() => toggleTransport(p, sink, 'pattern')))();
         else (opts.onToggleSong ?? (() => toggleTransport(p, sink, 'song')))();
         return;
       }

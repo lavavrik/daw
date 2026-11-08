@@ -50,15 +50,23 @@ is no PAT/SONG switch (and no Shift+L) any more.
   recorded notes at the heard tick), then `setMode` (saved, so it marks the
   project unsaved, but never an undo entry and never restored by undo, like
   the selection: Cmd+Z can't switch what plays), then PLAY (the count-in
-  is asked once the mode is set). `toggleTransport` is Space and the top
-  bar's Play / Stop; `stopTransport` stops either.
-- **Space** (`input/shortcuts.ts`) toggles the pattern transport when the key's
-  target or `document.activeElement` is inside the bottom panel (App's
-  `inBottomPanel`: the panel's wrapper element contains it), else the song
-  transport. Text fields, contenteditable and `<select>` keep Space. A step
+  is asked once the mode is set). `stopTransport` stops either;
+  `toggleTransport` is the default the shortcuts fall back to without an
+  App. The App wraps them with the recorder hooks: `toggleSong` (the top
+  bar's Play / Stop), `startTransport('pattern')` / `stopAny` (the panel's
+  ▶ / ■) and `togglePattern`.
+- **Space** (`input/shortcuts.ts`): while either transport plays, it stops
+  it, wherever the focus is. Stopped, it starts the pattern transport when the
+  key belongs to the bottom panel (App's `inBottomPanel`: the key's target or
+  `document.activeElement` is inside the panel's wrapper, or, with the focus
+  on `<body>` because a panel control gave it back (the pattern picker, rack
+  selects, number fields blur after use), the panel was where the last
+  pointerdown / focusin happened), else the song transport. Text fields, contenteditable and `<select>` keep Space. A step
   cell cancels its pointerdown (no text selection while painting), so the
   grid focuses the cell itself: a clicked step puts the focus in the panel.
-- **Rec** while the song plays is refused with a hint; stopped in Song mode
+- **Rec** and **R**: with no drum or synth track selected, R only flashes
+  why (the disabled Rec's tooltip, `ui/patternReadout.ts noPatternReason`).
+  Arming while the song plays is refused with a hint; stopped in Song mode
   (the song ran last), arming switches to Pattern mode first (no undo entry),
   so the next pattern Play records and counts in.
 - **Loop** (ruler drag sets whole bars and turns it on; the top bar's Loop

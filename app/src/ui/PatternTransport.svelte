@@ -28,7 +28,7 @@
   import { transportPlaying } from '../state/song-actions';
   import { saveRecSettings } from '../state/recorder';
   import type { Recorder, RecStatus } from '../state/recorder';
-  import { patternReadout } from './patternReadout';
+  import { noPatternReason, patternReadout } from './patternReadout';
 
   let { p, track, audio = false, clock, recorder, rec, onPlay, onStop, onToggleArm }: {
     p: Project;
@@ -47,9 +47,7 @@
 
   const playing = $derived(transportPlaying(p, 'pattern'));
   const songPlaying = $derived(transportPlaying(p, 'song'));
-  const why = $derived(
-    track ? null : audio ? 'An audio track has no pattern: select a drum or synth track' : 'Select a drum or synth track',
-  );
+  const why = $derived(noPatternReason(track ? track.kind : audio ? 'audio' : null));
   const len = $derived(track ? patternLength(currentPattern(track)) : 0);
 
   // The readout: from the heard tick, at most once per animation frame, and

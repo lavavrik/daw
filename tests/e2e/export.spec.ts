@@ -379,7 +379,7 @@ test('automation round-trips through save, undo, restart and export', async ({ p
   await page.keyboard.up('ControlOrMeta');
   // The fader drop: 0 dB (hold) at 0, −∞ at 1.5 bars.
   const fader = await addLane('Fader', 1);
-  const p0 = await lanePt(fader, 0, 60 / 66);
+  const p0 = await lanePt(fader, 0, 0.75); // 0 dB on the fader taper (plan 19)
   await page.mouse.click(p0.x, p0.y);
   const p1 = await lanePt(fader, DROP, 0);
   await page.mouse.click(p1.x, p1.y);

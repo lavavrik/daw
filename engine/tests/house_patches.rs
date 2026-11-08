@@ -1132,6 +1132,48 @@ fn garage_organ_is_percussive() {
 }
 
 #[test]
+fn garage_organ_release_is_longer() {
+    // Plan 13 Task 4 (the user: "probably needs a bit longer release"). chord4
+    // held 0.2 s at vel 100. Levels are 20 ms RMS windows: the one ending at
+    // the note-off vs the one centred 250 ms after it; then a 100 ms window
+    // from note-off + 1.5 s, absolute.
+    let r = play(&mut load("Garage Organ"), &CHORD4, 100, 0.2, 1.7);
+    let off = onset(0.2);
+    let at_off = db(rms(r.span(off - 0.02, off)));
+    let later = db(rms(r.span(off + 0.24, off + 0.26)));
+    let tail = db(rms(r.span(off + 1.5, off + 1.6)));
+    eprintln!("Garage Organ: at note-off {at_off:.1} dB, +250 ms {later:.1} dB ({:.1} dB), +1.5 s {tail:.1} dBFS", later - at_off);
+    assert!(later - at_off >= -30.0, "250 ms after the note-off only {:.1} dB (want ≥ −30) below the level at it", later - at_off);
+    assert!(tail < -60.0, "still {tail:.1} dBFS 1.5 s after the note-off");
+}
+
+/// Piano Stab's low share before plan 13 Task 4: [`low_share_db`] of its
+/// chord4 phrase was −10.4 dB at 48 kHz, −10.1 at 44.1 kHz and −10.3 at 96 kHz;
+/// the highest (44.1 kHz) is kept, so the +3 dB holds at every rate. Only the
+/// saw's C4 fundamental (262 Hz) lay below 300 Hz.
+const PIANO_STAB_LOW_SHARE_BEFORE: f32 = -10.1;
+
+/// Power below 300 Hz over the total (dB), Welch spectrum of the whole render.
+fn low_share_db(r: &Render) -> f32 {
+    let p = spectrum(r, 0.0, r.m.len() as f32 / SR);
+    let low: f64 = p.iter().enumerate().filter(|(i, _)| (*i as f32) * BIN_HZ < 300.0).map(|x| *x.1).sum();
+    let total: f64 = p.iter().sum();
+    (10.0 * (low / total).log10()) as f32
+}
+
+#[test]
+fn piano_stab_has_body() {
+    // Plan 13 Task 4 (the user: "good, but missing some depth"; depth =
+    // low-mid body, not reverb). The chord4 phrase as the level test plays
+    // it (vel 100, held 1.5 s, 0.5 s release): its share of power below
+    // 300 Hz is ≥ 3 dB above the old patch's.
+    let r = play_phrase(&mut load("Piano Stab"), Phrase::Chord4, 100, 1.5, 0.5);
+    let s = low_share_db(&r);
+    eprintln!("Piano Stab: below 300 Hz {s:.1} dB of the total (before: {PIANO_STAB_LOW_SHARE_BEFORE} dB)");
+    assert!(s >= PIANO_STAB_LOW_SHARE_BEFORE + 3.0, "low share {s:.1} dB, want ≥ {:.1}", PIANO_STAB_LOW_SHARE_BEFORE + 3.0);
+}
+
+#[test]
 fn warm_pad_moves() {
     // 124 BPM (the default tempo), transport playing so the 2-bar LFO is
     // locked to the bar: one cycle is 8 beats = 3.871 s. chord5 held; the

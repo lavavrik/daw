@@ -304,6 +304,18 @@ const TINE_KEYS: Patch = {
  * velocity-scaled envelope gives the bright hammer that mellows; the amp
  * decays with no sustain (held chords fade like a piano); a light saturator
  * for weight.
+ *
+ * Body (plan 13 Task 4; the user: "good, but missing some depth"): a
+ * triangle at the note and a sine an octave below fill the low mids the saw
+ * and square left thin (on chord4 only C4's 262 Hz lay below 300 Hz). Both
+ * are plain, nearly harmonic-free tones, so they add warmth under the hammer
+ * without brightening it, and they ride the same amp envelope, so the stab
+ * stays percussive (−20 dB at 0.76–0.82 s, was 0.70–0.74). Measured on chord4
+ * (vel 100, 48 kHz; 44.1/96 kHz within 0.2 dB): power below 300 Hz −5.0 dB of
+ * the total (was −10.4), loudness −16.0 dBFS (was −16.4), vel-127 peak
+ * 0.80–0.82 (was 0.76). The filter and hammer are
+ * unchanged: the layers alone gave +5 dB. Added as idx 10–11 so the older
+ * modules keep their idx.
  */
 const PIANO_STAB: Patch = {
   name: 'Piano Stab',
@@ -314,8 +326,9 @@ const PIANO_STAB: Patch = {
     { idx: 1, id: 'osc', params: { wave: 0 } },
     // Brightness: a square an octave up, 6 cents sharp (the slightly out-of-tune string pair).
     { idx: 2, id: 'osc', params: { wave: 1, octave: 1, fine: 6 } },
-    // Mix.
-    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45 } },
+    // Mix: saw, square, then the body layers (triangle, sub sine). The sub is a
+    // touch louder: it carries most of the depth; much more and low chords boom.
+    { idx: 3, id: 'mixer', params: { lvl1: 0.7, lvl2: 0.45, lvl3: 0.35, lvl4: 0.4 } },
     // LP12 opened by the hammer envelope.
     { idx: 4, id: 'filter', params: { mode: 1, cutoff: 600, reso: 0.1, cv_amt: 4 } },
     // Hammer envelope: instant, decays over ~0.5 s; velocity → brighter.
@@ -326,12 +339,20 @@ const PIANO_STAB: Patch = {
     { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 1.7, sustain: 0, release: 0.25, vel_amt: 0.4 } },
     // Weight: a light, slightly bright saturation, half wet.
     { idx: 8, id: 'saturator', params: { drive: 0.15, mix: 0.5, tone: 0.6 } },
-    // Out: sets the house level.
-    { idx: 9, id: 'out', params: { level: 0.27 } },
+    // Out: sets the house level (0.27 → 0.25 with the body layers: loudness −16.0 dBFS, vel-127 peak ≤ 0.82).
+    { idx: 9, id: 'out', params: { level: 0.25 } },
+    // Body: a triangle at the note (warmth at the fundamental).
+    { idx: 10, id: 'osc', params: { wave: 2 } },
+    // Depth: a sine an octave below (C3–B3 on chord4: low mids, not sub-bass).
+    { idx: 11, id: 'osc', params: { wave: 3, octave: -1 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
     { from: [0, 'pitch'], to: [2, 'pitch'] },
+    { from: [0, 'pitch'], to: [10, 'pitch'] },
+    { from: [0, 'pitch'], to: [11, 'pitch'] },
+    { from: [10, 'out'], to: [3, 'in3'] },
+    { from: [11, 'out'], to: [3, 'in4'] },
     { from: [0, 'gate'], to: [5, 'gate'] },
     { from: [0, 'gate'], to: [7, 'gate'] },
     { from: [0, 'vel'], to: [5, 'vel'] },
@@ -353,6 +374,12 @@ const PIANO_STAB: Patch = {
  * octave up and down (drawbar-ish), through a formant body whose own fast
  * envelope sweeps it down an octave at each hit (the "wah" bounce), into a
  * fast decay to a low sustain.
+ *
+ * Release 0.12 → 0.45 s (plan 13 Task 4; the user: "probably needs a bit
+ * longer release"): short stabs now ring out instead of cutting off. A 0.2 s
+ * chord4 is −20 dB 250 ms after its note-off (was −81 dB) and silent
+ * (< −60 dBFS) well before 1.5 s. The hit, the 0.3 s decay and the 0.25
+ * sustain are unchanged, so loudness (−16.7 dBFS) and peak are too.
  */
 const GARAGE_ORGAN: Patch = {
   name: 'Garage Organ',
@@ -373,8 +400,8 @@ const GARAGE_ORGAN: Patch = {
     { idx: 6, id: 'adsr', params: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 } },
     // Amp.
     { idx: 7, id: 'vca' },
-    // Amp envelope: percussive, a fast decay to a low (0.25) sustain; velocity → level.
-    { idx: 8, id: 'adsr', params: { attack: 0.001, decay: 0.3, sustain: 0.25, release: 0.12, vel_amt: 0.4 } },
+    // Amp envelope: percussive, a fast decay to a low (0.25) sustain, a 0.45 s release tail; velocity → level.
+    { idx: 8, id: 'adsr', params: { attack: 0.001, decay: 0.3, sustain: 0.25, release: 0.45, vel_amt: 0.4 } },
     // Per-voice drive (an organ through a hot amp): rounds each hit's onset peak.
     { idx: 9, id: 'saturator', params: { drive: 0.3, mix: 1 } },
     // Out: sets the house level.

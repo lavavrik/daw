@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { addTrack } from './addTrack';
 
 // Plan 21 Task 8: the icon pass must leave no button without an accessible
 // name (icon-only buttons carry aria-label / title), and the mixer's spectrum
@@ -26,7 +27,7 @@ test('every button has an accessible name across the main views', async ({ page 
   expect(await unnamed(page), 'song view / step grid').toEqual([]);
   // The song pane's add button opens a list (Task 5); older builds have the button itself.
   if (!(await page.getByTestId('add-synth-track').isVisible())) await page.getByTestId('add-track').click();
-  await page.getByTestId('add-synth-track').click();
+  await addTrack(page, 'synth');
   const tabs = page.locator('.tabs .tab');
   await tabs.nth(1).click(); // Piano roll
   await expect(page.getByTestId('pianoroll')).toBeVisible();

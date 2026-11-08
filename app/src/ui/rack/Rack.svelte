@@ -17,10 +17,16 @@
   // The Instrument tab: a VCV-Rack-style rail of module panels, with cables
   // drawn on an SVG layer above them.
   //
-  // Layout: `.rail` is the horizontal scroller; `.content` (position:
-  // relative, width = all panels) holds the panels AND the cable <svg>, so
-  // cables scroll with the panels. Jack centres are measured relative to
-  // `.content` (see measure()) on patch change, ResizeObserver and scroll.
+  // Layout (plan 13, multirow like VCV Rack): `.rail` is the scroller
+  // (vertical; horizontal only if one panel is wider than the rail);
+  // `.content` (position: relative, width = the rail's width) is a wrapping
+  // flex container: panels flow left to right and wrap into rows, each row as
+  // tall as its tallest panel (align-items: stretch), rows 14 px apart. It
+  // holds the panels AND the cable <svg>, so cables scroll with the panels.
+  // Jack centres are measured relative to `.content` (see measure()) on patch
+  // change, scroll, and whenever the ResizeObserver sees `.rail` or `.content`
+  // change size: a wrap reflow changes `.content`'s height (and a resize its
+  // width), so the observer on `.content` is what re-measures after a wrap.
   //
   // Cables: the SVG has `pointer-events: none` everywhere, so it never steals
   // clicks from knobs. Cables are grabbed by their INPUT jack instead (VCV
@@ -776,7 +782,8 @@
   .note input { font: inherit; width: 160px; background: #15161a; color: #e6e7ec; border: 1px solid #3a3d48; border-radius: 3px; padding: 1px 4px; }
   .note .bad { flex-basis: 100%; color: #ffb3ba; }
   .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; background: #101114; border-radius: 4px; }
-  .content { position: relative; display: flex; align-items: stretch; gap: 4px; width: max-content; min-width: 100%; box-sizing: border-box; padding: 6px; }
+  /* Wraps into rows; `width: 100%` (not max-content) so the rail's width is the wrap point. */
+  .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 4px; width: 100%; box-sizing: border-box; padding: 6px; }
   .empty { color: #7d808c; margin: 8px; }
   .cables { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.82; }

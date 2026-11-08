@@ -6,6 +6,19 @@ the audio thread renders in small sub-blocks. Code: `engine/src/rack/mod.rs` (gr
 `engine/src/rack/modules/*.rs` (the DSP); the generated module list is
 `engine/catalog.json`.
 
+## Rack layout (plan 13)
+
+The Instrument tab's rack (`app/src/ui/rack/Rack.svelte`) wraps into rows
+like VCV Rack instead of one long horizontal rail. `.content` is a wrapping
+flex container the width of the rail (`flex-wrap: wrap; width: 100%`), 14 px
+between rows, each row as tall as its tallest panel. The rail scrolls
+vertically, and horizontally only if a single panel is wider than the rail.
+Module order is unchanged (by `idx`, left to right, then down); nothing
+saved changes. Cables are an SVG layer over `.content`; jack centres are
+measured relative to it, and the ResizeObserver on `.content` re-measures
+whenever a wrap or window resize reflows the panels (e2e
+`tests/e2e/rack.spec.ts`, `cables follow wrapped rows`).
+
 ## Signals
 
 All signals are f32 buffers; the kind only matters for cable colour and docs.

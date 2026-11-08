@@ -501,26 +501,50 @@ test('Clip tab drag handles: fades and trim, one undo each', async ({ page }) =>
   expect((await c0()).offset).toBe(before.offset);
   expect((await c0()).len).toBe(before.len);
 
-  // Escape mid-drag puts the grabbed values back.
-  const g = await c0();
-  await drag('cliptab-handle-fade-out', -wave.width / 8);
-  await expect.poll(async () => (await c0()).fadeOut).not.toBe(g.fadeOut);
-  await page.keyboard.press('Escape');
-  await expect.poll(async () => (await c0()).fadeOut).toBe(g.fadeOut);
-  await page.mouse.up();
-
-  // Plan 16 Task 5: Cmd/Ctrl+Z mid-drag cancels it the same way, and undoes nothing older
-  // (the newest entry, the ArrowRight above, would make the fade out a quarter beat longer).
+  // Escape mid-drag puts the grabbed values back: all five fields a handle can move (a longer
+  // fade out shortens the fade in; the cancel restores both), and no undo entry is made.
+  const five = async () => {
+    const c = await c0();
+    return { start: c.start, len: c.len, offset: c.offset, fadeIn: c.fadeIn, fadeOut: c.fadeOut };
+  };
+  const g = await five();
+  expect(g.fadeIn + g.fadeOut).toBeGreaterThan(g.len - BEAT / 2); // so a longer fade out shortens the fade in
   const undoTitle = await page.getByTestId('undo').getAttribute('title');
   await drag('cliptab-handle-fade-out', -wave.width / 8);
   await expect.poll(async () => (await c0()).fadeOut).not.toBe(g.fadeOut);
+  expect((await c0()).fadeIn).toBeLessThan(g.fadeIn);
+  await page.keyboard.press('Escape');
+  await expect.poll(five).toEqual(g);
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  expect(await five()).toEqual(g);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+
+  // Plan 16 Task 5: Cmd/Ctrl+Z mid-drag cancels it the same way, and undoes nothing older
+  // (the newest entry, the ArrowRight above, would make the fade out a quarter beat longer).
+  await drag('cliptab-handle-fade-out', -wave.width / 8);
+  await expect.poll(async () => (await c0()).fadeOut).not.toBe(g.fadeOut);
   await page.keyboard.press(undoKey);
-  await expect.poll(async () => (await c0()).fadeOut).toBe(g.fadeOut);
+  await expect.poll(five).toEqual(g);
   await page.mouse.move(wave.x + wave.width / 2, wave.y + 4, { steps: 3 }); // the dead drag no longer moves it
   await page.mouse.up();
   await page.waitForTimeout(100);
-  expect((await c0()).fadeOut).toBe(g.fadeOut);
+  expect(await five()).toEqual(g);
   await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+
+  // A trim shortens the clip, so its fades give way; Escape and Cmd/Ctrl+Z put back the start,
+  // length, offset and both fades exactly, with no entry.
+  for (const key of ['Escape', undoKey]) {
+    await drag('cliptab-handle-trim', wave.width / 4);
+    await expect.poll(async () => (await c0()).start).toBeGreaterThan(g.start + 1500);
+    expect((await c0()).fadeIn).toBeLessThan(g.fadeIn);
+    await page.keyboard.press(key);
+    await expect.poll(five).toEqual(g);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+    expect(await five()).toEqual(g);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+  }
 });
 
 test('drop on a drum lane shows the hint', async ({ page }) => {

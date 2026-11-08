@@ -141,6 +141,18 @@ describe('gestures', () => {
     expect(s.g.cancelDrag()).toBe(false);
   });
 
+  it('pointerDown follows the held pointers (shortcuts: Alt+undo only mid-drag)', () => {
+    const s = setup();
+    expect(s.g.pointerDown()).toBe(false);
+    s.down(1);
+    expect(s.g.pointerDown()).toBe(true);
+    s.up(1);
+    expect(s.g.pointerDown()).toBe(false);
+    s.down(2);
+    s.g.blur();
+    expect(s.g.pointerDown()).toBe(false);
+  });
+
   it('Cmd+Z with no drag in progress is a normal undo', () => {
     let calls = 0;
     const s = setup([() => (calls++, false)]);

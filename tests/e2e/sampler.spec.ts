@@ -122,6 +122,20 @@ test('the Sample Player strip shows the sample and its handles edit start / end 
   await page.keyboard.press('Shift+ArrowLeft');
   await expect.poll(async () => (await sp())[2]).toBeCloseTo(0.009, 5);
 
+  // Escape mid-drag puts End back and makes no undo entry (the newest stays the key's).
+  const undoTitle = await page.getByTestId('undo').getAttribute('title');
+  const params = await sp();
+  await page.mouse.move(eb.x + eb.width / 2, eb.y + eb.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(eb.x + eb.width / 2 - i * 11, eb.y + eb.height / 2);
+  await expect.poll(async () => (await sp())[5]).toBeLessThan(0.9);
+  await page.keyboard.press('Escape');
+  await expect.poll(sp).toEqual(params);
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  expect(await sp()).toEqual(params);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+
   // Loop on: the Loop start handle appears.
   await page.getByTestId('knob-1-loop').getByRole('radio', { name: 'On' }).click();
   await expect(strip.getByRole('slider', { name: 'Loop start' })).toBeVisible();

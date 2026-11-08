@@ -733,6 +733,32 @@ test('Alt-drag bends a segment: saved, heard, one undo step (plan 16)', async ({
   expect(q0).toBeGreaterThan(0.05 * q3);
 });
 
+test('undo during an Alt-drag bend (Alt still held) cancels it (plan 16)', async ({ page }) => {
+  await start(page);
+  await setTempo(page, 240);
+  const slot = await dropBelow(page, 'tone', 2);
+  const lane = await addLane(page, slot, 'Fader');
+  await clickLane(page, lane, 0, 0.2);
+  await clickLane(page, lane, BAR, 0.8);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add automation point/); // the click's gesture closed
+  const straight = await savedLanes(page, slot);
+  const undoTitle = await page.getByTestId('undo').getAttribute('title');
+  const a = await lanePt(page, lane, BAR / 2, 0.5);
+  await page.keyboard.down('Alt');
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x, a.y - 30, { steps: 10 });
+  await expect.poll(async () => (await savedLanes(page, slot))[0].points[0].length).toBe(4); // bent
+  await page.keyboard.press(undoKey); // Cmd/Ctrl+Alt+Z: Alt is still down
+  await expect.poll(() => savedLanes(page, slot)).toEqual(straight);
+  await page.mouse.move(a.x, a.y - 60, { steps: 4 }); // the cancelled drag bends nothing
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await page.waitForTimeout(100);
+  expect(await savedLanes(page, slot)).toEqual(straight); // both points (the newest entries) still there
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoTitle!);
+});
+
 test('Alt-click on a line adds a free point; it bends nothing (plan 16, Ruling P)', async ({ page }) => {
   await start(page);
   await setTempo(page, 240);

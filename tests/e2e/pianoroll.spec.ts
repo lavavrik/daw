@@ -327,3 +327,14 @@ test('examples menu fits a short window (plan 13 follow-up)', async ({ page }) =
     await page.keyboard.press('Escape');
   }
 });
+
+test('examples menu: at most 60vh, re-measured when the window resizes while open', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await openRoll(page);
+  await page.getByTestId('examples-menu').click();
+  const list = page.getByTestId('examples-list');
+  expect((await list.boundingBox())!.height).toBeLessThanOrEqual(1400 * 0.6 + 1);
+  await page.setViewportSize({ width: 1280, height: 520 }); // still open: it shrinks to the room below
+  await expect.poll(async () => { const b = (await list.boundingBox())!; return b.y + b.height; }).toBeLessThanOrEqual(520);
+  await expect(list).toBeVisible();
+});

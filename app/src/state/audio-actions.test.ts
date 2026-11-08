@@ -3,7 +3,7 @@ import { MAX_CLIPS, MAX_SAMPLE_FLOATS, MAX_SONG_TICKS, Op } from '../audio/proto
 import { Project } from './project.svelte';
 import { addDrumTrack } from './actions';
 import {
-  CLIP_GAIN_MIN_DB, MAX_AUDIO_OFFSET, addAudioClip, addAudioTrack, clipGainLinear, sendAudioClip, setAudioClip, trimAudioClipStart,
+  CLIP_GAIN_MIN_DB, MAX_AUDIO_OFFSET, addAudioClip, addAudioTrack, clipGainLinear, restoreAudioClip, sendAudioClip, setAudioClip, trimAudioClipStart,
 } from './audio-actions';
 
 function setup() {
@@ -138,6 +138,29 @@ describe('audio clips', () => {
     trimAudioClipStart(p, sink, l.id, 3840 * 4 - 960);
     expect([l.start, l.len]).toEqual([3840 * 4 - 960, 3840 + 960]);
     expect(l.offset).toBeCloseTo(1.5, 12); // -0.5 s, modulo the 2 s file
+  });
+
+  it('a trim with the grab\'s fades gets them back as the clip grows again (plan 16 handles)', () => {
+    const { p, sink, a } = setup();
+    const c = addAudioClip(p, sink, a.id, { sampleId: 4, start: 0, fadeIn: 1500, fadeOut: 1500 })!; // len 3840
+    const grab = { fadeIn: c.fadeIn, fadeOut: c.fadeOut };
+    trimAudioClipStart(p, sink, c.id, 1840, grab); // len 2000: the fades give way
+    expect([c.len, c.fadeIn, c.fadeOut]).toEqual([2000, 500, 1500]);
+    trimAudioClipStart(p, sink, c.id, 0, grab); // back: the grab's fades, not the squeezed ones
+    expect([c.start, c.len, c.fadeIn, c.fadeOut]).toEqual([0, 3840, 1500, 1500]);
+  });
+
+  it('restoreAudioClip puts grabbed fields back exactly, without the len cap', () => {
+    const { p, sink, a } = setup();
+    const c = addAudioClip(p, sink, a.id, { sampleId: 4, start: 0 })!; // len 3840 = the whole file at 120 BPM
+    const grab = { start: c.start, len: c.len, offset: c.offset, fadeIn: 0, fadeOut: 0 };
+    p.tempo = 100; // the file now fits 3200 ticks: setAudioClip({ len }) would cap
+    setAudioClip(p, sink, c.id, { fadeOut: 3000, fadeIn: 900 });
+    expect(setAudioClip(p, sink, c.id, { len: 3840 })).toBe(true);
+    expect(c.len).toBe(3200);
+    expect(restoreAudioClip(p, sink, c.id, grab)).toBe(true);
+    expect({ start: c.start, len: c.len, offset: c.offset, fadeIn: c.fadeIn, fadeOut: c.fadeOut }).toEqual(grab);
+    expect(restoreAudioClip(p, sink, 'nope', grab)).toBe(false);
   });
 
   it('the offset stays where the engine can play it at any rate', () => {

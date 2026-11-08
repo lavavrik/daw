@@ -70,10 +70,21 @@ edit is undoable as long as it is in the saved project.
   loss). *Why nothing older is undone:* the key never reaches
   `history.undo()`, and until that gesture ends (release, blur, context
   menu, a new primary press) further undo/redo keys are swallowed too, so a
-  held ⌘Z's auto-repeat does not undo the entry before the drag. With a
-  pointer down on something that is not a cancellable drag (a button, the
-  step grid's paint), the old rule holds: the undo commits the gesture and
-  `afterApply` re-opens one for the rest of the press. While a recording
+  held ⌘Z's auto-repeat does not undo the entry before the drag. A drag
+  with nothing to put back (the step grid's paint, plan 16 ruling Q: each
+  crossed cell already holds its value) registers a "cancel" that only
+  answers true while painting: the key is swallowed, the paint goes on and
+  stays one entry. While a pointer is down, ⌘⌥Z / Ctrl+Alt+Z count as undo
+  too (`input/shortcuts.ts` `pointerDown`), so an Alt-drag (an automation
+  curve bend) cancels without letting go of Alt; with no pointer down Alt
+  keeps them off undo. A `ClipPanel` handle cancel restores all five
+  grabbed fields (start, len, offset, both fades) through
+  `restoreAudioClip` (no file-end `len` cap, which could leave it short of
+  the grab). A widget that can unmount mid-drag removes its registration
+  on destroy (`Rack`'s cable drag runs its cleanup in `onDestroy`). With a
+  pointer down on something that is not a cancellable drag (a button), the
+  old rule holds: the undo commits the gesture and `afterApply` re-opens
+  one for the rest of the press. While a recording
   pass holds its entry open the drag's edits and the restore merge into it
   (net nothing; the absorbed count may say 1).
 - **Same task:** App sets `coalesceTask`: one-shot edits made in the same

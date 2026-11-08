@@ -220,6 +220,48 @@ test('undo during a knob or fader drag cancels the drag', async ({ page }) => {
   await expect(page.getByTestId('track-1')).toHaveCount(0);
 });
 
+// Plan 16 ruling Q: the step grid's paint has no cancel (each cell it
+// crossed is already its own value), so Cmd/Ctrl+Z (or redo) while painting
+// does nothing: no older entry is undone, the paint goes on, and the whole
+// paint is still one entry after the release.
+test('undo during a step-grid paint is swallowed', async ({ page }) => {
+  await startAudio(page);
+  const cell = (s: number) => page.getByTestId(`step-0-${s}`);
+  await cell(0).click();
+  await expect(cell(0)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Set step/); // the click's gesture committed
+  await expect(page.getByTestId('redo')).toBeDisabled();
+  const title = await page.getByTestId('undo').getAttribute('title');
+  for (const s of [2, 3, 4, 5, 6]) await expect(cell(s)).toHaveAttribute('aria-pressed', 'false');
+  const at = async (s: number) => {
+    const b = (await cell(s).boundingBox())!;
+    return [b.x + b.width / 2, b.y + b.height / 2] as const;
+  };
+  await page.mouse.move(...(await at(2)));
+  await page.mouse.down();
+  await page.mouse.move(...(await at(3)), { steps: 3 });
+  await page.mouse.move(...(await at(4)), { steps: 3 });
+  await expect(cell(4)).toHaveAttribute('aria-pressed', 'true');
+  for (const key of ['ControlOrMeta+z', 'ControlOrMeta+Shift+z']) {
+    await page.keyboard.press(key);
+    await page.waitForTimeout(50);
+    await expect(page.getByTestId('undo')).toHaveAttribute('title', title!);
+    await expect(page.getByTestId('redo')).toBeDisabled(); // nothing undone
+    await expect(cell(0)).toHaveAttribute('aria-pressed', 'true');
+    for (const s of [2, 3, 4]) await expect(cell(s)).toHaveAttribute('aria-pressed', 'true');
+  }
+  await page.mouse.move(...(await at(5)), { steps: 3 }); // the paint goes on
+  await page.mouse.move(...(await at(6)), { steps: 3 });
+  await page.mouse.up();
+  for (const s of [2, 3, 4, 5, 6]) await expect(cell(s)).toHaveAttribute('aria-pressed', 'true');
+  // One entry: one undo clears the whole paint and leaves the click before it.
+  await page.keyboard.press('ControlOrMeta+z');
+  for (const s of [2, 3, 4, 5, 6]) await expect(cell(s)).toHaveAttribute('aria-pressed', 'false');
+  await expect(cell(0)).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('ControlOrMeta+z'); // and the click is the entry before it
+  await expect(cell(0)).toHaveAttribute('aria-pressed', 'false');
+});
+
 // Plan 9 Task 1: the question was about a state the undo replaces, so an
 // undo (↶, ⌘Z) closes an open inline confirm (as its Cancel would) first.
 test('undo closes an open confirm', async ({ page }) => {

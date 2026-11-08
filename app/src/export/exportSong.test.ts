@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Op } from '../audio/protocol';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
-import { buildAudioFixture, buildFixture, fakeDecoder, nullSink } from '../project/testFixture';
+import { addAutomationFixture, buildAudioFixture, buildFixture, fakeDecoder, nullSink } from '../project/testFixture';
 import { addAudioClip, addAudioTrack } from '../state/audio-actions';
 import { addDrumTrack, setRowSample, setStep } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
@@ -68,6 +68,20 @@ describe('export: what gets rendered', () => {
     expect(transport).toContainEqual([Op.SET_LOOP, 0, 0]);
     expect(transport.slice(-2)).toEqual([[Op.SEEK, 0], [Op.PLAY, 0]]);
     expect(cmds.filter((c) => c[0] === Op.SET_METRONOME)).toEqual([[Op.SET_METRONOME, 0]]);
+  });
+
+  it('commands carry a curved point: its SET, then its AUTO_POINT_CURVE (plan 16)', async () => {
+    // The export renders the curve the editor shows, not a straight segment.
+    const { p } = await buildFixture();
+    const lanes = addAutomationFixture(p);
+    lanes.cutoff.points[0].curve = -0.25;
+    const json = serialize(p);
+    const cmds = exportCommands(json, new Map(json.samples.map((s) => [s.id, s.id]))).commands;
+    const k = cmds.findIndex((c) => c[0] === Op.AUTO_POINT_CURVE);
+    expect(k).toBeGreaterThan(0);
+    expect(cmds[k]).toEqual([Op.AUTO_POINT_CURVE, lanes.cutoff.lane * 512, -0.25, 0, 0]);
+    expect(cmds[k - 1]).toEqual([Op.AUTO_POINT_SET, lanes.cutoff.lane * 512, 0, 200, 0]);
+    expect(cmds.filter((c) => c[0] === Op.AUTO_POINT_CURVE)).toHaveLength(1);
   });
 
   it('file name is "<project name> <YYYY-MM-DD>.wav", made safe', () => {

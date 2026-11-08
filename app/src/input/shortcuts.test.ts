@@ -5,7 +5,7 @@ import { createNoteInput } from './noteInput';
 import { DEFAULT_OCTAVE } from './qwertyPiano';
 import type { NoteListener } from './noteInput';
 
-const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number } = {}, project: object = { playing: false, tracks: [] }) => {
+const mk = (opts: { onTogglePlay?: () => void; onToggleArm?: () => void; onSave?: () => void; onSaveAs?: () => void; onOpen?: () => void; onUndo?: () => void; onRedo?: () => void; onTab?: (t: string) => void; initialOctave?: number; pointerDown?: () => boolean } = {}, project: object = { playing: false, tracks: [] }) => {
   const sent: number[][] = [];
   const octs: number[] = [];
   const heard: unknown[][] = []; // what the recorder side of the bus saw
@@ -75,6 +75,21 @@ describe('shortcut handlers', () => {
     l.h.onKeyDown(key('KeyZ', { metaKey: true, ...pd }));
     expect(calls).toHaveLength(5);
     expect(prevented).toBe(6);
+  });
+
+  it('Cmd/Ctrl+Alt+Z is undo (and +Shift redo) only while a pointer is down: an Alt-drag cancels (plan 16)', () => {
+    const calls: string[] = [];
+    let down = false;
+    const { h } = mk({ onUndo: () => calls.push('undo'), onRedo: () => calls.push('redo'), pointerDown: () => down });
+    h.onKeyDown(key('KeyZ', { metaKey: true, altKey: true }));
+    h.onKeyDown(key('KeyY', { ctrlKey: true, altKey: true }));
+    expect(calls).toEqual([]); // no drag: Alt makes it some other shortcut
+    down = true;
+    h.onKeyDown(key('KeyZ', { metaKey: true, altKey: true }));
+    h.onKeyDown(key('KeyZ', { ctrlKey: true, altKey: true }));
+    h.onKeyDown(key('KeyZ', { metaKey: true, altKey: true, shiftKey: true }));
+    h.onKeyDown(key('KeyY', { ctrlKey: true, altKey: true }));
+    expect(calls).toEqual(['undo', 'undo', 'redo', 'redo']);
   });
 
   it('piano key sends note on / off', () => {

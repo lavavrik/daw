@@ -3,8 +3,8 @@ import { addTrack } from './addTrack';
 import { startApp } from './startApp';
 
 // Plan 21 Task 8: the icon pass must leave no button without an accessible
-// name (icon-only buttons carry aria-label / title), and the mixer's spectrum
-// is >= 3x the old 320 px canvas at 1440x900.
+// name (icon-only buttons carry aria-label / title); the mixer's analyser
+// keeps its plan-12 size (the 3x spectrum is the top bar's).
 
 async function start(page: Page) {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -43,15 +43,18 @@ test('every button has an accessible name across the main views', async ({ page 
   expect(await unnamed(page), 'mixer').toEqual([]);
 });
 
-test('the mixer spectrum is at least 3x its old 320 px width at 1440x900', async ({ page }) => {
+test('the mixer analyser keeps its 340 px panel: 320 px spectrum, goniometer stacked under it', async ({ page }) => {
+  // The owner's "master spectrum 3x" meant the top bar's (TopBar, 3x); the
+  // mixer analyser stays as plan 12 drew it.
   await start(page);
   await page.getByTestId('mixer-tab').click();
   const spec = page.getByTestId('analyser-spectrum');
   await expect(spec).toBeVisible();
   const box = await spec.evaluate((c: HTMLCanvasElement) => ({ css: c.getBoundingClientRect().width, px: c.width, dpr: window.devicePixelRatio }));
-  expect(box.css).toBeGreaterThanOrEqual(960);
+  expect(box.css).toBeCloseTo(320, 0);
   expect(box.px).toBe(Math.round(box.css * Math.max(1, Math.round(box.dpr))));
-  // The goniometer keeps its size beside the spectrum.
-  const gon = await page.getByTestId('goniometer').boundingBox();
-  expect(gon!.width).toBeCloseTo(120, 0);
+  const s = (await spec.boundingBox())!;
+  const gon = (await page.getByTestId('goniometer').boundingBox())!;
+  expect(gon.width).toBeCloseTo(120, 0);
+  expect(gon.y).toBeGreaterThan(s.y + s.height - 1); // under the spectrum, not beside it
 });

@@ -200,7 +200,7 @@
     if (readoutEl) readoutEl.hidden = true;
   }
 
-  // A width change (the mixer panel is fluid): re-fit the backing store and
+  // A width change (the top bar's well is fluid): re-fit the backing store and
   // the grid now, not at the next analysis frame, and force a redraw.
   $effect(() => {
     void width;

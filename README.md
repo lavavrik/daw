@@ -92,7 +92,7 @@ faded out, so a sample that doesn't end at zero never clicks.
 Click **+ Synth track**: it gets the *Deep Bass* patch and opens the **Piano
 roll**. Play it with the computer keyboard (the home row A S D F G H J K L are
 white keys, W E T Y U O the black keys; **Z** / **X** change the octave, shown
-as **Oct** in the top bar) or a MIDI keyboard. The top bar's **Keys →** shows
+as **Oct** in the top bar) or a MIDI keyboard. **Options ▸ Keys play:** shows
 which track the keys play: the selected synth or drum track (with an audio
 track selected, the synth track selected last). A selected drum track takes
 the keys: MIDI notes 36–51 (C2 and up) play its rows 1–16, and on the
@@ -170,7 +170,7 @@ a **Glide mode** (Always, or Legato for slides on overlapping notes only).
 
 ## Recording
 
-1. Select a synth or drum track (its name shows after **Keys →**).
+1. Select a synth or drum track (its name shows after Options ▸ **Keys play:**).
 2. Arm with **R** or **● Rec** (it turns red). **1-2** (Count-in) gives one
    bar of clicks before recording starts. Both are in the bottom panel's
    header, in the pattern transport.
@@ -576,6 +576,8 @@ still work there).
 | **Cmd/Ctrl+E** | Timeline: split the selected clips at the playhead / song position |
 | **← →** | Piano roll: move by a grid cell. Timeline: nudge a beat (**Shift**: a bar) |
 | **↑ ↓** | Piano roll: transpose a semitone (**Shift**: an octave) |
+| **Alt+↑ / Alt+↓** | On a focused track header: move the track up / down |
+| **Alt+arrows** | On a focused rack module header: move the module to the next free spot |
 | **Alt** (while dragging) | No snap (piano roll, clips); Alt-click a step: ghost note |
 | **Shift**-drag | Box select (piano roll, timeline) |
 | **Cmd/Ctrl+wheel** | Zoom (piano roll, timeline) |
@@ -601,7 +603,7 @@ the **MIDI:** pill in the top bar shows the state. If it says "blocked", allow
 MIDI in Chrome's site settings (the icon left of the address bar ▸ Site
 settings ▸ MIDI devices) and reload. "no device": plug the keyboard in; it is
 picked up without a reload. "unsupported": use Chrome. Notes play the track
-shown after **Keys →**; select a synth track first. All MIDI channels are
+shown after Options ▸ **Keys play:**; select a synth track first. All MIDI channels are
 heard (omni).
 
 **"Sample limit reached".** A session can load 256 samples (every drop uses

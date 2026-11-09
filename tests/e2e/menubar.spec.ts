@@ -433,3 +433,21 @@ test('the wheel over Options ▸ Keyboard\'s octave row steps the octave', async
   await page.mouse.wheel(0, 200);
   await expect(page.getByTestId('menu-octave')).toHaveText(String(oct - 1));
 });
+
+// Final review #1: View ▸ Performance's live chips have a fixed width (min-width in ch, tabular
+// digits), so the View menu (width: max-content) never changes width as the numbers change.
+test('View ▸ Performance: the menu keeps its width with 0 or 123 dropouts', async ({ page }) => {
+  await start(page);
+  const setDropouts = (n: number) => page.evaluate((n) => {
+    // The top bar polls engine.dropouts() at 4 Hz (as layout.spec stubs it).
+    (window.__daw.engine as unknown as { dropouts: () => number }).dropouts = () => n;
+  }, n);
+  await setDropouts(0);
+  await openMenu(page, 'View');
+  await expect(page.getByTestId('cpu')).toContainText(' 0 drop');
+  const width = () => panel(page, 'View').evaluate((p) => p.getBoundingClientRect().width);
+  const before = await width();
+  await setDropouts(123);
+  await expect(page.getByTestId('cpu')).toContainText('123 drop');
+  expect(Math.abs((await width()) - before)).toBeLessThan(0.5);
+});

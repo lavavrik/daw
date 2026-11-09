@@ -826,8 +826,8 @@
             onclick={() => settingsFrom('View')}
           >
             <Icon icon={Gauge} /><span class="l">Performance</span>
-            <span class="pv" data-testid="cpu" class:bad={perf.dropouts > 0}>CPU {perf.cpu}% · {perf.dropouts} drop</span>
-            <span class="pv" data-testid="latency" class:warn={perf.latencyMs > BT_LATENCY_MS}>{Math.round(perf.latencyMs)} ms</span>
+            <span class="pv cpu" data-testid="cpu" class:bad={perf.dropouts > 0}>CPU {perf.cpu}% · {perf.dropouts} drop</span>
+            <span class="pv lat" data-testid="latency" class:warn={perf.latencyMs > BT_LATENCY_MS}>{Math.round(perf.latencyMs)} ms</span>
           </button>
         {:else if m === 'Options'}
           <p class="sec"><Icon icon={Keyboard} size={12} /> Keyboard</p>
@@ -938,7 +938,12 @@
   .sw { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; }
   /* View ▸ Performance: live values in mono (tabular), a warning in a fill
      (never --rec / --accent text on --panel: ui-theme.md "Rules of use"). */
-  .pv { padding: 1px 5px; border-radius: var(--r-xs); background: var(--well); font: 500 var(--fs-lbl) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); }
+  .pv { padding: 1px 5px; border-radius: var(--r-xs); background: var(--well); font: 500 var(--fs-lbl) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); text-align: right; }
+  /* A fixed width each (final review #1): the menu is max-content wide, so a chip that grew with its digits
+     ("CPU 9%" -> "CPU 10%", "0 drop" -> "123 drop") resized the whole View menu at 4 Hz. Widest:
+     "CPU 100% · 999 drop" (19 ch) and "999 ms" (6 ch), in the mono font (1ch = one digit). */
+  .pv.cpu { min-width: 19ch; }
+  .pv.lat { min-width: 6ch; }
   .pv.bad { background: var(--rec); color: var(--on-color); font-weight: 700; }
   .pv.warn { background: var(--accent); color: var(--on-color); font-weight: 700; }
   kbd { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text-2); }

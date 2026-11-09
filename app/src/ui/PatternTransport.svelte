@@ -95,7 +95,7 @@
   const recTitle = $derived(
     songPlaying && !rec.armed ? 'Recording works with the pattern transport: stop the song first'
     : why && !rec.armed ? why
-    : 'Record arm (R). Records into the Keys → track\'s current pattern while the pattern plays.',
+    : 'Record arm (R). Records into the current pattern of the track the keys play (Options ▸ Keys play:) while the pattern plays.',
   );
 </script>
 

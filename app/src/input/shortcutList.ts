@@ -53,7 +53,7 @@ export const SHORTCUTS: ShortcutGroup[] = [
     entries: [
       {
         keys: ['A W S E D F T G Y H U J K O L'],
-        what: 'Play notes on the Keys → track (on a drum track: its rows)',
+        what: 'Play notes on the track Options ▸ "Keys play:" names (on a drum track: its rows)',
         combos: PIANO_CODES.map(bare),
       },
       { keys: ['Z', 'X'], what: 'Octave down / up', combos: [bare('KeyZ'), bare('KeyX')] },
@@ -97,6 +97,8 @@ export const SHORTCUTS: ShortcutGroup[] = [
       { keys: ['Q'], what: 'Quantize (piano roll)' },
       { keys: ['Mod+D'], what: 'Duplicate the selected clips (timeline)' },
       { keys: ['Mod+E'], what: 'Split clips at the playhead (timeline)' },
+      { keys: ['Alt+↑', 'Alt+↓'], what: 'Move the track up / down (on a focused track header)' },
+      { keys: ['Alt+←', 'Alt+→', 'Alt+↑', 'Alt+↓'], what: 'Move a rack module to the next free spot (on its focused header)' },
     ],
   },
 ];

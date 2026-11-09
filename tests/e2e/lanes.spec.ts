@@ -70,6 +70,11 @@ test('drag a lane taller: header and lane follow, points use the new height, no 
   // From here on nothing is an edit: the undo button and the project's edit
   // counter (version) stay put. (Not `dirty`: the idle dirty check would
   // rightly set it again, since the project differs from its saved state.)
+  // The pick is a click, so its "Add automation lane" entry is committed by
+  // the pointer gesture one task after the pointerup (history/gestures.ts),
+  // which can land frames after the lane is already drawn. Wait for it, or
+  // the baseline is "Nothing to undo" and the undo loop below removes the lane.
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add automation lane/);
   const undoTitle = await page.getByTestId('undo').getAttribute('title');
 
   // Drag the strip 112 px down: live while the button is down, 160 px after.

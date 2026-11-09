@@ -84,3 +84,16 @@ describe('the shortcuts sheet list', () => {
     expect(comboMatches({ code: 'KeyZ' }, ev({ altKey: true }))).toBe(false);
   });
 });
+
+describe('the sheet names the local Alt+arrow moves and the menu labels (final review #3)', () => {
+  const all = SHORTCUTS.flatMap((g) => g.entries);
+  it('lists the track reorder and the rack module nudge', () => {
+    expect(all.some((e) => e.keys.join(' ') === 'Alt+↑ Alt+↓' && /track/.test(e.what))).toBe(true);
+    expect(all.some((e) => e.keys.join(' ') === 'Alt+← Alt+→ Alt+↑ Alt+↓' && /rack module/.test(e.what))).toBe(true);
+    expect(formatKeys('Alt+↑', true)).toBe('⌥↑');
+  });
+  it('says "Keys play:" (Options), not the removed "Keys →" pill', () => {
+    expect(all.some((e) => e.what.includes('Keys →'))).toBe(false);
+    expect(all.some((e) => e.what.includes('Keys play:'))).toBe(true);
+  });
+});

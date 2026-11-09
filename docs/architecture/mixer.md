@@ -642,6 +642,18 @@ Plan 29 (up to 8 returns), native, release, dev Mac:
 | Same as the 2-return mix plus 6 never-fed slots (`idle_returns_cost_nothing`, median of 5) | 9.25% vs 9.38%, ×0.986 (cap ×1.03) |
 | Retyping all 8 busy returns in one block (Reverb ↔ Delay), worst single block across the switch (`retyping_all_returns_fits_in_a_block`) | 0.72–0.81 ms against a 2.67 ms block (steady-state worst 0.54–0.65 ms) |
 
+Plan 29, browser (`spec 6 mix with 8 returns`: the spec 6 Song-mode mix, slots
+0..3 Reverb and 4..7 Delay, every track at -12 dB on all 8 sends; audio-thread
+CPU, mean over 10 s, dev Mac, serial Playwright project):
+
+| Scenario | Browser (audio-thread CPU) | Blocks |
+|---|---|---|
+| Spec 6, Song mode, 2 returns (same runs) | 6.3–7.4% (max 8.8%) | 100% |
+| Spec 6, Song mode, 8 busy returns | 6.2% (max 7.4%) in the isolated serial runs; 9.2–13.7% (max 16.7%) in full `npm run test:e2e` runs | 100% |
+
+The run-to-run drift (machine load from other work) is larger than the cost of
+the extra returns; the budget (< 0.6, no new dropouts, blocks >= 95%) holds.
+
 The retype figure covers the `reset_dsp` memset of the old rings (about 1 MiB per
 Delay, 0.6 MiB per Reverb) at fade end, on the audio thread: it fits in a block
 with room to spare, so the clear is not sliced over several blocks.

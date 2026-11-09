@@ -285,6 +285,42 @@ test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
 });
 
 /**
+ * Plan 29: the same mix with 8 busy returns (slots 0..3 Reverb, 4..7 Delay;
+ * slots 0 and 1 are the default Reverb and Delay) and every track at -12 dB
+ * on all 8 sends. Same budgets as spec 6.
+ */
+test('spec 6 mix with 8 returns stays under the browser CPU budget', async ({ page }) => {
+  test.setTimeout(60_000);
+  await startAudio(page);
+  const { synths } = await buildSpec6(page);
+  const ok = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    // Default layout has Reverb (slot 0) and Delay (slot 1); add 3 + 3 for 4 + 4.
+    const kinds = ['reverb', 'reverb', 'reverb', 'delay', 'delay', 'delay'];
+    for (const k of kinds) if (!a.addReturn(k)) return false;
+    for (const t of project.tracks) {
+      for (const s of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) a.setMix(t.id, `send_${s}`, -12);
+    }
+    return true;
+  });
+  expect(ok).toBe(true);
+  expect(await page.evaluate(() => (window as unknown as DawWindow).__daw!.engine!.failure)).toBeNull();
+  const laid = await page.evaluate(() => {
+    const { actions: a, project } = (window as unknown as DawWindow).__daw!;
+    for (const t of project.tracks) {
+      for (let start = 0; start < 16 * 3840; ) {
+        const c = a.addClip(t.id, { start });
+        if (!c) return false;
+        start += c.len;
+      }
+    }
+    return true;
+  });
+  expect(laid).toBe(true);
+  await playAndMeasure(page, 'spec6 browser, 8 returns', synths[0], 'song');
+});
+
+/**
  * Drop a `secs` long stereo WAV (two sines, built in the page: no 20 MB
  * argument from Node) below the lanes at tick 0, as from Finder: a new Audio
  * track with one clip the file's length. Returns the track's slot.

@@ -297,6 +297,32 @@ on the playlist) and:
 - Arrows step; the wheel steps only while the field is focused (so scrolling a panel never edits a field under the cursor). Enter/blur commits, Esc reverts. `oninput` reports the raw text for live validation (Settings' buffer field).
 - Do not wrap a NumberField in a `<label>`: a click on label text would forward to the first button (the − step). Use a `div`.
 
+## Resizable panes
+
+The library sidebar and the song timeline's track header column are
+resizable: `ui/Splitter.svelte`, a focusable `role="separator"` strip over
+the pane's edge (drag; ←/→ 8 px, Shift 1 px; double-click: the default;
+Escape / Cmd+Z mid-drag: back). Widths live in `ui/paneWidths.svelte.ts`
+(`PANES`: library 220 px, 180..480; track headers 176 px, 150..360), a UI
+preference in localStorage (`daw.paneWidth.<pane>`), never the project.
+The header strip sits inside the column's last 5 px, so a click at the very
+start of a lane still reaches the lane.
+
+## Bottom panel header heights
+
+Every control in the bottom panel header is 24 px tall: the pattern
+transport's well (20 px buttons in 2 px), the pattern picker's select,
+buttons and name field, and the tab tray (20 px tabs in 2 px), so the row
+reads as one line of equal pills.
+
+## Popover menus
+
+The main menus' popover (`MenuBar .pop`) is the look for menus: a `--panel`
+card with a 1 px `--raised` outline, `--lift` + `--drop`, a 6 px frame
+(8 px at the bottom), 26 px items with 10 px side padding, and small
+uppercase `--text-2` section heads. The rack's Add module menu follows it
+(one column per category; the category colour is a swatch by its head).
+
 ## Top bar
 
 `ui/TopBar.svelte` (plan 20 Task 5; spec §4; the canvas board "Song view"),

@@ -122,9 +122,11 @@
 </div>
 
 <style>
-  /* 22 px tall, like the picker beside it: a taller header would cost the
-     editors below a row at 1280×720 (pianoroll.spec layout test). */
-  .pt { display: inline-flex; align-items: center; gap: 3px; padding: 1px; flex: none; }
+  /* 24 px tall (20 px buttons in a 2 px well), the same box as the picker's
+     controls and the tab tray beside it (one height for the whole header
+     row). A taller header would cost the editors below a row at 1280×720
+     (pianoroll.spec layout test): 24 px is what the tab tray already took. */
+  .pt { display: inline-flex; align-items: center; gap: 3px; padding: 2px; flex: none; box-sizing: border-box; height: 24px; }
   .b {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 28px; height: 20px; padding: 0 6px; border: 0; border-radius: var(--r-sm);

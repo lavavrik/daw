@@ -49,7 +49,7 @@
   import type { NoteInput } from '../../input/noteInput';
   import type { CommandSink } from '../../state/actions';
   import { applyAcidSteps, convertToSteps, transposeAcid, type AcidEditKind } from '../../state/acid-actions';
-  import { DEFAULT_BASE, MAX_BASE, MIN_BASE, readSteps, REST, stepPitch, type AcidStep, type Unshowable } from '../../state/acidSteps';
+  import { DEFAULT_BASE, MAX_BASE, MIN_BASE, readSteps, REST, stepPitch, UNSHOWABLE_TEXT, type AcidStep } from '../../state/acidSteps';
   import { mutate, randomize, SCALES, shift, type ScaleName } from '../../state/acidTools';
   import { setPatternBars } from '../../state/pattern-actions';
   import { currentPattern } from '../../state/project.svelte';
@@ -84,13 +84,7 @@
   const AUDITION_MS = 150;
   const AUDITION_SOURCE = 'acid';
   const BLACK = new Set([1, 3, 6, 8, 10]);
-  const REASON: Record<Unshowable, string> = {
-    offgrid: 'a note starts off the 1/16 grid',
-    chord: 'two notes start on the same step',
-    poly: 'notes overlap',
-    range: 'the pitches span more than the three octaves of the steps',
-    long: 'the pattern is longer than 4 bars',
-  };
+  const REASON = UNSHOWABLE_TEXT;
   const TRANSPOSE: [number, string][] = [[-12, '−12'], [-1, '−1'], [1, '+1'], [12, '+12']];
   const SLIDE_HINT = 'Slides need a mono patch with glide, e.g. Acid Line';
   const NO_NEXT = 'Slide needs a next note';

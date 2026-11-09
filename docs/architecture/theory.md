@@ -252,11 +252,15 @@ through its own path, `acid-actions.ts`, and is not affected).
 1680): the key tools are in the Key card; Humanize… and the Chord toggle
 are icon-only below 1440 px (each keeps its name as `aria-label`, and a
 tooltip); Quantize (with its "N sel. / all" count) and Clear always show
-their labels. The readout takes what is
-left (it wraps only under 120 px) and ellipsizes a long text; its tooltip
-has the whole of it. Its default help is short enough to fit at 1280
-("4 notes · click to draw"); the tooltip adds the rest ("Shift-drag to
-select, right-click to delete").
+their labels. The row ends with the readout and the **zoom group**
+(zoom out / in in time, shorter / taller rows, **Fit**: the selection, or
+the whole pattern and its pitch range, fills the view; view state, no undo
+entry). The readout shows only while it has something to say (a selection,
+a velocity, a chord, a hint); idle it is hidden, not removed. Its
+flex-basis is 0, so text appearing never re-wraps the row (the editor below
+never jumps); it grows up to its text into what is left and ellipsizes a
+long one, its tooltip has the whole of it. (The idle "N notes · click to
+draw" help it used to show was replaced by the zoom group.)
 
 ## Tests
 

@@ -68,6 +68,13 @@ function maxPeak(page: Page, ms: number) {
 }
 
 const readout = (page: Page) => page.getByTestId('pr-readout');
+/** The selected track's current pattern's note count (the idle readout no longer shows it). */
+const noteCount = (page: Page) =>
+  page.evaluate(() => {
+    const p = (window as unknown as { __daw: { project: { selectedTrackId: string; tracks: { id: string; currentPatternId: string; patterns: { id: string; notes: unknown[] }[] }[] } } }).__daw.project;
+    const t = p.tracks.find((x) => x.id === p.selectedTrackId)!;
+    return t.patterns.find((x) => x.id === t.currentPatternId)!.notes.length;
+  });
 
 test('draw a note, it plays in the loop', async ({ page }) => {
   await openRoll(page);
@@ -124,7 +131,7 @@ test('quantize snaps a drawn-off-grid note', async ({ page }) => {
   await page.keyboard.up('Alt');
   await expect(readout(page)).toContainText(/C3 · 1\.1\.1 \+1\d\dt/); // nearer 1.1.2
   await page.keyboard.press('Escape'); // clears the selection
-  await expect(readout(page)).toContainText('1 note ·');
+  await expect(readout(page)).toBeHidden(); // idle: no readout (the zoom group has the room)
   await page.getByTestId('pr-quantize').click();
   await page.mouse.click((await at(page, SIXTEENTH + 60, C3)).x, p.y); // select it again
   await expect(readout(page)).toContainText('C3 · 1.1.2 · 1/16');
@@ -137,7 +144,7 @@ test('delete removes it and playback is silent', async ({ page }) => {
   await page.keyboard.press('ControlOrMeta+a');
   await expect(readout(page)).toContainText('2 notes selected');
   await page.keyboard.press('Delete');
-  await expect(readout(page)).toContainText('0 notes');
+  await expect.poll(() => noteCount(page)).toBe(0);
   await page.keyboard.press('Space');
   expect(await maxPeak(page, 2500)).toBeLessThan(0.001);
   await page.keyboard.press('Space');
@@ -153,17 +160,17 @@ test('right-click deletes just the note under the pointer (one undo entry)', asy
   await draw(page, 0, C3);
   await draw(page, BEAT, C3);
   await page.keyboard.press('Escape'); // no selection: the readout counts the notes
-  await expect(readout(page)).toContainText('2 notes');
+  await expect.poll(() => noteCount(page)).toBe(2);
   const pt = await at(page, BEAT + 30, C3);
   await page.mouse.click(pt.x, pt.y, { button: 'right' });
-  await expect(readout(page)).toContainText('1 note');
+  await expect.poll(() => noteCount(page)).toBe(1);
   // Right-click on empty grid does nothing (and never draws).
   const empty = await at(page, 2 * BEAT + 30, C3);
   await page.mouse.click(empty.x, empty.y, { button: 'right' });
-  await expect(readout(page)).toContainText('1 note');
+  await expect.poll(() => noteCount(page)).toBe(1);
   await page.keyboard.press('ControlOrMeta+z');
   await page.keyboard.press('Escape');
-  await expect(readout(page)).toContainText('2 notes');
+  await expect.poll(() => noteCount(page)).toBe(2);
 });
 
 test('right-click clears a step in the step grid', async ({ page }) => {
@@ -239,8 +246,8 @@ test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo
   await openRoll(page);
   await draw(page, 0, C3);
   await draw(page, BEAT, C3);
-  await page.keyboard.press('Escape'); // clears the selection: the readout counts the notes
-  await expect(readout(page)).toContainText('2 notes');
+  await page.keyboard.press('Escape'); // clears the selection
+  await expect.poll(() => noteCount(page)).toBe(2);
   await page.getByTestId('pr-clear').click();
   const ask = page.getByTestId('inline-confirm');
   await expect(ask).toContainText('Clear all 2 notes');
@@ -248,13 +255,13 @@ test('Clear asks inline: Cancel keeps the notes, Confirm clears them in one undo
   await page.keyboard.press('Escape');
   await expect(ask).toHaveCount(0);
   await expect(page.getByTestId('pr-clear')).toBeFocused(); // focus returned to the trigger
-  await expect(readout(page)).toContainText('2 notes');
+  await expect.poll(() => noteCount(page)).toBe(2);
   await page.getByTestId('pr-clear').click();
   await page.getByTestId('inline-confirm-ok').click();
   await expect(ask).toHaveCount(0);
-  await expect(readout(page)).not.toContainText('2 notes');
+  await expect.poll(() => noteCount(page)).toBe(0);
   await page.keyboard.press('ControlOrMeta+z'); // one undo entry brings both back
-  await expect(readout(page)).toContainText('2 notes');
+  await expect.poll(() => noteCount(page)).toBe(2);
 });
 
 test('bottom-panel tab shortcuts: Alt+2 Piano roll, a disabled tab only hints, F9 Mixer', async ({ page }) => {
@@ -284,17 +291,17 @@ test('examples menu: add an example pattern, undo it, add an example track', asy
   await page.getByTestId('examples-menu').click();
   await page.getByTestId('example-acid-line').click();
   await expect(title).toContainText('Acid Line example');
-  await expect(readout(page)).toContainText('16 notes');
+  await expect.poll(() => noteCount(page)).toBe(16);
   await expect(page.getByTestId('pr-length')).toHaveValue('1');
   // 2. One undo takes the whole thing back: the previous pattern is current again.
   await page.keyboard.press('ControlOrMeta+z');
   await expect(title).toContainText('Pattern 1');
-  await expect(readout(page)).toContainText('0 notes');
+  await expect.poll(() => noteCount(page)).toBe(0);
   // 3. "+ track": a new "Sax" track with the Sax patch, the example as its pattern.
   await page.getByTestId('examples-menu').click();
   await page.getByTestId('example-track-sax').click();
   await expect(title).toHaveText('Sax · Sax example');
-  await expect(readout(page)).toContainText('9 notes');
+  await expect.poll(() => noteCount(page)).toBe(9);
   await page.getByRole('button', { name: 'Instrument' }).click();
   await expect(page.getByTestId('patch-select')).toHaveValue('Sax');
   // The track's own patch's example comes first in the menu.
@@ -316,7 +323,7 @@ test('rack: "Add example roll" adds the patch\'s example and opens the Piano rol
   await page.getByTestId('rack-example').click();
   await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
   await expect(page.getByTestId('panel-title')).toContainText('Brass Stab example');
-  await expect(readout(page)).toContainText('64 notes');
+  await expect.poll(() => noteCount(page)).toBe(64);
 });
 
 test('examples menu fits a short window (plan 13 follow-up)', async ({ page }) => {

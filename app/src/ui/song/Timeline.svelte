@@ -165,13 +165,15 @@
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
+  import Splitter from '../Splitter.svelte';
+  import { paneWidths } from '../paneWidths.svelte';
   import AutoLane from './AutoLane.svelte';
   import AddTrackMenu from './AddTrackMenu.svelte';
   import { laneHeight, laneView } from './laneView.svelte';
   import { targetLabel } from './autoLabels';
   import { targetDef } from '../../state/automation';
   import {
-    BAR, BEAT, HEADER_W, LANE_H, LOOP_LABEL_MIN_PX, MASTER_GREY, MIN_CLIP_W, RULER_BAR_H, RULER_H, RULER_TIME_H, ZOOM, audioEdges,
+    BAR, BEAT, LANE_H, LOOP_LABEL_MIN_PX, MASTER_GREY, MIN_CLIP_W, RULER_BAR_H, RULER_H, RULER_TIME_H, ZOOM, audioEdges,
     barLabelStep, barRange, posReadout, timeLabels, boxSelect, clampGroupDt, clipLaneAt, dropTarget, drumPreview, followPage, hitTest, loopFromDrag,
     notePreview, placeLen, repeatTicks, resizeLeft, resizeRight, rowLayout, rowsHeight, seekTick, snap, snapFloor, tickToX,
     xToTick, zoomAt,
@@ -1373,7 +1375,7 @@
   data-testid="timeline"
   data-view={view ? JSON.stringify(view) : ''}
   data-playhead=""
-  style:--header-w="{HEADER_W}px"
+  style:--header-w="{paneWidths.trackHeaders}px"
   style:--ruler-h="{RULER_H}px"
   style:--ruler-bar-h="{RULER_BAR_H}px"
   style:--lane-h="{LANE_H}px"
@@ -1514,6 +1516,9 @@
       <output class="readout" class:hint={!!hint} data-testid="tl-readout">{readoutText}</output>
     </div>
   </div>
+  <!-- The track header column's right edge: drag to resize it (ui/Splitter.svelte; a UI preference). Above the
+       footer, and inside the column (its last 5 px): a click at the very start of a lane still reaches the lane. -->
+  <Splitter pane="trackHeaders" label="Track header width" testid="headers-resize" style="top: 0; bottom: {footH}px; left: calc(var(--header-w) - 5px); width: 5px" />
   {#if pointer && hoverText}
     <div class="hover-readout" class:flip={pointer.flip} data-testid="tl-hover-readout" aria-hidden="true" style:left="{pointer.x}px" style:top="{pointer.y}px">{hoverText}</div>
   {/if}

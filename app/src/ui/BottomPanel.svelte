@@ -17,6 +17,7 @@
   import Rack from './rack/Rack.svelte';
   import PianoRoll from './pianoroll/PianoRoll.svelte';
   import AcidSteps from './acid/AcidSteps.svelte';
+  import { acidUnavailable } from '../state/acid-actions';
   import Wheels from './Wheels.svelte';
   import MixerView from './mixer/MixerView.svelte';
   import ClipPanel from './ClipPanel.svelte';
@@ -62,9 +63,30 @@
   // (ClipPanel: the clip the timeline focused); Step grid, Piano roll, Acid
   // and Instrument are disabled for it, with their usual tooltips.
   let synthTab = $state(lastSynthTab);
+  // ACID AVAILABILITY. The Acid tab is disabled while the synth track's
+  // current pattern can't be read as steps (chords, overlaps, off-grid
+  // starts, > 4 bars: state/acid-actions.ts acidUnavailable; its text is the
+  // tab's tooltip). Picking another track / pattern that can't be shown while
+  // Acid is the remembered tab shows the Piano roll instead (Acid comes back
+  // with the next pattern that reads). An edit that breaks the pattern while
+  // the Acid tab is open (a recorded note, an undo) keeps it open, with its
+  // notice and "Convert to steps": `acidKeep` is the track:pattern the open
+  // tab shows, so the tab never jumps away under the user.
+  const acidWhy = $derived(acidUnavailable(track));
+  const patKey = $derived(ptrack ? `${ptrack.id}:${ptrack.currentPatternId}` : null);
+  let acidKeep = $state<string | null>(null);
+  const acidOk = $derived(!acidWhy || acidKeep === patKey);
   const editorTab = $derived(
-    track?.kind === 'synth' ? synthTab : track?.kind === 'drum' ? 'step' : track?.kind === 'audio' ? 'clip' : null,
+    track?.kind === 'synth' ? (synthTab === 'acid' && !acidOk ? 'pianoroll' : synthTab)
+    : track?.kind === 'drum' ? 'step' : track?.kind === 'audio' ? 'clip' : null,
   );
+  // Remember the pattern Acid is showing (readable); forget it once Acid is
+  // left (another tab, the mixer, another track or pattern), so a pattern
+  // broken in the piano roll never re-enables the tab.
+  $effect(() => {
+    if (editorTab !== 'acid' || p.mixerOpen) acidKeep = null;
+    else if (!acidWhy) acidKeep = patKey;
+  });
   /** The Audio track's focused clip (the Clip tab edits it; the header names it). */
   const audioClip = $derived(track?.kind === 'audio' ? (track.clips.find((c) => c.id === clipFocus.id) ?? null) : null);
   const audioClipName = $derived(
@@ -86,6 +108,7 @@
   export function pickTab(t: PanelTab) {
     const ok = tabFor(t, track?.kind ?? null);
     if ('hint' in ok) return flashHint(ok.hint);
+    if (t === 'acid' && !acidOk) return flashHint(acidWhy!);
     if (t === 'mixer') p.mixerOpen = true;
     else if (t === 'pianoroll' || t === 'acid' || t === 'instrument') pickSynthTab(t);
     else p.mixerOpen = false; // Step grid / Clip: the track's only editor
@@ -154,7 +177,7 @@
       <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? 'Alt+1 / F6' : 'Select a drum track (Alt+1 / F6)'} onclick={() => (p.mixerOpen = false)}>Step grid</button>
       <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+2 / F7' : 'Select a synth track (Alt+2 / F7)'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
       <!-- Alt+N is the Nth tab (shortcuts.ts TAB_CODES); Acid and Clip have no F-key. -->
-      <button class="tab" class:active={active === 'acid'} disabled={track?.kind !== 'synth'} data-testid="tab-acid" title={track?.kind === 'synth' ? 'The pattern as steps (Alt+3)' : 'Select a synth track (Alt+3)'} onclick={() => pickSynthTab('acid')}>Acid</button>
+      <button class="tab" class:active={active === 'acid'} disabled={track?.kind !== 'synth' || !acidOk} data-testid="tab-acid" title={track?.kind !== 'synth' ? 'Select a synth track (Alt+3)' : !acidOk ? `${acidWhy} (Alt+3)` : 'The pattern as steps (Alt+3)'} onclick={() => pickSynthTab('acid')}>Acid</button>
       <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+4 / F8' : 'Select a synth track (Alt+4 / F8)'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
       <button class="tab" class:active={active === 'mixer'} title="All tracks, the Reverb and Delay returns and the Master (Alt+5 / F9)" data-testid="mixer-tab" onclick={() => (p.mixerOpen = true)}>Mixer</button>
       <button class="tab" class:active={active === 'clip'} disabled={track?.kind !== 'audio'} data-testid="tab-clip" title={track?.kind === 'audio' ? 'The selected audio clip: gain, fades, loop (Alt+6)' : 'Select an audio track (Alt+6)'} onclick={() => (p.mixerOpen = false)}>Clip</button>

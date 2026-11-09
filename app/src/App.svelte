@@ -8,6 +8,8 @@
   import { noteMidiStatus } from './ui/topStatus';
   import Tooltip from './ui/Tooltip.svelte';
   import Browser from './ui/Browser.svelte';
+  import Splitter from './ui/Splitter.svelte';
+  import { paneWidths } from './ui/paneWidths.svelte';
   import SongArea from './ui/SongArea.svelte';
   import BottomPanel from './ui/BottomPanel.svelte';
   import { Op, TELEMETRY } from './audio/protocol';
@@ -1007,8 +1009,10 @@
         <button onclick={() => void startFresh()}>Start fresh</button>
       </div>
     {/if}
-    <div class="main">
+    <div class="main" style:--lib-w="{paneWidths.library}px">
       <Browser {engine} p={project} />
+      <!-- The library's right edge: drag to resize it (ui/Splitter.svelte; a UI preference). -->
+      <Splitter pane="library" label="Library width" testid="library-resize" style="top: 3px; bottom: 3px; left: calc(var(--lib-w) + 2px); width: 5px" />
       <div class="right">
         <div class="song"><SongArea p={project} {engine} {clock} /></div>
         <div class="bottom" bind:this={bottomEl}>
@@ -1039,7 +1043,8 @@
      component moves onto the theme. */
   :global(html, body) { margin: 0; height: 100%; background: var(--work); color: var(--text); font: var(--fs-ctl)/1.4 var(--font-ui); }
   .app { height: 100vh; display: flex; flex-direction: column; background: var(--work); }
-  .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; gap: 3px; padding: 3px; }
+  /* --lib-w: the library's width (ui/paneWidths.svelte.ts; the Splitter over the 3 px gap resizes it). */
+  .main { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--lib-w) minmax(0, 1fr); gap: 3px; padding: 3px; }
   /* The editor (piano roll / step grid / rack) gets the larger share: the roll
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
   .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }

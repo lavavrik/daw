@@ -25,8 +25,8 @@ export const AUTO_H = 48;
 /** Resized lane row heights stay within these (px). */
 export const LANE_MIN_H = 32;
 export const LANE_MAX_H = 240;
-/** Width of the track-header column (px): colour bar, name over the volume slider, M/S/A, ×. */
-export const HEADER_W = 176;
+// The track-header column's width is resizable: ui/paneWidths.svelte.ts
+// (pane 'trackHeaders', default 176 px), read by Timeline as --header-w.
 /**
  * The ruler (plan 21 §6): two labelled rows, BAR on top (bar numbers, beat
  * ticks, the loop bar and the playhead head) and TIME under it (m:ss labels,

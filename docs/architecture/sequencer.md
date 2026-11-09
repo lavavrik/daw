@@ -394,6 +394,14 @@ more than 4 bars) show "This pattern has notes the Acid tab can't show
 pattern to 4 bars, snaps starts, keeps a chord's highest note and folds
 pitches into a window.
 
+**The tab is disabled** for a pattern it can't show (`acidUnavailable` in
+`state/acid-actions.ts`; the tab's tooltip and Alt+3's hint give the
+reason): picking such a track or pattern while Acid is the remembered tab
+shows the Piano roll instead. An edit that breaks the pattern while the Acid
+tab is open (a recorded note, an undo) keeps it open with the notice above,
+so it never jumps away. **Patterns ▸ Convert to steps** does the same
+conversion from anywhere and opens Acid.
+
 **Rewrite rule. Reading never edits.** An edit (`planEdit`) compares the old
 reading with the new steps run by run and touches only what changed: a new
 run adds a canonical note, a run whose note step went away removes its note,

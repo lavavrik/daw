@@ -355,10 +355,9 @@ test('layout at 1280: the piano-roll toolbar stays one row with the key controls
   // Quantize and Clear keep their labels (review #3); the key tools are in the Key popover.
   await expect(page.getByTestId('pr-quantize')).toHaveText(/Quantize all/);
   await expect(page.getByTestId('pr-clear')).toHaveText(/Clear/);
-  // The readout's default help fits whole (the rest of it is the tooltip).
-  await expect(page.getByTestId('pr-readout')).toHaveText('0 notes · click to draw');
-  expect(await page.getByTestId('pr-readout').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await expect(page.getByTestId('pr-readout')).toHaveAttribute('title', /Shift-drag to select/);
+  // Idle, the readout is gone and the zoom group has the row's end.
+  await expect(page.getByTestId('pr-readout')).toBeHidden();
+  for (const id of ['pr-zoom-out', 'pr-zoom-in', 'pr-rows-less', 'pr-rows-more', 'pr-fit']) await expect(page.getByTestId(id)).toBeVisible();
   await openKey(page);
   for (const id of ['pr-key-root', 'pr-key-scale', 'pr-snap-key', 'pr-transpose', 'pr-fit-key']) await expect(page.getByTestId(id)).toBeVisible();
 });

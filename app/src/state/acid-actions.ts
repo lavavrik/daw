@@ -3,11 +3,11 @@
 // ordinary note actions, all inside ONE edit() so it is one undo entry.
 import type { CommandSink } from './actions';
 import { createSweepKeys } from '../history/sweep';
-import { ACID_MAX_BARS, convertSteps, DEFAULT_BASE, planEdit, readSteps, type AcidStep, type NoteDiff } from './acidSteps';
+import { ACID_MAX_BARS, convertSteps, DEFAULT_BASE, planEdit, readSteps, UNSHOWABLE_TEXT, type AcidStep, type NoteDiff } from './acidSteps';
 import { edit } from './edits';
 import { addNote, deleteNotes, setPatternBars, updateNotes } from './pattern-actions';
 import { currentPattern, synthTrack } from './project.svelte';
-import type { Project } from './project.svelte';
+import type { Project, Track } from './project.svelte';
 
 /** Coalesce keys with a 1000 ms idle rollover (history itself has no time limit). */
 let sweepKey = createSweepKeys();
@@ -85,4 +85,18 @@ export function convertToSteps(p: Project, sink: CommandSink, trackId: string): 
     applyDiff(p, sink, trackId, planEdit(pat.notes, pat.bars, base, steps));
     return base;
   });
+}
+
+/**
+ * Why the Acid tab is unavailable for `t`'s current pattern, or null when it
+ * can show it (readSteps at any base: it auto-fits the range). Only synth
+ * tracks have the tab at all (other kinds: shortcuts.ts tabFor says so).
+ * The bottom panel disables the tab with this text and the Patterns menu
+ * offers "Convert to steps" (convertToSteps) instead.
+ */
+export function acidUnavailable(t: Track | null): string | null {
+  if (!t || t.kind !== 'synth') return null;
+  const pat = currentPattern(t);
+  const v = readSteps(pat.notes, pat.bars);
+  return v.ok ? null : `Acid can't show this pattern as steps: ${UNSHOWABLE_TEXT[v.reason]} (Patterns ▸ Convert to steps)`;
 }

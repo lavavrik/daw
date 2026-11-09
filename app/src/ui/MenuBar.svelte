@@ -20,7 +20,10 @@
   //   Patterns  New, Duplicate, Rename…, Delete for the selected track's
   //             current pattern (state/pattern-actions.ts, as PatternPicker);
   //             inert with the reason (see below) when the selected track
-  //             has no patterns. Rename… turns the list into a name field
+  //             has no patterns. Convert to steps (synth tracks): snaps a
+  //             pattern the Acid tab can't show to steps and opens Acid
+  //             (state/acid-actions.ts convertToSteps; inert when Acid shows
+  //             it already). Rename… turns the list into a name field
   //             (Enter renames, Esc goes back to the list). The pattern
   //             library (plan 21 Task 4, state/pattern-library.ts): Save to
   //             project library… asks for a name the same way (default
@@ -31,7 +34,8 @@
   //             only that layer).
   //   View      Mixer (a toggle), the editor tabs (BottomPanel.pickTab through
   //             `onTab`; a tab the selected track can't show is inert with
-  //             shortcuts.ts tabFor's hint), Reset lane heights, Performance
+  //             shortcuts.ts tabFor's hint, Acid also while the pattern can't
+  //             be read as steps: acidUnavailable), Reset lane heights, Performance
   //             (plan 22: a live CPU · dropouts · latency readout, 4 Hz from
   //             TopBar's telemetry; a click opens Audio settings)
   //   Options   Keyboard: octave − / + and "Keys play: <track>"; Note names ▸
@@ -155,6 +159,7 @@
   import { banners, flashHint } from '../state/banners.svelte';
   import { LIBRARY_NAME_MAX, defaultLibraryName, saveBlocked, savePatternToLibrary } from '../state/pattern-library';
   import { tabFor } from '../input/shortcuts';
+  import { acidUnavailable, convertToSteps } from '../state/acid-actions';
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
   import { wheelOctaveSteps } from '../input/qwertyPiano';
@@ -523,6 +528,10 @@
   const cur = $derived(ptrack ? currentPattern(ptrack) : null);
   const NO_PATTERNS = 'Select a drum or synth track';
   const fullWhy = $derived(!ptrack ? NO_PATTERNS : ptrack.patterns.length >= MAX_PATTERNS ? PATTERNS_FULL_TEXT : null);
+  /** Convert to steps: only for a synth pattern the Acid tab can't show yet. */
+  const convertWhy = $derived(
+    selected?.kind !== 'synth' ? 'Select a synth track' : acidUnavailable(selected) ? null : 'The Acid tab already shows this pattern',
+  );
   const deleteWhy = $derived.by(() => {
     if (!ptrack || !cur) return NO_PATTERNS;
     if (ptrack.patterns.length <= 1) return 'A track needs at least one pattern';
@@ -717,7 +726,7 @@
   ];
   const tabWhy = (t: PanelTab) => {
     const r = tabFor(t, selected?.kind ?? null);
-    return 'hint' in r ? r.hint : null;
+    return 'hint' in r ? r.hint : t === 'acid' ? acidUnavailable(selected) : null;
   };
   function view(fn: () => void) {
     closeToOpener();
@@ -908,6 +917,12 @@
             <button class="it" data-testid="menu-pattern-delete" use:inertItem={deleteWhy} title={deleteWhy ?? 'Delete this pattern'} onclick={() => patternCmd((t, pid) => deletePattern(p, engine, t, pid))}>
               <Icon icon={Trash} /><span class="l">Delete</span>
             </button>
+            <!-- The Acid tab is disabled while the pattern can't be read as steps (BottomPanel ACID AVAILABILITY): this snaps it to steps (one undo entry) and opens Acid. -->
+            <button
+              class="it" data-testid="menu-pattern-convert" use:inertItem={convertWhy}
+              title={convertWhy ?? 'Snap the notes to 1/16 steps (one note per step) so the Acid tab can show them'}
+              onclick={() => patternCmd((t) => { convertToSteps(p, engine, t); onTab('acid'); })}
+            ><Icon icon={WaveSquare} /><span class="l">Convert to steps</span></button>
             <hr />
             <button class="it" data-testid="menu-pattern-save" use:inertItem={saveWhy} title={saveWhy ?? 'Store a copy of this pattern in the project'} onclick={() => void startSave()}>
               <Icon icon={BookmarkSimple} /><span class="l">Save to project library…</span>

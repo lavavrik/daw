@@ -993,7 +993,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
   await page.keyboard.up('KeyA');
   await page.getByTestId('pattern-stop').click();
 
-  await expect(page.getByTestId('pr-readout')).toContainText('1 note ');
+  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.patterns[0]?.notes ?? []).length)).toBe(1);
   const notes = await page.evaluate(() =>
     (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.patterns[0]?.notes ?? []).map((n) => ({ pitch: n.pitch, start: n.start, len: n.len })),
   );
@@ -1009,7 +1009,7 @@ test('record from the keyboard, notes land on the heard beat (simulated Bluetoot
 
   await openMenu(page, 'File');
   await page.getByTestId('undo-take').click();
-  await expect(page.getByTestId('pr-readout')).toContainText('0 notes');
+  await expect.poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks.flatMap((t) => t.patterns[0]?.notes ?? []).length)).toBe(0);
 });
 
 test('BPM: Enter sends SET_TEMPO once and gives the keys back to the piano', async ({ page }) => {

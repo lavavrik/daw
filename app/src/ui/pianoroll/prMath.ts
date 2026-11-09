@@ -234,3 +234,34 @@ export function initialView(width: number, height: number, total: number, notes:
   const topPitch = clamp(Math.round(centre + (rows - 1) / 2), Math.min(127, rows - 1), 127);
   return { ticksPerPx: total / Math.max(1, width - KEYS_W), scrollTick: 0, rowH, topPitch, keysW: KEYS_W };
 }
+
+/** Tallest row the zoom buttons and Fit go to (px). */
+export const MAX_ROW_H = 24;
+
+/**
+ * Fit (the piano roll's zoom group): ticks `start`..`end` across the grid
+ * width, and the rows `low`..`high` (plus a row of air above and below)
+ * filling the note area's `height`, rows MIN_ROW_H..MAX_ROW_H px tall (a
+ * range too tall for MIN_ROW_H rows is centred instead).
+ */
+export function fitView(width: number, height: number, start: number, end: number, low: number, high: number): View {
+  const rowH = clamp(Math.floor(height / (high - low + 3)), MIN_ROW_H, MAX_ROW_H);
+  const rows = Math.max(1, Math.floor(height / rowH));
+  const topPitch = clamp(Math.round((low + high) / 2 + (rows - 1) / 2), Math.min(127, rows - 1), 127);
+  const ticksPerPx = Math.max(1, end - start) / Math.max(1, width - KEYS_W);
+  return { ticksPerPx, scrollTick: Math.max(0, start), rowH, topPitch, keysW: KEYS_W };
+}
+
+/**
+ * Row height × `factor` (MIN_ROW_H..MAX_ROW_H, whole px), keeping the pitch
+ * in the middle of a `height` px note area in the middle.
+ */
+export function zoomRows(v: View, factor: number, height: number): View {
+  const rowH = clamp(Math.round(v.rowH * factor), MIN_ROW_H, MAX_ROW_H);
+  if (rowH === v.rowH) return v;
+  const centre = v.topPitch - height / v.rowH / 2;
+  return { ...v, rowH, topPitch: Math.round(centre + height / rowH / 2) };
+}
+
+/** The default pitch range of an empty roll (C2..C5), for Fit with no notes. */
+export const DEFAULT_RANGE = { low: DEFAULT_LOW, high: DEFAULT_HIGH } as const;

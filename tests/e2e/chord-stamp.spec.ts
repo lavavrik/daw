@@ -230,7 +230,7 @@ for (const width of [1280, 1440, 1680]) {
       return { oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4), overflow: el.scrollWidth > el.clientWidth };
     });
     expect(bar).toEqual({ oneLine: true, overflow: false });
-    for (const id of ['pr-key', 'pr-chord', 'pr-chord-opts', 'pr-quantize', 'pr-humanize', 'pr-clear', 'pr-readout']) {
+    for (const id of ['pr-key', 'pr-chord', 'pr-chord-opts', 'pr-quantize', 'pr-humanize', 'pr-clear', 'pr-readout', 'pr-fit']) {
       await expect(page.getByTestId(id)).toBeVisible();
     }
   });

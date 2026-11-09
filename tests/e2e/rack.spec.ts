@@ -1187,3 +1187,21 @@ test('reduced motion: a hovered panel rises at once, with no fading veil', async
   await page.mouse.move(2, 2);
   await expect(page.getByTestId('module-0')).not.toHaveClass(/\braised\b/); // no fade back to wait for
 });
+
+test('hovering a jack lights its cables and rings both ends; the rest dim', async ({ page }) => {
+  await loadSax(page);
+  await expect(page.getByTestId('cables-hot')).toHaveCount(0);
+  // An output that feeds a cable: the first cable's source jack.
+  const src = await page.evaluate(() => {
+    const d = (window as any).__daw; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const t = d.project.tracks.find((x: any) => x.id === d.project.selectedTrackId); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const c = t.cables[0];
+    return { m: c.from.m, port: c.from.port, n: t.cables.filter((x: any) => x.from.m === c.from.m && x.from.port === c.from.port).length }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  });
+  await page.locator(`[data-jack][data-m="${src.m}"][data-dir="out"][data-port="${src.port}"]`).hover();
+  await expect(page.getByTestId('cables-hot').locator('path.lit')).toHaveCount(src.n);
+  await expect(page.getByTestId('cables-hot').locator('circle.ring')).toHaveCount(src.n * 2);
+  await expect.poll(() => page.getByTestId('cables').evaluate((el) => getComputedStyle(el).opacity)).toBe('0.3');
+  await page.mouse.move(2, 2);
+  await expect(page.getByTestId('cables-hot')).toHaveCount(0);
+});

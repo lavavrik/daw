@@ -8,6 +8,11 @@
   import PianoKeys from 'phosphor-svelte/lib/PianoKeys';
   import Magnet from 'phosphor-svelte/lib/Magnet';
   import MusicNotes from 'phosphor-svelte/lib/MusicNotes';
+  import MagnifyingGlassMinus from 'phosphor-svelte/lib/MagnifyingGlassMinus';
+  import MagnifyingGlassPlus from 'phosphor-svelte/lib/MagnifyingGlassPlus';
+  import ArrowsInLineVertical from 'phosphor-svelte/lib/ArrowsInLineVertical';
+  import ArrowsOutLineVertical from 'phosphor-svelte/lib/ArrowsOutLineVertical';
+  import CornersOut from 'phosphor-svelte/lib/CornersOut';
   import Icon from '../Icon.svelte';
   import type { ChordType } from '../../music/scales';
   /** Grid size survives track switches for the session (the roll remounts per track). */
@@ -34,6 +39,10 @@
   // - keyboard: press a key to audition it (noteInput, source 'pianoroll');
   // - velocity lane: drag a stem up/down (selected stems win on a chord);
   // - wheel scrolls vertically, Shift+wheel horizontally, Cmd/Ctrl+wheel zooms.
+  // - the toolbar's zoom group (right end): zoom out / in (time), shorter /
+  //   taller rows, Fit (the selection, or the whole pattern; see "zoom group").
+  //   It replaced the idle readout ("N notes · click to draw"); the readout
+  //   now shows only while it has something to say.
   // Drags apply through updateNotes at most once per animation frame (the
   // latest value wins) plus the final value on pointerup. Escape or a lost
   // pointer capture mid-drag puts the original values back.
@@ -139,7 +148,7 @@
   import { MAX_TRACKS, currentPattern } from '../../state/project.svelte';
   import { clearPatternText } from '../../state/confirmText';
   import {
-    BAR, BEAT, KEYS_W, MIN_ROW_H, chordStampPitches, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
+    BAR, BEAT, DEFAULT_RANGE, KEYS_W, MAX_ROW_H, MIN_ROW_H, chordStampPitches, fitView, zoomRows, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
     readout, snap, snapFloor, stretchLen, stretchReadout, tickToX, xToTick, yToPitch, zoomAt,
   } from './prMath';
   import type { View } from './prMath';
@@ -242,13 +251,10 @@
       return `${readout(n, gridKey)} · vel ${n.vel}${n.start >= total ? ' · past the end (silent)' : ''}`;
     }
     if (selNotes.length > 1) return `${selNotes.length} notes selected`;
-    // Short enough for the 1280 toolbar (review: it was cut off); the rest is the tooltip.
-    return `${notes.length} note${notes.length === 1 ? '' : 's'} · click to draw`;
+    // Idle: nothing (the readout hides; the zoom group has the room). The
+    // drawing help is the canvas's aria-label and the roll's tooltip.
+    return '';
   });
-  /** The readout's tooltip: its text, or the whole help when it shows the short default. */
-  const readoutTitle = $derived(
-    readoutText.endsWith('· click to draw') ? `${readoutText}, Shift-drag to select, right-click to delete` : readoutText,
-  );
 
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
   function flashHint(text: string) {
@@ -274,6 +280,34 @@
   function fitWidth() {
     if (!view || size.w <= KEYS_W) return;
     view = clampView({ ...view, ticksPerPx: total / (size.w - KEYS_W), scrollTick: 0 });
+  }
+
+  // ---- zoom group (toolbar, right end) ---------------------------------------
+  // −/+ zoom time ×1.5 around the middle of the grid (Cmd/Ctrl+wheel zooms at
+  // the pointer); the row buttons make rows shorter / taller (MIN_ROW_H ..
+  // MAX_ROW_H) around the middle pitch; Fit shows the selection, or the whole
+  // pattern, across the grid with its pitch range filling the note area
+  // (prMath fitView). View state only: no undo entry.
+  const TIME_STEP = 1.5;
+  const ROW_STEP = 1.25;
+  const canZoomIn = $derived(!!view && view.ticksPerPx > ZOOM.minTpp);
+  const canZoomOut = $derived(!!view && view.ticksPerPx < ZOOM.maxTpp);
+  function zoomTime(factor: number) {
+    if (!view) return;
+    view = clampView(zoomAt(view, factor, KEYS_W + (size.w - KEYS_W) / 2, ZOOM));
+  }
+  function zoomRowsBy(factor: number) {
+    if (view) view = clampView(zoomRows(view, factor, noteH));
+  }
+  function fit() {
+    if (!view || size.w <= KEYS_W || noteH <= 0) return;
+    const list = selNotes.length ? selNotes : notes;
+    const start = selNotes.length ? snapFloor(Math.min(...list.map((n) => n.start)), BEAT) : 0;
+    const end = selNotes.length ? Math.ceil(Math.max(...list.map((n) => n.start + n.len)) / BEAT) * BEAT : total;
+    const ps = list.map((n) => n.pitch);
+    const [low, high] = ps.length ? [Math.min(...ps), Math.max(...ps)] : [DEFAULT_RANGE.low, DEFAULT_RANGE.high];
+    const v = fitView(size.w, noteH, start, end, low, high);
+    view = clampView({ ...v, ticksPerPx: Math.min(ZOOM.maxTpp, Math.max(ZOOM.minTpp, v.ticksPerPx)) });
   }
 
   // ---- size / DPR ----------------------------------------------------------
@@ -1307,7 +1341,20 @@
         </div>
       {/if}
     </div>
-    <output class="readout" data-testid="pr-readout" class:hint={!!hint} title={readoutTitle}>{readoutText}</output>
+    <output class="readout" data-testid="pr-readout" class:hint={!!hint} class:idle={!readoutText} title={readoutText}>{readoutText}</output>
+    <div class="zoom" role="group" aria-label="Zoom" data-testid="pr-zoom">
+        <button data-testid="pr-zoom-out" aria-label="Zoom out" title="Zoom out: more bars (Cmd/Ctrl+wheel zooms at the pointer)" disabled={!canZoomOut}
+          onclick={() => { zoomTime(TIME_STEP); refocus(); }}><Icon icon={MagnifyingGlassMinus} /></button>
+        <button data-testid="pr-zoom-in" aria-label="Zoom in" title="Zoom in: fewer bars, finer grid (Cmd/Ctrl+wheel zooms at the pointer)" disabled={!canZoomIn}
+          onclick={() => { zoomTime(1 / TIME_STEP); refocus(); }}><Icon icon={MagnifyingGlassPlus} /></button>
+        <button data-testid="pr-rows-less" aria-label="Shorter rows" title="Shorter rows: more pitches on screen" disabled={!view || view.rowH <= MIN_ROW_H}
+          onclick={() => { zoomRowsBy(1 / ROW_STEP); refocus(); }}><Icon icon={ArrowsInLineVertical} /></button>
+        <button data-testid="pr-rows-more" aria-label="Taller rows" title="Taller rows: bigger notes" disabled={!view || view.rowH >= MAX_ROW_H}
+          onclick={() => { zoomRowsBy(ROW_STEP); refocus(); }}><Icon icon={ArrowsOutLineVertical} /></button>
+        <button data-testid="pr-fit" aria-label="Fit {selNotes.length ? 'selection' : 'pattern'}"
+          title={selNotes.length ? 'Fit: the selected notes fill the view' : 'Fit: the whole pattern and all its notes fill the view'}
+          onclick={() => { fit(); refocus(); }}><Icon icon={CornersOut} /> Fit</button>
+    </div>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -1384,14 +1431,23 @@
   .bar .split .caret { padding: 2px 4px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   /* Chord: a toggle; on = the accent, like a lit step. */
   .bar button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
-  /* The readout takes what the row has left (at least 120 px before it
-     wraps: its flex-basis, which is what line breaking measures), up to its
-     text, and ellipsizes a long hint (the full text is its tooltip). */
+  /* The row's right end: the readout, then the zoom group. The readout is
+     there only while it has something to say (a selection, a velocity, a
+     chord, a hint; idle it is hidden, not removed). Its flex-basis is 0, so
+     whether it has text never changes how the row wraps (the editor below
+     never jumps); it grows up to its text into what the row has left and
+     ellipsizes a long one (the full text is its tooltip). */
   .readout {
-    margin-left: auto; flex: 1 1 120px; max-width: max-content; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    margin-left: auto; flex: 1 1 0; max-width: max-content; min-width: 0; overflow: hidden; text-overflow: ellipsis;
     padding: 2px 8px; border-radius: var(--r-sm); white-space: nowrap;
     background: var(--lcd); box-shadow: var(--well-shadow); color: var(--text); font: 500 var(--fs-ctl)/16px var(--font-mono);
   }
+  .readout.idle { visibility: hidden; }
+  /* The zoom group: icon buttons joined like the chord split button. */
+  .zoom { display: flex; gap: 1px; flex: none; }
+  .bar .zoom > button { padding-left: 5px; padding-right: 5px; border-radius: 0; }
+  .bar .zoom > button:first-child { border-top-left-radius: var(--r-sm); border-bottom-left-radius: var(--r-sm); }
+  .bar .zoom > button:last-child { padding-right: 7px; border-top-right-radius: var(--r-sm); border-bottom-right-radius: var(--r-sm); }
   .readout.hint { color: var(--accent); }
   .stage { position: relative; flex: 1; min-height: 180px; border: 1px solid var(--line); border-radius: var(--r-sm); outline: none; overflow: hidden; }
   .stage:focus-visible, .stage:focus { border-color: color-mix(in srgb, var(--c) 70%, var(--line)); }

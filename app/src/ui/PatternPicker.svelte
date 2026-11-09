@@ -202,13 +202,16 @@
 
 <style>
   /* Tokens only (theme.css): the select and the rename field take the global
-     skins; the buttons are compact .btn (raised), sized like the old ones
-     (11 px) because the bottom panel header is a dense row. */
-  .picker { display: inline-flex; align-items: center; gap: 4px; }
-  .btn { padding: 2px 6px; font-size: 11px; }
-  select { padding: 2px 4px 2px 6px; font-size: 11px; white-space: nowrap; }
+     skins; the buttons are compact .btn (raised), 11 px text because the
+     bottom panel header is a dense row. Every control here is --ctl-h (24 px)
+     tall, the same box as the pattern transport's well and the tab tray
+     beside it, so the header row reads as one line of equal pills. */
+  .picker { display: inline-flex; align-items: center; gap: 4px; --ctl-h: 24px; }
+  .btn, select, .name { box-sizing: border-box; height: var(--ctl-h); }
+  .btn { padding: 0 6px; font-size: 11px; }
+  select { padding: 0 4px 0 6px; font-size: 11px; white-space: nowrap; }
   .name { width: 130px; box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
-  .ic { display: inline-flex; align-items: center; padding: 2px 4px; }
+  .ic { display: inline-flex; align-items: center; padding: 0 4px; }
   /* Room for Save / Load in the one-row header at 1280 px (layout.spec.ts):
      Duplicate, the longest label, is icon-only below 1440 px (its name
      stays: aria-label, and the tooltip says what it does). */

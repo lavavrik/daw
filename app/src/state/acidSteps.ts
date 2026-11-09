@@ -58,6 +58,14 @@ export type StepKind = 'note' | 'rest' | 'tie';
 export interface AcidStep { kind: StepKind; key: number; oct: -1 | 0 | 1; accent: boolean; slide: boolean }
 export const REST: AcidStep = Object.freeze({ kind: 'rest', key: 0, oct: 0, accent: false, slide: false });
 export type Unshowable = 'offgrid' | 'chord' | 'poly' | 'range' | 'long';
+/** Why a pattern can't be shown as steps, as the Acid tab's notice and the disabled tab's tooltip say it. */
+export const UNSHOWABLE_TEXT: Record<Unshowable, string> = {
+  offgrid: 'a note starts off the 1/16 grid',
+  chord: 'two notes start on the same step',
+  poly: 'notes overlap',
+  range: 'the pitches span more than the three octaves of the steps',
+  long: 'the pattern is longer than 4 bars',
+};
 export type StepView =
   | { ok: true; base: number; steps: AcidStep[] }
   | { ok: false; reason: Unshowable };

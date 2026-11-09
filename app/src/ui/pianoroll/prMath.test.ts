@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  chordStampPitches, clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor, stretchLen, stretchReadout,
+  MAX_ROW_H, MIN_ROW_H, chordStampPitches, clampMove, fitView, zoomRows, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor, stretchLen, stretchReadout,
   tickToX, xToTick, yToPitch, zoomAt,
 } from './prMath';
 import type { View } from './prMath';
@@ -246,5 +246,29 @@ describe('draw and stretch (owner request pr-drag)', () => {
     expect(stretchReadout([57, 60, 64], 960, 1920, '1/16')).toBe('A3 C4 E4 · 1.2.1 · 1/2');
     // One note: the same text as the selected-note readout.
     expect(stretchReadout([48], 0, 720, '1/16')).toBe(readout({ pitch: 48, start: 0, len: 720 }, '1/16'));
+  });
+});
+
+describe('zoom group', () => {
+  it('fitView puts the span across the grid and the pitch range (with a row of air) in the note area', () => {
+    const v = fitView(48 + 960, 300, 3840, 7680, 60, 67);
+    expect(v.ticksPerPx).toBe(4); // 3840 ticks over 960 px
+    expect(v.scrollTick).toBe(3840);
+    expect(v.rowH).toBe(24); // 300 / 10 rows = 30, capped at MAX_ROW_H
+    expect(v.rowH).toBe(MAX_ROW_H);
+    // 12 rows shown; the range's middle (63.5) sits in the middle.
+    expect(pitchToY(67, v)).toBeGreaterThanOrEqual(0);
+    expect(pitchToY(60, v) + v.rowH).toBeLessThanOrEqual(300);
+  });
+  it('fitView never squeezes rows below MIN_ROW_H', () => {
+    expect(fitView(1008, 100, 0, 3840, 0, 127).rowH).toBe(MIN_ROW_H);
+  });
+  it('zoomRows keeps the middle pitch and stays within MIN..MAX', () => {
+    const v: View = { ticksPerPx: 10, scrollTick: 0, rowH: 12, topPitch: 72, keysW: 48 };
+    const z = zoomRows(v, 1.5, 240); // 20 rows -> 13.3 rows around pitch 62
+    expect(z.rowH).toBe(18);
+    expect(z.topPitch).toBe(69);
+    expect(zoomRows({ ...v, rowH: MAX_ROW_H }, 2, 240).rowH).toBe(MAX_ROW_H);
+    expect(zoomRows({ ...v, rowH: MIN_ROW_H }, 0.5, 240)).toEqual({ ...v, rowH: MIN_ROW_H });
   });
 });

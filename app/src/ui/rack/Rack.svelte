@@ -87,6 +87,13 @@
   // delay. A cable drag or a module drag lowers it at once: every cable on
   // top, as before.
   //
+  // WHERE A CABLE GOES: while the pointer is over a jack (or keyboard focus is
+  // on one) that has cables, those cables are drawn again on top of
+  // everything (`.cables.hot`, z 8: over a raised panel and its own cables),
+  // thicker and with a glow, a ring marks the jack at each end, and every
+  // other cable dims. An input has at most one cable; an output can feed
+  // several, all lit. Off during a cable or module drag (`hot`).
+  //
   // Cables: the SVG has `pointer-events: none` everywhere, so it never steals
   // clicks from knobs. Cables are grabbed by their INPUT jack instead (VCV
   // style): pressing a connected input lifts that cable's plug and carries
@@ -622,6 +629,8 @@
       .filter((c) => !(drag?.carry && drag.carry.m === c.to.m && drag.carry.port === c.to.port))
       .map((c) => ({
         id: key(c.to.m, 'in', c.to.port),
+        /** Its output jack's key (an output can feed several cables). */
+        src: key(c.from.m, 'out', c.from.port),
         /** The two modules it connects (raising a panel lifts its own cables with it). */
         from: c.from.m,
         to: c.to.m,
@@ -688,6 +697,26 @@
       idx, leaving: raised.leaving, left: at.left, top: at.top, w, h: at.height, mine,
       under: drawn.filter((c) => !mine(c)), own: drawn.filter(mine),
     };
+  });
+  // ---- where a cable goes (WHERE A CABLE GOES at the top) ----
+  type JackRef = { m: number; dir: 'in' | 'out'; port: number };
+  /** The jack under the pointer, and the one keyboard focus is on. */
+  let hoverJack = $state<JackRef | null>(null);
+  let focusJack = $state<JackRef | null>(null);
+  /** The jack element `t` is in (Jack.svelte's data attributes), or null. */
+  function jackOf(t: EventTarget | null): JackRef | null {
+    const el = t instanceof Element ? t.closest<HTMLElement>('[data-jack]') : null;
+    if (!el) return null;
+    return { m: Number(el.dataset.m), dir: el.dataset.dir === 'in' ? 'in' : 'out', port: Number(el.dataset.port) };
+  }
+  /** The cables at the hovered (else focused) jack, and the jack centres at their ends. */
+  const hot = $derived.by(() => {
+    const j = drag || mdrag ? null : (hoverJack ?? focusJack);
+    if (!j) return null;
+    const k = key(j.m, j.dir, j.port);
+    const list = drawn.filter((c) => (j.dir === 'in' ? c.id : c.src) === k);
+    if (!list.length) return null;
+    return { list, ends: list.flatMap((c) => [{ at: c.a, color: c.color }, { at: c.b, color: c.color }]) };
   });
   const dragA = $derived(drag ? pos[key(drag.fixed.m, drag.fixed.dir, drag.fixed.port)] : null);
   /**
@@ -1190,13 +1219,13 @@
           {:else}
             {#each groups as g (g.category)}
               <div class="group" style:--c={catalogCategoryColor(g.category)}>
-                <div class="gh">{g.category[0].toUpperCase() + g.category.slice(1)}</div>
+                <div class="gh"><i class="sw"></i>{g.category[0].toUpperCase() + g.category.slice(1)}</div>
                 {#each g.modules as md (md.id)}
                   {@const note = poolFullNote(md)}
                   <!-- The dot is the module's own header colour (a group can mix them: Shaping holds filters and envelopes). -->
                   <button role="menuitem" data-testid={`add-${md.id}`} aria-disabled={note ? 'true' : undefined}
                     title={note || undefined} onclick={() => add(md.id)}
-                  ><i class="dot" style:--c={moduleColor(md)}></i>{md.name}{#if note}<small>{note}</small>{/if}</button>
+                  ><i class="dot" style:--c={moduleColor(md)}></i><span class="l">{md.name}{#if note}<small>{note}</small>{/if}</span></button>
                 {/each}
               </div>
             {/each}
@@ -1256,8 +1285,9 @@
     <div
       class="content" bind:this={content}
       style:width={geometry ? `max(100%, ${geometry.w}px)` : undefined} style:height={geometry ? `${geometry.h}px` : undefined}
-      onpointerover={(e) => (hoverIdx = panelOf(e.target))} onpointerleave={() => (hoverIdx = null)}
-      onfocusin={(e) => (focusIdx = panelOf(e.target))} onfocusout={focusOut}
+      onpointerover={(e) => { hoverIdx = panelOf(e.target); hoverJack = jackOf(e.target); }}
+      onpointerleave={() => { hoverIdx = null; hoverJack = null; }}
+      onfocusin={(e) => { focusIdx = panelOf(e.target); focusJack = jackOf(e.target); }} onfocusout={(e) => { focusOut(e); focusJack = jackOf(e.relatedTarget); }}
     >
       {#if mdrag && landing && geometry}
         <!-- The grid while dragging (plan 22), behind the panels (first in .content): 10 px column ticks, every 50 px stronger, from PAD; the row bands. It reaches through the new-row band below the last row. -->
@@ -1338,6 +1368,19 @@
         <!-- The raised panel's own cables, above it. -->
         <svg class="cables own" data-testid="cables-own" width={size.w} height={svgH} aria-hidden="true">{@render cableSet(lift.own, () => false)}</svg>
       {/if}
+      {#if hot}
+        <!-- Where the hovered / focused jack's cables go: on top of everything, lit, with a ring at both ends. -->
+        <svg class="cables hot" data-testid="cables-hot" width={size.w} height={svgH} aria-hidden="true">
+          {#each hot.list as c (c.id)}
+            <path class="cable glow" d={cablePath(c.a, c.b)} stroke={c.color} />
+            <path class="cable lit" d={cablePath(c.a, c.b)} stroke={c.color} data-cable={c.id} />
+          {/each}
+          {#each hot.ends as e, i (i)}
+            <circle class="ring" cx={e.at.x} cy={e.at.y} r="13" stroke={e.color} style:color={e.color} />
+            <circle class="plug" cx={e.at.x} cy={e.at.y} r="4" fill={e.color} />
+          {/each}
+        </svg>
+      {/if}
     </div>
   </div>
 </div>
@@ -1356,14 +1399,31 @@
   .addwrap { position: relative; }
   .btn { padding: 4px 10px; }
   .btn[aria-expanded='true'] { filter: brightness(1.1); }
-  .menu { position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; display: flex; gap: 14px; padding: 10px; border-radius: var(--r-menu); background: var(--panel); box-shadow: var(--lift); }
-  .group { display: flex; flex-direction: column; gap: 1px; min-width: 104px; }
-  .gh { margin-bottom: 4px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--c) var(--gloss); box-shadow: var(--raised-shadow); color: var(--on-color); font: 700 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; }
-  .group button { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer; }
-  .group button:hover, .group button:focus-visible { background: var(--raised); outline: none; }
-  .group button[aria-disabled='true'] { color: var(--text-2); opacity: 0.6; cursor: not-allowed; }
-  .group button small { flex-basis: 100%; padding-left: 14px; font-size: var(--fs-xs); color: var(--text-2); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+  /* The add-module menu: the main menus' popover look (MenuBar .pop: a --panel card with a --raised outline, the
+     lift and drop, a 6 px frame, 26 px items, small uppercase section heads), one column per category. The
+     category colour is the swatch by its head; each item's dot is its module's own header colour. */
+  .menu {
+    position: absolute; z-index: 10; top: calc(100% + 4px); left: -5px; display: flex; gap: 6px; padding: 6px 6px 8px;
+    border: 1px solid var(--raised); border-radius: var(--r-menu); background: var(--panel); box-shadow: var(--lift), var(--drop);
+    color: var(--text); font: 500 var(--fs-ctl) var(--font-ui);
+  }
+  .group { display: flex; flex-direction: column; gap: 1px; width: max-content; min-width: 120px; }
+  .gh {
+    display: flex; align-items: center; gap: 6px; margin: 2px 10px 4px;
+    font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); white-space: nowrap;
+  }
+  .sw { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
+  .group button {
+    display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 26px; padding: 0 10px; border: 0;
+    border-radius: var(--r-sm); background: transparent; color: var(--text); font: inherit; text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  .group button:hover:not([aria-disabled='true']) { background: var(--raised); }
+  .group button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .group button[aria-disabled='true'] { opacity: 0.45; cursor: default; }
+  /* The name never wraps; a pool-full note goes on its own line under it. */
+  .group .l { display: flex; flex-direction: column; padding: 4px 0; }
+  .group button small { font-size: var(--fs-xs); color: var(--text-2); }
+  .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
   .full { margin: 0; color: var(--accent); white-space: nowrap; }
   .legend { margin-left: auto; display: flex; gap: 10px; font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2); }
   .legend span { display: flex; align-items: center; gap: 4px; }
@@ -1412,6 +1472,12 @@
   .cables.veil { z-index: 6; overflow: hidden; animation: veil-out 120ms ease-out forwards; }
   .cables.veil.back { animation-name: veil-in; }
   .cables.own { z-index: 7; }
+  /* Where a cable goes: the hovered jack's cables over everything (even a raised panel), the rest dimmed. */
+  .cables.hot { z-index: 8; }
+  .content:has(.cables.hot) .cables:not(.hot) { opacity: 0.3; transition: opacity 0.1s; }
+  .cable.lit { stroke-width: 4.5; opacity: 1; }
+  .cable.glow { stroke-width: 10; opacity: 0.3; filter: blur(3px); }
+  .ring { fill: none; stroke-width: 2.5; filter: drop-shadow(0 0 4px currentColor); }
   .cables .up { visibility: hidden; }
   @keyframes veil-out { from { opacity: 1; } to { opacity: 0; } }
   @keyframes veil-in { from { opacity: 0; } to { opacity: 1; } }

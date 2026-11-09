@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
 import { startApp } from './startApp';
+import { openMenu } from './topbar';
 
 // The Acid tab (plan 17 Task 4): a step view of a synth track's current
 // pattern, stored as ordinary notes (docs/architecture/sequencer.md, "Acid
@@ -241,4 +242,32 @@ test('the selection clears when the current pattern changes; Slide on a rest say
   await page.getByTestId('pattern-new').click();
   await expect(page.locator('[data-testid^="acid-step-"][aria-pressed="true"]')).toHaveCount(0);
   await expect(page.getByTestId('acid-key-0')).toBeDisabled();
+});
+
+test('the tab is disabled for a pattern it cannot show; Patterns ▸ Convert to steps opens it', async ({ page }) => {
+  await page.goto('/');
+  await startApp(page);
+  await addTrack(page, 'synth');
+  await page.getByTestId('tab-acid').click();
+  await expect(page.getByTestId('tab-acid')).toHaveClass(/active/);
+  // A chord (two notes on one step) on a NEW pattern: selecting it while Acid is the tab shows the Piano roll.
+  await page.getByTestId('pattern-new').click();
+  await page.evaluate(() => {
+    const d = (window as Any).__daw;
+    for (const pitch of [48, 52]) d.actions.addNote(d.project.selectedTrackId, { pitch, vel: 100, start: 0, len: 240 });
+  });
+  // Opened on this pattern, the Acid tab stays (the notice says why) ...
+  await expect(page.getByTestId('acid-unshowable')).toBeVisible();
+  // ... but come back to it from another tab and Acid is disabled, with the reason.
+  await page.getByRole('button', { name: 'Piano roll' }).click();
+  await expect(page.getByTestId('tab-acid')).toBeDisabled();
+  await expect(page.getByTestId('tab-acid')).toHaveAttribute('title', /two notes start on the same step/);
+  await page.keyboard.press('Alt+3'); // refused: only a hint
+  await expect(page.getByTestId('pr-canvas')).toBeVisible();
+  await openMenu(page, 'Patterns');
+  await page.getByTestId('menu-pattern-convert').click();
+  await expect(page.getByTestId('tab-acid')).toHaveClass(/active/);
+  await expect(page.getByTestId('acid-step-0')).toBeVisible();
+  await openMenu(page, 'Patterns');
+  await expect(page.getByTestId('menu-pattern-convert')).toHaveAttribute('aria-disabled', 'true');
 });

@@ -168,3 +168,14 @@ test('Snap to key: the pitch is snapped at the press and the length stretched', 
   await expect.poll(() => shape(page)).toEqual([[62, 0, 3 * SIXTEENTH]]);
   await expect.poll(() => undoLabel(page)).toBe('Add note');
 });
+
+test('losing pointer capture mid-draw (window blur) keeps the note at the length reached', async ({ page }) => {
+  await openRoll(page);
+  await pressAndDrag(page, 0, C3, 2 * SIXTEENTH);
+  await expect.poll(() => shape(page)).toEqual([[C3, 0, 2 * SIXTEENTH]]);
+  // What the browser fires when capture is lost without a release.
+  await page.getByTestId('pr-canvas').dispatchEvent('lostpointercapture');
+  await page.mouse.up();
+  await expect.poll(() => shape(page)).toEqual([[C3, 0, 2 * SIXTEENTH]]);
+  await expect.poll(() => undoLabel(page)).toBe('Add note');
+});

@@ -918,6 +918,17 @@
     cancel();
     return true;
   }));
+  /**
+   * Pointer capture lost without a release (window blur, OS gesture): a draw
+   * keeps the note at the length it had reached — only Esc / Cmd+Z discard a
+   * drawn note; every other drag is cancelled as before.
+   */
+  function lost() {
+    if (drag?.kind !== 'draw') return cancel();
+    drag = null;
+    flush();
+    stretch = null;
+  }
   /** Abort the drag and put the original values back. */
   function cancel() {
     if (!drag) return;
@@ -1319,7 +1330,7 @@
       onpointermove={move}
       onpointerup={up}
       onpointercancel={cancel}
-      onlostpointercapture={cancel}
+      onlostpointercapture={lost}
       onpointerleave={() => { if (!drag) { hoverPitch = null; hoverPt = null; } }}
     ></canvas>
   </div>

@@ -542,6 +542,25 @@ test('other modules never move up or down: a drag out of a row, Alt+Down, a remo
   await expect.poll(async () => maxShift(before, await panelRects(page), [gone])).toBeLessThanOrEqual(1);
 });
 
+test('Alt+Right then Alt+Left in one burst leaves no undo entry (settled after each nudge)', async ({ page }) => {
+  await loadBrass(page);
+  await page.getByTestId('module-header-6').focus();
+  await page.keyboard.press('Alt+ArrowRight'); // pins the flow: a real edit
+  await expect.poll(() => undoLabel(page)).toBe('Move module');
+  await page.waitForTimeout(1100); // a new burst (history/sweep.ts: 1 s idle)
+  const pos = await positions(page);
+  const before = await undoLabel(page);
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(async () => (await positions(page))[6]!.x).toBe(pos[6]!.x + 1);
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect.poll(async () => (await positions(page))[6]!.x).toBe(pos[6]!.x);
+  expect(await positions(page)).toEqual(pos);
+  // Back where it was: the burst's entry is gone, so the next undo is the pinning move (not a dead entry).
+  expect(await undoLabel(page)).toBe(before);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => anyPos(page)).toBe(false); // that one undo took back the pin itself
+});
+
 test('a refused nudge flashes the module red and is announced again each time', async ({ page }) => {
   await loadBrass(page);
   const rects = await panelRects(page);
@@ -696,6 +715,20 @@ test('mech knob: drag, Shift-fine, typed entry, reset, keys, cancel; one undo en
   await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.36, 5);
   await page.keyboard.press('ArrowDown');
   await expect.poll(() => valueOf(page, RESO)).toBeCloseTo(0.35, 5);
+
+  // Typed entry opened and closed without typing changes nothing (Task 2 parked #1): Shift+↑ (fine) is a value
+  // the rounded readout hides; Enter on the untouched draft must not write the readout back (no entry either).
+  await page.keyboard.press('Shift+ArrowUp');
+  await expect.poll(() => valueOf(page, RESO)).toBeGreaterThan(0.35);
+  const fine = await valueOf(page, RESO);
+  await expect(knob.getByTestId('knob-readout')).toHaveText('35%');
+  const label1 = await undoLabel(page);
+  await page.keyboard.press('Enter'); // opens the entry with "35%"
+  await expect(knob.getByTestId('knob-entry')).toHaveValue('35%');
+  await knob.getByTestId('knob-entry').press('Enter');
+  await expect(knob.getByTestId('knob-entry')).toHaveCount(0);
+  expect(await valueOf(page, RESO)).toBe(fine);
+  expect(await undoLabel(page)).toBe(label1);
 });
 
 /**

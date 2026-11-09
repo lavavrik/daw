@@ -427,6 +427,14 @@ describe('mech dial geometry', () => {
 });
 
 describe('widestValue', () => {
+  it('is computed once per def (memoised on the def object)', () => {
+    const d = { ...attack };
+    const n = widestValue(d);
+    d.max = 1e9; // a def is never mutated in the app; here it shows the second call reads the cache
+    expect(widestValue(d)).toBe(n);
+    expect(widestValue({ ...d })).toBeGreaterThan(n); // another object: measured afresh
+  });
+
   it('is at least the width of the min, max and default readouts', () => {
     for (const mod of ['filter', 'adsr', 'osc', 'midi_in', 'lfo']) {
       for (const pd of moduleDef(mod).params) {

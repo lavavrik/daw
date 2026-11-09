@@ -272,7 +272,17 @@ export function formatValue(d: KnobDef, v: number): string {
  * pattern in between are seen). Choice params have no chip (their buttons
  * are fixed), so they measure their longest choice.
  */
+const widestCache = new WeakMap<KnobDef, number>();
 export function widestValue(d: KnobDef): number {
+  // ~2000 formatValue calls per param: once per def, not per Knob mount (every
+  // rack knob and every mixer strip's). Defs are the catalog's own objects.
+  const known = widestCache.get(d);
+  if (known !== undefined) return known;
+  const w = measureWidest(d);
+  widestCache.set(d, w);
+  return w;
+}
+function measureWidest(d: KnobDef): number {
   if (d.choices.length) return Math.max(...d.choices.map((c) => c.length));
   const SWEEP = 2000;
   const seen = [d.min, d.max, d.default];

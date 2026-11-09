@@ -215,7 +215,7 @@ describe('moveTrack (plan 22 Task 4: reorder the song tracks)', () => {
   }
 
   it('permutes p.tracks only: no engine command, slots / ids / colours kept, marked edited', () => {
-    const { p, sink, sent, a, b, c, order } = rig();
+    const { p, sent, a, b, c, order } = rig();
     const before = p.tracks.map((t) => [t.id, t.slot, t.color]);
     const v = p.version;
     p.dirty = false;
@@ -231,7 +231,7 @@ describe('moveTrack (plan 22 Task 4: reorder the song tracks)', () => {
   });
 
   it('refuses a move to the same place or out of range: no write, not dirty', () => {
-    const { p, sink, order } = rig();
+    const { p, order } = rig();
     p.dirty = false;
     const v = p.version;
     for (const [from, to] of [[1, 1], [-1, 0], [0, 3], [3, 0], [0.5, 1], [NaN, 0]]) expect(moveTrack(p, from, to)).toBe(false);
@@ -242,7 +242,7 @@ describe('moveTrack (plan 22 Task 4: reorder the song tracks)', () => {
   });
 
   it('is one undo entry; undo / redo restore the order without any engine command', () => {
-    const { p, sink, sent, order } = rig();
+    const { p, sent, order } = rig();
     moveTrack(p, 2, 0);
     expect(p.history!.labels.undo).toBe('Move track');
     expect(p.history!.undo()).toBe(true);

@@ -139,13 +139,20 @@ test('Alt+Up/Down and the context menu move a track; M / S / A clicks never reor
   expect(await names(page)).toEqual(['Drums', 'Synth', 'Drums 2']);
 
   // Alt+Down on the focused header: one place down, focus stays on it, the live region says where.
+  // The add's entry is committed by its pointer gesture a task after the release: wait for it, or the
+  // move below is folded into that still-open gesture.
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add drum track/);
+  const undoBefore = await page.getByTestId('undo').getAttribute('title');
   await page.getByTestId('track-0').focus();
   await page.keyboard.press('Alt+ArrowDown');
   await expect.poll(() => names(page)).toEqual(['Synth', 'Drums', 'Drums 2']);
   await expect(page.getByTestId('track-order-status')).toHaveText('Moved Drums to position 2 of 3');
   await expect(page.getByTestId('track-0')).toBeFocused();
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Move track/);
   await page.keyboard.press('Alt+ArrowUp');
   await expect.poll(() => names(page)).toEqual(['Drums', 'Synth', 'Drums 2']);
+  // Down then Up in one burst nets to nothing: no dead "Move track" entry (settled after each press).
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', undoBefore!);
   await page.keyboard.press('Alt+ArrowUp'); // already first: nothing
   expect(await names(page)).toEqual(['Drums', 'Synth', 'Drums 2']);
   // Quick presses (after a pause: a new burst) are one undo entry: one undo goes back to where they started.
@@ -172,6 +179,15 @@ test('Alt+Up/Down and the context menu move a track; M / S / A clicks never reor
   await page.getByTestId('track-0').click({ button: 'right' });
   const menu = page.getByTestId('track-menu');
   await expect(menu).toBeVisible();
+  // The menus' padding (plan 22 "Menus": right >= 16 px, bottom >= 8 px), every item the full inner width.
+  const box = await menu.evaluate((m) => {
+    const cs = getComputedStyle(m);
+    const inner = m.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    return { right: parseFloat(cs.paddingRight), bottom: parseFloat(cs.paddingBottom), inner, widths: [...m.querySelectorAll('button')].map((b) => b.getBoundingClientRect().width) };
+  });
+  expect(box.right).toBeGreaterThanOrEqual(16);
+  expect(box.bottom).toBeGreaterThanOrEqual(8);
+  for (const w of box.widths) expect(Math.abs(w - box.inner)).toBeLessThan(0.5);
   await expect(menu.getByTestId('track-menu-up')).toBeDisabled();
   await menu.getByTestId('track-menu-down').click();
   await expect(menu).toBeHidden();
@@ -186,4 +202,17 @@ test('Alt+Up/Down and the context menu move a track; M / S / A clicks never reor
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
   await expect(page.getByTestId('track-2')).toBeFocused();
+});
+
+test('the window losing focus mid-drag drops the track drag (nothing moves)', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  await expect(page.getByTestId('track-1')).toBeVisible();
+  const b1 = (await page.getByTestId('track-1').boundingBox())!;
+  await dragHeader(page, 0, b1.y + b1.height + 10, false);
+  await expect(page.getByTestId('track-drag-ghost')).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur'))); // Cmd+Tab away: the release may never come
+  await expect(page.getByTestId('track-drag-ghost')).toBeHidden();
+  await page.mouse.up();
+  expect(await names(page)).toEqual(['Drums', 'Synth']);
 });

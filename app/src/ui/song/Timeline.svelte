@@ -1563,9 +1563,11 @@
   .hscroll { width: 140px; flex: none; margin-left: 8px; --c: var(--text-dim); }
   .readout { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 var(--font-ui); color: var(--text-2); }
   .readout.hint { color: var(--accent); }
-  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  /* Context-menu padding as the menu bar's popovers (plan 22 "Menus": right >= 16 px, bottom >= 8 px); each
+     item spans the inner width, so its highlight is the full band. */
+  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 6px 16px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; }
-  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button { width: 100%; box-sizing: border-box; font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
   .menu button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
 </style>

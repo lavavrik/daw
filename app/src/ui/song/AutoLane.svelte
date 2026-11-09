@@ -609,9 +609,11 @@
   .auto:focus-visible { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent); }
   .cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .tip { position: absolute; pointer-events: none; padding: 1px 5px; border-radius: var(--r-sm); background: var(--lcd); color: var(--text); font: 10px/1.4 var(--font-mono); white-space: nowrap; }
-  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  /* Context-menu padding as the menu bar's popovers (plan 22 "Menus": right >= 16 px, bottom >= 8 px); each
+     item spans the inner width, so its highlight is the full band. */
+  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 6px 16px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; }
-  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button { width: 100%; box-sizing: border-box; font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .menu button:hover, .menu button:focus-visible { background: var(--raised); outline: none; }
   .menu .check { display: inline-block; width: 14px; }
 </style>

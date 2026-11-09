@@ -390,8 +390,17 @@
     bad = false;
     editing = true;
   }
-  /** Apply the draft; false (and stay open) when it doesn't parse. */
+  /**
+   * Apply the draft; false (and stay open) when it doesn't parse. A draft that
+   * is still the readout it opened with (nothing typed) changes nothing: the
+   * readout is rounded, so parsing it back would write a slightly different
+   * value (a hidden 0.01 st reads "0") and make an undo entry for no edit.
+   */
   function commitEntry(): boolean {
+    if (draft.trim() === readout.trim()) {
+      editing = false;
+      return true;
+    }
     const v = parseValue(def, draft, readout);
     if (v === null) {
       bad = true;

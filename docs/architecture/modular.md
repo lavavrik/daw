@@ -182,7 +182,8 @@ or 1 row at the same x. A nudge moves only if the module fits there:
 
 - Quick nudges are one entry: the coalesce key is
   `sweepKey('rackmove:<trackId>')` (`history/sweep.ts`), and it steps after
-  1 s idle.
+  1 s idle. Each nudge settles the entry (`p.history.settle()`), so a burst
+  that ends where it started (→ then ←) leaves no entry.
 - The rack's polite live region (`jack-status`, shared with keyboard
   patching) announces each move: "Moved VCA to row 2, position 31" (row
   1-based, position in grid units). A refused nudge says why instead.

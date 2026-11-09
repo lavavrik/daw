@@ -244,7 +244,10 @@
   let opener: HTMLElement | null = null;
 
   // ---- open / close --------------------------------------------------------
+  // Both clear the submenu hover timers (cancelHover): a pending hover-open or
+  // grace-close must not fire into the next menu (or after the menu closed).
   function show(m: MenuName, from: HTMLElement | null = btns[m] ?? null) {
+    cancelHover();
     confirming = null;
     renaming = false;
     saving = false;
@@ -253,6 +256,7 @@
     open = m;
   }
   function close() {
+    cancelHover();
     confirming = null;
     renaming = false;
     saving = false;
@@ -840,8 +844,9 @@
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
             Keys play: {#if keysTrack}<span class="sw" style:background={keysTrack.color}></span>{/if}<b data-testid="keys-target">{keysTrack?.name ?? '(no track)'}</b>
           </p>
-          <!-- `note-names`: the old Settings select's id, on the control that replaced it. -->
-          <div class="subwrap" data-sub="notes">
+          <!-- `note-names`: the old Settings select's id, on the control that replaced it; `menu-notenames`
+               (its row, as before the submenu) on the wrapper. -->
+          <div class="subwrap" data-sub="notes" data-testid="menu-notenames">
             <button
               class="it" data-testid="note-names" bind:this={subBtns.notes} aria-expanded={sub === 'notes'} aria-controls="menu-notenames-sub"
               onclick={(e) => subClick('notes', e)} onkeydown={(e) => subBtnKey(e, 'notes')}

@@ -317,11 +317,12 @@ colour is stored on the track. So reordering is a permutation of
   the header follows the pointer, and an `--accent` line marks the drop gap
   (`tlMath.dropGap`: how many blocks have their middle above the pointer;
   none on the track's own two gaps). The rows move on the drop; Escape,
-  Cmd/Ctrl+Z or a lost pointer cancel. Near the top / bottom of the
-  timeline's scroller (below the sticky ruler, above the sticky footer:
+  Cmd/Ctrl+Z, a lost pointer or the window losing focus (blur) cancel. Near
+  the top / bottom of the timeline's scroller (below the sticky ruler, above the sticky footer:
   Timeline passes `scroll`) the view scrolls, like the rack's module drag.
   Alt+Up / Alt+Down on the focused header button move it one place (the
-  rack's nudge chord; quick presses coalesce into one undo entry, 1 s idle),
+  rack's nudge chord; quick presses coalesce into one undo entry, 1 s idle,
+  settled after each press so a burst that nets to nothing leaves no entry),
   and the header's context menu has Move up / Move down. Each move is
   announced in a polite live region: "Moved <name> to position n of N".
 

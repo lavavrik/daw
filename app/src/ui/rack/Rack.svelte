@@ -563,6 +563,9 @@
     if (samePlacement(result, base)) return; // Alt+Down on a module alone in the bottom row
     if (!inBounds(result, base)) return refuse(refusalText(result));
     if (!setRackLayout(p, track.id, toPositions(result), 'Move module', sweepKey(`rackmove:${track.id}`))) return;
+    // A coalesced move only marks the entry stale; settle now, so a burst that
+    // nets to nothing (→ then ←) leaves no dead "Move module" entry.
+    p.history?.settle();
     edited.add(track.id);
     const at = result.find((q) => q.idx === idx)!;
     rackStatus = `Moved ${titles.get(idx) ?? 'module'} to row ${at.row + 1}, position ${at.x}`;

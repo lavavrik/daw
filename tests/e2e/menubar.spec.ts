@@ -451,3 +451,20 @@ test('View ▸ Performance: the menu keeps its width with 0 or 123 dropouts', as
   await expect(page.getByTestId('cpu')).toContainText('123 drop');
   expect(Math.abs((await width()) - before)).toBeLessThan(0.5);
 });
+
+// Task 1 parked: close() and show() clear the submenu hover timers, so a hover-open still pending when
+// the menu closes cannot open the submenu in the menu shown next. The wrapper keeps `menu-notenames`.
+test('a hover-open pending when the menu closes does not open the submenu in the next menu', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Options');
+  await expect(page.getByTestId('menu-notenames')).toContainText('Note names');
+  const item = page.getByTestId('note-names');
+  // The pointer arriving on the item arms the ~150 ms hover-open. Dispatched, so the real pointer stays on
+  // the Options button: a real move would also send boundary events to the reopened menu.
+  await item.dispatchEvent('pointerover', { pointerType: 'mouse', bubbles: true });
+  await page.keyboard.press('Escape'); // closes Options at once (no submenu open yet), focus back on its button
+  await page.keyboard.press('Enter'); // Options again, before the hover-open would have fired
+  await expect(panel(page, 'Options')).toBeVisible();
+  await page.waitForTimeout(400); // past the hover-open delay (the assertion is that nothing happens)
+  await expect(item).toHaveAttribute('aria-expanded', 'false');
+});

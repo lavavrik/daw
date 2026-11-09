@@ -55,13 +55,14 @@
   //     ghost of the header follows the pointer, and an --accent line marks
   //     the gap it will drop into (tlMath.dropGap; none on its own two gaps,
   //     which are no move). The rows move on the drop (one write). Escape,
-  //     Cmd/Ctrl+Z (registerDragCancel), a lost pointer or unmounting cancel
-  //     it. Near the top / bottom edge of the timeline's scroller (under the
-  //     sticky ruler, above the sticky footer: `scroll` from Timeline) the
-  //     view scrolls, faster the deeper in, like the rack's module drag;
+  //     Cmd/Ctrl+Z (registerDragCancel), a lost pointer, the window losing
+  //     focus (blur) or unmounting cancel it. Near the top / bottom edge of
+  //     the timeline's scroller (under the sticky ruler, above the sticky
+  //     footer: `scroll` from Timeline) the view scrolls, faster the deeper in, like the rack's module drag;
   //   - Alt+Up / Alt+Down on the focused header button (the rack's nudge
   //     chord) moves it one place; quick presses are one undo entry
-  //     (sweepKey `trackmove:<id>`, 1 s idle), and focus stays on it;
+  //     (sweepKey `trackmove:<id>`, 1 s idle; settled after each press, so
+  //     ↓ then ↑ leaves no entry), and focus stays on it;
   //   - the header's context menu (right-click, or the context-menu key):
   //     "Move up" / "Move down" (`track-menu-up` / `-down`).
   // Each move says "Moved <name> to position n of N" in the visually hidden
@@ -78,7 +79,7 @@
   import TrackVol from './TrackVol.svelte';
   import { mixParam } from '../../audio/mixerCatalog';
   import { releaseHeldKeys } from '../../input/shortcuts';
-  import { soloTitle } from '../soloTitle';
+  import { IS_MAC, soloTitle } from '../soloTitle';
   import InlineConfirm from '../InlineConfirm.svelte';
   import { MAX_AUTO_LANES } from '../../audio/protocol';
   import { laneCount, projectLanes } from '../../state/automation';
@@ -197,6 +198,9 @@
     const from = p.tracks.findIndex((t) => t.id === id);
     const t = p.tracks[from];
     if (!t || !moveTrack(p, from, to, { coalesce: o.coalesce })) return;
+    // A coalesced (keyboard) move only marks the entry stale; settle now, so a
+    // burst that nets to nothing (↓ then ↑) leaves no dead "Move track" entry.
+    if (o.coalesce) p.history?.settle();
     announce(`Moved ${t.name} to position ${to + 1} of ${p.tracks.length}`);
     if (!o.refocus) return;
     // The keyed rows were re-ordered in the DOM, which can drop the focus: put it back.
@@ -305,6 +309,8 @@
       ev.stopPropagation();
       end();
     };
+    // The window losing focus mid-drag (Cmd+Tab) may swallow the release: drop the drag then too.
+    const blur = () => end();
     /** Stop listening and drop the drag (nothing was written). */
     function end() {
       if (edgeRaf) cancelAnimationFrame(edgeRaf);
@@ -313,6 +319,7 @@
       window.removeEventListener('pointerup', up, true);
       window.removeEventListener('pointercancel', cancel, true);
       window.removeEventListener('keydown', esc, true);
+      window.removeEventListener('blur', blur);
       if (press && el.hasPointerCapture(press.pointerId)) el.releasePointerCapture(press.pointerId);
       press = null;
       reorder = null;
@@ -322,6 +329,7 @@
     window.addEventListener('pointermove', move, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', cancel, true);
+    window.addEventListener('blur', blur);
   }
   /** The click a real drag's release makes on the button under it is no click. */
   function swallowClick() {
@@ -345,7 +353,6 @@
   });
 
   // The header's context menu: "Move up" / "Move down".
-  const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   let menu = $state<{ x: number; y: number; id: string; from: HTMLElement | null } | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
   const menuTrack = $derived(menu ? (p.tracks.find((t) => t.id === menu!.id) ?? null) : null);
@@ -657,9 +664,11 @@
   .drop-line { position: absolute; left: 0; right: 0; z-index: 1; height: 2px; margin-top: -1px; background: var(--accent); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent); pointer-events: none; }
   .drop-line::before { content: ''; position: absolute; left: 0; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
-  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  /* Context-menu padding as the menu bar's popovers (plan 22 "Menus": right >= 16 px, bottom >= 8 px); each
+     item spans the inner width, so its highlight is the full band. */
+  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 6px 16px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button { width: 100%; box-sizing: border-box; font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
   .menu button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
 </style>

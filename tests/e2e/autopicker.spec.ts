@@ -186,3 +186,74 @@ test('a 32-module rack stays usable: grouped, searchable, scrolls inside a max h
   const first = await pop.locator('[data-testid="auto-pick-item"]').first().getAttribute('data-name');
   expect(await activeRow(page)).toBe(`Filter 5 › ${first}`); // a group search: its first param
 });
+
+/** A synth track whose rack has 32 modules (the list scrolls); returns its slot, picker open. */
+async function hugeRackPicker(page: Page) {
+  await addTrack(page, 'synth');
+  const { slot } = await lastTrack(page);
+  await page.evaluate(() => {
+    const d = (window as Any).__daw;
+    const t = d.project.tracks.at(-1);
+    const kinds = ['osc', 'filter', 'lfo', 'adsr', 'vca', 'noise'];
+    const modules = [{ idx: 0, id: 'midi_in' }, { idx: 1, id: 'out' }];
+    for (let i = 2; i < 32; i++) modules.push({ idx: i, id: kinds[i % kinds.length] });
+    d.actions.loadPatch(t.id, { name: 'Huge', modules, cables: [] });
+  });
+  await page.getByTestId(`track-auto-${slot}`).click();
+  await page.getByTestId(`auto-add-${slot}`).click();
+  await expect(page.getByTestId('auto-search')).toBeFocused();
+  return slot;
+}
+
+test('a press on the list scrollbar keeps the focus in the search; a still pointer never steals the active row', async ({ page }) => {
+  await start(page);
+  await hugeRackPicker(page);
+  const list = picker(page).locator('[role="tree"]');
+  const b = (await list.boundingBox())!;
+  // The scrollbar lane is the list's right edge (classic scrollbars) or empty list padding: either way not a row.
+  await page.mouse.move(b.x + b.width - 3, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByTestId('auto-search')).toBeFocused();
+  // Park the pointer over the list, then move with the keys: the list scrolls under the
+  // pointer, which sends a pointermove with no movement; the key-chosen row stays active.
+  await page.mouse.move(b.x + 40, b.y + b.height / 2);
+  for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowDown');
+  const keyed = await activeRow(page);
+  await page.waitForTimeout(100);
+  expect(await activeRow(page)).toBe(keyed);
+  // A real move does take it.
+  await page.mouse.move(b.x + 40, b.y + 30);
+  await expect.poll(() => activeRow(page)).not.toBe(keyed);
+});
+
+test('IME composition and modified arrows stay with the field', async ({ page }) => {
+  await start(page);
+  await hugeRackPicker(page);
+  const before = await activeRow(page);
+  // Shift+Down selects text (nothing to select: no-op), never moves the active row.
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown');
+  expect(await activeRow(page)).toBe(before);
+  // A key event marked isComposing is ignored too.
+  await page.getByTestId('auto-search').evaluate((el) =>
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', isComposing: true, bubbles: true, cancelable: true })));
+  expect(await activeRow(page)).toBe(before);
+  await page.keyboard.press('ArrowDown');
+  expect(await activeRow(page)).not.toBe(before);
+});
+
+test('near the bottom of the window the picker opens above its button', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  const { slot } = await lastTrack(page);
+  await page.getByTestId(`track-auto-${slot}`).click();
+  const btn = page.getByTestId(`auto-add-${slot}`);
+  // Pin the button 30 px above the window's bottom edge (its row is in the top half otherwise).
+  await btn.evaluate((el) => Object.assign((el as HTMLElement).style, { position: 'fixed', left: '300px', bottom: '30px', top: 'auto', zIndex: '60' }));
+  await btn.click();
+  const pop = (await picker(page).boundingBox())!;
+  const bb = (await btn.boundingBox())!;
+  expect(pop.y + pop.height).toBeLessThanOrEqual(bb.y); // above, not under
+  expect(pop.y).toBeGreaterThanOrEqual(0);
+});

@@ -30,7 +30,11 @@
   //                only this layer closes)
   //   Tab          close (the focus moves on)
   // Left / Right drive the list, not the caret: the field holds one word,
-  // and Backspace still edits it. A press outside, a resize, or the button
+  // and Backspace still edits it. Keys during an IME composition and
+  // modified arrows (Shift / Alt / Cmd / Ctrl) stay with the field. A press
+  // anywhere in the popover but the field (the list's scrollbar included)
+  // keeps the focus in the field; hover makes a row active only on a real
+  // pointer move (not the synthetic one a scroll under the pointer sends). A press outside, a resize, or the button
   // moving (the timeline scrolled under the popover) closes it.
   //
   // PICKING adds the lane through automation-actions addLane (one undo
@@ -132,6 +136,18 @@
     activeKey = i >= 0 ? rowKey(rs[i]) : null;
   }
 
+  /**
+   * Pointer hover makes a row active, but only on a real move: the browser
+   * also sends a pointermove when the list scrolls under a still pointer
+   * (keys moving the active row), which would snatch the active row back.
+   */
+  let lastPointer = { x: NaN, y: NaN };
+  function hover(e: PointerEvent, r: PickRow) {
+    if (e.clientX === lastPointer.x && e.clientY === lastPointer.y) return;
+    lastPointer = { x: e.clientX, y: e.clientY };
+    if (selectable(r)) activeKey = rowKey(r);
+  }
+
   /** Move the active row by `dir` over selectable rows (no wrap past the ends). */
   function step(dir: 1 | -1) {
     let i = activeIndex;
@@ -146,6 +162,11 @@
   }
 
   function key(e: KeyboardEvent) {
+    // An IME composition owns its keys (Enter commits it, arrows pick a
+    // candidate); a modified arrow (Shift: select text, Alt / Cmd: word or
+    // line jumps) stays with the field.
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key.startsWith('Arrow') && (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey)) return;
     const r = rows[activeIndex];
     const take = () => {
       e.preventDefault();
@@ -237,7 +258,10 @@
     style:top={at.top === null ? null : `${at.top}px`}
     style:bottom={at.bottom === null ? null : `${at.bottom}px`}
     style:max-height="{at.maxH}px"
+    onmousedown={(e) => { if (e.target !== field) e.preventDefault(); }}
   >
+    <!-- Any press in the popover but the field (the list's scrollbar, its
+         padding, a row) keeps the focus in the field: the keys keep working. -->
     <input
       bind:this={field}
       bind:value={query}
@@ -275,13 +299,13 @@
             data-testid="auto-pick-group"
             data-name={r.group.name}
             onmousedown={(e) => e.preventDefault()}
-            onpointermove={() => (activeKey = rowKey(r))}
+            onpointermove={(e) => hover(e, r)}
             onclick={() => {
               activeKey = rowKey(r);
               toggle(r.group.key);
             }}
           >
-            <span class="caret" class:open={isOpen}><Icon icon={CaretRight} size={10} /></span>
+            <span class="caret" class:open={isOpen}><Icon icon={CaretRight} size={12} /></span>
             <span class="name">{r.group.name}</span>
             <span class="count">{r.group.items.length}</span>
           </div>
@@ -303,7 +327,7 @@
             data-name={it.label}
             title={it.used ? `${it.lane}: already automated` : `Add a lane: ${it.lane}`}
             onmousedown={(e) => e.preventDefault()}
-            onpointermove={() => !it.used && (activeKey = rowKey(r))}
+            onpointermove={(e) => hover(e, r)}
             onclick={() => pick(it)}
           >
             <span class="name">{it.label}</span>

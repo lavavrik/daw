@@ -149,12 +149,14 @@ export function pickerRows(groups: readonly PickGroup[], expanded: ReadonlySet<s
 }
 
 /**
- * The row a search makes active, so Enter picks the likeliest param: the
- * first pickable one whose name starts with the query ("cut": Cutoff, not
- * EQ Low cut), else one with a word that starts with it, else one that
- * contains it; else (the query named a group: "filter 2") the first
- * pickable param on screen; failing all, the first row. -1 when there are
- * no rows.
+ * The row a search makes active, so Enter picks the likeliest param. Three
+ * tiers, best first: the name starts with the query ("cut": Cutoff, not EQ
+ * Low cut), a word of it does, it contains it. At each tier a param's own
+ * name is tried first, then a group's name: a group-name match ("filter",
+ * "env" → Envelope) makes that group's first pickable param active, ahead of
+ * a weaker match in some param's name ("Filter › Mod env" only has a
+ * word starting with "env"). Failing all, the first pickable param on
+ * screen; failing that, the first row. -1 when there are no rows.
  */
 export function bestMatch(rows: readonly PickRow[], query: string): number {
   const q = norm(query);
@@ -164,11 +166,14 @@ export function bestMatch(rows: readonly PickRow[], query: string): number {
     (l) => l.startsWith(q),
     (l) => l.split(/\s+/).some((w) => w.startsWith(q)),
     (l) => l.includes(q),
-    () => true,
   ];
+  const pickable = (r: PickRow) => r.kind === 'item' && !r.item.used;
   for (const test of tests) {
-    const i = rows.findIndex((r) => r.kind === 'item' && !r.item.used && test(r.item.label.toLowerCase()));
+    const i = rows.findIndex((r) => pickable(r) && r.kind === 'item' && test(r.item.label.toLowerCase()));
     if (i >= 0) return i;
+    const g = rows.findIndex((r) => pickable(r) && test(r.group.name.toLowerCase()));
+    if (g >= 0) return g;
   }
-  return 0;
+  const any = rows.findIndex(pickable);
+  return any >= 0 ? any : 0;
 }

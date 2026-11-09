@@ -99,7 +99,20 @@ describe('automation picker search', () => {
     expect(r.kind === 'item' && `${r.group.name} › ${r.item.label}`).toBe(`Oscillator 2 › ${f[0].items[0].label}`);
   });
 
-  it('never makes a used param the best match', () => {
+  it('a group name that starts with the query beats a param with a word that does', () => {
+    const item = (label: string, used = false) => ({ owner: 't', target: { kind: 'mix', param: label } as never, label, lane: label, used });
+    const groups: PickGroup[] = [
+      { key: 'a', name: 'Filter', section: 'Rack', items: [item('Cutoff'), item('Mod env')] },
+      { key: 'b', name: 'Envelope', section: 'Rack', items: [item('Attack', true), item('Decay')] },
+    ];
+    const rows = pickerRows(groups, new Set(['a', 'b']));
+    const r = rows[bestMatch(rows, 'env')];
+    expect(r.kind === 'item' && `${r.group.name} › ${r.item.label}`).toBe('Envelope › Decay'); // its first pickable param
+    const c = rows[bestMatch(rows, 'cut')];
+    expect(c.kind === 'item' && c.item.label).toBe('Cutoff'); // a param name still wins at its tier
+  });
+
+    it('never makes a used param the best match', () => {
     const d = addDrumTrack(p, sink)!;
     const used = ownerGroups(d, d.id, [{ kind: 'mix', param: 'pan' }]);
     const f = filterGroups(used, 'pan');

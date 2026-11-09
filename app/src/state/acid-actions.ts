@@ -20,13 +20,14 @@ export type AcidEditKind = 'pitch' | 'oct' | 'accent' | 'slide' | 'kind' | 'entr
 /**
  * Applies `diff` to the current pattern: delete first (frees engine idx), then
  * update, then add. Must run inside an edit(). addNote returns null when all
- * MAX_NOTES are used; the remaining adds are then dropped, so a full pattern
- * gets a partial result (still one undo entry, no error).
+ * MAX_NOTES are used (so do the remaining adds: a full pattern gets a
+ * partial result, still one undo entry, no error) and for an exact duplicate
+ * of a note already there (skipped; the rest still go in).
  */
 function applyDiff(p: Project, sink: CommandSink, trackId: string, diff: NoteDiff) {
   if (diff.remove.length) deleteNotes(p, sink, trackId, diff.remove);
   if (diff.update.length) updateNotes(p, sink, trackId, diff.update);
-  for (const a of diff.add) if (addNote(p, sink, trackId, a) === null) break;
+  for (const a of diff.add) addNote(p, sink, trackId, a);
 }
 
 /**

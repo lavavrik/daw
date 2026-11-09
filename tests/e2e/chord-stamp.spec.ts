@@ -117,7 +117,10 @@ test('hovering shows a ghost of the chord (N notes), none over a note or past th
   await expect(cv).toHaveAttribute('data-ghost', '57,60,64,67,71'); // 5 notes
 
   // Snap to key on: a fixed type's root snaps to the key (C#4 -> D4, ties up), then D minor... as m9 on D.
+  await page.getByTestId('pr-key').click(); // Snap to key lives in the Key popover
   await page.getByTestId('pr-snap-key').click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('pr-key-pop')).toHaveCount(0);
   await hover(240, 61);
   await expect(cv).toHaveAttribute('data-ghost', '62,65,69,72,76');
 
@@ -165,7 +168,7 @@ for (const width of [1280, 1440, 1680]) {
       return { oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4), overflow: el.scrollWidth > el.clientWidth };
     });
     expect(bar).toEqual({ oneLine: true, overflow: false });
-    for (const id of ['pr-key', 'pr-snap-key', 'pr-chord', 'pr-chord-opts', 'pr-transpose', 'pr-fit-key', 'pr-readout']) {
+    for (const id of ['pr-key', 'pr-chord', 'pr-chord-opts', 'pr-quantize', 'pr-humanize', 'pr-clear', 'pr-readout']) {
       await expect(page.getByTestId(id)).toBeVisible();
     }
   });

@@ -95,10 +95,15 @@ Regenerate after changing the maths:
 
 ## Piano roll
 
-**Key: A min ▾** (toolbar, `pr-key`) opens `KeyCard`: a root select (named
-in the Note names style, so solfège shows "La min") and a scale select.
-Each pick is `setKey` at once; the card stays open until Esc or a press
-outside.
+**Key: A min ▾** (toolbar, `pr-key`) opens `KeyCard`, which holds every
+key tool (Task 1 review #2/#3: out of the toolbar, so Quantize and Clear
+keep their labels at 1280 px): a root select (named in the Note names
+style, so solfège shows "La min") and a scale select, Snap to key,
+Transpose… and Fit to key. Each key pick is `setKey` at once; the card
+stays open after every action until Esc or a press outside (after a Fit
+that leaves nothing out of key, the focus moves to the card, so Esc still
+closes it). While Snap to key is on, the Key button shows a small magnet
+(`pr-key-snap-badge`).
 
 **Highlight.** With a key other than chromatic, the note grid's row shading
 follows the key instead of the black/white keys: **out-of-key rows** are
@@ -107,29 +112,43 @@ are tinted in the track colour (16 %), in-key rows are plain. A chromatic
 key keeps the classic black-key shading and tints nothing
 (`prMath.keyRow` → null).
 
-**Snap to key** (`pr-snap-key`, a toggle; a saved UI pref, off by default,
-not in the project): pitches follow `prMath.movedPitch`:
+**Snap to key** (`pr-snap-key` in the Key card, a toggle; a saved UI pref,
+off by default, not in the project): pitches follow `prMath.movedPitch`:
 
 - a **drawn** note lands on `nearestInKey` of the clicked row (ties up);
   the drag that follows counts from the clicked row, so pointing at the row
-  above or below moves it as usual;
+  above or below moves it as usual. When the snapped pitch already has a
+  note at that start (or the click is past the end of a note shorter than
+  the cell), that note is selected and dragged instead: a draw never
+  stacks a second note on one (review #1; `addNote` refuses an exact
+  duplicate, same pitch and start, anyway);
 - a **dragged** or **nudged** (↑ / ↓, Shift = octave) note goes to the
   first in-key pitch *in the direction of the move* (`'up'` / `'down'`), so
   a one-row move never snaps back to where it started; a time-only drag
-  puts an out-of-key note on its nearest in-key pitch;
+  **or ← / → nudge** (review #8: one rule) puts an out-of-key note on its
+  nearest in-key pitch;
 - Alt still only turns off the time snap. There is no note paste in the
   roll yet; a future paste should go through `movedPitch` too.
 
-**Transpose…** (`pr-transpose`, `TransposeCard`): a −12..+12 semitone slider
-and Apply. It moves the selection, or every note when nothing is selected
-(as Quantize), as a plain semitone shift (Snap to key does not apply). The
-group stops at 0 / 127 keeping its shape. One "Transpose" undo entry; 0 is a
-no-op with no entry.
+**Transpose…** (`pr-transpose` in the Key card expands `TransposeCard`,
+`transpose-pop`): a −12..+12 semitone slider and Apply. It moves the
+selection, or every note when nothing is selected (as Quantize), as a
+plain semitone shift (Snap to key does not apply). The group stops at 0 /
+127 keeping its shape, and the readout says so ("Moved +7 (top of range)";
+"Already at the top of the range: nothing moved"; review #6). One
+"Transpose" undo entry; 0 is a no-op with no entry.
 
-**Fit to key** (`pr-fit-key`): every note of the pattern (past-the-end ones
-too) to `nearestInKey` (ties up). One "Fit to key" undo entry; disabled (and
-a no-op with no entry) when nothing is out of key, e.g. any chromatic key.
-The readout says how many notes moved.
+**Fit to key** (`pr-fit-key` in the Key card): the selection, or every note
+of the pattern (past-the-end ones too) when nothing is selected (review #7,
+like the other tools), to `nearestInKey` (ties up). One "Fit to key" undo
+entry; disabled (and a no-op with no entry) when nothing it acts on is out
+of key, e.g. any chromatic key. The readout says how many notes moved.
+
+**Stacked notes merge** (review #1). Transpose and Fit to key can move a
+note onto another one at the same pitch and start (G# + A at one start →
+A + A). Inside the same undo entry such a stack becomes one note
+(`pattern-actions` `mergeStacked`): the longest is kept (the first on a
+tie) with the stack's highest velocity, and the readout adds "merged N".
 
 **Chord stamp** (plan 26 Task 2). The toolbar's **Chord** toggle
 (`pr-chord`, aria-pressed) turns chord mode on; its **▾** (`pr-chord-opts`)
@@ -146,7 +165,9 @@ size); chord mode itself starts off whenever the roll opens.
   (e2e). No ghost over an existing note (a press there still moves or
   resizes it) or past the pattern end.
 - **Click** places every note of the ghost, velocity 100, as ONE "Add
-  chord" undo entry (`addNotes`), and selects them. No drag follows the
+  chord" undo entry (`addNotes`), and selects them. A chord note that
+  would sit exactly on an existing note (same pitch and start) is skipped,
+  not stacked. No drag follows the
   click (a drawn single note's follow-up drag would, with Snap to key, snap
   each chord note on its own and bend the chord).
 - **Pitches:** `prMath.chordStampPitches(row, type, inversion, key,
@@ -163,9 +184,11 @@ size); chord mode itself starts off whenever the roll opens.
   in draw mode.
 
 **Toolbar width.** The roll's toolbar stays one row at 1280 px
-(`theory.spec` "layout at 1280"): Snap to key, Transpose… and Fit to key are
-icon-only below 1680 px; Quantize, Humanize… and Clear below 1440 px (each
-keeps its name as `aria-label`, and a tooltip). The readout takes what is
+(`theory.spec` "layout at 1280", `chord-stamp.spec` at 1280 / 1440 /
+1680): the key tools are in the Key card; Humanize… and the Chord toggle
+are icon-only below 1440 px (each keeps its name as `aria-label`, and a
+tooltip); Quantize (with its "N sel. / all" count) and Clear always show
+their labels. The readout takes what is
 left (it wraps only under 120 px) and ellipsizes a long text; its tooltip
 has the whole of it.
 
@@ -174,7 +197,9 @@ has the whole of it.
 - Unit: `music/scales.test.ts` (every scale, root and pitch against a
   brute-force reference; chords, inversions, edges),
   `music/scales.fixture.test.ts` (engine fixture), `state/key-actions.test.ts`
-  (setKey undo/dirty/no-op, the engine hook, transpose, fit),
+  (setKey undo/dirty/no-op, the engine hook, transpose, fit, the selection,
+  stacked notes merging), `state/pattern-actions.test.ts` (`addNote`
+  refuses a duplicate),
   `ui/pianoroll/prMath.test.ts` (`keyRow`, `movedPitch`),
   `project/migrate.test.ts` (v5 → v6), `schema.test.ts` (validation),
   `load.test.ts` (round trip, New).
@@ -186,5 +211,8 @@ has the whole of it.
   one row at 1280 / 1440 / 1680).
 - e2e `tests/e2e/theory.spec.ts`: the highlight read off the canvas pixels
   (A minor, D major, chromatic), Snap to key drawing and dragging, the pref
-  across a reload, Transpose +3 with one undo, Fit to key, the key across
-  an autosave restore, the toolbar on one row at 1280.
+  across a reload (and the Key button's badge), Transpose +3 with one undo,
+  Fit to key, a Snap draw onto an existing note and the snapping ← / →
+  nudge, Fit on the selection and merging, the clamped Transpose's
+  readout, the key across an autosave restore, the toolbar on one row at
+  1280 with Quantize / Clear labelled.

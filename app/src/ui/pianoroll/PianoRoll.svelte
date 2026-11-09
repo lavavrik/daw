@@ -7,8 +7,6 @@
   import DiceFive from 'phosphor-svelte/lib/DiceFive';
   import PianoKeys from 'phosphor-svelte/lib/PianoKeys';
   import Magnet from 'phosphor-svelte/lib/Magnet';
-  import ArrowsDownUp from 'phosphor-svelte/lib/ArrowsDownUp';
-  import MagicWand from 'phosphor-svelte/lib/MagicWand';
   import MusicNotes from 'phosphor-svelte/lib/MusicNotes';
   import Icon from '../Icon.svelte';
   import type { ChordType } from '../../music/scales';
@@ -55,15 +53,21 @@
   // change octave, R arms recording, Space toggles the transport.
   //
   // The key (plan 26 Task 1; docs/architecture/theory.md): "Key: A min ▾"
-  // opens KeyCard (root + scale: setKey, one "Key" undo entry). Out-of-key
-  // rows are dimmed and root rows tinted in the track colour, replacing the
-  // black/white-key shading (a chromatic key keeps the classic shading and
-  // no highlight). Snap to key (a saved UI pref, snapToKey.svelte.ts): notes
-  // drawn, dragged or nudged land on in-key pitches (prMath.movedPitch: a
-  // drawn note on the nearest, ties up; a moved one in the direction of the
-  // move); Alt still turns off the TIME snap only. Transpose… (TransposeCard,
-  // ±12 semitones) acts on the selection or every note; Fit to key moves
-  // every note to the nearest in-key pitch. Each is one undo entry.
+  // opens KeyCard, which holds every key tool (Task 1 review #2/#3: the
+  // toolbar keeps its labels at 1280 px): root + scale (setKey, one "Key"
+  // undo entry), Snap to key (a saved UI pref, snapToKey.svelte.ts; the Key
+  // button shows a magnet badge while on), Transpose… (±12 semitones) and
+  // Fit to key. Out-of-key rows are dimmed and root rows tinted in the track
+  // colour, replacing the black/white-key shading (a chromatic key keeps the
+  // classic shading and no highlight). With Snap to key, notes drawn,
+  // dragged or nudged (↑↓ and, like a sideways drag, ←→) land on in-key
+  // pitches (prMath.movedPitch: a drawn note on the nearest, ties up; a
+  // moved one in the direction of the move); Alt still turns off the TIME
+  // snap only. A draw that lands exactly on an existing note (same pitch
+  // and start) selects and drags that note instead of stacking a second one.
+  // Transpose and Fit act on the selection or every note, one undo entry
+  // each; notes they land on top of each other merge (pattern-actions
+  // mergeStacked). The readout says what they did.
   //
   // Chord stamp (plan 26 Task 2; theory.md "Chord stamp"): the "Chord"
   // toggle turns chord mode on, its ▾ opens ChordCard (type + inversion).
@@ -98,7 +102,6 @@
   import PopButton from '../PopButton.svelte';
   import HumanizeCard from '../HumanizeCard.svelte';
   import KeyCard from './KeyCard.svelte';
-  import TransposeCard from './TransposeCard.svelte';
   import { snapToKey, setSnapToKey } from './snapToKey.svelte';
   import { CHORD_TYPES, SCALES, inKey } from '../../music/scales';
   import ChordCard from './ChordCard.svelte';
@@ -113,7 +116,7 @@
   import type { ExampleRoll } from '../../state/houseExamples';
   import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, MAX_TRANSPOSE, PATTERNS_FULL_TEXT, addNote, addNotes, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes,
+    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, addNotes, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes, noteAt,
     quantizeNotes, setPatternBars, transposeNotes, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
@@ -182,7 +185,8 @@
   const snapKey = $derived(snapToKey.on ? p.key : null);
   /** "Key: A min" (the Note names style applies to the root). */
   const keyText = $derived(`${pitchClassName(p.key.root)} ${SCALES[p.key.scale].short}`);
-  const outOfKey = $derived(notes.filter((n) => !inKey(n.pitch, p.key)).length);
+  /** Out-of-key notes among what Fit to key acts on (the selection, or every note). */
+  const outOfKey = $derived((selNotes.length ? selNotes : notes).filter((n) => !inKey(n.pitch, p.key)).length);
   const chordLabel = $derived(CHORD_TYPES.find((c) => c.id === chordType)?.label ?? chordType);
   const invText = $derived(chordInv ? `inversion ${chordInv}` : 'root position');
   /** Where a click would place the chord, and its pitches: what the ghost shows (chord mode only). */
@@ -695,9 +699,11 @@
           return;
         }
         if (chordOn) return stamp(tick, pitch, e.altKey);
-        const n = addNote(p, engine, track.id, {
-          pitch: movedPitch(pitch, 0, snapKey), start: e.altKey ? Math.round(tick) : snapFloor(tick, grid), len: grid, vel: 100,
-        });
+        const at = { pitch: movedPitch(pitch, 0, snapKey), start: e.altKey ? Math.round(tick) : snapFloor(tick, grid) };
+        // A note already there (Snap to key moved the click onto it, or a note
+        // shorter than the cell): select and drag it, never stack a second.
+        const there = noteAt(pat, at.pitch, at.start);
+        const n = there ?? addNote(p, engine, track.id, { ...at, len: grid, vel: 100 });
         if (!n) {
           flashHint('Pattern is full (1024 notes)');
           return;
@@ -870,9 +876,11 @@
     const orig = snapshot(selected);
     const c = clampMove(orig, dt, dp, total);
     if (!c.dt && !c.dp) return;
-    // Only the field that moves: a pitch nudge never touches `start`.
+    // Only the field that moves: a pitch nudge never touches `start`. With
+    // Snap to key a sideways nudge also puts the pitch in key, as a sideways
+    // drag does (movedPitch with dp 0: the nearest, ties up; review #8).
     updateNotes(p, engine, track.id, orig.map((o) => ({
-      id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp ? { pitch: movedPitch(o.pitch, c.dp, snapKey) } : {}),
+      id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp || snapKey ? { pitch: movedPitch(o.pitch, c.dp, snapKey) } : {}),
     })));
   }
   function key(e: KeyboardEvent) {
@@ -920,10 +928,20 @@
     lastChord = { ...o };
     chordOn = true;
   }
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const mergedText = (n: number) => (n ? `, merged ${n}` : '');
   function fitToKey() {
-    const moved = fitNotesToKey(p, engine, track.id);
-    flashHint(moved ? `Moved ${moved} note${moved === 1 ? '' : 's'} into the key` : 'Every note is in key');
-    refocus();
+    const { moved, merged } = fitNotesToKey(p, engine, track.id, selectedIds());
+    flashHint(moved ? `Moved ${plural(moved, 'note')} into the key${mergedText(merged)}` : 'Every note is in key');
+  }
+  /** Transpose… Apply; the readout says when the keyboard's range stopped it short (review #6). */
+  function transpose(st: number) {
+    const { semitones, merged } = transposeNotes(p, engine, track.id, selectedIds(), st);
+    const fmt = (n: number) => (n > 0 ? `+${n}` : `${n}`);
+    const edge = st > 0 ? 'top' : 'bottom';
+    if (!semitones) flashHint(`Already at the ${edge} of the range: nothing moved`);
+    else if (semitones !== st) flashHint(`Moved ${fmt(semitones)} (${edge} of range)${mergedText(merged)}`);
+    else flashHint(`Moved ${fmt(semitones)} st${mergedText(merged)}`);
   }
   /** What Humanize… / Transpose… act on (the selection, or every note), for their hints. */
   const targetText = $derived(selNotes.length === 1 ? 'the selected note' : selNotes.length ? `the ${selNotes.length} selected notes` : 'every note');
@@ -1067,24 +1085,23 @@
     </label>
     <PopButton id="pr-key-pop-{track.id}" label="Key" testid="pr-key-pop">
       {#snippet trigger(a)}
-        <button {...a} data-testid="pr-key" aria-label="Key: {keyText}" title="The song's key: the roll highlights it, Snap to key and Fit to key follow it">
-          <Icon icon={PianoKeys} /> Key: {keyText} ▾
+        <button {...a} data-testid="pr-key" aria-label="Key: {keyText}{snapToKey.on ? ', Snap to key on' : ''}"
+          title="The song's key, Snap to key{snapToKey.on ? ' (on)' : ''}, Transpose… and Fit to key">
+          <Icon icon={PianoKeys} /> Key: {keyText}{#if snapToKey.on}<span class="badge" data-testid="pr-key-snap-badge"><Icon icon={Magnet} size={12} /></span>{/if} ▾
         </button>
       {/snippet}
       {#snippet children()}
-        <KeyCard value={p.key} onpick={(k) => setKey(p, engine, k)} />
+        <KeyCard value={p.key} onpick={(k) => setKey(p, engine, k)}
+          snap={snapToKey.on} onsnap={setSnapToKey}
+          target={targetText} hasNotes={notes.length > 0} ontranspose={transpose}
+          {outOfKey} onfit={fitToKey} />
       {/snippet}
     </PopButton>
-    <button data-testid="pr-snap-key" aria-pressed={snapToKey.on} aria-label="Snap to key" class:on={snapToKey.on}
-      title="Snap to key: drawn and moved notes land on the key's notes ({snapToKey.on ? 'on' : 'off'})"
-      onclick={() => { setSnapToKey(!snapToKey.on); refocus(); }}>
-      <Icon icon={Magnet} /><span class="t2"> Snap to key</span>
-    </button>
     <div class="split" role="group" aria-label="Chord stamp">
       <button data-testid="pr-chord" aria-pressed={chordOn} aria-label="Chord" class:on={chordOn}
         title="Chord: click the grid to place a {chordLabel} chord ({invText}) instead of one note; Esc leaves ({chordOn ? 'on' : 'off'})"
         onclick={() => { chordOn = !chordOn; refocus(); }}>
-        <Icon icon={MusicNotes} /><span class="t2"> Chord</span>
+        <Icon icon={MusicNotes} /><span class="t"> Chord</span>
       </button>
       <PopButton id="pr-chord-pop-{track.id}" label="Chord type and inversion" testid="pr-chord-pop">
         {#snippet trigger(a)}
@@ -1098,7 +1115,7 @@
     </div>
     <button data-testid="pr-quantize" aria-label="Quantize {selNotes.length ? `${selNotes.length} selected` : 'all'}"
       title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
-      <Icon icon={MagnetStraight} /><span class="t"> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}</span>
+      <Icon icon={MagnetStraight} /> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
     </button>
     <PopButton id="pr-humanize-pop-{track.id}" label="Humanize" testid="humanize-pop">
       {#snippet trigger(a)}
@@ -1113,23 +1130,7 @@
         />
       {/snippet}
     </PopButton>
-    <PopButton id="pr-transpose-pop-{track.id}" label="Transpose" testid="transpose-pop">
-      {#snippet trigger(a)}
-        <button {...a} data-testid="pr-transpose" aria-label="Transpose…" title="Transpose: move the selection or every note by up to ±{MAX_TRANSPOSE} semitones" disabled={!notes.length}>
-          <Icon icon={ArrowsDownUp} /><span class="t2"> Transpose…</span>
-        </button>
-      {/snippet}
-      {#snippet children(close)}
-        <TransposeCard hint="Moves {targetText} up or down, keeping the chord shapes (stops at the top and bottom of the keyboard)."
-          onapply={(st) => transposeNotes(p, engine, track.id, selectedIds(), st)} {close} />
-      {/snippet}
-    </PopButton>
-    <button data-testid="pr-fit-key" aria-label="Fit to key" disabled={!outOfKey}
-      title={outOfKey ? `Fit to key: move the ${outOfKey} out-of-key note${outOfKey === 1 ? '' : 's'} to the nearest note of ${keyText}` : `Every note is in ${keyText}`}
-      onclick={fitToKey}>
-      <Icon icon={MagicWand} /><span class="t2"> Fit to key</span>
-    </button>
-    <button data-testid="pr-clear" aria-label="Clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /><span class="t"> Clear</span></button>
+    <button data-testid="pr-clear" aria-label="Clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /> Clear</button>
     {#if clearAsk}
       <InlineConfirm
         message={clearPatternText(track, notes.length)}
@@ -1229,18 +1230,19 @@
   .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: var(--raised); color: var(--text); filter: none; outline: none; }
   .exmenu .full { margin: 0 0 4px; color: var(--accent); font-size: var(--fs-ctl); white-space: nowrap; }
   /* Room for the readout on the one-row toolbar at 1280 px (pianoroll.spec
-     "layout at 1280×720", theory.spec "layout at 1280"): Quantize,
-     Humanize… and Clear are icon-only below 1440 px, the key tools (Snap to
-     key, Transpose…, Fit to key: plan 26) below 1680 px (their names stay:
-     aria-label, and the tooltip says what each does), like the pattern
-     picker's Duplicate. */
+     "layout at 1280×720", theory.spec / chord-stamp.spec "layout at …"):
+     the key tools live in the Key popover (plan 26 review #2/#3), so only
+     Humanize… and the Chord toggle are icon-only, below 1440 px (their
+     names stay: aria-label, and the tooltip says what each does), like the
+     pattern picker's Duplicate. */
   @media (max-width: 1439px) { .t { display: none; } }
-  @media (max-width: 1679px) { .t2 { display: none; } }
+  /* Snap to key is on: a small magnet on the Key button. */
+  .badge { display: inline-flex; margin-left: 2px; color: var(--accent); }
   /* The chord stamp: the toggle and its ▾ options as one split button. */
   .split { display: flex; gap: 1px; }
   .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   .bar .split .caret { padding: 2px 4px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
-  /* Snap to key, Chord: toggles; on = the accent, like a lit step. */
+  /* Chord: a toggle; on = the accent, like a lit step. */
   .bar button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
   /* The readout takes what the row has left (at least 120 px before it
      wraps: its flex-basis, which is what line breaking measures), up to its

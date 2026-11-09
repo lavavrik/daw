@@ -72,6 +72,18 @@ function pushNote(sink: CommandSink, t: SynthTrack, pat: NotePatternState, idx: 
   return n;
 }
 
+/** Rounded / clamped (pitch, start) of a new note, as pushNote stores it. */
+const cellOf = (t: SynthTrack, o: NewNote) => ({ pitch: clampInt(o.pitch, 0, 127), start: clampInt(o.start, 0, patternTicks(t) - 1) });
+
+/**
+ * The note of `pat` at exactly `pitch` and `start`, if any. Two notes there
+ * would stack invisibly (one plays doubled); the add paths refuse one, the
+ * move paths that create one merge them (mergeStacked).
+ */
+export function noteAt(pat: NotePatternState, pitch: number, start: number): Note | undefined {
+  return pat.notes.find((n) => n.pitch === pitch && n.start === start);
+}
+
 /** The `count` lowest free engine idxs of `pat`, or null when fewer are free. */
 function freeIdxs(pat: NotePatternState, count: number): number[] | null {
   const used = new Set(pat.notes.map((n) => n.idx));
@@ -82,7 +94,9 @@ function freeIdxs(pat: NotePatternState, count: number): number[] | null {
 
 /**
  * Adds to the current pattern (`patternId`: only if that one is current).
- * Lowest free engine idx (per pattern), or null when all MAX_NOTES are used.
+ * Lowest free engine idx (per pattern). Null when all MAX_NOTES are used, or
+ * when a note already sits at the same pitch and start (an exact duplicate
+ * is refused: Task 1 review #1; the piano roll selects that note instead).
  */
 export function addNote(
   p: Project, sink: CommandSink, trackId: string,
@@ -92,6 +106,8 @@ export function addNote(
   return edit(p, 'Add note', () => {
     const tp = target(p, trackId, patternId);
     if (!tp) return null;
+    const c = cellOf(tp.t, o);
+    if (noteAt(tp.pat, c.pitch, c.start)) return null;
     const idx = freeIdxs(tp.pat, 1);
     return idx ? pushNote(sink, tp.t, tp.pat, idx[0], o) : null;
   });
@@ -99,11 +115,14 @@ export function addNote(
 
 /**
  * Adds several notes to the current pattern as ONE undo entry (plan 26 Task
- * 2: the piano roll's chord stamp). All or nothing: when the pattern has
- * fewer than `notes.length` free slots (MAX_NOTES) nothing is added and the
- * result is null, as for an unknown / drum track; the caller says why. An
- * empty list adds nothing (no entry) and returns []. Each note is clamped
- * as addNote does; they take the lowest free engine idxs, in order.
+ * 2: the piano roll's chord stamp). Exact duplicates (same pitch and start
+ * as a note already there, or as an earlier one in the list) are skipped,
+ * as addNote refuses them. All or nothing for the rest: when the pattern
+ * has fewer free slots (MAX_NOTES) than notes to add, nothing is added and
+ * the result is null, as for an unknown / drum track; the caller says why.
+ * The result lists the notes added ([] when there was nothing to add: no
+ * entry). Each note is clamped as addNote does; they take the lowest free
+ * engine idxs, in order.
  */
 export function addNotes(
   p: Project, sink: CommandSink, trackId: string, notes: NewNote[], label = 'Add notes',
@@ -111,9 +130,17 @@ export function addNotes(
   return edit(p, label, () => {
     const tp = target(p, trackId);
     if (!tp) return null;
-    const idxs = freeIdxs(tp.pat, notes.length);
+    const seen = new Set<string>();
+    const fresh = notes.filter((o) => {
+      const c = cellOf(tp.t, o);
+      const k = `${c.pitch}:${c.start}`;
+      if (seen.has(k) || noteAt(tp.pat, c.pitch, c.start)) return false;
+      seen.add(k);
+      return true;
+    });
+    const idxs = freeIdxs(tp.pat, fresh.length);
     if (!idxs) return null;
-    return notes.map((o, i) => pushNote(sink, tp.t, tp.pat, idxs[i], o));
+    return fresh.map((o, i) => pushNote(sink, tp.t, tp.pat, idxs[i], o));
   });
 }
 
@@ -263,45 +290,97 @@ export function humanizeNotes(p: Project, sink: CommandSink, trackId: string, am
 export const MAX_TRANSPOSE = 12;
 
 /**
+ * After a move of `movedIds` (inside the caller's edit): every note that now
+ * sits on the same pitch and start as another note, one of them moved, is
+ * merged into one (Task 1 review #1): the longest is kept (the first in the
+ * pattern on a tie), with the highest velocity of the stack; the rest are
+ * deleted. Returns how many notes were removed.
+ */
+function mergeStacked(p: Project, sink: CommandSink, trackId: string, movedIds: ReadonlySet<string>): number {
+  const tp = target(p, trackId);
+  if (!tp) return 0;
+  const stacks = new Map<string, Note[]>();
+  for (const n of tp.pat.notes) {
+    const k = `${n.pitch}:${n.start}`;
+    const s = stacks.get(k);
+    if (s) s.push(n);
+    else stacks.set(k, [n]);
+  }
+  const gone: string[] = [];
+  const vels: { id: string; vel: number }[] = [];
+  for (const s of stacks.values()) {
+    if (s.length < 2 || !s.some((n) => movedIds.has(n.id))) continue;
+    const keep = s.reduce((a, b) => (b.len > a.len ? b : a));
+    const vel = Math.max(...s.map((n) => n.vel));
+    if (vel !== keep.vel) vels.push({ id: keep.id, vel });
+    for (const n of s) if (n !== keep) gone.push(n.id);
+  }
+  if (vels.length) updateNotes(p, sink, trackId, vels);
+  if (gone.length) deleteNotes(p, sink, trackId, gone);
+  return gone.length;
+}
+
+/** The notes `ids` names (empty = every note of the current pattern, past-the-end ones too). */
+function targetNotes(pat: NotePatternState, ids: string[]): Note[] {
+  const want = ids.length ? new Set(ids) : null;
+  return pat.notes.filter((n) => !want || want.has(n.id));
+}
+
+/**
  * Transpose… (plan 26 Task 1): move the pitch of `ids` (empty = every note
  * of the current pattern, past-the-end ones too) by `semitones`, rounded and
  * clamped to ±MAX_TRANSPOSE, then clamped for the whole group so no note
  * leaves 0..127 (the shape is kept, as prMath.clampMove does for a drag).
  * A plain semitone shift: Snap to key does not apply (Fit to key is the
- * in-key fix). One "Transpose" undo entry. Returns the semitones applied; 0 changes nothing
- * and adds no entry.
+ * in-key fix). Notes that land on another note's pitch and start merge
+ * (mergeStacked). One "Transpose" undo entry. Returns the semitones applied
+ * (less than asked when the range stopped the group: the caller says so)
+ * and the notes merged; 0 semitones changes nothing and adds no entry.
  */
-export function transposeNotes(p: Project, sink: CommandSink, trackId: string, ids: string[], semitones: number): number {
+export function transposeNotes(
+  p: Project, sink: CommandSink, trackId: string, ids: string[], semitones: number,
+): { semitones: number; merged: number } {
+  const none = { semitones: 0, merged: 0 };
   const tp = target(p, trackId);
-  if (!tp) return 0;
-  const want = ids.length ? new Set(ids) : null;
-  const notes = tp.pat.notes.filter((n) => !want || want.has(n.id));
-  if (!notes.length) return 0;
+  if (!tp) return none;
+  const notes = targetNotes(tp.pat, ids);
+  if (!notes.length) return none;
   const lo = -Math.min(...notes.map((n) => n.pitch));
   const hi = 127 - Math.max(...notes.map((n) => n.pitch));
   const dp = Math.min(hi, Math.max(lo, clampInt(semitones, -MAX_TRANSPOSE, MAX_TRANSPOSE))) + 0;
-  if (dp === 0) return 0;
-  edit(p, 'Transpose', () => updateNotes(p, sink, trackId, notes.map((n) => ({ id: n.id, pitch: n.pitch + dp }))));
-  return dp;
+  if (dp === 0) return none;
+  const merged = edit(p, 'Transpose', () => {
+    updateNotes(p, sink, trackId, notes.map((n) => ({ id: n.id, pitch: n.pitch + dp })));
+    return mergeStacked(p, sink, trackId, new Set(notes.map((n) => n.id)));
+  });
+  return { semitones: dp, merged };
 }
 
 /**
- * Fit to key (plan 26 Task 1): every note of the current pattern (past-the-end
- * ones too) to nearestInKey(pitch, p.key) -- the nearest in-key pitch, ties
- * up; starts, lengths and velocities stay. One "Fit to key" undo entry.
- * Returns how many notes moved; 0 (everything already in key, or a chromatic
- * key) changes nothing and adds no entry.
+ * Fit to key (plan 26 Task 1; review #7: the selection, like the other
+ * tools): every note of `ids` (empty = every note of the current pattern,
+ * past-the-end ones too) to nearestInKey(pitch, p.key) -- the nearest
+ * in-key pitch, ties up; starts, lengths and velocities stay. Notes that
+ * land on another note's pitch and start merge (mergeStacked). One "Fit to
+ * key" undo entry. Returns how many notes moved and how many were merged
+ * away; 0 moved (everything already in key, or a chromatic key) changes
+ * nothing and adds no entry.
  */
-export function fitNotesToKey(p: Project, sink: CommandSink, trackId: string): number {
+export function fitNotesToKey(
+  p: Project, sink: CommandSink, trackId: string, ids: string[] = [],
+): { moved: number; merged: number } {
   const tp = target(p, trackId);
-  if (!tp) return 0;
-  const changes = tp.pat.notes
+  if (!tp) return { moved: 0, merged: 0 };
+  const changes = targetNotes(tp.pat, ids)
     .map((n) => ({ id: n.id, from: n.pitch, pitch: nearestInKey(n.pitch, p.key) }))
     .filter((c) => c.pitch !== c.from)
     .map(({ id, pitch }) => ({ id, pitch }));
-  if (!changes.length) return 0;
-  edit(p, 'Fit to key', () => updateNotes(p, sink, trackId, changes));
-  return changes.length;
+  if (!changes.length) return { moved: 0, merged: 0 };
+  const merged = edit(p, 'Fit to key', () => {
+    updateNotes(p, sink, trackId, changes);
+    return mergeStacked(p, sink, trackId, new Set(changes.map((c) => c.id)));
+  });
+  return { moved: changes.length, merged };
 }
 
 // ---- pattern CRUD ------------------------------------------------------------

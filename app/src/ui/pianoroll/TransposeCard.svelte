@@ -1,8 +1,9 @@
 <script lang="ts">
-  // The Transpose… popover's content (plan 26 Task 1; docs/architecture/
-  // theory.md): a semitone slider -12..+12 and Apply. Apply calls `onapply`
-  // with the semitones (pattern-actions transposeNotes: the selection or
-  // every note, one "Transpose" undo entry) and closes the popover. Moving
+  // The Transpose… section of the Key popover (plan 26 Task 1, review #2;
+  // KeyCard; docs/architecture/theory.md): a semitone slider -12..+12 and
+  // Apply. Apply calls `onapply` with the semitones (pattern-actions
+  // transposeNotes: the selection or every note, one "Transpose" undo
+  // entry) and closes the section. Moving
   // the slider changes nothing by itself; Enter on it applies too. Same
   // shape as HumanizeCard.
   import { MAX_TRANSPOSE } from '../../state/pattern-actions';

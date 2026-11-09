@@ -82,6 +82,17 @@ async function pickKey(page: Page, root: number, scale: string) {
   await expect.poll(() => key(page)).toEqual({ root, scale });
 }
 
+/** Open the Key popover (it holds Snap to key, Transpose… and Fit to key: review #2/#3). */
+async function openKey(page: Page) {
+  if (await page.getByTestId('pr-key-pop').isVisible()) return;
+  await page.getByTestId('pr-key').click();
+  await expect(page.getByTestId('pr-key-pop')).toBeVisible();
+}
+async function closeKey(page: Page) {
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('pr-key-pop')).toHaveCount(0);
+}
+
 async function clearAutosave(page: Page) {
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
@@ -123,7 +134,9 @@ test('A minor (the default) dims C# and tints A; D major dims F and C, not F# or
   expect(chrom.d).toEqual(chrom.e); // the root is not tinted
   expect(lum(chrom.cs)).toBeLessThan(lum(chrom.e)); // a black key
   expect(lum(chrom.cs)).toBeGreaterThan(lum(amin.cs)); // but not dimmed as out of key
+  await openKey(page);
   await expect(page.getByTestId('pr-fit-key')).toBeDisabled(); // nothing is out of a chromatic key
+  await closeKey(page);
 
   // Each pick was one undo entry: back through chromatic, D major (scale, root) to A minor.
   for (const want of [{ root: 2, scale: 'major' }, { root: 2, scale: 'minor' }, { root: 9, scale: 'minor' }]) {
@@ -135,15 +148,21 @@ test('A minor (the default) dims C# and tints A; D major dims F and C, not F# or
 test('Snap to key: drawing on C#4 places D4 (the tie goes up); a drag down one row lands on C4; the toggle is remembered', async ({ page }) => {
   await openRoll(page);
   const snap = page.getByTestId('pr-snap-key');
+  await openKey(page);
   await expect(snap).toHaveAttribute('aria-pressed', 'false');
+  await closeKey(page);
+  await expect(page.getByTestId('pr-key-snap-badge')).toHaveCount(0);
   // Off: C#4 is drawn as is.
   await draw(page, 0, 61);
   await expect.poll(() => pitches(page)).toEqual([61]);
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => pitches(page)).toEqual([]);
 
+  await openKey(page);
   await snap.click();
   await expect(snap).toHaveAttribute('aria-pressed', 'true');
+  await closeKey(page);
+  await expect(page.getByTestId('pr-key-snap-badge')).toBeVisible(); // the Key button shows it
   await draw(page, 0, 61);
   await expect.poll(() => pitches(page)).toEqual([62]);
 
@@ -162,6 +181,8 @@ test('Snap to key: drawing on C#4 places D4 (the tie goes up); a drag down one r
   await page.reload();
   await startApp(page);
   await addTrack(page, 'synth');
+  await expect(page.getByTestId('pr-key-snap-badge')).toBeVisible();
+  await openKey(page);
   await expect(page.getByTestId('pr-snap-key')).toHaveAttribute('aria-pressed', 'true');
 });
 
@@ -180,6 +201,7 @@ test('Transpose +3 moves the selected notes only; one undo restores them', async
   await page.keyboard.up('Shift');
   await expect(page.getByTestId('pr-readout')).toContainText('2 notes selected');
 
+  await openKey(page);
   await page.getByTestId('pr-transpose').click();
   await expect(page.getByTestId('transpose-pop')).toBeVisible();
   await expect(page.getByTestId('transpose-pop')).toContainText('the 2 selected notes');
@@ -190,6 +212,8 @@ test('Transpose +3 moves the selected notes only; one undo restores them', async
   await expect(page.getByTestId('transpose-pop')).toHaveCount(0);
   await expect.poll(() => pitches(page)).toEqual([63, 67, 67]);
   await expect.poll(() => undoLabel(page)).toBe('Transpose');
+  await expect(page.getByTestId('pr-readout')).toContainText('Moved +3 st');
+  await closeKey(page);
 
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => pitches(page)).toEqual([60, 64, 67]);
@@ -200,17 +224,79 @@ test('Fit to key moves an out-of-key note to the nearest in-key pitch, in one un
   const fit = page.getByTestId('pr-fit-key');
   await draw(page, 0, 64); // E4: in A minor
   await expect.poll(() => pitches(page)).toEqual([64]);
+  await openKey(page);
   await expect(fit).toBeDisabled();
+  await closeKey(page);
   await draw(page, 960, 66); // F#4: out (F and G both one away: up to G4)
   await draw(page, 1920, 68); // G#4: out (G / A: up to A4)
+  await page.keyboard.press('Escape'); // clear the selection: Fit acts on every note
+  await openKey(page);
   await expect(fit).toBeEnabled();
   await fit.click();
   await expect.poll(() => pitches(page)).toEqual([64, 67, 69]);
   await expect.poll(() => undoLabel(page)).toBe('Fit to key');
   await expect(page.getByTestId('pr-readout')).toContainText('Moved 2 notes into the key');
   await expect(fit).toBeDisabled();
+  await closeKey(page);
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => pitches(page)).toEqual([64, 66, 68]);
+});
+
+test('Snap to key: a draw onto an existing note selects it, adds nothing; a sideways nudge snaps the pitch (review #1, #8)', async ({ page }) => {
+  await openRoll(page);
+  await draw(page, 0, 61); // C#4, Snap off
+  await draw(page, 960, 62); // D4 at beat 2
+  await expect.poll(() => pitches(page)).toEqual([61, 62]);
+  await openKey(page);
+  await page.getByTestId('pr-snap-key').click();
+  await closeKey(page);
+  // C#4 at beat 2 snaps onto the D4 already there: it is selected, nothing stacks.
+  await draw(page, 960, 61);
+  await expect(page.getByTestId('pr-readout')).toContainText('D4');
+  expect(await pitches(page)).toEqual([61, 62]);
+  // Select the off-key C#4 and nudge it right: it moves a cell AND into key (D4), as a sideways drag would.
+  const c = await at(page, 30, 61);
+  await page.mouse.click(c.x, c.y);
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await notes(page)).map((n) => [n.pitch, n.start]).sort((a, b) => a[1] - b[1])).toEqual([[62, 240], [62, 960]]);
+});
+
+test('Fit to key acts on the selection and merges notes it stacks; Transpose says when the range stops it (review #1, #6, #7)', async ({ page }) => {
+  await openRoll(page);
+  const fit = page.getByTestId('pr-fit-key');
+  await draw(page, 0, 68); // G#4
+  await draw(page, 0, 69); // A4, same start
+  await draw(page, 960, 66); // F#4
+  await expect.poll(() => pitches(page)).toEqual([66, 68, 69]);
+  // Only the selected F#4 (the last drawn note is selected).
+  await openKey(page);
+  await fit.click();
+  await expect.poll(() => pitches(page)).toEqual([67, 68, 69]);
+  await closeKey(page);
+  // Nothing selected: every note. G#4 lands on A4 and merges into it, one entry.
+  await page.getByTestId('pianoroll').getByRole('application').focus(); // the popover gave the focus back to the Key button
+  await page.keyboard.press('Escape');
+  await openKey(page);
+  await fit.click();
+  await expect.poll(() => pitches(page)).toEqual([67, 69]);
+  await expect(page.getByTestId('pr-readout')).toContainText('Moved 1 note into the key, merged 1');
+  await closeKey(page);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => pitches(page)).toEqual([67, 68, 69]);
+
+  // Transpose +12 with A4 (69)... raised near the top first: the group stops at 127.
+  await page.evaluate(() => {
+    const d = (window as unknown as W & { __daw: { actions: Record<string, (...a: unknown[]) => unknown> } }).__daw;
+    const t = d.project.tracks.find((x) => x.kind === 'synth') as unknown as { id: string };
+    d.actions.addNote(t.id, { pitch: 120, start: 1920, len: 240 });
+  });
+  await expect.poll(() => pitches(page)).toEqual([67, 68, 69, 120]);
+  await openKey(page);
+  await page.getByTestId('pr-transpose').click();
+  await page.getByTestId('transpose-amount').fill('12');
+  await page.getByTestId('transpose-apply').click();
+  await expect.poll(() => pitches(page)).toEqual([74, 75, 76, 127]);
+  await expect(page.getByTestId('pr-readout')).toContainText('Moved +7 (top of range)');
 });
 
 test('the key survives a reload (autosave restore)', async ({ page }) => {
@@ -245,5 +331,9 @@ test('layout at 1280: the piano-roll toolbar stays one row with the key controls
     return { oneLine: kids.every((r) => Math.abs(mid(r) - mid(kids[0])) < 4), overflow: el.scrollWidth > el.clientWidth };
   });
   expect(bar).toEqual({ oneLine: true, overflow: false });
-  for (const id of ['pr-key', 'pr-snap-key', 'pr-transpose', 'pr-fit-key']) await expect(page.getByTestId(id)).toBeVisible();
+  // Quantize and Clear keep their labels (review #3); the key tools are in the Key popover.
+  await expect(page.getByTestId('pr-quantize')).toHaveText(/Quantize all/);
+  await expect(page.getByTestId('pr-clear')).toHaveText(/Clear/);
+  await openKey(page);
+  for (const id of ['pr-key-root', 'pr-key-scale', 'pr-snap-key', 'pr-transpose', 'pr-fit-key']) await expect(page.getByTestId(id)).toBeVisible();
 });

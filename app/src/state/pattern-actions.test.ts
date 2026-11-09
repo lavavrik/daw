@@ -40,6 +40,18 @@ describe('pattern actions', () => {
     expect(currentPattern(t).notes).toHaveLength(1);
   });
 
+  it('addNote refuses an exact duplicate (same pitch and start; review #1)', () => {
+    const { p, t, sink, sent } = setup();
+    expect(addNote(p, sink, t.id, { pitch: 60, start: 480, len: 240 })).not.toBeNull();
+    sent.length = 0;
+    expect(addNote(p, sink, t.id, { pitch: 60, start: 480, len: 960, vel: 30 })).toBeNull();
+    expect(addNote(p, sink, t.id, { pitch: 60.2, start: 480.4, len: 10 })).toBeNull(); // compared after rounding
+    expect(sent).toEqual([]);
+    expect(addNote(p, sink, t.id, { pitch: 61, start: 480, len: 240 })).not.toBeNull(); // another pitch
+    expect(addNote(p, sink, t.id, { pitch: 60, start: 481, len: 240 })).not.toBeNull(); // another start
+    expect(currentPattern(t).notes).toHaveLength(3);
+  });
+
   it('idx reused after delete', () => {
     const { p, t, sink, sent } = setup();
     const a = addNote(p, sink, t.id, { pitch: 60, start: 0, len: 100 })!;
@@ -53,8 +65,8 @@ describe('pattern actions', () => {
 
   it('returns null at MAX_NOTES', () => {
     const { p, t, sink } = setup();
-    for (let i = 0; i < MAX_NOTES; i++) expect(addNote(p, sink, t.id, { pitch: 60, start: 0, len: 1 })).not.toBeNull();
-    expect(addNote(p, sink, t.id, { pitch: 60, start: 0, len: 1 })).toBeNull();
+    for (let i = 0; i < MAX_NOTES; i++) expect(addNote(p, sink, t.id, { pitch: 60, start: i, len: 1 })).not.toBeNull();
+    expect(addNote(p, sink, t.id, { pitch: 61, start: 0, len: 1 })).toBeNull(); // full, not a duplicate
   });
 
   it('updateNotes clamps pitch, vel and len', () => {
@@ -342,7 +354,7 @@ describe('addNotes (the chord stamp: plan 26 Task 2)', () => {
 
   it('all or nothing: refused (null, nothing sent, no entry) when fewer slots are free than notes', () => {
     const x = withHistory();
-    for (let i = 0; i < MAX_NOTES - 3; i++) addNote(x.p, x.sink, x.t.id, { pitch: i % 128, start: 0, len: 10 });
+    for (let i = 0; i < MAX_NOTES - 3; i++) addNote(x.p, x.sink, x.t.id, { pitch: 100, start: i, len: 10 });
     const before = x.h.labels.undo;
     x.sent.length = 0;
     expect(addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64, 67]))).toBeNull();
@@ -353,6 +365,15 @@ describe('addNotes (the chord stamp: plan 26 Task 2)', () => {
     // Three still fit.
     expect(addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64]))).toHaveLength(3);
     expect(currentPattern(x.t).notes).toHaveLength(MAX_NOTES);
+  });
+
+  it('skips exact duplicates (of the pattern or of each other); the cap counts only what is added', () => {
+    const x = setup();
+    addNote(x.p, x.sink, x.t.id, { pitch: 60, start: 0, len: 240 });
+    const added = addNotes(x.p, x.sink, x.t.id, [...chord([57, 60, 64]), { pitch: 64, start: 0, len: 960 }])!;
+    expect(added.map((n) => n.pitch)).toEqual([57, 64]);
+    expect(currentPattern(x.t).notes).toHaveLength(3);
+    expect(addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64]))).toEqual([]); // all there already
   });
 
   it('clamps like addNote; an empty list or a drum track adds nothing', () => {

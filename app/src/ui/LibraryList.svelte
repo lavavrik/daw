@@ -166,7 +166,7 @@
   .lib { display: flex; flex-direction: column; gap: 1px; outline: none; }
   .row { display: flex; align-items: center; gap: 2px; }
   .load {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 8px; border: 0;
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 10px; border: 0;
     border-radius: var(--r-sm); background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui);
     text-align: left; cursor: pointer;
   }

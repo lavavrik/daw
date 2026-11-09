@@ -72,12 +72,24 @@
   //   if it was inside. One delegated `pointerover` / `pointerleave` on the
   //   popover drives it all (`subHover`); touch pointers are ignored.
   //
-  // LOOK (plan 22): the popover has 16 px of padding at the sides and 8 px
-  // at the bottom (the owner: "more breathing room on the right and
-  // bottom"), and every item is exactly the popover's inner width, so the
-  // hover / focus highlight is one full-width band. (Buttons shrink to fit
-  // their text even as display: flex, so items inside a wrapper, e.g. the
-  // old note-name pair, were narrower: `.it` sets width: 100%.)
+  // LOOK (plan 22; revised 2026-11-09): every item is exactly the popover's
+  // inner width, so the hover / focus highlight is one full-width band.
+  // (Buttons shrink to fit their text even as display: flex, so items inside
+  // a wrapper, e.g. the old note-name pair, were narrower: `.it` sets
+  // width: 100%.) The popover's own padding is a thin 6 px frame around
+  // those bands (8 px at the bottom) and the item's 10 px padding holds the
+  // text in, so the text keeps 16 px of room at either side (the owner's
+  // plan 22 "more breathing room on the right and bottom") while the
+  // highlight reaches nearly to the edge — 16 px of popover padding left
+  // the band floating in the middle (the owner: "weird paddings on left and
+  // right"). Rows that are not .it (.sec, .info, .oct, .offset, .field,
+  // .note, .name) inset by the same 10 px so their text lines up.
+  // The card has a 1 px --raised border and a --drop under the --lift: a
+  // bare --panel card over the --top bar and the --panel/--work views
+  // blended in (the owner: "blends in with the background a lot").
+  //
+  // THE MENU ROW: 5 px button padding (the words read as separate targets),
+  // and TopBar.svelte keeps 4 px under the row and room to its right.
   //
   // KEYBOARD AND FOCUS. Each menu is a button (aria-expanded, aria-controls)
   // and a popover holding a plain list of buttons: no role=menu (plan 20's
@@ -1003,31 +1015,31 @@
 <style>
   /* Tokens only. The row: 12 px text buttons, flat until hovered / open
      (a menu bar, not a toolbar of raised buttons). */
-  .menubar { display: flex; align-items: center; gap: 0; }
+  .menubar { display: flex; align-items: center; gap: 1px; }
   .m { position: relative; display: inline-flex; }
   .mb {
-    height: 18px; padding: 0 3px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2);
+    height: 18px; padding: 0 5px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2);
     font: 500 var(--fs-ctl)/18px var(--font-ui); cursor: pointer;
   }
-  .m:first-child .mb { margin-left: -3px; } /* "File" lines up with the name under it */
+  .m:first-child .mb { margin-left: -5px; } /* "File" lines up with the name under it */
   .mb:hover, .mb.open { background: var(--raised); color: var(--text); }
   .mb:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
   /* Short windows (the 40 px top bar, TopBar.svelte): a 16 px row. */
   @media (max-height: 739px) { .mb { height: 16px; line-height: 16px; } }
 
-  /* The popover: a --panel card with the lift (as plan 20's ⋯ menu). 16 px
-     sides, 8 px bottom (plan 22: LOOK in the header comment). */
+  /* The popover: a --panel card with a --raised edge, the lift and a drop
+     (LOOK in the header comment): a 6 px frame, 8 px at the bottom. */
   .pop[hidden] { display: none; }
   .pop {
-    position: absolute; top: calc(100% + 4px); left: -3px; z-index: 10; width: max-content; min-width: 210px; max-width: 320px;
-    display: flex; flex-direction: column; gap: 1px; padding: 6px 16px 8px; white-space: normal;
-    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
+    position: absolute; top: calc(100% + 4px); left: -5px; z-index: 10; width: max-content; min-width: 210px; max-width: 320px;
+    display: flex; flex-direction: column; gap: 1px; padding: 6px 6px 8px; white-space: normal;
+    background: var(--panel); border: 1px solid var(--raised); border-radius: var(--r-menu); box-shadow: var(--lift), var(--drop); color: var(--text);
     font: 500 var(--fs-ctl) var(--font-ui);
   }
   /* width 100%: a button shrinks to its text even as display: flex, and the
      highlight must be the popover's full inner width (plan 22). */
   .it {
-    display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+    display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-sm);
     background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer;
   }
   .it :global(svg) { flex: none; color: var(--text-2); }
@@ -1057,27 +1069,27 @@
   kbd { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text-2); }
   hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
   .sec {
-    display: flex; align-items: center; gap: 4px; margin: 2px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 4px; margin: 2px 10px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2);
   }
-  .oct { display: flex; align-items: center; gap: 4px; padding: 2px 8px; }
+  .oct { display: flex; align-items: center; gap: 4px; padding: 2px 10px; }
   .oct .l { flex: 1; }
   .sq {
     width: 24px; height: 22px; padding: 0; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss);
     box-shadow: var(--raised-shadow); color: var(--text); font: 600 var(--fs-ctl) var(--font-ui); cursor: pointer;
   }
   .pop :global(.sq[aria-disabled='true']) { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: default; }
-  .info { margin: 2px 8px 2px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .info { margin: 2px 10px 2px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .info b { color: var(--text); font-weight: 600; }
-  .offset { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px; }
+  .offset { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; }
   .offset .l { color: var(--text); white-space: nowrap; }
-  .note { margin: 2px 8px 4px; font-size: 11px; color: var(--text-2); }
+  .note { margin: 2px 10px 4px; font-size: 11px; color: var(--text-2); }
   .discard { margin: 2px 2px 6px; color: var(--accent); }
   .row { display: flex; gap: 6px; }
   .btn.danger { background-color: var(--rec); color: var(--on-color); }
-  .field { margin: 2px 8px 4px; color: var(--text-2); }
+  .field { margin: 2px 10px 4px; color: var(--text-2); }
   .name {
-    margin: 0 8px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow);
+    margin: 0 10px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow);
     color: var(--text); font: inherit;
   }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
@@ -1085,8 +1097,8 @@
   .subwrap { position: relative; display: flex; flex-direction: column; }
   .chev { display: inline-flex; }
   .sub {
-    position: absolute; left: calc(100% + 16px); top: -6px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
-    max-height: min(360px, 60vh); overflow-y: auto; padding: 6px 16px 8px;
-    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift);
+    position: absolute; left: calc(100% + 7px); top: -7px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
+    max-height: min(360px, 60vh); overflow-y: auto; padding: 6px 6px 8px;
+    background: var(--panel); border: 1px solid var(--raised); border-radius: var(--r-menu); box-shadow: var(--lift), var(--drop);
   }
 </style>

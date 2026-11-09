@@ -10,8 +10,13 @@
   // · View · Options · Help (MenuBar.svelte, which holds the menus, their
   // keyboard model and plan 20's ⋯ items under their old test ids) — and
   // under it the name + hint stack with ↶ ↷ beside it. ↶ ↷ moved in from
-  // the bar's row: the menu row (252 px) is wider than the old name stack
+  // the bar's row: the menu row (~290 px) is wider than the old name stack
   // and the ⋯ together, and the bar must still fit one row at 1280 px.
+  // The menu row sets the block's width; the name + hint column takes all
+  // of it but ↶ ↷ (pushed to the right end), so the hint line gets ~200 px
+  // (it had a fixed 128 px: the owner, 2026-11-09, "can't fit a lot of
+  // messages"). 4 px under the menu row and 8 px of margin to its right
+  // keep it off the name and the separator.
   // Short windows (< 740 px, the 40 px bar): two lines, the 16 px menu row,
   // then name · hint · ↶ ↷ (18 px) on one line. (Plan 21's ruling put the
   // name after the menus on line 1; at 1280 px that line would be ~380 px
@@ -472,12 +477,15 @@
      stack and ↶ ↷ (they moved in from the bar's row so the wider block still
      fits one row at 1280 px). Short windows: see the media query below. */
   .proj {
-    position: relative; display: grid; grid-template-columns: 128px auto; grid-template-areas: "menu menu" "id undo";
-    align-items: center; column-gap: 8px; row-gap: 1px;
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "menu menu" "id undo";
+    align-items: center; column-gap: 8px; row-gap: 4px; margin-right: 8px;
   }
   .menus { grid-area: menu; }
   .id { grid-area: id; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .undo { grid-area: undo; justify-self: start; }
+  /* contain: the hint's (and the name's) length never widens the block: the
+     menu row alone sets its width, so the bar never re-flows on a hover. */
+  .id { contain: inline-size; }
+  .undo { grid-area: undo; justify-self: end; }
   .name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 700 14px/18px var(--font-ui); text-align: left; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .name:hover .pname { text-decoration: underline; text-decoration-color: var(--text-2); }
   .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
@@ -553,9 +561,8 @@
     /* The left block in two lines: the menus, then the name, the hint and
        ↶ ↷ as 18 px buttons (a 24 px hit area) — 32 px ones would not fit
        under the menu row, and beside it the bar would not fit 1280 px. */
-    .proj { grid-template-columns: minmax(0, 1fr) auto; column-gap: 6px; }
-    /* contain: the hint's length never widens the block (the menu row sets its width). */
-    .id { flex-direction: row; align-items: baseline; gap: 8px; contain: inline-size; }
+    .proj { column-gap: 6px; row-gap: 1px; }
+    .id { flex-direction: row; align-items: baseline; gap: 8px; }
     .name { flex: none; max-width: 112px; font-size: 13px; line-height: 17px; }
     .hint { flex: 1; min-width: 0; white-space: nowrap; }
     .undo .ib { position: relative; width: 24px; height: 18px; border-radius: var(--r-sm); }

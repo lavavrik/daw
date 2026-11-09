@@ -313,8 +313,10 @@ test('the About dialog closes on its backdrop, not on a press inside its padding
 });
 
 // Plan 22 Task 1 (the owner: "more breathing room on the right and bottom";
-// "the highlighted item should have full width").
-test('every item spans the popover\'s inner width; 16 px padding at the sides, 8 px at the bottom', async ({ page }) => {
+// "the highlighted item should have full width"), revised 2026-11-09 ("weird
+// paddings on left and right"): the popover is a thin 6 px frame, the items'
+// own 10 px padding keeps the text 16 px from either edge.
+test('every item spans the popover\'s inner width; its text 16 px from the sides, 8 px at the bottom', async ({ page }) => {
   await start(page);
   for (const m of MENUS) {
     await openMenu(page, m);
@@ -322,9 +324,14 @@ test('every item spans the popover\'s inner width; 16 px padding at the sides, 8
       const cs = getComputedStyle(p);
       const inner = p.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       const items = [...p.querySelectorAll<HTMLElement>('.it')].filter((i) => !i.closest('.sub') && i.getClientRects().length);
-      return { right: parseFloat(cs.paddingRight), bottom: parseFloat(cs.paddingBottom), inner, widths: [...new Set(items.map((i) => i.getBoundingClientRect().width))] };
+      return {
+        side: parseFloat(cs.paddingRight), bottom: parseFloat(cs.paddingBottom), inner,
+        text: Math.min(...items.map((i) => parseFloat(cs.paddingRight) + parseFloat(getComputedStyle(i).paddingRight))),
+        widths: [...new Set(items.map((i) => i.getBoundingClientRect().width))],
+      };
     });
-    expect(out.right, m).toBeGreaterThanOrEqual(16);
+    expect(out.side, m).toBeLessThanOrEqual(8); // the highlight band reaches (nearly) to the edge
+    expect(out.text, m).toBeGreaterThanOrEqual(16);
     expect(out.bottom, m).toBeGreaterThanOrEqual(8);
     for (const w of out.widths) expect(Math.abs(w - out.inner), `${m}: an item ${w} px in ${out.inner}`).toBeLessThan(0.5);
   }
@@ -332,7 +339,11 @@ test('every item spans the popover\'s inner width; 16 px padding at the sides, 8
   await openMenu(page, 'Options');
   const item = page.getByTestId('note-names');
   await item.hover();
-  const hl = await item.evaluate((i) => ({ bg: getComputedStyle(i).backgroundColor, w: i.getBoundingClientRect().width, inner: i.parentElement!.parentElement!.clientWidth - 32 }));
+  const hl = await item.evaluate((i) => {
+    const pop = i.closest<HTMLElement>('.pop')!;
+    const cs = getComputedStyle(pop);
+    return { bg: getComputedStyle(i).backgroundColor, w: i.getBoundingClientRect().width, inner: pop.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) };
+  });
   expect(hl.bg).not.toBe('rgba(0, 0, 0, 0)');
   expect(Math.abs(hl.w - hl.inner)).toBeLessThan(0.5);
 });

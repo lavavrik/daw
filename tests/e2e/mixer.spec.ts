@@ -436,6 +436,8 @@ test('strip knobs fit their 56 px cells; a strip whose upper controls scroll sho
   const upper = s.getByTestId('strip-upper');
   const overflow = await upper.evaluate((u) => u.scrollHeight > u.clientHeight);
   expect(overflow).toBe(true);
+  // Expanding (focus on a header) may have scrolled it already: start from the top.
+  await upper.evaluate((u) => { u.scrollTop = 0; });
   await expect(upper).toHaveClass(/fade-bot/);
   await expect(upper).not.toHaveClass(/fade-top/);
   await upper.evaluate((u) => { u.scrollTop = u.scrollHeight; });

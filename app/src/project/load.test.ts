@@ -510,7 +510,7 @@ describe('loadProject', () => {
     const kinds = cmds.filter((c) => c[0] === Op.RETURN_KIND).map((c) => [c[1], c[2]]);
     expect(kinds).toEqual([[0, 2], [1, 2], [2, 1], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]]);
     const lastKind = cmds.map((c) => c[0]).lastIndexOf(Op.RETURN_KIND);
-    const returnSets = cmds.map((c, i) => [c, i] as const).filter(([c]) => c[0] === Op.MIX_SET && c[1] >= 32 && c[1] <= 39);
+    const returnSets = cmds.map((c, i) => [c, i] as const).filter(([c]) => c[0] === Op.MIX_SET && (c[1] ?? 0) >= 32 && (c[1] ?? 0) <= 39);
     expect(returnSets.length).toBeGreaterThan(0);
     for (const [, i] of returnSets) expect(i).toBeGreaterThan(lastKind);
   });

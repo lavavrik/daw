@@ -389,6 +389,51 @@ SHAPE_PRESETS                                                // the menu's 8 ent
   tick while the song plays, else the parked song position (the same one
   Split uses); the menu fixes the range when it opens.
 
+### Transitions (plan 28 Task 3)
+
+`state/transitions.ts`: **Add track ▸ Transition ▸ Riser / Downlifter /
+Impact** (the menu bar's Add submenu, `menu-add-transition-<kind>`, and the
+playlist footer's chips, `add-transition-<kind>`; both through
+`ui/addTrack.ts addTransitionTrack`). One `edit()` ("Add riser", …) runs
+the ordinary actions, so it is **one undo entry** and the engine gets what
+the user's own edits would send:
+
+1. `addSynthTrack` named after it ("Riser", "Riser 2", …) with its patch
+   (`housePatches.ts TRANSITION_PATCHES`);
+2. its "Pattern 1" renamed after it, `bars` long, with its notes;
+3. `addClip` at the start of the playhead's bar (moved back so it ends in
+   the song: `transitionStart`);
+4. its mixer settings (`setMix`);
+5. per lane: `addLane`, then `insertShape` over the clip, `[start, end)`:
+   the lane is empty, so the closing point lands on the clip's end and the
+   value holds after it.
+
+| Kind | Bars | Patch | Notes | Lanes / mix |
+|---|---|---|---|---|
+| Riser | 8 | Noise Sweep | one bar-long C4 per bar | Filter `cutoff` ramp-up 200 Hz → 12 kHz; `fader` ramp-up −24 → 0 dB |
+| Downlifter | 4 | Noise Sweep | one bar-long C4 per bar | `cutoff` ramp-down 12 kHz → 200 Hz; `fader` ramp-down 0 → −30 dB |
+| Impact | 1 | Impact | one 1/8 C4 on beat 1 | `send_a` (Reverb) −6 dB; no lanes |
+
+- **Notes.** The sweeps write a note per bar, not one long note: notes are
+  not chased, so a song started (or a loop wrapped) mid-clip picks the noise
+  up at the next bar line instead of staying silent. Noise Sweep is mono
+  with a full-sustain ADSR and the sequencer sends Offs before Ons at the
+  same tick, so the gate retriggers from the held level: no audible seam.
+  The Impact plays C4 because its sub lands two octaves under the note (C2,
+  65 Hz); keep it in C3–C5.
+- **Impact's tail** is its reverb send (house patches hold no Reverb):
+  −6 dB, louder than any mix preset's send, on whatever the Reverb return
+  holds (the return's own params are the project's, never touched here).
+- **The playhead** is the AutoBus's `songTick()` (the heard tick while the
+  song plays, else the parked song position) in the menu bar, Timeline's
+  `songPlayhead` (the same rule) in the footer.
+- **Refusals** (`transitionBlocked`, checked before the first change: no
+  state, no command, no entry): all `MAX_TRACKS` tracks used; for a sweep,
+  fewer than 2 of the `MAX_AUTO_LANES` lanes free. The menu items are then
+  inert / disabled with that reason as the tooltip.
+- **The lanes open** under the new row (`laneView.setOpen`: UI state, not
+  undone).
+
 ### Persistence, replay, undo
 
 - **Schema v3** (projects.md): lanes inside their owner's JSON, points as

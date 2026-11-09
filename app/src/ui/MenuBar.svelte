@@ -14,8 +14,9 @@
   //             Garage 130, Acid 126, Tech House 125; state/templates.ts),
   //             Open… ⌘O, Save ⌘S, Save as… ⇧⌘S, Export WAV…, Undo take
   //   Edit      Undo / Redo, named from the history ("Undo Add note"), ⌘Z / ⇧⌘Z
-  //   Add       Drum / Synth / Sampler / Audio track, Master row: the same
-  //             actions as the playlist footer's buttons (ui/addTrack.ts)
+  //   Add       Drum / Synth / Sampler / Audio track, Transition ▸ (Riser,
+  //             Downlifter, Impact: state/transitions.ts), Master row: the
+  //             same actions as the playlist footer's buttons (ui/addTrack.ts)
   //   Patterns  New, Duplicate, Rename…, Delete for the selected track's
   //             current pattern (state/pattern-actions.ts, as PatternPicker);
   //             inert with the reason (see below) when the selected track
@@ -48,8 +49,10 @@
   // (menu-octave-down / -up).
   //
   // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names, Add ▸ Drum
-  // track ▸ one item per built-in kit, menu-add-drum-kit-<id>, File ▸ New
-  // from template ▸ one item per template, menu-template-<id>): one open
+  // track ▸ one item per built-in kit, menu-add-drum-kit-<id>, Add ▸
+  // Transition ▸ Riser / Downlifter / Impact, menu-add-transition-<kind>
+  // (plan 28 Task 3), File ▸ New from template ▸ one item per template,
+  // menu-template-<id>): one open
   // at a time (`sub`), flying out to the right of their item.
   //   Keys: → or Enter / Space on the item opens it on its first entry;
   //   ↑ ↓ Home End move inside; → inside does nothing. While one is open,
@@ -139,7 +142,10 @@
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
   import { wheelOctaveSteps } from '../input/qwertyPiano';
-  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack } from './addTrack';
+  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from './addTrack';
+  import { TRANSITIONS, transitionBlocked } from '../state/transitions';
+  import type { TransitionKind } from '../state/transitions';
+  import { useAutoBus } from './autoBus';
   import { KITS } from '../state/kits';
   import { TEMPLATE_MENU } from '../state/templates';
   import type { AddKind } from './addTrack';
@@ -155,6 +161,7 @@
   import { midiLabel, midiTip } from './topStatus';
   import Gauge from 'phosphor-svelte/lib/Gauge';
   import TextAa from 'phosphor-svelte/lib/TextAa';
+  import TrendUp from 'phosphor-svelte/lib/TrendUp';
   import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
   import ArrowCounterClockwise from 'phosphor-svelte/lib/ArrowCounterClockwise';
   import ArrowsVertical from 'phosphor-svelte/lib/ArrowsVertical';
@@ -487,6 +494,12 @@
     closeToOpener();
     void addKitTrack(p, engine, kitId);
   }
+  /** Add ▸ Transition ▸ <kind> (plan 28 Task 3): its clip at the song playhead's bar. */
+  const bus = useAutoBus();
+  function addTransitionItem(kind: TransitionKind) {
+    closeToOpener();
+    addTransitionTrack(p, engine, kind, bus?.songTick() ?? p.songPosition);
+  }
 
   // ---- Patterns ------------------------------------------------------------
   const selected = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
@@ -551,7 +564,7 @@
     }
   }
   // ---- submenus (SUBMENUS above) --------------------------------------------
-  type SubName = 'lib' | 'notes' | 'kits' | 'templates';
+  type SubName = 'lib' | 'notes' | 'kits' | 'transitions' | 'templates';
   /** The open submenu (one at a time). */
   let sub = $state<SubName | null>(null);
   const subBtns: Partial<Record<SubName, HTMLButtonElement>> = $state({});
@@ -800,7 +813,29 @@
         {:else if m === 'Add'}
           {#each ADD_ITEMS as a (a.kind)}
             {@const why = addBlocked(p, a.kind)}
-            {#if a.kind === 'master'}<hr />{/if}
+            {#if a.kind === 'master'}
+              <!-- Transition ▸ Riser / Downlifter / Impact (plan 28 Task 3), after the track kinds. -->
+              {@const trackWhy = addBlocked(p, 'synth')}
+              <div class="subwrap" data-sub="transitions">
+                <button
+                  class="it" data-testid="menu-add-transition" bind:this={subBtns.transitions} aria-expanded={sub === 'transitions'} aria-controls="menu-add-transitions"
+                  use:inertItem={trackWhy ?? (p.loading ? LOADING : null)} title={trackWhy ?? 'Add a transition track at the playhead: a riser, a downlifter or an impact'}
+                  onclick={(e) => subClick('transitions', e)} onkeydown={(e) => subBtnKey(e, 'transitions')}
+                ><Icon icon={TrendUp} /><span class="l">Transition</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+                {#if sub === 'transitions'}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="sub" id="menu-add-transitions" role="group" aria-label="Transitions" bind:this={subEl} onkeydown={subKey}>
+                    {#each TRANSITIONS as tr (tr.kind)}
+                      {@const trWhy = transitionBlocked(p, tr.kind)}
+                      <button class="it" data-testid="menu-add-transition-{tr.kind}" use:inertItem={trWhy} title={trWhy ?? tr.title} onclick={() => addTransitionItem(tr.kind)}>
+                        <span class="l">{tr.label}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+              <hr />
+            {/if}
             {#if a.kind === 'drum'}
               <!-- Drum track ▸ a kit (plan 25): Starter (what the playlist's "Drum track" adds) and the others. -->
               <div class="subwrap" data-sub="kits">

@@ -1470,7 +1470,7 @@
     </div>
     <div class="foot" bind:clientHeight={footH}>
       <!-- One "+ Add track" list (its items are disabled at MAX_TRACKS, with the reason); a sample dropped on it makes a Sampler track. -->
-      <AddTrackMenu {p} {engine} onhint={flashHint} />
+      <AddTrackMenu {p} {engine} onhint={flashHint} playhead={songPlayhead} />
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->
       <input
         class="hscroll"

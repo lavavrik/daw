@@ -13,6 +13,8 @@ import { addSamplerTrack } from '../state/sampler-actions';
 import { addAudioTrack } from '../state/audio-actions';
 import type { ImportEngine } from '../state/sampleImport';
 import { STARTER_PATCHES } from '../state/patches';
+import { addTransition } from '../state/transitions';
+import type { TransitionKind } from '../state/transitions';
 import { laneView, setOpen } from './song/laneView.svelte';
 import { MASTER_ROW } from './song/tlMath';
 
@@ -61,4 +63,16 @@ export function addTrack(p: Project, engine: CommandSink & ImportEngine, kind: A
     laneView.master = true;
     setOpen(MASTER_ROW, true);
   }
+}
+
+/**
+ * Add ▸ Transition ▸ <kind> (plan 28 Task 3; state/transitions.ts: one undo
+ * entry) with its clip at the bar of `playhead` (the song playhead: the
+ * AutoBus's songTick, as both menus pass it). The new track's lanes are
+ * opened under its row so the sweep shows at once.
+ */
+export function addTransitionTrack(p: Project, engine: CommandSink, kind: TransitionKind, playhead: number) {
+  const t = addTransition(p, engine, kind, playhead);
+  if (t?.automation.length) setOpen(t.id, true);
+  return t;
 }

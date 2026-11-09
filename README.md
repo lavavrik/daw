@@ -363,6 +363,14 @@ and drops. Design notes:
 - **Master row.** **+ Master row** (under the timeline) adds a row below the
   last track for the master and the two returns (e.g. "Master · Ceiling",
   "Reverb · Size"). It stays once it has had a lane; **×** hides it.
+- **Transitions.** **Add track ▸ Transition** (the timeline's **Add track**
+  list or the menu bar's **Add**) adds a ready-made transition at the bar
+  the playhead is in: **Riser** (8 bars of noise, its filter opening 200 Hz
+  → 12 kHz and its volume rising −24 dB → 0), **Downlifter** (4 bars, the
+  filter closing and the volume falling to −30 dB) or **Impact** (one sub
+  drop hit on beat 1, sent to the reverb). Each is its own synth track with
+  one clip; the sweeps' cutoff and volume lanes open under it, ready to
+  edit. One undo takes it all back.
 - **Editing.**
   - Click empty lane space to add a point (snapped to 1/16, **Alt** = free);
     keep the mouse down to drag it into place.

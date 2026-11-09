@@ -34,6 +34,15 @@
   // appears once its samples are in, a moment later). "Drum track" itself
   // is the starter kit's track, like a new project's default one.
   //
+  // Under "Audio track" (plan 28 Task 3): Transition, a label over one chip
+  // per transition (state/transitions.ts TRANSITIONS: Riser, Downlifter,
+  // Impact; chips as the kits, for the same reason), test ids
+  // `add-transition-<kind>`: the menu bar's Add ▸ Transition ▸ items. Each
+  // adds its track with the clip at the bar of the song playhead
+  // (`playhead`: Timeline's songPlayhead) in one undo entry. A chip is
+  // disabled with the reason as its tooltip when the tracks or the
+  // automation lanes are full (transitionBlocked).
+  //
   // Dropping a sample (a Finder file or a library sample) on the button makes
   // a Sampler track with it, as the old "+ Sampler track" button did.
   import Plus from 'phosphor-svelte/lib/Plus';
@@ -42,6 +51,7 @@
   import Waveform from 'phosphor-svelte/lib/Waveform';
   import FileAudio from 'phosphor-svelte/lib/FileAudio';
   import FadersHorizontal from 'phosphor-svelte/lib/FadersHorizontal';
+  import TrendUp from 'phosphor-svelte/lib/TrendUp';
   import type { Component } from 'svelte';
   import Icon from '../Icon.svelte';
   import type { Project } from '../../state/project.svelte';
@@ -52,10 +62,20 @@
   import { KITS, STARTER_KIT_ID } from '../../state/kits';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
-  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack } from '../addTrack';
+  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from '../addTrack';
   import type { AddKind } from '../addTrack';
+  import { TRANSITIONS, transitionBlocked } from '../../state/transitions';
+  import type { TransitionKind } from '../../state/transitions';
 
-  let { p, engine, onhint }: { p: Project; engine: CommandSink & ImportEngine; onhint: (text: string) => void } = $props();
+  let {
+    p, engine, onhint, playhead = () => p.songPosition,
+  }: {
+    p: Project;
+    engine: CommandSink & ImportEngine;
+    onhint: (text: string) => void;
+    /** The song playhead (a tick): where a transition's clip goes (its bar). */
+    playhead?: () => number;
+  } = $props();
 
   /** Each item's old footer test id and its icon. */
   const ITEM: Record<AddKind, { testid: string; icon: Component<any> }> = {
@@ -109,6 +129,10 @@
     if (kind === 'drum') return void pickKit(STARTER_KIT_ID);
     close(false);
     addTrack(p, engine, kind);
+  }
+  function pickTransition(kind: TransitionKind) {
+    close(false);
+    addTransitionTrack(p, engine, kind, playhead());
   }
   /**
    * A kit's drum track is being made (its samples load first): no second one
@@ -225,6 +249,15 @@
           {/each}
         </div>
       {/if}
+      {#if it.kind === 'audio'}
+        <div class="group-label" aria-hidden="true"><Icon icon={TrendUp} />Transition</div>
+        <div class="kits" role="group" aria-label="Transition track" data-testid="add-transitions">
+          {#each TRANSITIONS as tr (tr.kind)}
+            {@const trWhy = transitionBlocked(p, tr.kind)}
+            <button class="kit" data-testid="add-transition-{tr.kind}" disabled={!!trWhy} title={trWhy ?? tr.title} onclick={() => pickTransition(tr.kind)}>{tr.label}</button>
+          {/each}
+        </div>
+      {/if}
     {/each}
   </div>
 {/if}
@@ -237,7 +270,9 @@
   .list button { display: flex; align-items: center; gap: 8px; font: var(--fs-ctl) var(--font-ui); text-align: left; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .list button:hover:not(:disabled), .list button:focus-visible { background: var(--raised); outline: none; }
   .list button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
-  /* The kit choice under "Drum track": small chips, indented under its label. */
+  /* "Transition": a plain label (not an item) over its chips, aligned as an item's text. */
+  .group-label { display: flex; align-items: center; gap: 8px; padding: 5px 8px 3px; font: var(--fs-ctl) var(--font-ui); color: var(--text-2); cursor: default; }
+  /* The kit choice under "Drum track" (and the transitions): small chips, indented under its label. */
   .kits { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 6px 4px 28px; max-width: 200px; }
   .list .kits button.kit { padding: 1px 6px; font-size: var(--fs-lbl); color: var(--text-2); border: 1px solid var(--line); }
   .list .kits button.kit:hover:not(:disabled), .list .kits button.kit:focus-visible { color: var(--text); border-color: var(--accent); }

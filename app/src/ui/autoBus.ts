@@ -97,6 +97,13 @@ export interface AutoBus {
   midiCc(owner: MixChannelTarget, target: AutoTarget): number | null;
   /** The lane on `target` of `owner`, or null. */
   laneFor(owner: MixChannelTarget, target: AutoTarget): AutomationLane | null;
+  /**
+   * The song playhead (a tick): the heard position while the song plays,
+   * else the parked song position. Where "at the playhead" edits go when
+   * they are made outside the timeline (Add ▸ Transition, plan 28 Task 3;
+   * the timeline's own songPlayhead is the same rule).
+   */
+  songTick(): number;
   /** Evaluate every control now (and start the loop if it should run). */
   refresh(): void;
   /**
@@ -245,6 +252,11 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
           loopId = 0;
         }
       };
+    },
+    songTick() {
+      if (!p.playing || p.mode !== 'song') return p.songPosition;
+      const t = d.heardTicks();
+      return Number.isFinite(t) ? Math.max(0, Math.round(t)) : p.songPosition;
     },
     touch(owner, target) {
       if (p.mode !== 'song') return false;

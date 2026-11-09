@@ -159,9 +159,11 @@ test('+ Add track lists every kind; each item adds one; Escape closes and return
   await openAddTrack(page);
   await expect(btn).toHaveAttribute('aria-expanded', 'true');
   const menu = page.getByTestId('add-track-menu');
-  // "Drum track" is followed by its kit choice (plan 25: one chip per built-in kit).
+  // "Drum track" is followed by its kit choice (plan 25: one chip per built-in kit), "Audio track" by the
+  // Transition chips (plan 28 Task 3: a label, then one chip per transition).
   await expect(menu.getByRole('button')).toHaveText([
-    'Drum track', 'Starter', 'Drum Machine', 'Deep', 'Garage', 'Dusty', 'Synth track', 'Sampler track', 'Audio track', 'Master row',
+    'Drum track', 'Starter', 'Drum Machine', 'Deep', 'Garage', 'Dusty', 'Synth track', 'Sampler track', 'Audio track',
+    'Riser', 'Downlifter', 'Impact', 'Master row',
   ]);
   // Keyboard: the first item has the focus, ArrowDown moves (through the kit chips too), Escape closes and gives the focus back.
   await expect(page.getByTestId(ADD_ID.drum)).toBeFocused();

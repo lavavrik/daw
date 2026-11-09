@@ -50,14 +50,17 @@ async function clickCell(page: Page, tick: number, pitch: number) {
   await page.mouse.click(p.x, p.y);
 }
 
-/** Pick a type / inversion in the ▾ card (each pick also turns chord mode on), then close it. */
+/**
+ * Pick a type, then an inversion, in the ▾ card. Each pick turns chord mode
+ * on and hands the focus to the roll, which closes the card.
+ */
 async function pickChord(page: Page, type: string, inversion: number) {
-  await page.getByTestId('pr-chord-opts').click();
-  await expect(page.getByTestId('pr-chord-pop')).toBeVisible();
-  await page.getByTestId('pr-chord-type').selectOption(type);
-  await page.getByTestId('pr-chord-inv').selectOption(String(inversion));
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('pr-chord-pop')).toHaveCount(0);
+  for (const [id, value] of [['pr-chord-type', type], ['pr-chord-inv', String(inversion)]]) {
+    await page.getByTestId('pr-chord-opts').click();
+    await expect(page.getByTestId('pr-chord-pop')).toBeVisible();
+    await page.getByTestId(id).selectOption(value);
+    await expect(page.getByTestId('pr-chord-pop')).toHaveCount(0);
+  }
   await expect(page.getByTestId('pr-chord')).toHaveAttribute('aria-pressed', 'true');
 }
 
@@ -131,6 +134,65 @@ test('hovering shows a ghost of the chord (N notes), none over a note or past th
   await expect(cv).toHaveAttribute('data-ghost', '');
   await page.mouse.move(2, 2);
   await expect(cv).toHaveAttribute('data-ghost', '');
+});
+
+test('a pick hands the focus to the roll (Esc leaves chord mode at once); a chord already there selects it with a hint', async ({ page }) => {
+  await openRoll(page);
+  await page.getByTestId('pr-chord-opts').click();
+  await page.getByTestId('pr-chord-type').selectOption('m7');
+  await expect(page.getByTestId('pr-chord-pop')).toHaveCount(0);
+  await expect(page.getByTestId('pr-chord')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape'); // the stage has the focus
+  await expect(page.getByTestId('pr-chord')).toHaveAttribute('aria-pressed', 'false');
+
+  // In key on A3, then on the empty G#3 cell at the same start: G# snaps up to A, Am7 again.
+  await pickChord(page, 'inKey', 0);
+  await clickCell(page, 0, A3);
+  await expect.poll(() => pitches(page)).toEqual([57, 60, 64, 67]);
+  await expect.poll(() => undoLabel(page)).toBe('Add chord');
+  await clickCell(page, 0, 56);
+  await expect(page.getByTestId('pr-readout')).toContainText('That chord is already there');
+  expect(await pitches(page)).toEqual([57, 60, 64, 67]); // nothing stacked
+  await page.keyboard.press('Escape'); // leave chord mode: the readout shows the selection again
+  await expect(page.getByTestId('pr-readout')).toContainText('4 notes selected', { timeout: 5_000 }); // after the hint
+  await page.keyboard.press('ControlOrMeta+z'); // the refused stamp made no entry: one undo takes the chord away
+  await expect.poll(() => pitches(page)).toEqual([]);
+
+  // At the top row, In key in 3rd inversion has every note past 127: said, nothing placed.
+  await pickChord(page, 'inKey', 3);
+  for (let i = 0; i < 20 && (await view(page)).topPitch < 127; i++) {
+    const b = (await page.getByTestId('pr-canvas').boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 3);
+    await page.mouse.wheel(0, -400);
+  }
+  await expect.poll(async () => (await view(page)).topPitch).toBe(127);
+  const top = await at(page, 960 + 30, 127); // G9: in A minor
+  await page.mouse.move(top.x, top.y);
+  await expect(page.getByTestId('pr-canvas')).toHaveAttribute('data-ghost', '');
+  await expect(page.getByTestId('pr-readout')).toContainText('no room on the keyboard here');
+  await page.mouse.click(top.x, top.y);
+  await expect(page.getByTestId('pr-readout')).toContainText('No room on the keyboard for this chord here');
+  expect(await pitches(page)).toEqual([]);
+});
+
+test('the ghost follows a wheel scroll and the Shift key without a pointer move', async ({ page }) => {
+  await openRoll(page);
+  const cv = page.getByTestId('pr-canvas');
+  await page.getByTestId('pr-chord').click();
+  const p = await at(page, 240 + 30, A3);
+  await page.mouse.move(p.x, p.y);
+  await expect(cv).toHaveAttribute('data-ghost', '57,60,64,67');
+  // Scroll the view down: the row under the still pointer changes, and the ghost with it.
+  const top = (await view(page)).topPitch;
+  await page.mouse.wheel(0, 3 * (await view(page)).rowH);
+  await expect.poll(async () => (await view(page)).topPitch).toBeLessThan(top);
+  await expect(cv).not.toHaveAttribute('data-ghost', '57,60,64,67');
+  await expect(cv).not.toHaveAttribute('data-ghost', '');
+  // Shift (a click would box-select) hides it; releasing brings it back.
+  await page.keyboard.down('Shift');
+  await expect(cv).toHaveAttribute('data-ghost', '');
+  await page.keyboard.up('Shift');
+  await expect(cv).not.toHaveAttribute('data-ghost', '');
 });
 
 test('a pattern near full refuses the whole chord with a message', async ({ page }) => {

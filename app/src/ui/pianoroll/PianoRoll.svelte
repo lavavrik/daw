@@ -116,7 +116,7 @@
   import type { ExampleRoll } from '../../state/houseExamples';
   import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, addNotes, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes, noteAt,
+    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, addNotes, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes, mergeStackedNotes, noteAt,
     quantizeNotes, setPatternBars, transposeNotes, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
@@ -167,8 +167,13 @@
   let chordOn = $state(false);
   let chordType = $state<ChordType>(lastChord.type);
   let chordInv = $state(lastChord.inversion);
-  /** The empty grid cell under the pointer (no drag, not over a note), for the chord ghost. */
-  let hoverCell = $state.raw<{ tick: number; pitch: number; alt: boolean } | null>(null);
+  /**
+   * The pointer over the note grid while no drag runs (canvas x, note-area
+   * y) and the Alt / Shift state: what the chord ghost follows. Kept as a
+   * point, not a cell, so a wheel scroll / zoom (view) or a modifier key
+   * (the window listener below) moves the ghost without a pointer move.
+   */
+  let hoverPt = $state.raw<{ x: number; ny: number; alt: boolean; shift: boolean } | null>(null);
 
   /** The pattern being edited (the track's current pattern). */
   const pat = $derived(currentPattern(track));
@@ -189,6 +194,14 @@
   const outOfKey = $derived((selNotes.length ? selNotes : notes).filter((n) => !inKey(n.pitch, p.key)).length);
   const chordLabel = $derived(CHORD_TYPES.find((c) => c.id === chordType)?.label ?? chordType);
   const invText = $derived(chordInv ? `inversion ${chordInv}` : 'root position');
+  /** The empty grid cell under hoverPt (none over a note, or with Shift: a click there box-selects). */
+  const hoverCell = $derived.by(() => {
+    const v = view;
+    if (!hoverPt || !v || hoverPt.shift) return null;
+    const { x, ny } = hoverPt;
+    if (x < KEYS_W || ny < 0 || ny >= noteH || hitTest(drawOrder, x, ny, v)) return null;
+    return { tick: xToTick(x, v), pitch: clampPitch(yToPitch(ny, v)), alt: hoverPt.alt };
+  });
   /** Where a click would place the chord, and its pitches: what the ghost shows (chord mode only). */
   const ghost = $derived.by(() => {
     if (!chordOn || !hoverCell || hoverCell.tick >= total) return null;
@@ -200,6 +213,7 @@
     if (hint) return hint;
     if (velShown !== null) return `Velocity ${velShown}`;
     if (chordOn) {
+      if (ghost && !ghost.pitches.length) return `${chordLabel} · no room on the keyboard here`;
       return ghost ? `${chordLabel} · ${ghost.pitches.map((pt) => noteName(pt)).join(' ')} · click to place`
         : `Chord: ${chordLabel}, ${invText} · click to place, Esc to leave`;
     }
@@ -208,8 +222,13 @@
       return `${readout(n, gridKey)} · vel ${n.vel}${n.start >= total ? ' · past the end (silent)' : ''}`;
     }
     if (selNotes.length > 1) return `${selNotes.length} notes selected`;
-    return `${notes.length} note${notes.length === 1 ? '' : 's'} · click to draw, Shift-drag to select`;
+    // Short enough for the 1280 toolbar (review: it was cut off); the rest is the tooltip.
+    return `${notes.length} note${notes.length === 1 ? '' : 's'} · click to draw`;
   });
+  /** The readout's tooltip: its text, or the whole help when it shows the short default. */
+  const readoutTitle = $derived(
+    readoutText.endsWith('· click to draw') ? `${readoutText}, Shift-drag to select, right-click to delete` : readoutText,
+  );
 
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
   function flashHint(text: string) {
@@ -660,6 +679,7 @@
     if (e.button !== 0 || !view || !canvas) return;
     e.preventDefault(); // no text selection
     stage?.focus({ preventScroll: true });
+    hoverPt = null; // no ghost during a drag (a stamp's new notes hide it anyway)
     const { x, y, ny } = local(e);
     const v = view;
     const reg = region(x, y);
@@ -720,20 +740,26 @@
   function stamp(tick: number, pitch: number, alt: boolean) {
     const pitches = chordStampPitches(pitch, chordType, chordInv, p.key, snapKey);
     const start = alt ? Math.round(tick) : snapFloor(tick, grid);
+    if (!pitches.length) { // every note past 127 (e.g. In key at the top, inverted)
+      flashHint('No room on the keyboard for this chord here');
+      return;
+    }
     const added = addNotes(p, engine, track.id, pitches.map((pt) => ({ pitch: pt, start, len: grid, vel: 100 })), 'Add chord');
     if (!added) {
       flashHint(`Pattern is full: no room for this ${pitches.length}-note chord (${MAX_NOTES} notes max)`);
       return;
     }
-    selected = new Set(added.map((n) => n.id));
-    hoverCell = null; // the chord is under the pointer now: no ghost over it until the next move
+    // The whole chord is selected, notes that were already there included.
+    selected = new Set(pitches.map((pt) => noteAt(pat, pt, start)?.id).filter((id): id is string => !!id));
+    if (!added.length) flashHint('That chord is already there');
+    // The new notes are under the pointer now: hoverCell's hit test hides the ghost.
   }
 
   function move(e: PointerEvent) {
     if (!view) return;
     const v = view;
     const { x, y, ny } = local(e);
-    if (!drag) return hover(x, y, ny, e.altKey);
+    if (!drag) return hover(x, y, ny, { alt: e.altKey, shift: e.shiftKey });
     if (drag.kind === 'key') {
       const pt = clampPitch(yToPitch(Math.min(noteH - 1, Math.max(0, ny)), v));
       if (pt !== auditionPitch) audition(pt, e.timeStamp);
@@ -789,16 +815,15 @@
     }
   }
 
-  function hover(x: number, y: number, ny: number, alt: boolean) {
+  function hover(x: number, y: number, ny: number, mods: { alt: boolean; shift: boolean }) {
     const v = view!;
     const reg = region(x, y);
     hoverPitch = reg === 'keys' || reg === 'notes' ? clampPitch(yToPitch(ny, v)) : null;
-    hoverCell = null;
+    hoverPt = reg === 'notes' ? { x, ny, alt: mods.alt, shift: mods.shift } : null;
     if (reg === 'keys') cursor = 'pointer';
     else if (reg === 'notes') {
       const hit = hitTest(drawOrder, x, ny, v);
       cursor = hit ? (hit.part === 'end' ? 'ew-resize' : 'move') : 'crosshair';
-      if (!hit) hoverCell = { tick: xToTick(x, v), pitch: clampPitch(yToPitch(ny, v)), alt };
     } else if (reg === 'vel') cursor = stemsAt(x).size ? 'ns-resize' : 'default';
     else cursor = 'default';
   }
@@ -808,6 +833,9 @@
     const d = drag;
     drag = null; // first: the lostpointercapture that follows must not cancel
     flush();
+    // Snap to key can land two moved notes on one pitch at one start: merge
+    // them inside the drag's own gesture (one undo entry with the move).
+    if (d.kind === 'move' && d.moved && snapKey) mergeAfterMove(d.orig.map((o) => o.id));
     if (d.kind === 'key') audition(null, e.timeStamp);
     if (d.kind === 'vel') velShown = null;
     if (d.kind === 'box') box = null;
@@ -872,6 +900,12 @@
   function quantize() {
     quantizeNotes(p, engine, track.id, selectedIds(), grid);
   }
+  /** mergeStackedNotes after a Snap-to-key move; drops merged-away notes from the selection. */
+  function mergeAfterMove(ids: string[]) {
+    if (!mergeStackedNotes(p, engine, track.id, ids)) return;
+    const live = new Set(notes.map((n) => n.id));
+    selected = new Set([...selected].filter((id) => live.has(id)));
+  }
   function nudge(dt: number, dp: number) {
     const orig = snapshot(selected);
     const c = clampMove(orig, dt, dp, total);
@@ -882,6 +916,8 @@
     updateNotes(p, engine, track.id, orig.map((o) => ({
       id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp || snapKey ? { pitch: movedPitch(o.pitch, c.dp, snapKey) } : {}),
     })));
+    // Same key task, so the same undo entry (App's coalesceTask).
+    if (snapKey) mergeAfterMove(orig.map((o) => o.id));
   }
   function key(e: KeyboardEvent) {
     const cmd = e.metaKey || e.ctrlKey;
@@ -922,12 +958,27 @@
     gridKey = lastGrid = k;
     refocus();
   }
+  /** A ChordCard pick: chord mode on. ChordCard then hands the focus to the stage (closing the card), so Esc leaves chord mode. */
   function setChord(o: { type: ChordType; inversion: number }) {
     chordType = o.type;
     chordInv = o.inversion;
     lastChord = { ...o };
     chordOn = true;
   }
+  // The ghost follows Alt (unsnapped start) and Shift (box select: no ghost)
+  // pressed or released without a pointer move.
+  $effect(() => {
+    if (!chordOn) return;
+    const mod = (e: KeyboardEvent) => {
+      if ((e.key === 'Alt' || e.key === 'Shift') && hoverPt) hoverPt = { ...hoverPt, alt: e.altKey, shift: e.shiftKey };
+    };
+    window.addEventListener('keydown', mod);
+    window.addEventListener('keyup', mod);
+    return () => {
+      window.removeEventListener('keydown', mod);
+      window.removeEventListener('keyup', mod);
+    };
+  });
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const mergedText = (n: number) => (n ? `, merged ${n}` : '');
   function fitToKey() {
@@ -1093,7 +1144,7 @@
       {#snippet children()}
         <KeyCard value={p.key} onpick={(k) => setKey(p, engine, k)}
           snap={snapToKey.on} onsnap={setSnapToKey}
-          target={targetText} hasNotes={notes.length > 0} ontranspose={transpose}
+          target={targetText} selCount={selNotes.length} hasNotes={notes.length > 0} ontranspose={transpose}
           {outOfKey} onfit={fitToKey} />
       {/snippet}
     </PopButton>
@@ -1109,7 +1160,7 @@
             title="Chord type ({chordLabel}) and inversion ({invText})">▾</button>
         {/snippet}
         {#snippet children()}
-          <ChordCard type={chordType} inversion={chordInv} onpick={setChord} />
+          <ChordCard type={chordType} inversion={chordInv} onpick={setChord} focusTo={stage} />
         {/snippet}
       </PopButton>
     </div>
@@ -1167,7 +1218,7 @@
         </div>
       {/if}
     </div>
-    <output class="readout" data-testid="pr-readout" class:hint={!!hint} title={readoutText}>{readoutText}</output>
+    <output class="readout" data-testid="pr-readout" class:hint={!!hint} title={readoutTitle}>{readoutText}</output>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -1191,7 +1242,7 @@
       onpointerup={up}
       onpointercancel={cancel}
       onlostpointercapture={cancel}
-      onpointerleave={() => { if (!drag) { hoverPitch = null; hoverCell = null; } }}
+      onpointerleave={() => { if (!drag) { hoverPitch = null; hoverPt = null; } }}
     ></canvas>
   </div>
 </div>

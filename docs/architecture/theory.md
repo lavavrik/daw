@@ -151,32 +151,50 @@ plain semitone shift (Snap to key does not apply). The group stops at 0 /
 of the pattern (past-the-end ones too) when nothing is selected (review #7,
 like the other tools), to `nearestInKey` (ties up). One "Fit to key" undo
 entry; disabled (and a no-op with no entry) when nothing it acts on is out
-of key, e.g. any chromatic key. The readout says how many notes moved.
+of key, e.g. any chromatic key. Its label names its target the way
+Quantize's does ("Fit 1 sel." / "Fit all"): a note just drawn stays
+selected, so it is easy to fit only that one. The readout says how many
+notes moved.
 
 **Stacked notes merge** (review #1). Transpose and Fit to key can move a
 note onto another one at the same pitch and start (G# + A at one start →
 A + A). Inside the same undo entry such a stack becomes one note
 (`pattern-actions` `mergeStacked`): the longest is kept (the first on a
 tie) with the stack's highest velocity, and the readout adds "merged N".
+A move with **Snap to key** on can stack selected notes too (G# + A
+nudged or dragged: both land on A): the roll runs the same merge
+(`mergeStackedNotes`) at the end of the drag (inside its gesture) or right
+after the nudge (in the same key task), so it is part of the move's own
+"Move notes" undo entry. Without Snap a move never merges: putting a note
+on another is then what the pointer asked for.
 
 **Chord stamp** (plan 26 Task 2). The toolbar's **Chord** toggle
 (`pr-chord`, aria-pressed) turns chord mode on; its **▾** (`pr-chord-opts`)
 opens `ChordCard`: the chord type (`pr-chord-type`, `CHORD_TYPES`, In key
 by default) and the inversion (`pr-chord-inv`, root position ..
 3rd). Picking either also turns chord mode on (*my call*: you pick a chord
-to place it). The type and inversion last the session (like the grid
-size); chord mode itself starts off whenever the roll opens.
+to place it) and hands the focus to the roll's grid (`releaseSelect`),
+which closes the card: the next click places the chord and Esc leaves
+chord mode at once. The type and inversion last the session (like the
+grid size); chord mode itself starts off whenever the roll opens.
 
 - **Ghost.** In chord mode, hovering an empty cell of the grid shows the
   chord there: one faint, dashed note per pitch, one grid cell long from
   the cell's start (Alt: unsnapped). The readout names it ("In key · A3 C4
   E4 G4 · click to place"); the canvas carries the pitches as `data-ghost`
   (e2e). No ghost over an existing note (a press there still moves or
-  resizes it) or past the pattern end.
+  resizes it), past the pattern end, or with Shift held (a click
+  box-selects). The roll keeps the pointer's point, not its cell, so the
+  ghost follows a wheel scroll or zoom, and Alt / Shift pressed or
+  released, without a pointer move. When every note of the chord would be
+  past 127 the readout says "no room on the keyboard here".
 - **Click** places every note of the ghost, velocity 100, as ONE "Add
-  chord" undo entry (`addNotes`), and selects them. A chord note that
-  would sit exactly on an existing note (same pitch and start) is skipped,
-  not stacked. No drag follows the
+  chord" undo entry (`addNotes`), and selects the whole chord (notes that
+  were already there included). A chord note that would sit exactly on an
+  existing note (same pitch and start) is skipped, not stacked; when
+  that leaves nothing to add the readout says "That chord is already
+  there" (no entry), and when every note is past 127, "No room on the
+  keyboard for this chord here". No drag follows the
   click (a drawn single note's follow-up drag would, with Snap to key, snap
   each chord note on its own and bend the chord).
 - **Pitches:** `prMath.chordStampPitches(row, type, inversion, key,
@@ -199,7 +217,9 @@ are icon-only below 1440 px (each keeps its name as `aria-label`, and a
 tooltip); Quantize (with its "N sel. / all" count) and Clear always show
 their labels. The readout takes what is
 left (it wraps only under 120 px) and ellipsizes a long text; its tooltip
-has the whole of it.
+has the whole of it. Its default help is short enough to fit at 1280
+("4 notes · click to draw"); the tooltip adds the rest ("Shift-drag to
+select, right-click to delete").
 
 ## Tests
 

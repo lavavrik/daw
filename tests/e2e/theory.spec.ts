@@ -299,6 +299,27 @@ test('Fit to key acts on the selection and merges notes it stacks; Transpose say
   await expect(page.getByTestId('pr-readout')).toContainText('Moved +7 (top of range)');
 });
 
+test('Snap to key: a nudge that lands two selected notes on one pitch merges them, in the move\'s undo entry; Fit shows its target', async ({ page }) => {
+  await openRoll(page);
+  await draw(page, 0, 68); // G#4 (Snap off)
+  await draw(page, 0, 69); // A4, same start
+  await expect.poll(() => pitches(page)).toEqual([68, 69]);
+  await openKey(page);
+  await expect(page.getByTestId('pr-fit-key')).toHaveText(/Fit 1 sel\./); // the A4 just drawn is selected
+  await page.getByTestId('pr-snap-key').click();
+  await closeKey(page);
+  await page.getByTestId('pianoroll').getByRole('application').focus();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('ArrowRight'); // both move a cell; G#4 snaps to A4: one A4 is left
+  await expect.poll(async () => (await notes(page)).map((n) => [n.pitch, n.start])).toEqual([[69, 240]]);
+  await expect.poll(() => undoLabel(page)).toBe('Move notes');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => (await notes(page)).map((n) => [n.pitch, n.start]).sort((a, b) => a[0] - b[0])).toEqual([[68, 0], [69, 0]]);
+  await page.keyboard.press('Escape');
+  await openKey(page);
+  await expect(page.getByTestId('pr-fit-key')).toHaveText(/Fit all/);
+});
+
 test('the key survives a reload (autosave restore)', async ({ page }) => {
   test.setTimeout(60_000);
   await openRoll(page);
@@ -334,6 +355,10 @@ test('layout at 1280: the piano-roll toolbar stays one row with the key controls
   // Quantize and Clear keep their labels (review #3); the key tools are in the Key popover.
   await expect(page.getByTestId('pr-quantize')).toHaveText(/Quantize all/);
   await expect(page.getByTestId('pr-clear')).toHaveText(/Clear/);
+  // The readout's default help fits whole (the rest of it is the tooltip).
+  await expect(page.getByTestId('pr-readout')).toHaveText('0 notes · click to draw');
+  expect(await page.getByTestId('pr-readout').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await expect(page.getByTestId('pr-readout')).toHaveAttribute('title', /Shift-drag to select/);
   await openKey(page);
   for (const id of ['pr-key-root', 'pr-key-scale', 'pr-snap-key', 'pr-transpose', 'pr-fit-key']) await expect(page.getByTestId(id)).toBeVisible();
 });

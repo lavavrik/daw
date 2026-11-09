@@ -7,7 +7,8 @@
   //   - Snap to key (a toggle, a saved UI pref; the Key button shows a
   //     magnet badge while it is on);
   //   - Transpose… (expands TransposeCard: ±12 semitones, Apply);
-  //   - Fit to key (disabled when nothing it acts on is out of key).
+  //   - Fit to key, labelled with its target like Quantize ("Fit 1 sel." /
+  //     "Fit all"; disabled when nothing it acts on is out of key).
   // Transpose and Fit act on the selection, or every note. The card stays
   // open after each action (a key, Snap and a Fit are often used together);
   // Esc or a press outside closes it.
@@ -23,7 +24,7 @@
   import { selectKey } from '../selectKey';
   import { tick } from 'svelte';
 
-  let { value, onpick, snap, onsnap, target, hasNotes, ontranspose, outOfKey, onfit }: {
+  let { value, onpick, snap, onsnap, target, selCount, hasNotes, ontranspose, outOfKey, onfit }: {
     value: MusicKey;
     onpick: (key: MusicKey) => void;
     /** Snap to key is on. */
@@ -31,6 +32,8 @@
     onsnap: (on: boolean) => void;
     /** What Transpose and Fit act on: "every note", "the 2 selected notes"… */
     target: string;
+    /** Selected notes (0: Transpose and Fit act on every note); the Fit label shows it, as Quantize's. */
+    selCount: number;
     /** The pattern has notes (Transpose… is disabled otherwise). */
     hasNotes: boolean;
     ontranspose: (semitones: number) => void;
@@ -78,10 +81,10 @@
     title="Transpose: move {target} by up to ±{MAX_TRANSPOSE} semitones" onclick={() => (transposing = !transposing)}>
     <Icon icon={ArrowsDownUp} /> Transpose…
   </button>
-  <button data-testid="pr-fit-key" bind:this={fitBtn} disabled={!outOfKey}
+  <button data-testid="pr-fit-key" bind:this={fitBtn} disabled={!outOfKey} aria-label="Fit to key: {selCount ? `${selCount} selected` : 'all'}"
     title={outOfKey ? `Fit to key: move the ${outOfKey} out-of-key note${outOfKey === 1 ? '' : 's'} of ${target} to the nearest note of ${keyName}` : `Every note of ${target} is in ${keyName}`}
     onclick={fit}>
-    <Icon icon={MagicWand} /> Fit to key
+    <Icon icon={MagicWand} /> Fit {selCount ? `${selCount} sel.` : 'all'}
   </button>
 </div>
 {#if transposing}

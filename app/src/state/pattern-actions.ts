@@ -55,6 +55,12 @@ function target(p: Project, trackId: string, patternId?: string) {
 type NewNote = { pitch: number; start: number; len: number; vel?: number };
 
 /**
+ * Rounded / clamped (pitch, start) of a new note: what pushNote stores AND
+ * what the duplicate checks compare (one clamp, so they never drift apart).
+ */
+const cellOf = (t: SynthTrack, o: NewNote) => ({ pitch: clampInt(o.pitch, 0, 127), start: clampInt(o.start, 0, patternTicks(t) - 1) });
+
+/**
  * Pushes `o` (clamped) into `pat` at engine idx `idx` and sends it; returns
  * the reactive proxy. The shared body of addNote / addNotes.
  */
@@ -62,18 +68,14 @@ function pushNote(sink: CommandSink, t: SynthTrack, pat: NotePatternState, idx: 
   pat.notes.push({
     id: crypto.randomUUID(),
     idx,
-    pitch: clampInt(o.pitch, 0, 127),
+    ...cellOf(t, o),
     vel: clampInt(o.vel ?? 100, 1, 127),
-    start: clampInt(o.start, 0, patternTicks(t) - 1),
     len: clampInt(o.len, 1, MAX_NOTE_LEN),
   });
   const n = pat.notes[pat.notes.length - 1]; // reactive proxy
   sendNote(sink, t, n);
   return n;
 }
-
-/** Rounded / clamped (pitch, start) of a new note, as pushNote stores it. */
-const cellOf = (t: SynthTrack, o: NewNote) => ({ pitch: clampInt(o.pitch, 0, 127), start: clampInt(o.start, 0, patternTicks(t) - 1) });
 
 /**
  * The note of `pat` at exactly `pitch` and `start`, if any. Two notes there
@@ -318,6 +320,17 @@ function mergeStacked(p: Project, sink: CommandSink, trackId: string, movedIds: 
   if (vels.length) updateNotes(p, sink, trackId, vels);
   if (gone.length) deleteNotes(p, sink, trackId, gone);
   return gone.length;
+}
+
+/**
+ * mergeStacked as an action, for the piano roll after a Snap-to-key move or
+ * nudge (Snap can put two selected notes on one pitch at one start: G#+A ->
+ * A+A). Called inside the move's gesture / key task, so it lands in the
+ * move's own undo entry ("Move notes"). Returns how many notes were merged
+ * away; 0 changes nothing.
+ */
+export function mergeStackedNotes(p: Project, sink: CommandSink, trackId: string, movedIds: string[]): number {
+  return edit(p, 'Move notes', () => mergeStacked(p, sink, trackId, new Set(movedIds)));
 }
 
 /** The notes `ids` names (empty = every note of the current pattern, past-the-end ones too). */

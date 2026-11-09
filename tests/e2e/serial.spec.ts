@@ -176,7 +176,9 @@ async function buildSpec6(page: Page) {
     synths.forEach((t, k) => {
       // Held chord (a full 4-bar pattern, all 8 voices busy) + one bar of 16ths.
       [36, 40, 43, 47, 50, 53, 57, 60].forEach((p) => a.addNote(t.id, { pitch: p + k, start: 0, len: 15360, vel: 90 }));
-      for (let i = 0; i < 16; i++) a.addNote(t.id, { pitch: 60 + ((i * 5 + k) % 24), start: i * 240, len: 120, vel: 100 });
+      // From 62, not 60: the first 16th (start 0) must not repeat the chord's
+      // top voice (60 + k at 0), which addNote refuses as a duplicate.
+      for (let i = 0; i < 16; i++) a.addNote(t.id, { pitch: 62 + ((i * 5 + k) % 24), start: i * 240, len: 120, vel: 100 });
     });
     // Mix: EQ, both sends and a lowered fader on every track; returns/master EQ.
     for (const t of project.tracks) {

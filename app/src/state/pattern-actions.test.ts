@@ -5,7 +5,7 @@ import type { DrumPattern, NotePatternState } from './project.svelte';
 import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import {
-  GRID_TICKS, addNote, addNotes, clearPattern, deleteNotes, deletePattern, duplicatePattern, newPattern, patternTicks,
+  GRID_TICKS, addNote, addNotes, clearPattern, mergeStackedNotes, deleteNotes, deletePattern, duplicatePattern, newPattern, patternTicks,
   quantizeNotes, renamePattern, selectPattern, setPatternBars, updateNotes,
 } from './pattern-actions';
 import { setStepCount, setSwing, toggleStep } from './actions';
@@ -383,5 +383,24 @@ describe('addNotes (the chord stamp: plan 26 Task 2)', () => {
     expect(addNotes(x.p, x.sink, x.t.id, [])).toEqual([]);
     const d = addDrumTrack(x.p, x.sink)!;
     expect(addNotes(x.p, x.sink, d.id, chord([60]))).toBeNull();
+  });
+});
+
+describe('mergeStackedNotes (a Snap-to-key move that stacks notes)', () => {
+  it('merges what the move stacked inside the move\'s own undo entry; nothing stacked = 0, no change', () => {
+    const x = setup();
+    const h = createHistory({ snapshot: () => serialize(x.p), apply: (from, to) => diffApply(x.p, x.sink, from, to) });
+    x.p.history = h;
+    const a = addNote(x.p, x.sink, x.t.id, { pitch: 68, start: 0, len: 240, vel: 120 })!;
+    const b = addNote(x.p, x.sink, x.t.id, { pitch: 69, start: 0, len: 480, vel: 80 })!;
+    expect(mergeStackedNotes(x.p, x.sink, x.t.id, [a.id, b.id])).toBe(0);
+    // A move (as the roll's nudge / drag) and its merge in ONE transaction, as App's gesture / key task makes it.
+    h.transact('Move notes', () => {
+      updateNotes(x.p, x.sink, x.t.id, [{ id: a.id, pitch: 69, start: 240 }, { id: b.id, start: 240 }]);
+      expect(mergeStackedNotes(x.p, x.sink, x.t.id, [a.id, b.id])).toBe(1);
+    });
+    expect(currentPattern(x.t).notes.map((n) => [n.pitch, n.start, n.len, n.vel])).toEqual([[69, 240, 480, 120]]);
+    h.undo();
+    expect(currentPattern(x.t).notes.map((n) => [n.pitch, n.start])).toEqual([[68, 0], [69, 0]]);
   });
 });

@@ -172,7 +172,7 @@ describe('chord types and voicing', () => {
 
   it('pentatonic In key snaps to the pentatonic itself, the parent scale gives the quality (review #4)', () => {
     const amp = key(9, 'minorPentatonic'); // A C D E G
-    expect(chordRoot(59, 'inKey', amp)).toBe(60); // B (not in it): A / C tie -> up to C
+    expect(chordRoot(59, 'inKey', amp)).toBe(60); // B (not in it): C is 1 away, A 2 -> C
     expect(voiceChord(59, 'inKey', 0, amp)).toEqual([60, 64, 67, 71]); // Cmaj7, never Bm7b5
     expect(voiceChord(65, 'inKey', 0, amp)).toEqual([64, 67, 71, 74]); // F -> E (nearer): Em7, never Fmaj7
     expect(voiceChord(64, 'inKey', 0, amp)).toEqual([64, 67, 71, 74]); // E: Em7 (natural minor)

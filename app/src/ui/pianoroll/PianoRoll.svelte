@@ -9,9 +9,13 @@
   import Magnet from 'phosphor-svelte/lib/Magnet';
   import ArrowsDownUp from 'phosphor-svelte/lib/ArrowsDownUp';
   import MagicWand from 'phosphor-svelte/lib/MagicWand';
+  import MusicNotes from 'phosphor-svelte/lib/MusicNotes';
   import Icon from '../Icon.svelte';
+  import type { ChordType } from '../../music/scales';
   /** Grid size survives track switches for the session (the roll remounts per track). */
   let lastGrid: GridKey = '1/16';
+  /** The chord stamp's type and inversion, the same way (chord MODE itself starts off on every mount). */
+  let lastChord: { type: ChordType; inversion: number } = { type: 'inKey', inversion: 0 };
 </script>
 
 <script lang="ts">
@@ -61,6 +65,16 @@
   // ±12 semitones) acts on the selection or every note; Fit to key moves
   // every note to the nearest in-key pitch. Each is one undo entry.
   //
+  // Chord stamp (plan 26 Task 2; theory.md "Chord stamp"): the "Chord"
+  // toggle turns chord mode on, its ▾ opens ChordCard (type + inversion).
+  // In chord mode, hovering empty grid shows a ghost of the chord on that
+  // row (snapped like a drawn note; prMath.chordStampPitches), and a click
+  // there places every note of it, one grid cell long, as ONE "Add chord"
+  // undo entry (addNotes; refused whole, with a hint, when the pattern has
+  // no room for all of it). Notes under the pointer are still moved /
+  // resized as usual; Shift and right-click keep their meaning. Escape
+  // leaves chord mode (after cancelling a drag).
+  //
   // Humanize… (plan 25 Task 3; docs/architecture/sequencer.md "Humanize"):
   // an amount card (HumanizeCard) whose Apply is humanizeNotes on the
   // selection, or every note (like Quantize): starts and velocities jittered,
@@ -86,26 +100,27 @@
   import KeyCard from './KeyCard.svelte';
   import TransposeCard from './TransposeCard.svelte';
   import { snapToKey, setSnapToKey } from './snapToKey.svelte';
-  import { SCALES, inKey } from '../../music/scales';
+  import { CHORD_TYPES, SCALES, inKey } from '../../music/scales';
+  import ChordCard from './ChordCard.svelte';
   import { pitchClassName } from '../noteName';
   import { setKey } from '../../state/key-actions';
   import { HUMANIZE_TICKS, HUMANIZE_VEL } from '../../state/groove';
   import { THEME } from '../theme';
-  import { MAX_PATTERNS } from '../../audio/protocol';
+  import { MAX_NOTES, MAX_PATTERNS } from '../../audio/protocol';
   import { TRACKS_FULL_TEXT } from '../../state/actions';
   import { addExamplePattern, addExampleTrack } from '../../state/example-actions';
   import { exampleFor } from '../../state/houseExamples';
   import type { ExampleRoll } from '../../state/houseExamples';
   import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, MAX_TRANSPOSE, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes,
+    GRID_TICKS, MAX_NOTE_LEN, MAX_TRANSPOSE, PATTERNS_FULL_TEXT, addNote, addNotes, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes,
     quantizeNotes, setPatternBars, transposeNotes, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { MAX_TRACKS, currentPattern } from '../../state/project.svelte';
   import { clearPatternText } from '../../state/confirmText';
   import {
-    BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
+    BAR, BEAT, KEYS_W, MIN_ROW_H, chordStampPitches, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
     readout, snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
   } from './prMath';
   import type { View } from './prMath';
@@ -145,6 +160,12 @@
   let velShown = $state<number | null>(null);
   let hint = $state<string | null>(null);
   let cursor = $state('default');
+  /** Chord mode (the chord stamp) and its options. */
+  let chordOn = $state(false);
+  let chordType = $state<ChordType>(lastChord.type);
+  let chordInv = $state(lastChord.inversion);
+  /** The empty grid cell under the pointer (no drag, not over a note), for the chord ghost. */
+  let hoverCell = $state.raw<{ tick: number; pitch: number; alt: boolean } | null>(null);
 
   /** The pattern being edited (the track's current pattern). */
   const pat = $derived(currentPattern(track));
@@ -162,10 +183,22 @@
   /** "Key: A min" (the Note names style applies to the root). */
   const keyText = $derived(`${pitchClassName(p.key.root)} ${SCALES[p.key.scale].short}`);
   const outOfKey = $derived(notes.filter((n) => !inKey(n.pitch, p.key)).length);
+  const chordLabel = $derived(CHORD_TYPES.find((c) => c.id === chordType)?.label ?? chordType);
+  const invText = $derived(chordInv ? `inversion ${chordInv}` : 'root position');
+  /** Where a click would place the chord, and its pitches: what the ghost shows (chord mode only). */
+  const ghost = $derived.by(() => {
+    if (!chordOn || !hoverCell || hoverCell.tick >= total) return null;
+    const { tick, pitch, alt } = hoverCell;
+    return { start: alt ? Math.round(tick) : snapFloor(tick, grid), len: grid, pitches: chordStampPitches(pitch, chordType, chordInv, p.key, snapKey) };
+  });
 
   const readoutText = $derived.by(() => {
     if (hint) return hint;
     if (velShown !== null) return `Velocity ${velShown}`;
+    if (chordOn) {
+      return ghost ? `${chordLabel} · ${ghost.pitches.map((pt) => noteName(pt)).join(' ')} · click to place`
+        : `Chord: ${chordLabel}, ${invText} · click to place, Esc to leave`;
+    }
     if (selNotes.length === 1) {
       const n = selNotes[0];
       return `${readout(n, gridKey)} · vel ${n.vel}${n.start >= total ? ' · past the end (silent)' : ''}`;
@@ -352,6 +385,19 @@
         ctx.fillText(noteName(n.pitch), Math.max(x0, KEYS_W) + 3, y + v.rowH / 2 + 0.5);
         ctx.globalAlpha = 1;
       }
+    }
+    if (ghost) { // the chord stamp's ghost: outlined, faint, dashed
+      const gx0 = tickToX(ghost.start, v);
+      const gw = Math.max(2, tickToX(ghost.start + ghost.len, v) - gx0 - 1);
+      ctx.setLineDash([3, 2]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = C.playhead;
+      for (const pt of ghost.pitches) {
+        const y = top + pitchToY(pt, v);
+        fillA(ctx, color, 0.3, gx0 + 0.5, y + 1, gw, v.rowH - 2);
+        ctx.strokeRect(gx0 + 1, y + 1.5, Math.max(1, gw - 1), v.rowH - 3);
+      }
+      ctx.setLineDash([]);
     }
     if (box) {
       ctx.strokeStyle = C.accent;
@@ -648,6 +694,7 @@
           flashHint('Past the pattern end — raise Length to draw there');
           return;
         }
+        if (chordOn) return stamp(tick, pitch, e.altKey);
         const n = addNote(p, engine, track.id, {
           pitch: movedPitch(pitch, 0, snapKey), start: e.altKey ? Math.round(tick) : snapFloor(tick, grid), len: grid, vel: 100,
         });
@@ -663,11 +710,24 @@
     canvas.setPointerCapture(e.pointerId);
   }
 
+  /** Chord mode: place the chord on `pitch`'s row at `tick` (one "Add chord" entry), select it. No drag follows. */
+  function stamp(tick: number, pitch: number, alt: boolean) {
+    const pitches = chordStampPitches(pitch, chordType, chordInv, p.key, snapKey);
+    const start = alt ? Math.round(tick) : snapFloor(tick, grid);
+    const added = addNotes(p, engine, track.id, pitches.map((pt) => ({ pitch: pt, start, len: grid, vel: 100 })), 'Add chord');
+    if (!added) {
+      flashHint(`Pattern is full: no room for this ${pitches.length}-note chord (${MAX_NOTES} notes max)`);
+      return;
+    }
+    selected = new Set(added.map((n) => n.id));
+    hoverCell = null; // the chord is under the pointer now: no ghost over it until the next move
+  }
+
   function move(e: PointerEvent) {
     if (!view) return;
     const v = view;
     const { x, y, ny } = local(e);
-    if (!drag) return hover(x, y, ny);
+    if (!drag) return hover(x, y, ny, e.altKey);
     if (drag.kind === 'key') {
       const pt = clampPitch(yToPitch(Math.min(noteH - 1, Math.max(0, ny)), v));
       if (pt !== auditionPitch) audition(pt, e.timeStamp);
@@ -723,14 +783,16 @@
     }
   }
 
-  function hover(x: number, y: number, ny: number) {
+  function hover(x: number, y: number, ny: number, alt: boolean) {
     const v = view!;
     const reg = region(x, y);
     hoverPitch = reg === 'keys' || reg === 'notes' ? clampPitch(yToPitch(ny, v)) : null;
+    hoverCell = null;
     if (reg === 'keys') cursor = 'pointer';
     else if (reg === 'notes') {
       const hit = hitTest(drawOrder, x, ny, v);
       cursor = hit ? (hit.part === 'end' ? 'ew-resize' : 'move') : 'crosshair';
+      if (!hit) hoverCell = { tick: xToTick(x, v), pitch: clampPitch(yToPitch(ny, v)), alt };
     } else if (reg === 'vel') cursor = stemsAt(x).size ? 'ns-resize' : 'default';
     else cursor = 'default';
   }
@@ -822,6 +884,7 @@
     if (e.key === 'Escape') {
       take();
       if (drag) cancel();
+      else if (chordOn) chordOn = false;
       else selected = new Set();
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && !cmd && !e.altKey) {
       take();
@@ -850,6 +913,12 @@
   function setGrid(k: GridKey) {
     gridKey = lastGrid = k;
     refocus();
+  }
+  function setChord(o: { type: ChordType; inversion: number }) {
+    chordType = o.type;
+    chordInv = o.inversion;
+    lastChord = { ...o };
+    chordOn = true;
   }
   function fitToKey() {
     const moved = fitNotesToKey(p, engine, track.id);
@@ -1011,6 +1080,22 @@
       onclick={() => { setSnapToKey(!snapToKey.on); refocus(); }}>
       <Icon icon={Magnet} /><span class="t2"> Snap to key</span>
     </button>
+    <div class="split" role="group" aria-label="Chord stamp">
+      <button data-testid="pr-chord" aria-pressed={chordOn} aria-label="Chord" class:on={chordOn}
+        title="Chord: click the grid to place a {chordLabel} chord ({invText}) instead of one note; Esc leaves ({chordOn ? 'on' : 'off'})"
+        onclick={() => { chordOn = !chordOn; refocus(); }}>
+        <Icon icon={MusicNotes} /><span class="t2"> Chord</span>
+      </button>
+      <PopButton id="pr-chord-pop-{track.id}" label="Chord type and inversion" testid="pr-chord-pop">
+        {#snippet trigger(a)}
+          <button {...a} class="caret" data-testid="pr-chord-opts" aria-label="Chord type and inversion: {chordLabel}, {invText}"
+            title="Chord type ({chordLabel}) and inversion ({invText})">▾</button>
+        {/snippet}
+        {#snippet children()}
+          <ChordCard type={chordType} inversion={chordInv} onpick={setChord} />
+        {/snippet}
+      </PopButton>
+    </div>
     <button data-testid="pr-quantize" aria-label="Quantize {selNotes.length ? `${selNotes.length} selected` : 'all'}"
       title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
       <Icon icon={MagnetStraight} /><span class="t"> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}</span>
@@ -1097,6 +1182,7 @@
       bind:this={canvas}
       data-testid="pr-canvas"
       data-view={view ? JSON.stringify({ ...view, rulerH: RULER_H, velTop }) : ''}
+      data-ghost={ghost ? ghost.pitches.join(',') : ''}
       style:cursor
       onpointerdown={down}
       oncontextmenu={(e) => e.preventDefault()}
@@ -1104,7 +1190,7 @@
       onpointerup={up}
       onpointercancel={cancel}
       onlostpointercapture={cancel}
-      onpointerleave={() => { if (!drag) hoverPitch = null; }}
+      onpointerleave={() => { if (!drag) { hoverPitch = null; hoverCell = null; } }}
     ></canvas>
   </div>
 </div>
@@ -1150,7 +1236,11 @@
      picker's Duplicate. */
   @media (max-width: 1439px) { .t { display: none; } }
   @media (max-width: 1679px) { .t2 { display: none; } }
-  /* Snap to key: a toggle; on = the accent, like a lit step. */
+  /* The chord stamp: the toggle and its ▾ options as one split button. */
+  .split { display: flex; gap: 1px; }
+  .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .bar .split .caret { padding: 2px 4px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  /* Snap to key, Chord: toggles; on = the accent, like a lit step. */
   .bar button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
   /* The readout takes what the row has left (at least 120 px before it
      wraps: its flex-basis, which is what line breaking measures), up to its

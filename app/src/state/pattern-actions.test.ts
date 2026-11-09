@@ -5,12 +5,15 @@ import type { DrumPattern, NotePatternState } from './project.svelte';
 import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import {
-  GRID_TICKS, addNote, clearPattern, deleteNotes, deletePattern, duplicatePattern, newPattern, patternTicks,
+  GRID_TICKS, addNote, addNotes, clearPattern, deleteNotes, deletePattern, duplicatePattern, newPattern, patternTicks,
   quantizeNotes, renamePattern, selectPattern, setPatternBars, updateNotes,
 } from './pattern-actions';
 import { setStepCount, setSwing, toggleStep } from './actions';
 import { addClip, deleteClips } from './song-actions';
 import { MAX_PATTERNS } from '../audio/protocol';
+import { createHistory } from '../history/history';
+import { diffApply } from '../history/diffApply';
+import { serialize } from '../project/serialize';
 
 function setup() {
   const sent: number[][] = [];
@@ -308,5 +311,56 @@ describe('pattern CRUD', () => {
     expect(sent).toEqual([[Op.SET_CURRENT_PATTERN, t.slot, 0, 0, 0], [Op.CLEAR_PATTERN_DATA, t.slot, 2, 0, 0]]);
     // The freed index is reused.
     expect((newPattern(p, sink, t.id) as NotePatternState).engineIdx).toBe(1);
+  });
+});
+
+describe('addNotes (the chord stamp: plan 26 Task 2)', () => {
+  /** setup() with history installed as App does it. */
+  function withHistory() {
+    const x = setup();
+    const h = createHistory({ snapshot: () => serialize(x.p), apply: (from, to) => diffApply(x.p, x.sink, from, to) });
+    x.p.history = h;
+    return { ...x, h };
+  }
+  const chord = (pitches: number[], start = 0) => pitches.map((pitch) => ({ pitch, start, len: 240 }));
+
+  it('adds every note as ONE undo entry, sends each, takes the lowest free idxs', () => {
+    const x = withHistory();
+    addNote(x.p, x.sink, x.t.id, { pitch: 40, start: 0, len: 240 }); // idx 0
+    x.sent.length = 0;
+    const added = addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64, 67], 480), 'Add chord')!;
+    expect(added.map((n) => [n.pitch, n.start, n.len, n.vel, n.idx])).toEqual([
+      [57, 480, 240, 100, 1], [60, 480, 240, 100, 2], [64, 480, 240, 100, 3], [67, 480, 240, 100, 4],
+    ]);
+    expect(x.sent.map((c) => c[0])).toEqual([Op.NOTE_SET, Op.NOTE_SET, Op.NOTE_SET, Op.NOTE_SET]);
+    expect(x.h.labels.undo).toBe('Add chord');
+    x.h.undo();
+    expect(currentPattern(x.t).notes.map((n) => n.pitch)).toEqual([40]);
+    x.h.redo();
+    expect(currentPattern(x.t).notes.map((n) => n.pitch)).toEqual([40, 57, 60, 64, 67]);
+  });
+
+  it('all or nothing: refused (null, nothing sent, no entry) when fewer slots are free than notes', () => {
+    const x = withHistory();
+    for (let i = 0; i < MAX_NOTES - 3; i++) addNote(x.p, x.sink, x.t.id, { pitch: i % 128, start: 0, len: 10 });
+    const before = x.h.labels.undo;
+    x.sent.length = 0;
+    expect(addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64, 67]))).toBeNull();
+    expect(currentPattern(x.t).notes).toHaveLength(MAX_NOTES - 3);
+    expect(x.sent).toEqual([]);
+    expect(x.h.labels.undo).toBe(before);
+    expect(x.h.canUndo).toBe(true);
+    // Three still fit.
+    expect(addNotes(x.p, x.sink, x.t.id, chord([57, 60, 64]))).toHaveLength(3);
+    expect(currentPattern(x.t).notes).toHaveLength(MAX_NOTES);
+  });
+
+  it('clamps like addNote; an empty list or a drum track adds nothing', () => {
+    const x = setup();
+    const [n] = addNotes(x.p, x.sink, x.t.id, [{ pitch: 200, start: -5, len: 0, vel: 0 }])!;
+    expect([n.pitch, n.start, n.len, n.vel]).toEqual([127, 0, 1, 1]);
+    expect(addNotes(x.p, x.sink, x.t.id, [])).toEqual([]);
+    const d = addDrumTrack(x.p, x.sink)!;
+    expect(addNotes(x.p, x.sink, d.id, chord([60]))).toBeNull();
   });
 });

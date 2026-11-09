@@ -11,9 +11,10 @@ notes in it without the user knowing any theory.
 | The key in the project | `Project.key` (`state/project.svelte.ts`), project.json `key` (schema 6, projects.md) |
 | Changing it | `state/key-actions.ts` `setKey` / `applyKey` / `keyCommands` |
 | Transpose, Fit to key | `state/pattern-actions.ts` `transposeNotes`, `fitNotesToKey` |
+| Chord stamp | `state/pattern-actions.ts` `addNotes`, `ui/pianoroll/prMath.ts` `chordStampPitches`, `ChordCard.svelte` |
 | Roll maths | `ui/pianoroll/prMath.ts` `keyRow`, `movedPitch` |
 | Snap to key pref | `ui/pianoroll/snapToKey.svelte.ts` (localStorage `daw.snapToKey`) |
-| UI | `ui/pianoroll/PianoRoll.svelte`, `KeyCard.svelte`, `TransposeCard.svelte` |
+| UI | `ui/pianoroll/PianoRoll.svelte`, `KeyCard.svelte`, `TransposeCard.svelte`, `ChordCard.svelte` |
 
 ## The key model
 
@@ -130,6 +131,37 @@ too) to `nearestInKey` (ties up). One "Fit to key" undo entry; disabled (and
 a no-op with no entry) when nothing is out of key, e.g. any chromatic key.
 The readout says how many notes moved.
 
+**Chord stamp** (plan 26 Task 2). The toolbar's **Chord** toggle
+(`pr-chord`, aria-pressed) turns chord mode on; its **▾** (`pr-chord-opts`)
+opens `ChordCard`: the chord type (`pr-chord-type`, `CHORD_TYPES`, In key
+by default) and the inversion (`pr-chord-inv`, root position ..
+3rd). Picking either also turns chord mode on (*my call*: you pick a chord
+to place it). The type and inversion last the session (like the grid
+size); chord mode itself starts off whenever the roll opens.
+
+- **Ghost.** In chord mode, hovering an empty cell of the grid shows the
+  chord there: one faint, dashed note per pitch, one grid cell long from
+  the cell's start (Alt: unsnapped). The readout names it ("In key · A3 C4
+  E4 G4 · click to place"); the canvas carries the pitches as `data-ghost`
+  (e2e). No ghost over an existing note (a press there still moves or
+  resizes it) or past the pattern end.
+- **Click** places every note of the ghost, velocity 100, as ONE "Add
+  chord" undo entry (`addNotes`), and selects them. No drag follows the
+  click (a drawn single note's follow-up drag would, with Snap to key, snap
+  each chord note on its own and bend the chord).
+- **Pitches:** `prMath.chordStampPitches(row, type, inversion, key,
+  snapKey)` = `voiceChord` in the project key. With **Snap to key** on, a
+  fixed type's root first snaps to the key (`nearestInKey`, ties up: C#4 →
+  D4, then D major as is, even if that has out-of-key notes); In key
+  already builds on the key, so the toggle changes nothing for it.
+- **The cap.** `addNotes` is all or nothing: when the pattern has fewer
+  free slots than the chord has notes (`MAX_NOTES`, 1024), nothing is
+  placed and the readout says "Pattern is full: no room for this 4-note
+  chord (1024 notes max)".
+- **Escape** cancels a drag first, else leaves chord mode, else clears the
+  selection. Shift (box select, toggle) and right-click (delete) work as
+  in draw mode.
+
 **Toolbar width.** The roll's toolbar stays one row at 1280 px
 (`theory.spec` "layout at 1280"): Snap to key, Transpose… and Fit to key are
 icon-only below 1680 px; Quantize, Humanize… and Clear below 1440 px (each
@@ -146,6 +178,12 @@ has the whole of it.
   `ui/pianoroll/prMath.test.ts` (`keyRow`, `movedPitch`),
   `project/migrate.test.ts` (v5 → v6), `schema.test.ts` (validation),
   `load.test.ts` (round trip, New).
+- Chord stamp: `ui/pianoroll/prMath.test.ts` (`chordStampPitches`: In
+  key, Snap to key, inversions, the top edge), `state/pattern-actions.test.ts`
+  (`addNotes`: one entry, all or nothing at the cap, clamping); e2e
+  `tests/e2e/chord-stamp.spec.ts` (Am7 on A3 in one undo, Esc, m9 first
+  inversion, the ghost's notes, a near-full pattern refusing, the toolbar on
+  one row at 1280 / 1440 / 1680).
 - e2e `tests/e2e/theory.spec.ts`: the highlight read off the canvas pixels
   (A minor, D major, chromatic), Snap to key drawing and dragging, the pref
   across a reload, Transpose +3 with one undo, Fit to key, the key across

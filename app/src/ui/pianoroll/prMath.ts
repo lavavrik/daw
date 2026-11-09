@@ -8,8 +8,8 @@
 // The component subtracts the ruler height from pointer y before calling these.
 import { GRID_TICKS } from '../../state/pattern-actions';
 import { NOTE_NAMES, noteName } from '../noteName';
-import { inKey, isKeyRoot, nearestInKey } from '../../music/scales';
-import type { MusicKey } from '../../music/scales';
+import { inKey, isKeyRoot, nearestInKey, voiceChord } from '../../music/scales';
+import type { ChordType, MusicKey } from '../../music/scales';
 
 export interface View {
   /** Horizontal zoom: ticks per CSS pixel (960 PPQ). */
@@ -161,6 +161,21 @@ export function keyRow(p: number, key: MusicKey): 'root' | 'in' | 'out' | null {
 export function movedPitch(from: number, dp: number, key: MusicKey | null): number {
   if (!key) return from + dp;
   return nearestInKey(from + dp, key, dp > 0 ? 'up' : dp < 0 ? 'down' : undefined);
+}
+
+/**
+ * The pitches the chord stamp (plan 26 Task 2) places when `pitch`'s row is
+ * clicked: scales.ts voiceChord of `type` / `inversion` in the project key.
+ * `snapKey` (Snap to key on, else null) snaps the root of a fixed type to
+ * the key first (nearest, ties up), as a drawn note; 'inKey' needs no snap
+ * (voiceChord already builds it on the key's own degree). Ascending, inside
+ * 0..127 (may be fewer than the type's notes at the keyboard's top).
+ */
+export function chordStampPitches(
+  pitch: number, type: ChordType, inversion: number, key: MusicKey, snapKey: MusicKey | null,
+): number[] {
+  const root = snapKey && type !== 'inKey' ? nearestInKey(pitch, snapKey) : pitch;
+  return voiceChord(root, type, inversion, key);
 }
 
 // ---- view --------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor,
+  chordStampPitches, clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor,
   tickToX, xToTick, yToPitch, zoomAt,
 } from './prMath';
 import type { View } from './prMath';
@@ -184,5 +184,30 @@ describe('the key (plan 26)', () => {
     expect(movedPitch(64, 1, amin)).toBe(65); // E -> F: in key
     expect(movedPitch(60, 12, amin)).toBe(72);
     expect(movedPitch(127, 3, amin)).toBe(127);
+  });
+});
+
+describe('chordStampPitches (the chord stamp)', () => {
+  const amin = { root: 9, scale: 'minor' } as const;
+  const cmaj = { root: 0, scale: 'major' } as const;
+  it('In key on A3 in A minor is Am7; on an off-key row it builds on the key (no snap needed)', () => {
+    expect(chordStampPitches(57, 'inKey', 0, amin, null)).toEqual([57, 60, 64, 67]);
+    expect(chordStampPitches(57, 'inKey', 0, amin, amin)).toEqual([57, 60, 64, 67]);
+    expect(chordStampPitches(58, 'inKey', 0, amin, null)).toEqual(chordStampPitches(59, 'inKey', 0, amin, null)); // A#3 -> B3 (tie up): Bm7b5
+    expect(chordStampPitches(59, 'inKey', 0, amin, null)).toEqual([59, 62, 65, 69]);
+  });
+  it('a fixed type plays on the clicked row; Snap to key snaps its root first (nearest, ties up)', () => {
+    expect(chordStampPitches(61, 'maj', 0, amin, null)).toEqual([61, 65, 68]); // C# major, as clicked
+    expect(chordStampPitches(61, 'maj', 0, amin, amin)).toEqual([62, 66, 69]); // root C# -> D (tie up), then D major
+    expect(chordStampPitches(66, 'min', 0, cmaj, cmaj)).toEqual([67, 70, 74]); // F# -> G (tie up): G minor (not snapped inside)
+    expect(chordStampPitches(60, 'maj', 0, amin, amin)).toEqual([60, 64, 67]); // already in key
+  });
+  it('inversions: m9 on A3, first inversion moves the A up an octave', () => {
+    expect(chordStampPitches(57, 'm9', 0, amin, null)).toEqual([57, 60, 64, 67, 71]);
+    expect(chordStampPitches(57, 'm9', 1, amin, null)).toEqual([60, 64, 67, 69, 71]);
+    expect(chordStampPitches(57, 'm9', 3, amin, null)).toEqual([67, 69, 71, 72, 76]);
+  });
+  it('notes past 127 are dropped', () => {
+    expect(chordStampPitches(125, 'maj', 0, amin, null)).toEqual([125]);
   });
 });

@@ -52,34 +52,68 @@ function target(p: Project, trackId: string, patternId?: string) {
   return { t, pat };
 }
 
+type NewNote = { pitch: number; start: number; len: number; vel?: number };
+
+/**
+ * Pushes `o` (clamped) into `pat` at engine idx `idx` and sends it; returns
+ * the reactive proxy. The shared body of addNote / addNotes.
+ */
+function pushNote(sink: CommandSink, t: SynthTrack, pat: NotePatternState, idx: number, o: NewNote): Note {
+  pat.notes.push({
+    id: crypto.randomUUID(),
+    idx,
+    pitch: clampInt(o.pitch, 0, 127),
+    vel: clampInt(o.vel ?? 100, 1, 127),
+    start: clampInt(o.start, 0, patternTicks(t) - 1),
+    len: clampInt(o.len, 1, MAX_NOTE_LEN),
+  });
+  const n = pat.notes[pat.notes.length - 1]; // reactive proxy
+  sendNote(sink, t, n);
+  return n;
+}
+
+/** The `count` lowest free engine idxs of `pat`, or null when fewer are free. */
+function freeIdxs(pat: NotePatternState, count: number): number[] | null {
+  const used = new Set(pat.notes.map((n) => n.idx));
+  const out: number[] = [];
+  for (let idx = 0; idx < MAX_NOTES && out.length < count; idx++) if (!used.has(idx)) out.push(idx);
+  return out.length === count ? out : null;
+}
+
 /**
  * Adds to the current pattern (`patternId`: only if that one is current).
  * Lowest free engine idx (per pattern), or null when all MAX_NOTES are used.
  */
 export function addNote(
   p: Project, sink: CommandSink, trackId: string,
-  o: { pitch: number; start: number; len: number; vel?: number },
+  o: NewNote,
   patternId?: string,
 ): Note | null {
   return edit(p, 'Add note', () => {
     const tp = target(p, trackId, patternId);
     if (!tp) return null;
-    const { t, pat } = tp;
-    const used = new Set(pat.notes.map((n) => n.idx));
-    let idx = 0;
-    while (idx < MAX_NOTES && used.has(idx)) idx++;
-    if (idx >= MAX_NOTES) return null;
-    pat.notes.push({
-      id: crypto.randomUUID(),
-      idx,
-      pitch: clampInt(o.pitch, 0, 127),
-      vel: clampInt(o.vel ?? 100, 1, 127),
-      start: clampInt(o.start, 0, patternTicks(t) - 1),
-      len: clampInt(o.len, 1, MAX_NOTE_LEN),
-    });
-    const n = pat.notes[pat.notes.length - 1]; // reactive proxy
-    sendNote(sink, t, n);
-    return n;
+    const idx = freeIdxs(tp.pat, 1);
+    return idx ? pushNote(sink, tp.t, tp.pat, idx[0], o) : null;
+  });
+}
+
+/**
+ * Adds several notes to the current pattern as ONE undo entry (plan 26 Task
+ * 2: the piano roll's chord stamp). All or nothing: when the pattern has
+ * fewer than `notes.length` free slots (MAX_NOTES) nothing is added and the
+ * result is null, as for an unknown / drum track; the caller says why. An
+ * empty list adds nothing (no entry) and returns []. Each note is clamped
+ * as addNote does; they take the lowest free engine idxs, in order.
+ */
+export function addNotes(
+  p: Project, sink: CommandSink, trackId: string, notes: NewNote[], label = 'Add notes',
+): Note[] | null {
+  return edit(p, label, () => {
+    const tp = target(p, trackId);
+    if (!tp) return null;
+    const idxs = freeIdxs(tp.pat, notes.length);
+    if (!idxs) return null;
+    return notes.map((o, i) => pushNote(sink, tp.t, tp.pat, idxs[i], o));
   });
 }
 

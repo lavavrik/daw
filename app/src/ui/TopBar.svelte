@@ -64,7 +64,9 @@
   // jumps, double-click 0 dB, typed entry, arrows, Esc / Cmd+Z cancel, the
   // automation follow (registered on the auto bus as the Master strip's
   // Fader is: a master fader lane moves it while it plays, and a drag
-  // overrides it) and the Automate / MIDI-learn menu.
+  // overrides it) and, on right-click, the precise-value popover (plan 24,
+  // ui/ValuePopover.svelte: "0" sets 0.0 dB, "-inf" silence) with the
+  // Automate / MIDI-learn items under it.
   //
   // MINI SPECTRUM (`topbar-spectrum`): a 20-band view of the master on the
   // analyser bus (ui/vis/Spectrum.svelte, no labels) on an --lcd well; a

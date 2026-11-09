@@ -702,17 +702,24 @@ test('Automate menu from the keyboard; the 64-lane cap', async ({ page }) => {
   await start(page);
   await page.getByTestId('mixer-tab').click();
   const menu = page.getByTestId('auto-ctl-menu');
+  const pop = page.getByTestId('value-popover');
   const mf = page.getByTestId('strip-master').getByTestId('fader');
-  // Shift+F10 on the focused fader opens the menu with its item focused; Escape gives focus back.
+  // Shift+F10 on the focused fader opens the precise-value card (plan 24) with
+  // the menu as its lower half: the value field has the focus, Tab past Set
+  // and Reset reaches "Automate"; Escape gives focus back.
   await mf.focus();
   await page.keyboard.press('Shift+F10');
   await expect(menu).toBeVisible();
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
   await expect(page.getByTestId('auto-ctl-automate')).toBeFocused();
-  const box = (await menu.boundingBox())!;
+  const box = (await pop.boundingBox())!;
   const fb = (await mf.boundingBox())!;
   expect(Math.abs(box.x - fb.x)).toBeLessThan(40); // placed at the control, not at the window's corner
   await page.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
+  await expect(pop).toHaveCount(0);
   await expect(mf).toBeFocused();
   // 64 lanes: 32 tracks with a Fader and a Pan lane each.
   await page.evaluate(() => {
@@ -728,7 +735,8 @@ test('Automate menu from the keyboard; the 64-lane cap', async ({ page }) => {
   // The ContextMenu key, Enter on "Automate": refused with the reason, nothing added.
   await mf.focus();
   await page.keyboard.press('ContextMenu');
-  await expect(page.getByTestId('auto-ctl-automate')).toBeFocused();
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await page.getByTestId('auto-ctl-automate').focus();
   await page.keyboard.press('Enter');
   await expect(page.getByTestId('flash-hint')).toContainText('at most 64');
   expect(await savedLanes(page, 'master')).toEqual([]);

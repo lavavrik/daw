@@ -29,15 +29,21 @@
   // double-click first overrides the lane (Song mode) until its next point,
   // then sets the base (one undo entry); a drag and the arrows start from
   // the heard value. Escape mid-drag restores the base without a new
-  // override. Right-click, the ContextMenu key or Shift+F10: "Automate" /
-  // "Show automation", then "MIDI learn" / "Forget MIDI (CC 7)" (plan 14,
-  // as Knob.svelte: the learn target pulses, a mapped fader shows a "CC"
-  // tag `<testid>-cc` and its title (the accessible description) says "MIDI CC 7").
+  // override. Right-click, the ContextMenu key or Shift+F10 open the
+  // precise-value popover (plan 24, ui/ValuePopover.svelte, as Knob.svelte):
+  // the value in dB through the catalog's fader def ("-6", "-inf" = silence),
+  // Set / Reset (0 dB), then the control menu that used to open here alone,
+  // "Automate" / "Show automation" and "MIDI learn" / "Forget MIDI (CC 7)"
+  // (plan 14: the learn target pulses, a mapped fader shows a "CC" tag
+  // `<testid>-cc` and its title (the accessible description) says "MIDI CC 7").
+  // A popover's Set is one edit through `change` (override, then onchange):
+  // one undo entry, like a key or a drag.
   import { onDestroy, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
-  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { closeValuePopover, openValuePopover } from '../ValuePopover.svelte';
+  import { mixParam } from '../../audio/mixerCatalog';
   import { isLearning } from '../midiLearn.svelte';
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
@@ -133,20 +139,28 @@
   const cc = $derived(bus && auto ? bus.midiCc(auto.owner, auto.target) : null);
   const ccNote = $derived(cc !== null ? ` — MIDI CC ${cc}` : '');
 
-  /** The control menu at (x, y), or beside the fader (keyboard); false when it would have no item. */
-  function menuAt(x: number | null, y: number | null): boolean {
-    if (!bus || !auto) return false;
-    const items = menuItems(bus, auto.owner, auto.target);
-    if (!items.automate && !items.midi) return false;
+  /** The catalog's fader param (dB, the fader law, "-inf" at the bottom): the popover's text and range. */
+  const DEF = mixParam('fader');
+  /** The precise-value popover at (x, y), or beside the fader (keyboard). */
+  function popoverAt(x: number | null, y: number | null) {
     const r = el?.getBoundingClientRect();
-    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: el });
-    return true;
+    openValuePopover({
+      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def: DEF, value,
+      apply: change, from: el, auto: bus && auto ? auto : null,
+    });
   }
   function context(e: MouseEvent) {
+    e.preventDefault();
+    if (dragging) return;
     // A keyboard-made contextmenu event has no pointer position: place it at the fader.
     const kbd = e.clientX === 0 && e.clientY === 0;
-    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
+    popoverAt(kbd ? null : e.clientX, kbd ? null : e.clientY);
   }
+  // A popover opened from this fader closes with it (its apply would edit a fader that is gone).
+  $effect(() => {
+    const f = el;
+    return () => { if (f) closeValuePopover(f); };
+  });
 
   function send(v: number) {
     if (v === lastSent) return;
@@ -217,7 +231,8 @@
 
   function key(e: KeyboardEvent) {
     if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
-      if (!dragging && menuAt(null, null)) e.preventDefault();
+      e.preventDefault(); // no native menu (nor a contextmenu event after it)
+      if (!dragging) popoverAt(null, null);
       return;
     }
     if (dragging) {
@@ -254,7 +269,7 @@
     aria-valuetext={ariaAuto !== null ? `${formatDb(ariaAuto)}, automated (base ${readout})` : readout}
     title={(automated
       ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
-      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = 0 dB, arrows = ±1 dB${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
+      : `${name}: ${readout} — drag up/down (Shift = fine), double-click = 0 dB, arrows = ±1 dB, right-click = exact value${autoStatus ? ' / Automate' : ''}`) + ccNote}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
     class:auto-off={automated && autoStatus !== 'on'}

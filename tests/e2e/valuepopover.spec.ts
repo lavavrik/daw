@@ -179,3 +179,148 @@ test('it stays inside the window near the right and bottom edges', async ({ page
     await expect(pop).toHaveCount(0);
   }
 });
+
+// ---- plan 24 Task 2: faders, track volume, master, the step grid's sliders ----
+
+/** The default project: the drum track (slot 0) selected, its step grid open. */
+async function home(page: Page) {
+  await page.goto('/');
+  await startApp(page);
+  await expect(page.getByTestId('step-0-0')).toBeVisible();
+  return page.evaluate(() => (window as Any).__daw.project.tracks[0].slot as number);
+}
+const mixDb = (page: Page, slot: number | 'master') =>
+  page.evaluate((s) => {
+    const m = (window as Any).__daw.project.mixer;
+    return (s === 'master' ? m.master : m.channels[(window as Any).__daw.project.tracks.find((t: Any) => t.slot === s).id]).params[0] as number;
+  }, slot);
+const row0 = (page: Page) => page.evaluate(() => {
+  const t = (window as Any).__daw.project.tracks[0];
+  const pat = t.patterns.find((x: Any) => x.id === t.patternId) ?? t.patterns[0];
+  return { gain: t.rows[0].gain as number, pan: t.rows[0].pan as number, swing: pat.swing as number };
+});
+
+/** Right-click `ctl`, type `text`, Enter: the popover closes. */
+async function enter(page: Page, ctl: ReturnType<Page['getByTestId']>, text: string) {
+  await ctl.click({ button: 'right' });
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await page.keyboard.type(text);
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('value-popover')).toHaveCount(0);
+}
+
+test('mixer fader: "-6" sets −6.0 dB, "-inf" mutes, each one undo entry; the menu items are kept', async ({ page }) => {
+  const slot = await home(page);
+  await page.getByTestId('mixer-tab').click();
+  const strip = page.getByTestId(`strip-${slot}`);
+  const fader = strip.getByTestId('fader');
+  const readout = strip.getByTestId('fader-readout');
+  await expect(readout).toHaveText('0.0 dB');
+  await fader.click({ button: 'right' });
+  const pop = page.getByTestId('value-popover');
+  await expect(pop).toContainText('−∞ … +6.0 dB');
+  await expect(page.getByTestId('value-input')).toHaveValue('0.0');
+  await expect(pop.getByText('dB', { exact: true })).toBeVisible();
+  // The fader's own menu is the lower half.
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Automate');
+  await expect(page.getByTestId('auto-ctl-midi')).toHaveText('MIDI learn');
+  await page.keyboard.type('-6');
+  await page.keyboard.press('Enter');
+  await expect(pop).toHaveCount(0);
+  await expect(readout).toHaveText('−6.0 dB');
+  await expect(fader).toBeFocused();
+  expect(await mixDb(page, slot)).toBe(-6);
+  await enter(page, fader, '-inf');
+  await expect(readout).toHaveText('−∞');
+  expect(await mixDb(page, slot)).toBe(-60);
+  // One undo entry each.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(readout).toHaveText('−6.0 dB');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(readout).toHaveText('0.0 dB');
+});
+
+test('a track header volume: "-12" shows −12.0 dB on the mixer strip', async ({ page }) => {
+  const slot = await home(page);
+  const vol = page.getByTestId(`track-vol-${slot}`);
+  await vol.click({ button: 'right' });
+  await expect(page.getByTestId('value-popover')).toContainText(/volume/i);
+  await expect(page.getByTestId('auto-ctl-automate')).toHaveText('Automate');
+  await page.keyboard.type('-12');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('value-popover')).toHaveCount(0);
+  await expect(vol).toBeFocused();
+  expect(await mixDb(page, slot)).toBe(-12);
+  await page.getByTestId('mixer-tab').click();
+  await expect(page.getByTestId(`strip-${slot}`).getByTestId('fader-readout')).toHaveText('−12.0 dB');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByTestId(`strip-${slot}`).getByTestId('fader-readout')).toHaveText('0.0 dB');
+});
+
+test('the top bar Master: "0" sets 0.0 dB', async ({ page }) => {
+  await home(page);
+  const master = page.getByTestId('master-volume');
+  await enter(page, master, '-10');
+  await expect(master.getByTestId('knob-readout')).toHaveText('−10.0 dB');
+  await enter(page, master, '0');
+  await expect(master.getByTestId('knob-readout')).toHaveText('0.0 dB');
+  expect(await mixDb(page, 'master')).toBe(0);
+});
+
+test('step grid: row gain "1.5", row pan "L25" (−0.25), swing "60" (60 %)', async ({ page }) => {
+  await home(page);
+  const row = page.getByTestId('row-0');
+  const gain = row.getByRole('slider', { name: /^Gain / });
+  const pan = row.getByRole('slider', { name: /^Pan / });
+  const swing = page.getByTestId('swing');
+
+  await gain.click({ button: 'right' });
+  await expect(page.getByTestId('value-input')).toHaveValue('1');
+  await expect(page.getByTestId('value-popover')).toContainText('0 … 2');
+  await expect(page.getByTestId('auto-ctl-menu')).toHaveCount(0); // no menu items
+  await page.keyboard.type('1.5');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await row0(page)).gain).toBe(1.5);
+  await expect(row.locator('.gain .val')).toHaveText('1.50');
+  await expect(gain).toBeFocused();
+
+  await enter(page, pan, 'L25');
+  await expect.poll(async () => (await row0(page)).pan).toBe(-0.25);
+  await expect(row.locator('.pan .val')).toHaveText('L 25');
+  // Reset: back to centre.
+  await pan.click({ button: 'right' });
+  await expect(page.getByTestId('value-input')).toHaveValue('L25');
+  await page.getByTestId('value-reset').click();
+  await expect.poll(async () => (await row0(page)).pan).toBe(0);
+
+  await enter(page, swing, '60');
+  await expect.poll(async () => (await row0(page)).swing).toBe(0.6);
+  await expect(page.locator('.pct')).toHaveText('60%');
+  // A finer value snaps to the slider's 1 % step; one undo entry.
+  await enter(page, swing, '33.3');
+  await expect.poll(async () => (await row0(page)).swing).toBe(0.33);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => (await row0(page)).swing).toBe(0.6);
+  // The keyboard: Shift+F10 on the focused slider opens it there.
+  await swing.focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await expect(page.getByTestId('value-input')).toHaveValue('60');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('value-popover')).toHaveCount(0);
+  await expect(swing).toBeFocused();
+});
+
+test('one popover at a time: opening a second closes the first', async ({ page }) => {
+  const slot = await home(page);
+  const pop = page.getByTestId('value-popover');
+  await page.getByTestId(`track-vol-${slot}`).click({ button: 'right' });
+  await expect(pop).toContainText(/volume/i);
+  await page.getByTestId('swing').click({ button: 'right' });
+  await expect(pop).toHaveCount(1);
+  await expect(pop.locator('.ttl')).toHaveText('Swing');
+  await expect(page.getByTestId('value-input')).toHaveValue('0');
+  await page.getByTestId('master-volume').click({ button: 'right' });
+  await expect(pop).toHaveCount(1);
+  await expect(pop.locator('.ttl')).toHaveText('Master');
+});

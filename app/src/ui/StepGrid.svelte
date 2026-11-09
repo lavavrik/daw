@@ -20,6 +20,15 @@
   // have no MIDI-learn or automation for the Knob slider variant to keep, and
   // a native drag is already one undo entry (history/gestures.ts).
   //
+  // Precise value (plan 24, ui/ValuePopover.svelte): right-click, the
+  // ContextMenu key or Shift+F10 on a row's gain or pan or on Swing opens the
+  // popover with a KnobDef built from the slider's range (GAIN_DEF, PAN_DEF,
+  // SWING_DEF below): gain as the plain multiplier it shows ("1.25"), pan as
+  // L/C/R ("L25", or -1..1), swing in percent ("60"). The value is snapped to
+  // the slider's 0.01 step (1 % for swing), so the popover never sets what
+  // the slider can't show. Set is the slider's own action: one undo entry,
+  // labelled as a drag is. No menu items (no automation, no learn).
+  //
   // Delete row (plan 21 task 7): a trash button at the end of each row,
   // faded in on row hover and while focus is inside the row, but always in
   // the tab order (opacity only, never display/visibility). One undo entry
@@ -62,6 +71,8 @@
     dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
   } from './stepGrid';
   import { rangeFill, rangeFillBipolar } from './rangeFill';
+  import { closeValuePopover, openValuePopover } from './ValuePopover.svelte';
+  import type { KnobDef } from './rack/knobMath';
 
   let { p, engine, clock, track, onerror }: {
     p: Project;
@@ -368,6 +379,37 @@
   }
   const vol = (e: Event) => (e.currentTarget as HTMLInputElement).valueAsNumber;
 
+  // ---- precise value (header: plan 24) ---------------------------------
+  // KnobDefs for the native sliders: knobMath formats and parses through them
+  // (0..2 is a plain number, a unitless 0..1 a percent, name 'pan' L/C/R).
+  const lin: Pick<KnobDef, 'integer' | 'unit' | 'curve' | 'choices'> = { integer: false, unit: '', curve: 'lin', choices: [] };
+  const GAIN_DEF: KnobDef = { ...lin, label: 'Gain', min: 0, max: 2, default: 1 };
+  const PAN_DEF: KnobDef = { ...lin, label: 'Pan', name: 'pan', min: -1, max: 1, default: 0 };
+  const SWING_DEF: KnobDef = { ...lin, label: 'Swing', min: 0, max: 1, default: 0 };
+  /** The sliders' 0.01 step (swing's 1 %). */
+  const snap = (v: number) => Math.round(v * 100) / 100;
+  /**
+   * The popover for a slider: on its contextmenu event (at the pointer; a
+   * keyboard-made one, at 0,0, at the slider) or its ContextMenu / Shift+F10
+   * key (at the slider). Other keys pass.
+   */
+  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, value: number, set: (v: number) => void) {
+    const kbd = e instanceof KeyboardEvent;
+    if (kbd && e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+    e.preventDefault(); // no native menu (nor, after the key, a contextmenu event)
+    const el = e.currentTarget as HTMLInputElement;
+    const r = el.getBoundingClientRect();
+    const at = kbd || (e.clientX === 0 && e.clientY === 0) ? null : e;
+    openValuePopover({
+      x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, label, def, value, from: el,
+      apply: (v) => { const s = snap(v); if (s !== value) set(s); },
+    });
+  }
+  /** A popover opened from this slider closes with it (a deleted row, another track): its apply would edit what is gone. */
+  function popoverOwner(node: HTMLElement) {
+    return { destroy: () => closeValuePopover(node) };
+  }
+
   // ---- delete row -----------------------------------------------------
   let gridEl: HTMLDivElement;
   /** Delete row `r`, then keep keyboard focus nearby: the delete button now
@@ -432,6 +474,9 @@
         <input
           type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill={gain.fill}
           aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
+          use:popoverOwner
+          oncontextmenu={(e) => precise(e, `${row.name} gain`, GAIN_DEF, row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
+          onkeydown={(e) => precise(e, `${row.name} gain`, GAIN_DEF, row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
         />
         <span class="val mono">{row.gain.toFixed(2)}</span>
       </label>
@@ -440,6 +485,9 @@
           type="range" min="-1" max="1" step="0.01" value={row.pan}
           style:--fill={pan.fill} style:--fill-pos={pan.pos}
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
+          use:popoverOwner
+          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
+          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
         />
         <span class="val mono">{panText(row.pan)}</span>
       </label>
@@ -520,6 +568,9 @@
         class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
         style:--fill={rangeFill(pat.swing).fill}
         data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
+        use:popoverOwner
+        oncontextmenu={(e) => precise(e, 'Swing', SWING_DEF, pat.swing, (v) => setSwing(p, engine, track.id, v))}
+        onkeydown={(e) => precise(e, 'Swing', SWING_DEF, pat.swing, (v) => setSwing(p, engine, track.id, v))}
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>

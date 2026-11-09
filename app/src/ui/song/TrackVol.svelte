@@ -26,11 +26,14 @@
   // a drag sends at most one value per frame without the Fader's own
   // coalescing.
   //
-  // Right-click, the ContextMenu key or Shift+F10 (as the Fader): the control
-  // menu, "Automate" / "Show automation" and "MIDI learn" / "Forget MIDI"
-  // (AutoMenu.svelte). The learn target pulses (`data-learning`), as the
-  // Fader; both are the same target (the track's fader), so learning or
-  // mapping one shows on the other.
+  // Right-click, the ContextMenu key or Shift+F10 (as the Fader): the
+  // precise-value popover (plan 24, ui/ValuePopover.svelte), the value in dB
+  // through the catalog's fader def ("-12", "-inf" = silence), Set / Reset
+  // (0 dB, one undo entry through setVol), then the control menu that used to
+  // open here alone, "Automate" / "Show automation" and "MIDI learn" /
+  // "Forget MIDI" (AutoMenu.svelte). The learn target pulses
+  // (`data-learning`), as the Fader; both are the same target (the track's
+  // fader), so learning or mapping one shows on the other.
   import { onDestroy, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
@@ -38,7 +41,7 @@
   import { setMix } from '../../state/mixer-actions';
   import { mixParam } from '../../audio/mixerCatalog';
   import { ariaThrottle, useAutoBus } from '../autoBus';
-  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { closeValuePopover, openValuePopover } from '../ValuePopover.svelte';
   import { isLearning } from '../midiLearn.svelte';
   import type { AutoStatus } from '../autoBus';
   import { FADER_MAX_DB, FADER_MIN_DB, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
@@ -96,22 +99,27 @@
     paint();
   });
 
-  // ---- control menu: Automate / MIDI learn (as Fader.svelte) --------------------
+  // ---- precise value + control menu: Automate / MIDI learn (as Fader.svelte) ------
   const learningMe = $derived(isLearning(track.id, FADER));
-  /** The control menu at (x, y), or under the slider (keyboard); false when it would have no item. */
-  function menuAt(x: number | null, y: number | null): boolean {
-    if (!bus) return false;
-    const items = menuItems(bus, track.id, FADER);
-    if (!items.automate && !items.midi) return false;
+  /** The precise-value popover at (x, y), or under the slider (keyboard). */
+  function popoverAt(x: number | null, y: number | null) {
     const r = el?.getBoundingClientRect();
-    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: track.id, target: FADER, label: `${track.name} volume`, from: el });
-    return true;
+    openValuePopover({
+      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: `${track.name} volume`, def: mixParam('fader'),
+      value: db, apply: setVol, from: el, auto: bus ? { owner: track.id, target: FADER } : null,
+    });
   }
   function context(e: MouseEvent) {
+    e.preventDefault();
     // A keyboard-made contextmenu event has no pointer position: place it at the slider.
     const kbd = e.clientX === 0 && e.clientY === 0;
-    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
+    popoverAt(kbd ? null : e.clientX, kbd ? null : e.clientY);
   }
+  // A popover opened from this slider closes with it (its apply would edit a track that is gone).
+  $effect(() => {
+    const v = el;
+    return () => { if (v) closeValuePopover(v); };
+  });
 
   // ---- edits ---------------------------------------------------------------------
   function setVol(v: number) {
@@ -164,6 +172,11 @@
   onDestroy(registerDragCancel(cancel));
   onDestroy(() => press?.end());
   function key(e: KeyboardEvent) {
+    if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
+      e.preventDefault(); // no native menu (nor a contextmenu event after it)
+      popoverAt(null, null);
+      return;
+    }
     if (e.key === 'Escape' && press && !press.cancelled) {
       e.preventDefault();
       e.stopPropagation();
@@ -199,7 +212,7 @@
   aria-valuetext={ariaAuto !== null ? `${formatDb(ariaAuto)}, automated (base ${formatDb(db)})` : formatDb(db)}
   title={automated
     ? `${track.name} volume: base ${formatDb(db)} — Automated — dragging overrides until the next point`
-    : `${track.name} volume: ${formatDb(db)} (the mixer fader) — double-click: 0 dB, arrows: ±1 dB (Shift: 0.1 dB)`}
+    : `${track.name} volume: ${formatDb(db)} (the mixer fader) — double-click: 0 dB, arrows: ±1 dB (Shift: 0.1 dB), right-click: exact value`}
   onpointerdown={down}
   oninput={input}
   onkeydown={key}

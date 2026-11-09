@@ -247,7 +247,8 @@ of these class names keeps its own box when it sets its own padding and font.
   1280 px beside the pattern transport (`layout.spec.ts`).
 - Menus come in two looks: a light one like the open select (`AutoMenu`,
   the floating right-click Automate / MIDI learn menu: `--text`, dark text;
-  knobs show its items inside the precise-entry card instead, below) and a
+  every control now shows its items inside the precise-entry card instead,
+  below) and a
   `--panel` card with the lift for popovers with their own controls (the
   Rack's add-module menu, the piano roll's Examples, `InlineConfirm`). Both
   use `--r-menu` / `--r-md` and `--lift`.
@@ -482,12 +483,21 @@ Callers call `openValuePopover`; opening another replaces the open one.
   layer. The global tooltip is in the top layer, so tips for Set, Reset and
   the items show above the card. A press or focus moving into the card
   releases the control's own tip, so that tip never covers the field.
-- **Who uses it.** Every `Knob` variant (knob, slider, mech, vfader): the
-  rack, the mixer strips' knobs and the top bar's Master. The knob's own
-  click-the-readout typed entry stays.
-  - Plan 24 Task 2 moves the mixer `Fader`, the song `TrackVol` and the
-    step grid's native ranges onto it. Until then the Fader and TrackVol
-    keep the floating AutoMenu.
+- **Who uses it.** Every control that sets a parameter value (plan 24
+  "all sliders"; view controls such as the timeline zoom, and choice
+  params, are not sliders):
+  - every `Knob` variant (knob, slider, mech, vfader): the rack, the mixer
+    strips' knobs and the top bar's Master. The knob's own
+    click-the-readout typed entry stays;
+  - the mixer `Fader` and the song `TrackVol` (Task 2): the catalog's
+    `fader` def, so the field is in dB ("-6", "-inf" = silence) and Reset
+    is 0 dB. Their right-click menu (Automate, MIDI learn) is the card's
+    lower half now; nothing opens the floating AutoMenu any more, though
+    `openAutoMenu` is kept for other callers;
+  - the step grid's native ranges (Task 2): row gain (a plain multiplier,
+    0..2), row pan (L/C/R) and Swing (percent). `StepGrid.svelte` builds
+    their `KnobDef`s and snaps the value to the slider's 0.01 step, so the
+    card never sets what the slider can't show. They have no items.
   - A caller with no catalog param builds a `KnobDef`: label, min, max,
     default, `integer`, unit, `curve: 'lin'`, `choices: []`, plus `name:
-    'pan'` for an L/C/R readout.
+    'pan'` for an L/C/R readout. A unitless 0..1 def reads as a percent.

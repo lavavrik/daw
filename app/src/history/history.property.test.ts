@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { addDrumTrack, addRow, removeDrumRow, removeTrack, selectTrack, setRowGain, setTempo, toggleStep } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
+import { addReturn, deleteReturn, renameReturn } from '../state/returns';
 import { addNote, deleteNotes, newPattern, selectPattern, updateNotes } from '../state/pattern-actions';
 import { addSynthTrack, loadPatch, removeModule, setParam } from '../state/rack-actions';
 import { STARTER_PATCHES } from '../state/patches';
@@ -267,9 +268,19 @@ async function sequence(seed: number, ops: number) {
       const c = audioClip();
       if (c) (log.push('deleteAudioClip'), deleteClips(p, sink, [c.id]));
     },
+    // Returns (plan 29).
+    (log) => (log.push('addReturn'), void addReturn(p, sink, r.int(2) === 0 ? 'reverb' : 'delay')),
+    (log) => {
+      const x = r.pick(p.mixer.returns);
+      if (x) (log.push('deleteReturn'), deleteReturn(p, sink, x.id));
+    },
+    (log) => {
+      const x = r.pick(p.mixer.returns);
+      if (x) (log.push('renameReturn'), renameReturn(p, x.id, `Ret ${r.int(100)}`));
+    },
     // Automation (plan 10).
     (log) => {
-      const owner = r.pick([...p.tracks.map((t) => t), 'reverb', 'delay', 'master'] as const)!;
+      const owner = r.pick([...p.tracks.map((t) => t), ...p.mixer.returns.map((x) => x.id), 'master'] as const)!;
       const target = r.pick(automatableParams(p, owner))?.target;
       if (target) (log.push('addLane'), addLane(p, sink, typeof owner === 'string' ? owner : owner.id, target));
     },

@@ -12,9 +12,13 @@
 //     slot's params: so every builder sends it BEFORE the slot's MIX_SETs
 //     (project/commands.ts mixerCommands, history/diffApply.ts).
 //
-// Pure helpers here; the add / rename / delete actions are plan 29 Task 5.
-import { MAX_RETURNS, MIX_RETURN0 } from '../audio/protocol';
-import { defaultMixParams } from '../audio/mixerCatalog';
+// Pure helpers first, then the add / rename / delete actions (plan 29 Task 5).
+// This module imports neither mixer-actions nor midiMap (both import it), so
+// the delete cleans lanes and mappings by plain mutation inside its own edit.
+import { MAX_RETURNS, MIX_RETURN0, Op, sendParam, sendPreParam } from '../audio/protocol';
+import { defaultMixParams, mixParam } from '../audio/mixerCatalog';
+import type { CommandSink } from './actions';
+import { edit, markEdited } from './edits';
 import type { ChannelState, Project } from './project.svelte';
 
 export { MAX_RETURNS };
@@ -78,4 +82,78 @@ export function nextReturnName(p: Project, kind: ReturnKind): string {
   let n = 2;
   while (taken.has(`${KIND_NAME[kind]} ${n}`)) n++;
   return `${KIND_NAME[kind]} ${n}`;
+}
+
+/**
+ * Add a return of `kind` on the lowest free slot: one edit "Add return".
+ * Null (no edit) when all MAX_RETURNS slots are taken. The name defaults to
+ * nextReturnName; the id is a UUID. The engine gets RETURN_KIND slot 0, then
+ * RETURN_KIND slot kind: a deleted return's slot is already Off, but the
+ * explicit Off makes the add correct whatever the engine still holds (it
+ * ignores a same-kind RETURN_KIND, and a kind change resets the slot's
+ * params, which is why the new return's defaults need no MIX_SETs).
+ */
+export function addReturn(p: Project, sink: CommandSink, kind: ReturnKind, name?: string): ReturnState | null {
+  const slot = freeSlot(p);
+  if (slot === null) return null;
+  return edit(p, 'Add return', () => {
+    p.mixer.returns.push(newReturn(crypto.randomUUID(), kind, name ?? nextReturnName(p, kind), slot));
+    sink.send(Op.RETURN_KIND, slot, KIND_CODE.off);
+    sink.send(Op.RETURN_KIND, slot, KIND_CODE[kind]);
+    return p.mixer.returns[p.mixer.returns.length - 1]; // the reactive proxy
+  });
+}
+
+/** Rename: one edit "Rename return". False (no edit) for an unknown id or a name empty / over RETURN_NAME_MAX after trimming. */
+export function renameReturn(p: Project, id: string, name: string): boolean {
+  const r = findReturn(p, id);
+  const n = name.trim();
+  if (!r || n.length < 1 || n.length > RETURN_NAME_MAX) return false;
+  return edit(p, 'Rename return', () => {
+    r.name = n;
+    // No engine command marks this edit, so the unsaved mark is ours.
+    markEdited(p);
+    return true;
+  });
+}
+
+/**
+ * Delete a return: one edit "Delete return". Besides the return it removes
+ *   - its Master-row lanes (AUTO_LANE_CLEAR) and the MIDI mappings it owns,
+ *   - every track's lane on, and MIDI mapping of, the slot's two sends
+ *     (sendParam / sendPreParam), and
+ *   - resets those two send params on every track to their defaults,
+ * then RETURN_KIND slot 0 (Off: the engine fades the tail out over 5 ms).
+ * The slot is therefore clean when a later add reuses it. Lanes go before the
+ * resets so the lane's CLEAR does not undo the MIX_SET. Undo / redo are the
+ * snapshot diff (history/diffApply.ts), which restores all of it.
+ */
+export function deleteReturn(p: Project, sink: CommandSink, id: string): boolean {
+  const r = findReturn(p, id);
+  if (!r) return false;
+  return edit(p, 'Delete return', () => {
+    const sends = new Set([sendParam(r.slot), sendPreParam(r.slot)]);
+    const isSend = (t: { kind: string; param?: string }) => t.kind === 'mix' && sends.has(t.param ?? '');
+    for (const x of p.mixer.automation) if (x.channel === id) sink.send(Op.AUTO_LANE_CLEAR, x.lane.lane);
+    p.mixer.automation = p.mixer.automation.filter((x) => x.channel !== id);
+    for (const t of p.tracks) {
+      for (const l of t.automation) if (isSend(l.target)) sink.send(Op.AUTO_LANE_CLEAR, l.lane);
+      if (t.automation.some((l) => isSend(l.target))) t.automation = t.automation.filter((l) => !isSend(l.target));
+    }
+    for (const t of p.tracks) {
+      const ch = p.mixer.channels[t.id];
+      if (!ch) continue;
+      for (const name of sends) {
+        const def = mixParam(name);
+        if (ch.params[def.id] === def.default) continue;
+        ch.params[def.id] = def.default;
+        sink.send(Op.MIX_SET, t.slot, def.id, def.default);
+      }
+    }
+    const gone = p.midiMap.filter((m) => m.owner === id || isSend(m.target));
+    if (gone.length) p.midiMap = p.midiMap.filter((m) => !gone.includes(m));
+    p.mixer.returns = p.mixer.returns.filter((x) => x.id !== id);
+    sink.send(Op.RETURN_KIND, r.slot, KIND_CODE.off);
+    return true;
+  });
 }

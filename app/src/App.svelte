@@ -27,6 +27,8 @@
   import { library } from './library/library.svelte';
   import { addNote, setPatternBars } from './state/pattern-actions';
   import { setMix, setSidechain } from './state/mixer-actions';
+  import { addReturn, deleteReturn, renameReturn } from './state/returns';
+  import type { ReturnKind } from './state/returns';
   import { addLane, drawPoints, setLaneEnabled } from './state/automation-actions';
   import { BUILTIN_PATCHES } from './state/patches';
   import { installShortcuts, setShortcutOctave, type PanelTab } from './input/shortcuts';
@@ -369,6 +371,10 @@
     addSynthTrack: (patchName) =>
       engine ? addSynthTrack(project, engine, undefined, BUILTIN_PATCHES.find((x) => x.name === patchName)) : null,
     addRow: (trackId) => (engine ? addRow(project, engine, trackId) : null),
+    // Returns (plan 29): e2e drives them through the same actions as the UI.
+    addReturn: (kind: ReturnKind, name?: string) => (engine ? addReturn(project, engine, kind, name) : null),
+    renameReturn: (id: string, name: string) => renameReturn(project, id, name),
+    deleteReturn: (id: string) => (engine ? deleteReturn(project, engine, id) : false),
     removeTrack: (trackId) => engine && removeTrack(project, engine, trackId),
     setRowSample: (trackId, rowId, sampleId, name) => engine && setRowSample(project, engine, trackId, rowId, sampleId, name),
     setStep: (trackId, rowId, step, vel) => engine && setStep(project, engine, trackId, rowId, step, vel),

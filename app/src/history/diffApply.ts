@@ -517,7 +517,8 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
     for (const lj of tj.automation) want.set(lj.lane, { owner: trackOwner(tj.slot), channel: tj.slot, patch: tj.kind === 'synth' ? tj.patch : null, lj });
   }
   for (const mj of to.mixer.automation) {
-    want.set(mj.lane, { owner: mj.channel, channel: masterChannelIndex(to.mixer, mj.channel), patch: null, lj: mj });
+    const channel = masterChannelIndex(to.mixer, mj.channel);
+    if (channel !== null) want.set(mj.lane, { owner: mj.channel, channel, patch: null, lj: mj }); // none: a lane on a missing return is skipped
   }
   // Clear first...
   for (const [i, e] of engine) {

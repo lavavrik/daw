@@ -152,11 +152,13 @@ export const audioClipCommands = (slot: number, c: AudioClipJson): EngineCommand
 /**
  * The engine mixer channel of a Master row channel of `mixer` (a return id:
  * MIX_RETURN0 + its slot; 'master': MIX_MASTER). The channel must exist
- * (schema.ts validate drops lanes and mappings of a missing return).
+ * (schema.ts validate drops lanes and mappings of a missing return) or null
+ * when it does not: callers skip such a lane, so a stale snapshot never throws.
  */
-export function masterChannelIndex(mixer: Pick<MixerJson, 'returns'>, channel: string): number {
+export function masterChannelIndex(mixer: Pick<MixerJson, 'returns'>, channel: string): number | null {
   if (channel === 'master') return MIX_MASTER;
-  return MIX_RETURN0 + mixer.returns.find((r) => r.id === channel)!.slot;
+  const r = mixer.returns.find((x) => x.id === channel);
+  return r ? MIX_RETURN0 + r.slot : null;
 }
 
 /**
@@ -215,7 +217,10 @@ function autoCommands(project: ProjectJson): EngineCommand[] {
   for (const tj of project.tracks) {
     for (const lj of tj.automation) out.push(...laneCommands(lj, tj.slot, tj.kind === 'synth' ? tj.patch : null));
   }
-  for (const mj of project.mixer.automation) out.push(...laneCommands(mj, masterChannelIndex(project.mixer, mj.channel), null));
+  for (const mj of project.mixer.automation) {
+    const ch = masterChannelIndex(project.mixer, mj.channel);
+    if (ch !== null) out.push(...laneCommands(mj, ch, null));
+  }
   return out;
 }
 

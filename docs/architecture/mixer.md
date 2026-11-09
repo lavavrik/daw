@@ -275,6 +275,126 @@ change). At 1280×720 a track strip's pan sits below the sends, scrolled.
   the section's icon (brighter while open), or the ▸ / ▾ triangle when it
   has none; never both.
 
+## Strip presets (plan 27)
+
+Every strip has a **Presets** button (a small sliders push-button on the
+right end of its header, `strip-presets`). It opens a floating card
+(`PopButton` with `float`: fixed to the window, because the strip clips its
+content) listing the strip kind's presets (`preset-<id>`), and on a track
+strip **Duck to kick** (`preset-duck`). Code: `app/src/state/mixerPresets.ts`
+(tables, `applyPreset`), `app/src/state/mixer-actions.ts` (`duckToKick`).
+
+**Rules.**
+- A preset holds absolute values for **whole sections** of its strip kind:
+  - a track preset holds the EQ, the comp and both sends with their pre flags;
+  - a return preset holds its EQ and its effect;
+  - a master preset holds its EQ and the limiter.
+
+  Applying one after another never leaves a knob of the first one behind;
+  anything a preset does not list is the catalog default.
+- A preset never holds fader, pan, mute or solo (the balance is the user's),
+  nor the sidechain key. **Flat** keeps a key; with the comp off, it does
+  nothing.
+- Every value is inside its `mixer_catalog.json` range, and the strip takes it
+  (`accepts`). `mixerPresets.test.ts` checks every preset.
+- One apply is **one undo entry**, "Preset: <name>". The params are set in
+  catalog order, through `setMix`, nested in one `edit`.
+
+**The EQ the values talk to** (`engine/src/dsp/eq.rs`):
+- a 12 dB/oct HP (20 Hz = off);
+- a low shelf at 100 Hz;
+- a mid peak (200 Hz to 8 kHz, Q 0.3 to 4);
+- a high shelf at 8 kHz.
+
+The comp's attack and release are in ms. The values below were chosen for
+house at 120 to 130 bpm, where a beat is 460 to 500 ms.
+
+### Track presets
+
+Blank cells are the defaults: EQ and comp off, sends at −60 dB (off), post-fader.
+
+| Preset | EQ: HP · low · mid (freq, gain, Q) · high | Comp: thr · ratio · att · rel · makeup | Sends (reverb · delay) | Why |
+|---|---|---|---|---|
+| Kick punch | 30 Hz · +3 · 400 Hz −3 Q 1.2 · +1.5 | −14 dB · 4 · 10 ms · 80 ms · +3 | — | The HP clears sub-rumble below the fundamental, which only eats headroom. The 100 Hz shelf adds weight, and the 400 Hz cut removes the cardboard "box". The 10 ms attack lets the click through before the comp clamps, so the kick hits harder. The 80 ms release recovers well before the next 16th. The kick stays dry: reverb on the kick smears the low end. On a drum bus the +1.5 dB shelf also lifts the hats. |
+| Bass tidy | 35 Hz · 0 · 250 Hz −3 Q 1 · −3 | −20 dB · 4 · 15 ms · 120 ms · +3 | — | The 35 Hz HP removes the inaudible sub-sub. The 250 Hz cut takes out the mud where bass and kick body pile up. The −3 dB shelf at 8 kHz tames fizz that fights the hats. The 4:1 comp evens out the note levels so the low end sits at one level; the 15 ms attack keeps the pluck. Dry, so the low end stays mono-solid. |
+| Hats air | 300 Hz · 0 · 3.5 kHz −2 Q 1.5 · +3 | off | −22 · — | Everything under 300 Hz in a hat is bleed or thump that clouds the kick. The 3.5 kHz dip tames the harsh "tss", and the 8 kHz shelf adds air. No comp, because squashing hats flattens the groove's dynamics. A touch of room puts them in the same space as the rest. |
+| Pad wash | 180 Hz · 0 · 500 Hz −3 Q 0.8 · −2 | −24 dB · 2 · 30 ms · 300 ms · +2 | −8 · −24 | The pad leaves the kick and bass range below 180 Hz, which is the most important house mix move. A wide 500 Hz dip de-muds it, and a softer top keeps it behind. A gentle, slow 2:1 comp levels the chords without pumping. The pump comes from Duck to kick on top. It is washed well into the reverb, with a little delay. |
+| Stab space | 150 Hz · 0 · 2.5 kHz +2 Q 1 · 0 | −18 dB · 3 · 5 ms · 100 ms · +2 | −14 · −16 | The stab's low end is out, and 2.5 kHz brings presence so it cuts through in short hits. A fast comp gives a consistent bite. Reverb plus a clear echo is the classic dub-chord space. |
+| Lead presence | 120 Hz · 0 · 3 kHz +3 Q 0.9 · +1.5 | −18 dB · 3 · 8 ms · 150 ms · +2 | −16 · −18 | The low end is cleared, and a broad lift at 3 kHz (where the ear is most sensitive) brings the line forward with some air. A 3:1 comp holds it at one level. It has a bit of space, less than the pad, so it stays upfront. |
+| Flat | (defaults) | (defaults: off) | (defaults: off) | Back to a clean strip: EQ, comp and sends at their catalog defaults, as spec §3 says. |
+
+### Return presets
+
+Every reverb and delay preset high-passes its return. Low end in a reverb or
+an echo is mud, and the classic move is an HP at 200 to 400 Hz.
+
+| Preset | Return EQ | Effect | Why |
+|---|---|---|---|
+| Room | HP 250 Hz | size 0.35 · decay 0.8 s · damping 0.5 · predelay 10 ms | A small, short ambience that thickens drums and stabs without an audible tail. |
+| Plate | HP 300 Hz | size 0.55 · decay 1.8 s · damping 0.25 · predelay 25 ms | Bright and dense, with low damping. The 25 ms predelay keeps the attack of a snare, clap or vocal clear of the tail. |
+| Hall | HP 250 Hz | size 0.85 · decay 3.8 s · damping 0.45 · predelay 40 ms | A big space for breakdowns and pads. A long predelay separates the dry sound from the room. Its decay is over 3 s (the e2e checks it). |
+| Dark | HP 200 Hz, high −6 dB | size 0.7 · decay 2.8 s · damping 0.85 · predelay 20 ms | Heavy damping plus a shelved-off top. A deep-house space that stays behind the mix and never fizzes. |
+| 1/8 ping-pong | HP 300 Hz | 1/8 · feedback 0.35 · ping-pong on · high cut 6 kHz | Eighths bouncing left and right, with three or four audible repeats. It widens stabs and hats without washing them out. |
+| 3/16 dub | HP 400 Hz, mid 800 Hz +2 Q 0.7 | 3/16 (a dotted eighth) · feedback 0.55 · ping-pong off · high cut 2.5 kHz | The dub-techno echo: a long, darkening tail in the centre, thinned and pushed into the mids, as a tape echo would be. The dotted eighth plays against the four-on-the-floor. |
+| 1/4 slap | HP 250 Hz | 1/4 · feedback 0.15 · ping-pong off · high cut 5 kHz | About one repeat a beat later. It adds depth to a lead or vocal without a cloud. |
+
+### Master presets
+
+| Preset | Master EQ | Limiter | Why |
+|---|---|---|---|
+| Clean | off (flat) | −0.3 dB | A transparent master, the default state. |
+| Warm | HP 25 Hz · low +1.5 · 3.5 kHz −1 Q 0.7 · high −1.5 | −0.3 dB | A gentle tilt (spec §3: "gentle EQ"). The HP removes the sub-rumble that eats limiter headroom. A little 100 Hz weight is added, and the harshness and top are eased by a dB or so. No move is bigger than 1.5 dB, because a master EQ should only nudge. |
+
+The −0.3 dB ceiling leaves a little room against inter-sample peaks on
+playback.
+
+### Duck to kick
+
+`duckToKick(p, sink, trackId)` is the one-click pump. It keys the track's comp from the
+Kick row and sets comp on, threshold −30 dB, ratio 8, attack 1 ms, release
+150 ms and makeup +2 dB (`DUCK_TO_KICK`, values fixed by the spec). Together:
+- every kick pulls the track down hard;
+- the dip lands with the kick's transient;
+- the level swells back before the next beat.
+
+It is one undo entry, "Duck to kick". Fader, pan, EQ and sends are left alone.
+
+**The Kick** (`kickKey`): the first row whose name has the role Kick (`kits.ts
+rowHasRole`: case and surrounding spaces ignored) in the first drum track, in
+track order, that has one. A first drum track with no Kick, such as a
+percussion track, is skipped rather than refused.
+
+**Refused** (nothing changes, nothing is sent): the call returns `{ ok: false,
+reason }`, and the strip flashes the reason in the top bar (`flashHint`). This
+happens when:
+- there is no Kick row;
+- the target is the drum track that plays the Kick;
+- the target is not a track;
+- the Kick row would be a ninth distinct drum-row key (`MAX_KEYS`,
+  `rowKeyAllowed`). A Kick row another strip already keys is shared, so a
+  second duck is always allowed.
+
+The menu offers Duck to kick on every track strip except the Kick's own drum
+track.
+
+### Calling them without the UI (templates)
+
+`applyPreset(p, sink, channel, presetId)` returns a boolean.
+`duckToKick(p, sink, trackId)` returns `{ ok }`. Both are plain actions, and
+`edit` (`state/edits.ts`) makes no undo entry in these cases:
+- the project has no history yet (a fresh `Project`);
+- it is loading;
+- it is baselining.
+
+Inside an outer `edit` they are part of that one entry. A template build
+(plan 27 Task 2) calls them directly, with no option and no separate
+non-edit variant. Preset ids:
+- tracks: `kick-punch`, `bass-tidy`, `hats-air`, `pad-wash`, `stab-space`,
+  `lead-presence`, `flat`;
+- the Reverb return: `room`, `plate`, `hall`, `dark`;
+- the Delay return: `delay-pingpong`, `delay-dub`, `delay-slap`;
+- the master: `master-clean`, `master-warm`.
+
 ## Engine reset
 
 `OP_RESET_ALL` calls `Mixer::reset_all`: every strip is rebuilt in place

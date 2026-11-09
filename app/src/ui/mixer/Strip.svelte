@@ -23,12 +23,24 @@
   // EQ, Comp, return, send, pan and limiter knobs are mech knobs, compact
   // ('sm', 46 px), two per row; the fader is the mech fader (Fader.svelte).
   // Meters unchanged.
+  //
+  // Presets (plan 27 Task 1; docs/architecture/mixer.md "Strip presets"): a
+  // small button at the header's right end opens a floating PopButton card
+  // listing the strip kind's presets (state/mixerPresets.ts: one undo entry
+  // each) and, on a track strip that is not the Kick's own drum track,
+  // Duck to kick (mixer-actions duckToKick; a refusal is flashed in the top
+  // bar's status). The card floats (fixed) because the strip clips.
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
   import { MAX_KEYS, MIX_METER_STRIDE } from '../../audio/protocol';
   import type { ChannelState, Project, SidechainKey } from '../../state/project.svelte';
-  import { keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { duckToKick, keyLabel, kickKey, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { applyPreset, presetsFor } from '../../state/mixerPresets';
+  import type { PresetKind } from '../../state/mixerPresets';
+  import { flashHint } from '../../state/banners.svelte';
+  import PopButton from '../PopButton.svelte';
+  import SlidersHorizontal from 'phosphor-svelte/lib/SlidersHorizontal';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import Knob from '../rack/Knob.svelte';
   import Fader from './Fader.svelte';
@@ -78,6 +90,28 @@
   const compKnobs = $derived(group('comp').filter((d) => d.name !== 'comp_on'));
   const fxKnobs = $derived(target === 'reverb' ? group('reverb') : target === 'delay' ? group('delay') : []);
   const ceilingDb = $derived(kind === 'master' ? val('limiter_ceiling') : 0);
+
+  // ---- presets -------------------------------------------------------------
+  const presets = $derived(presetsFor(kind === 'track' ? 'track' : (target as Exclude<PresetKind, 'track'>)));
+  /** Duck to kick is offered on track strips, except the drum track that plays the Kick. */
+  const canDuck = $derived(kind === 'track' && kickKey(p)?.trackId !== target);
+  const presetsTitle = $derived(
+    kind === 'track' ? `Presets: EQ, comp and sends in one go${canDuck ? '; Duck to kick' : ''}`
+    : kind === 'master' ? 'Presets: the master EQ and limiter in one go'
+    : `Presets: this return's EQ and ${target === 'reverb' ? 'reverb' : 'delay'} in one go`,
+  );
+  function duck() {
+    const r = duckToKick(p, engine, target);
+    if (!r.ok) flashHint(r.reason);
+  }
+  /** ArrowUp / ArrowDown move between the menu's items (wrapping), as AutoMenu's list. */
+  function menuArrows(e: KeyboardEvent) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const all = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button')];
+    const i = all.indexOf(document.activeElement as HTMLElement);
+    all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+  }
 
   // ---- sidechain -----------------------------------------------------------
   // Select values: "none", "t:<trackId>" (a whole track), "r:<trackId>:<row>".
@@ -218,6 +252,26 @@
     <b>{name}</b>
     {#if subtitle}<span class="sub">{subtitle}</span>{/if}
   </button>
+  <span class="presets">
+    <PopButton id="strip-presets-pop-{channel}" label={`${name} presets`} testid="strip-presets-pop" float>
+      {#snippet trigger(a)}
+        <button {...a} type="button" class="mech-btn pbtn" data-testid="strip-presets" aria-label={`Presets for ${name}`} title={presetsTitle}><Icon icon={SlidersHorizontal} size={12} /></button>
+      {/snippet}
+      {#snippet children(close)}
+        <p class="lbl pop-h">{name} presets</p>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="plist" onkeydown={menuArrows}>
+          {#each presets as pr (pr.id)}
+            <button type="button" class="it" data-testid="preset-{pr.id}" title={pr.blurb} onclick={() => { close(); applyPreset(p, engine, target, pr.id); }}>{pr.name}</button>
+          {/each}
+          {#if canDuck}
+            <hr />
+            <button type="button" class="it" data-testid="preset-duck" title="Key the comp from the Kick row and pump this track with every kick" onclick={() => { close(); duck(); }}>Duck to kick</button>
+          {/if}
+        </div>
+      {/snippet}
+    </PopButton>
+  </span>
 
   <!-- Everything above the fader: scrolls inside the strip when the mixer is too short for it, so the fader stays in view. -->
   <div class="upper" bind:this={upperEl} onscroll={cue} class:fade-top={moreAbove} class:fade-bot={moreBelow} data-testid="strip-upper">
@@ -342,7 +396,22 @@
   .fm, .readout { flex: none; }
   .strip.sel { outline: 2px solid var(--c); outline-offset: -1px; }
   .screw { z-index: 1; }
-  .name { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; height: 36px; flex: none; box-sizing: border-box; border: 0; margin: 0 -10px 4px; padding: 0 12px; text-align: left; cursor: pointer; min-width: 0; }
+  /* Right padding: room for the Presets button over the header's right end. */
+  .name { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; height: 36px; flex: none; box-sizing: border-box; border: 0; margin: 0 -10px 4px; padding: 0 34px 0 12px; text-align: left; cursor: pointer; min-width: 0; }
+  /* Presets: a small push-button on the header's right end (over the name
+     button, a sibling: a button can't hold one), and its menu rows in
+     MenuBar's item look (a full-width band per item). */
+  .presets { position: absolute; top: 7px; right: 8px; z-index: 2; }
+  .pbtn { min-width: 22px; width: 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .pop-h { margin: 0 8px; }
+  .plist { display: flex; flex-direction: column; gap: 1px; min-width: 150px; }
+  .it {
+    display: flex; align-items: center; width: 100%; box-sizing: border-box; min-height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  .it:hover { background: var(--raised); }
+  .it:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .plist hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
   .name:disabled { cursor: default; }
   .name:not(:disabled):hover { filter: brightness(1.06); }
   .name b { font-size: var(--fs-lbl); line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }

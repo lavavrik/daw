@@ -14,6 +14,13 @@
   // attrs it is given onto its button), so the button keeps the parent's
   // scoped look (the piano roll's dense toolbar buttons, the step grid's
   // .btn). `children` gets `close` for actions that end the popover.
+  //
+  // `float` (plan 27: the mixer strip's Presets): the card is fixed to the
+  // window instead of absolutely placed under the trigger, for a trigger
+  // inside a box that clips (the strip's overflow: hidden). It opens under
+  // the trigger's left edge, flipped above it or shifted left when it would
+  // leave the window. Since it no longer follows the trigger, a wheel outside
+  // it (the mixer scrolls under it) or a resize closes it too.
   import { tick, type Snippet } from 'svelte';
 
   interface TriggerAttrs {
@@ -23,7 +30,7 @@
     onclick: () => void;
   }
 
-  let { id, label, testid, place = 'below', trigger, children }: {
+  let { id, label, testid, place = 'below', float = false, trigger, children }: {
     /** The card's DOM id (aria-controls). */
     id: string;
     /** The card's accessible name. */
@@ -31,6 +38,8 @@
     testid: string;
     /** Where the card opens: under the trigger (a toolbar), or over it (a footer at a panel's bottom). */
     place?: 'below' | 'above';
+    /** Fixed to the window (header: a trigger inside a clipping box); `place` is then ignored. */
+    float?: boolean;
     trigger: Snippet<[TriggerAttrs]>;
     children: Snippet<[() => void]>;
   } = $props();
@@ -40,10 +49,24 @@
   let card = $state<HTMLElement | null>(null);
   const triggerBtn = () => wrap?.querySelector<HTMLElement>(':scope > button');
 
+  /** The floating card's window position (float only). */
+  let left = $state(0);
+  let top = $state(0);
+  /** Margin kept from the window's edges, and the gap to the trigger (px). */
+  const EDGE = 8;
+  const GAP = 6;
+
   async function toggle() {
     open = !open;
     if (!open) return;
+    const r = float ? triggerBtn()?.getBoundingClientRect() : undefined;
+    if (r) [left, top] = [r.left, r.bottom + GAP];
     await tick();
+    if (r && card) {
+      const [w, h] = [card.offsetWidth, card.offsetHeight];
+      left = Math.max(EDGE, Math.min(r.left, innerWidth - EDGE - w));
+      top = r.bottom + GAP + h > innerHeight - EDGE ? Math.max(EDGE, r.top - GAP - h) : r.bottom + GAP;
+    }
     (card?.querySelector<HTMLElement>('button:not(:disabled), input') ?? card)?.focus();
   }
   function close(refocus = true) {
@@ -70,7 +93,18 @@
       if (!wrap?.contains(e.target as Node)) close(false);
     };
     window.addEventListener('pointerdown', outside, true);
-    return () => window.removeEventListener('pointerdown', outside, true);
+    if (!float) return () => window.removeEventListener('pointerdown', outside, true);
+    const wheel = (e: WheelEvent) => {
+      if (!card?.contains(e.target as Node)) close(false);
+    };
+    const resize = () => close(false);
+    window.addEventListener('wheel', wheel, { capture: true, passive: true });
+    window.addEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('wheel', wheel, { capture: true });
+      window.removeEventListener('resize', resize);
+    };
   });
 </script>
 
@@ -78,7 +112,7 @@
 <span class="popbtn" bind:this={wrap} onfocusout={focusOut}>
   {@render trigger({ 'aria-haspopup': 'dialog', 'aria-expanded': open, 'aria-controls': id, onclick: toggle })}
   {#if open}
-    <div class="card" class:above={place === 'above'} {id} role="dialog" aria-label={label} tabindex="-1" data-testid={testid} bind:this={card} onkeydown={key}>
+    <div class="card" class:above={!float && place === 'above'} class:float style:left={float ? `${left}px` : undefined} style:top={float ? `${top}px` : undefined} {id} role="dialog" aria-label={label} tabindex="-1" data-testid={testid} bind:this={card} onkeydown={key}>
       {@render children(() => close())}
     </div>
   {/if}
@@ -94,4 +128,6 @@
     outline: none;
   }
   .card.above { top: auto; bottom: calc(100% + 6px); }
+  /* Floating: fixed to the window, on the app's menus' layer (ValuePopover's z-index). */
+  .card.float { position: fixed; z-index: 60; }
 </style>

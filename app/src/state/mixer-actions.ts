@@ -7,6 +7,7 @@ import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
 import { edit } from './edits';
+import { rowHasRole } from './kits';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
 
 export type MixChannelTarget = string /* trackId */ | 'reverb' | 'delay' | 'master';
@@ -158,4 +159,71 @@ export function keyLabel(p: Project, key: SidechainKey | null): string {
   if (key.row === null) return t.name;
   const row = t.kind === 'drum' ? t.rows[key.row] : undefined;
   return `${t.name} · ${row ? row.name : `Row ${key.row + 1}`}`;
+}
+
+/**
+ * Duck to kick's compressor (plan 27, spec 2026-11-19-builtin-content.md §3):
+ * the classic house pump. Deep threshold and a high ratio so every kick pulls
+ * the strip down hard, 1 ms attack so the dip lands with the kick's
+ * transient, 150 ms release so the level swells back before the next beat
+ * (a beat is 469-500 ms at 120-128 bpm), +2 dB makeup for what the dip
+ * costs on average. Values fixed by the spec.
+ */
+export const DUCK_TO_KICK = {
+  comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2,
+} as const;
+
+/**
+ * The sidechain key Duck to kick uses: the Kick row (by role, kits.ts
+ * rowHasRole: "Kick", " kick " ...; its first such row) of the first drum
+ * track, in track order, that has one. Null when no drum track has a Kick.
+ * (The spec says "the first drum track's Kick row"; a first drum track with
+ * no Kick, say a percussion track, is skipped rather than refused.)
+ */
+export function kickKey(p: Project): { trackId: string; row: number } | null {
+  for (const t of p.tracks) {
+    if (t.kind !== 'drum') continue;
+    const row = t.rows.findIndex((r) => rowHasRole(r.name, 'Kick'));
+    if (row >= 0) return { trackId: t.id, row };
+  }
+  return null;
+}
+
+export type DuckResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Presets ▸ Duck to kick on a track strip: key the track's compressor from
+ * the Kick row (kickKey) and set DUCK_TO_KICK, as ONE undo entry "Duck to
+ * kick" (setSidechain and setMix nested in one edit). Leaves fader, pan,
+ * EQ and sends alone.
+ *
+ * Refused, with nothing changed or sent and a reason for the status line
+ * (the caller shows it: Strip flashHint), when:
+ *   - `trackId` is not a track (the returns and the master have no comp);
+ *   - no drum track has a Kick row;
+ *   - `trackId` is the drum track that owns that Kick (keying the kit from
+ *     its own kick would duck the kick itself);
+ *   - the Kick row would be a (MAX_KEYS+1)th distinct drum-row key
+ *     (rowKeyAllowed; a Kick row another strip already keys is shared, so
+ *     it is always allowed).
+ *
+ * Template builds (plan 27 Task 2) call this directly: `edit` makes no undo
+ * entry when the project has no history yet, while it is loading, or while
+ * it is baselining (state/edits.ts), and inside an outer edit it is part of
+ * that one entry.
+ */
+export function duckToKick(p: Project, sink: CommandSink, trackId: string): DuckResult {
+  const t = p.tracks.find((x) => x.id === trackId);
+  if (!t || !p.mixer.channels[trackId]) return { ok: false, reason: 'Duck to kick works on track strips only' };
+  const key = kickKey(p);
+  if (!key) return { ok: false, reason: 'Duck to kick: no Kick row in any drum track' };
+  if (key.trackId === trackId) return { ok: false, reason: 'Duck to kick: this is the track that plays the Kick' };
+  if (!rowKeyAllowed(p, trackId, key)) {
+    return { ok: false, reason: `Duck to kick: already ${MAX_KEYS} drum-row sidechain keys (the most); free one first` };
+  }
+  return edit(p, 'Duck to kick', () => {
+    setSidechain(p, sink, trackId, key);
+    for (const [name, v] of Object.entries(DUCK_TO_KICK)) setMix(p, sink, trackId, name, v);
+    return { ok: true } as const;
+  });
 }

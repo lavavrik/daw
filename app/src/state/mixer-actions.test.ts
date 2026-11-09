@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
+import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, removeTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
-import { keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
+import { DUCK_TO_KICK, duckToKick, kickKey, keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
+import { KIT_ROLES } from './kits';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
@@ -245,5 +246,108 @@ describe('mixer state', () => {
     expect(setSidechain(p, sink, s.id, null)).toBe(true);
     expect(setSidechain(p, sink, s.id, { trackId: d.id, row: 99 })).toBe(false);
     expect(setSidechain(p, sink, 'gone', null)).toBe(false);
+  });
+});
+
+describe('Duck to kick', () => {
+  /** A project with a kit-named drum track (Kick on row 0) and a synth; history on. */
+  function kitProject() {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const d = addDrumTrack(p, sink, 'Drums', [...KIT_ROLES])!;
+    const s = addSynthTrack(p, sink)!;
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    return { p, sink, sent, d, s };
+  }
+  const comp = (p: Project, id: string) =>
+    Object.fromEntries(['comp_on', 'comp_threshold', 'comp_ratio', 'comp_attack', 'comp_release', 'comp_makeup'].map((n) => [n, p.mixer.channels[id].params[P(n)]]));
+
+  it('keys the comp from the Kick row and sets the exact values, one undo entry', () => {
+    const { p, sink, sent, d, s } = kitProject();
+    setMix(p, sink, s.id, 'fader', -4);
+    const before = [...p.mixer.channels[s.id].params];
+    sent.length = 0;
+    expect(duckToKick(p, sink, s.id)).toEqual({ ok: true });
+    expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 0 });
+    expect(keyLabel(p, p.mixer.channels[s.id].key)).toBe('Drums · Kick');
+    expect(comp(p, s.id)).toEqual({ comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2 });
+    expect(DUCK_TO_KICK).toEqual({ comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2 });
+    expect(sent).toContainEqual([Op.MIX_SET_KEY, s.slot, keyCode({ slot: d.slot, row: 0 }), 0, 0]);
+    expect(sent).toContainEqual([Op.MIX_SET, s.slot, P('comp_ratio'), 8, 0]);
+    expect(p.mixer.channels[s.id].params[P('fader')]).toBe(-4); // nothing else moves
+    expect(p.history!.labels.undo).toBe('Duck to kick');
+    p.history!.undo();
+    expect([...p.mixer.channels[s.id].params]).toEqual(before);
+    expect(p.mixer.channels[s.id].key).toBeNull();
+  });
+
+  it('finds the Kick by role (case and spaces ignored), in the first drum track that has one', () => {
+    const p = new Project();
+    const { sink } = fake();
+    addDrumTrack(p, sink, 'Perc', ['Shaker', 'Conga']); // first drum track, no Kick
+    const d = addDrumTrack(p, sink, 'Beat', ['Clap', ' kick ', 'Kick'])!;
+    const s = addSynthTrack(p, sink)!;
+    expect(kickKey(p)).toEqual({ trackId: d.id, row: 1 });
+    expect(duckToKick(p, sink, s.id).ok).toBe(true);
+    expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 1 });
+  });
+
+  it('with no Kick row it says so and changes nothing', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    addDrumTrack(p, sink); // Row 1..4
+    const s = addSynthTrack(p, sink)!;
+    const before = [...p.mixer.channels[s.id].params];
+    sent.length = 0;
+    const r = duckToKick(p, sink, s.id);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.reason).toMatch(/no Kick row/i);
+    expect(sent).toEqual([]);
+    expect([...p.mixer.channels[s.id].params]).toEqual(before);
+    expect(p.mixer.channels[s.id].key).toBeNull();
+  });
+
+  it(`refuses at MAX_KEYS (${MAX_KEYS}) distinct row keys, and says so; a Kick already keyed is shared`, () => {
+    const { p, sink, sent, d } = kitProject();
+    // MAX_KEYS other rows, none of them the Kick, each keyed by its own synth.
+    const d2 = addDrumTrack(p, sink, 'More', ['A', 'B', 'C', 'D'])!;
+    const rows = [...[1, 2, 3, 4, 5, 6, 7].map((row) => ({ trackId: d.id, row })), { trackId: d2.id, row: 0 }];
+    expect(rows.length).toBe(MAX_KEYS);
+    const keyed = rows.map((key) => {
+      const t = addSynthTrack(p, sink)!;
+      expect(setSidechain(p, sink, t.id, key)).toBe(true);
+      return t;
+    });
+    const s = addSynthTrack(p, sink)!;
+    const label = p.history!.labels.undo;
+    sent.length = 0;
+    const r = duckToKick(p, sink, s.id);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.reason).toContain(String(MAX_KEYS));
+    expect(sent).toEqual([]);
+    expect(p.mixer.channels[s.id].key).toBeNull();
+    expect(p.mixer.channels[s.id].params[P('comp_on')]).toBe(0);
+    expect(p.history!.labels.undo).toBe(label);
+    // Once a channel holds the Kick row (swapping its own row for it), the next duck shares it: allowed.
+    expect(duckToKick(p, sink, keyed[0].id).ok).toBe(true);
+    expect(duckToKick(p, sink, s.id).ok).toBe(true);
+  });
+
+  it('refuses on the drum track that owns the Kick, on returns and on unknown tracks', () => {
+    const { p, sink, sent, d } = kitProject();
+    sent.length = 0;
+    expect(duckToKick(p, sink, d.id).ok).toBe(false);
+    expect(duckToKick(p, sink, 'reverb').ok).toBe(false);
+    expect(duckToKick(p, sink, 'gone').ok).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it('without a history (a template build) it just applies', () => {
+    const p = new Project();
+    const { sink } = fake();
+    addDrumTrack(p, sink, 'Drums', [...KIT_ROLES]);
+    const s = addSynthTrack(p, sink)!;
+    expect(duckToKick(p, sink, s.id).ok).toBe(true);
+    expect(p.mixer.channels[s.id].params[P('comp_threshold')]).toBe(-30);
   });
 });

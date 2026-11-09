@@ -467,12 +467,14 @@ describe('automation actions', () => {
     for (const [tick, value] of [[0, 300], [BAR, 500], [2 * BAR, 800], [4 * BAR, 900], [6 * BAR, 1000]]) addPoint(p, sink, l.id, { tick, value });
     p.history!.clear();
     const before = pts(l);
-    const outside = l.points.filter((x) => x.tick < BAR || x.tick > 4 * BAR).map((x) => x.id);
-    // Bars 2-5 (BAR..4 BAR, both ends included): the points at BAR, 2 BAR and 4 BAR go.
+    const outside = l.points.filter((x) => x.tick < BAR || x.tick >= 4 * BAR).map((x) => x.id);
+    // Bars 2-4 ([BAR, 4 BAR): the end is exclusive): the points at BAR and 2 BAR go; the one ON 4 BAR
+    // stays, so the shape's closing point is not written and its last quarter leads into it.
     const r = insertShape(p, sink, l.id, preset('sine-4'), { start: BAR, end: 4 * BAR });
-    expect(r).toEqual({ ok: true, points: 49 });
+    expect(r).toEqual({ ok: true, points: 48 });
     expect(l.points.map((x) => x.id).filter((id) => outside.includes(id))).toEqual(outside); // same objects
-    expect(l.points.map((x) => x.tick)).toEqual([0, ...Array.from({ length: 49 }, (_, i) => BAR + i * 240), 6 * BAR]);
+    expect(l.points.map((x) => x.tick)).toEqual([0, ...Array.from({ length: 48 }, (_, i) => BAR + i * 240), 4 * BAR, 6 * BAR]);
+    expect(l.points.find((x) => x.tick === 4 * BAR)!.value).toBe(900);
     expect(l.points.map((x) => x.curve).slice(1, 4)).toEqual([SINE_OUT_CURVE, SINE_BACK_CURVE, SINE_OUT_CURVE]);
     invariants(l);
     agrees();
@@ -484,6 +486,55 @@ describe('automation actions', () => {
     p.history!.redo();
     expect(l.points).toHaveLength(51);
     agrees();
+  });
+
+  it('insertShape at the range edges: hold points, chaining', () => {
+    const { p, sink, agrees } = rig();
+    const t = addDrumTrack(p, sink)!;
+    const l = addLane(p, sink, t.id, { kind: 'mix', param: 'pan' })!;
+    // A hold point just before the range keeps its hold (it steps onto the shape's first point);
+    // one ON start is replaced; a hold point ON end is kept, hold and all.
+    addPoint(p, sink, l.id, { tick: BAR - 240, value: 0.5, hold: true });
+    addPoint(p, sink, l.id, { tick: BAR, value: -0.5, hold: true });
+    addPoint(p, sink, l.id, { tick: 2 * BAR, value: 0.25, hold: true });
+    const before = l.points.find((x) => x.tick === BAR - 240)!;
+    const atEnd = l.points.find((x) => x.tick === 2 * BAR)!;
+    expect(insertShape(p, sink, l.id, preset('ramp-up'), { start: BAR, end: 2 * BAR })).toEqual({ ok: true, points: 1 });
+    expect(pts(l)).toEqual([[BAR - 240, 0.5, true], [BAR, -1, false], [2 * BAR, 0.25, true]]);
+    expect([l.points[0], l.points[2]]).toEqual([before, atEnd]); // same objects
+    expect(laneValueAt(l.points, BAR - 1, defs.pan)).toBe(0.5); // still holds up to the shape
+    expect(laneValueAt(l.points, 1.5 * BAR, defs.pan)).toBeCloseTo(-0.375, 9); // the ramp leads into the kept point
+    // A gate whose range starts on that kept hold point replaces it; its own hold points step.
+    expect(insertShape(p, sink, l.id, preset('gate-8'), { start: 2 * BAR, end: 3 * BAR })).toEqual({ ok: true, points: 17 });
+    expect(l.points.find((x) => x.tick === 2 * BAR)).toMatchObject({ value: 1, hold: true });
+    expect(laneValueAt(l.points, 2 * BAR + 239, defs.pan)).toBe(1);
+    expect(laneValueAt(l.points, 2 * BAR + 240, defs.pan)).toBe(-1);
+    // Chained shapes: the next range starts on the previous closing point and replaces it.
+    expect(l.points.at(-1)).toMatchObject({ tick: 3 * BAR, value: 1, hold: false });
+    expect(insertShape(p, sink, l.id, preset('ramp-down'), { start: 3 * BAR, end: 4 * BAR })).toEqual({ ok: true, points: 2 });
+    expect(pts(l).slice(-2)).toEqual([[3 * BAR, 1, false], [4 * BAR, -1, false]]);
+    invariants(l);
+    agrees();
+  });
+
+  it('shapes on a bipolar param (pan) and the duck depth on a fader', () => {
+    const d = defs.pan; // lin −1..1: the mid line is 0
+    const sine = shapePoints(preset('sine-1'), d, FOUR);
+    expect(sine.slice(0, 5).map((x) => x.value)).toEqual([0, 1, 0, -1, 0]);
+    // Symmetric about the centre: half a cycle later the value is negated.
+    for (let t = 0; t < BAR / 2; t += 60) expect(laneValueAt(sine, t + BAR / 2, d)! + laneValueAt(sine, t, d)!).toBeCloseTo(0, 9);
+    const duck = shapePoints(preset('duck'), d, FOUR);
+    expect(duck.slice(0, 3).map((x) => x.value)).toEqual([1, -1, 1]); // not a fader: max → min
+    // The duck's recovery is a release: past halfway back by a quarter of the way, then easing into the top.
+    const q = laneValueAt(duck, DUCK_DIP_TICKS + (BEAT - DUCK_DIP_TICKS) / 4, d)!;
+    expect((q + 1) / 2).toBeCloseTo(0.5, 6); // (1/4)^(1/2)
+    expect(DUCK_CURVE).toBeGreaterThan(0);
+    // A fader-law lane ducks from 0 dB to −12 dB by default (not +6 dB to Off); lo / hi still win.
+    for (const f of [defs.fader, mixParam('send_a')]) {
+      expect(shapePoints(preset('duck'), f, FOUR).slice(0, 3).map((x) => x.value)).toEqual([0, -12, 0]);
+      expect(shapePoints({ kind: 'duck', lo: -30, hi: 3 }, f, FOUR).slice(0, 2).map((x) => x.value)).toEqual([3, -30]);
+      expect(shapePoints(preset('ramp-up'), f, FOUR).map((x) => x.value)).toEqual([f.min, f.max]); // other shapes: the full range
+    }
   });
 
   it('insertShape nests in an outer edit (no entry of its own) and refuses past the cap', () => {

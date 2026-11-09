@@ -301,8 +301,19 @@ export function drawPoints(p: Project, sink: CommandSink, laneId: string, sample
 const BEAT_TICKS = BAR_TICKS / 4;
 /** The duck's dip: from the top to the bottom in a 1/32 of a beat (~15 ms at 120 BPM). */
 export const DUCK_DIP_TICKS = BEAT_TICKS / 32;
-/** The duck's recovery curve: x^2 of the way back, so it stays low a moment, then swells back by the next beat. */
-export const DUCK_CURVE = -1 / 3;
+/**
+ * The duck's recovery curve, like a compressor's release: x^(1/2) of the
+ * way back at fraction x, so it comes back fast at first, then eases into
+ * the top by the next beat.
+ */
+export const DUCK_CURVE = 1 / 3;
+/**
+ * A duck's default travel on a fader-law lane (the track fader and the
+ * sends, whose bottom is −∞ / Off and top +6 dB): from 0 dB down to −12 dB,
+ * a sidechain-style pump. On every other param it is the param's max → min.
+ */
+export const DUCK_FADER_LO_DB = -12;
+export const DUCK_FADER_HI_DB = 0;
 /**
  * A sine LFO is 4 breakpoints per cycle (mid, top, mid, bottom) and each
  * quarter is one curved segment. Leaving the mid line the sine covers
@@ -318,7 +329,8 @@ export const MIN_SHAPE_PERIOD = 8;
 
 /**
  * A shape to insert. `lo` / `hi` are the ends of its travel in the param's
- * units (default: the param's min and max; clamped to the range): a ramp up
+ * units (default: the param's min and max, except a duck on a fader-law
+ * lane: DUCK_FADER_LO_DB / DUCK_FADER_HI_DB; clamped to the range): a ramp up
  * goes lo → hi, a duck dips from hi to lo, a sine swings between them, a
  * gate opens at hi and closes at lo. `period` is one cycle in ticks.
  */
@@ -326,7 +338,11 @@ export type AutoShape =
   | { kind: 'ramp-up' | 'ramp-down' | 'duck'; lo?: number; hi?: number }
   | { kind: 'sine' | 'gate'; period: number; lo?: number; hi?: number };
 
-/** A tick range [start, end], both ends included. */
+/**
+ * A tick range [start, end): insertShape replaces the points from `start`
+ * up to (not including) `end`, so shapes chain: the next range starts where
+ * this one ends. The shape's closing point sits ON `end` (see insertShape).
+ */
 export interface ShapeRange {
   start: number;
   end: number;
@@ -431,8 +447,9 @@ function breakpoints(shape: AutoShape, start: number, end: number): Bp[] {
 export function shapePoints(shape: AutoShape, def: AutoDef, range: ShapeRange): ShapePoint[] {
   const { start, end } = range;
   if (!(end > start)) return [];
-  const loV = clampParam(def, shape.lo ?? def.min);
-  const hiV = clampParam(def, shape.hi ?? def.max);
+  const fader = shape.kind === 'duck' && def.curve === 'fader';
+  const loV = clampParam(def, shape.lo ?? (fader ? DUCK_FADER_LO_DB : def.min));
+  const hiV = clampParam(def, shape.hi ?? (fader ? DUCK_FADER_HI_DB : def.max));
   const p0 = toPos(def, loV);
   const p1 = toPos(def, hiV);
   // The ends map to lo / hi exactly (no position round trip).
@@ -455,9 +472,14 @@ export function shapePoints(shape: AutoShape, def: AutoDef, range: ShapeRange): 
 export type InsertShapeResult = { ok: true; points: number } | { ok: false; message: string };
 
 /**
- * Write `shape` over `range` (ticks, both ends included; rounded and kept in
- * the song) on lane `laneId`: its points REPLACE every point of the lane in
- * the range and the points outside it are kept. One edit() ("Insert
+ * Write `shape` over `range` (ticks, rounded and kept in the song) on lane
+ * `laneId`. Its points REPLACE every point of the lane in [start, end) and
+ * the points outside are kept. `end` is exclusive: the shape's closing point
+ * (shapePoints' last, on `end`) is added only when the lane has no point
+ * there; a point already on `end` is left alone and the shape leads into it.
+ * So shapes chain (the next one, starting at this `end`, replaces this
+ * one's closing point) and the menu's "Bars 5–8" never touches bar 9's
+ * point. `points` in the result counts the points written. One edit() ("Insert
  * shape"): one undo entry on its own, and none of its own inside an outer
  * edit() (it then belongs to the caller's entry, as Task 3's transitions
  * do: they create a track, a clip and lanes and insert shapes in one edit).
@@ -476,9 +498,10 @@ export function insertShape(p: Project, sink: CommandSink, laneId: string, shape
   if (Number.isNaN(shape.lo) || Number.isNaN(shape.hi)) return { ok: false, message: 'The shape has no value range' };
   if ('period' in shape && !(shape.period >= MIN_SHAPE_PERIOD)) return { ok: false, message: 'The shape repeats too fast' };
   const { lane, def } = f;
-  const made = shapePoints(shape, def, { start, end });
+  const atEnd = lane.points.some((x) => x.tick === end);
+  const made = shapePoints(shape, def, { start, end }).filter((m) => !(atEnd && m.tick === end));
   const want: Want[] = [
-    ...lane.points.filter((x) => x.tick < start || x.tick > end).map(keep),
+    ...lane.points.filter((x) => x.tick < start || x.tick >= end).map(keep),
     ...made.map((m): Want => ({ old: null, ...m })),
   ];
   if (want.length > MAX_AUTO_POINTS) {

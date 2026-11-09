@@ -332,7 +332,7 @@ of points.
 type AutoShape =
   | { kind: 'ramp-up' | 'ramp-down' | 'duck'; lo?: number; hi?: number }
   | { kind: 'sine' | 'gate'; period: number; lo?: number; hi?: number };
-interface ShapeRange { start: number; end: number }       // ticks, both ends included
+interface ShapeRange { start: number; end: number }       // ticks, [start, end): end exclusive
 type InsertShapeResult = { ok: true; points: number } | { ok: false; message: string };
 
 shapePoints(shape, def, range): ShapePoint[]                // pure: {tick, value, hold, curve}[]
@@ -342,7 +342,12 @@ SHAPE_PRESETS                                                // the menu's 8 ent
 ```
 
 - **Travel.** `lo` / `hi` are in the param's units (default its min / max,
-  clamped to the range). The shape is laid out in **knob position**
+  clamped to the range). **Exception: a duck on a fader-law lane** (the
+  track fader and the sends: bottom −∞ / Off, top +6 dB) defaults to
+  `DUCK_FADER_HI_DB` 0 dB → `DUCK_FADER_LO_DB` −12 dB, a sidechain-style
+  pump; ducking to Off from +6 dB every beat is not musical. Every other
+  param (lin dB ones like the EQ gains included) ducks max → min. Explicit
+  `lo` / `hi` always win. The shape is laid out in **knob position**
   between them, as the lane draws and the engine interpolates (an exp
   cutoff ramps logarithmically in Hz). The ends are exactly `lo` / `hi`.
   Every value is inside the param's range.
@@ -351,19 +356,25 @@ SHAPE_PRESETS                                                // the menu's 8 ent
   | Preset | Breakpoints | 4 bars |
   |---|---|---|
   | Ramp up / down | `lo` at the start, `hi` at the end (reversed for down); straight | 2 |
-  | Duck per beat | each beat: `hi`, then `lo` 1/32 beat later (`DUCK_DIP_TICKS`, 30 ticks: the fast dip), then a recovery curved by `DUCK_CURVE` (−1/3: x², stays low, then swells) back to `hi` at the next beat | 33 |
+  | Duck per beat | each beat: `hi`, then `lo` 1/32 beat later (`DUCK_DIP_TICKS`, 30 ticks: the fast dip), then a recovery curved by `DUCK_CURVE` (+1/3: x^½, like a compressor's release: fast at first, then easing into the top) back to `hi` at the next beat | 33 |
   | Sine 1/4, 1/2, 1 bar | mid, top, mid, bottom per cycle, starting on the rise; a quarter leaving the mid line has curve `SINE_OUT_CURVE` +0.235, one returning `SINE_BACK_CURVE` −0.267 (the least-max-error x^k fits of sin and 1 − cos; within 4.4 % of the travel of a true sine) | 65, 33, 17 |
   | Gate 1/8, 1/16 | hold points: `hi` for the first half of each step, `lo` for the second | 65, 129 |
 
-- **Ends.** The first point is at `range.start`, the last at `range.end`.
+- **Ends.** `shapePoints` puts the first point at `range.start` and the last
+  (the closing point) at `range.end`.
   A cycle cut short by the end gets a point there on its own line (a power
   curve cut at any fraction is the same curve, so the cut segment keeps its
   curve exactly). The last point is always linear with curve 0: the segment
   after it leads to a point outside the shape.
-- **Replace.** `insertShape` replaces every point of the lane whose tick
-  is in `[start, end]` (both ends included, as `drawPoints`) and keeps the
-  rest (same objects, ids and idx where possible). The range is rounded and
-  kept in the song.
+- **Replace: the end is exclusive.** `insertShape` replaces every point of
+  the lane whose tick is in `[start, end)` and keeps the rest (same objects,
+  ids and idx where possible; a hold point before `start` keeps its hold
+  and steps onto the shape). The closing point is written only when the
+  lane has no point ON `end`; a point there is left alone and the shape's
+  last segment leads into it. So shapes chain (the next range starts on
+  this one's closing point and replaces it), and the menu's "Bars 5–8"
+  leaves a point on bar 9.1 untouched. (`drawPoints` differs: a stroke
+  replaces both of its ends.) The range is rounded and kept in the song.
 - **Refusals** (nothing changes, nothing is sent, the message is for the
   user: the lane menu shows it as a hint): no such lane; an empty range; a
   NaN `lo` / `hi`; a `period` under `MIN_SHAPE_PERIOD` (8 ticks); and a lane
@@ -451,8 +462,11 @@ SHAPE_PRESETS                                                // the menu's 8 ent
   point: Linear / Hold / Delete, then **Insert shape ▸**; right-click off
   the points: Insert shape ▸ alone (plan 28). Its submenu (`auto-shape-menu`,
   items `auto-shape-<preset id>`) names the bars it writes ("Bars 2–3
-  (loop)", "Bars 5–8"), opens on hover, click, → or Enter, and ← / Escape go
-  back to its item; it flips to the menu's left when the window has no room.
+  (loop)", "Bars 5–8": the bars it replaces, end exclusive), opens on hover,
+  click, → or Enter, and ← / Escape go back to its item; ↑ / ↓ (wrapping) and
+  Home / End move within the menu and within the submenu. The submenu
+  flips to the menu's left, and upwards (its bottom level with its item),
+  where the window has no room.
   A refused shape (the 512-point cap) shows the message as a hint. history/gestures.ts makes each gesture one undo
   entry. Keys on a focused lane: Delete, Cmd/Ctrl+A, Escape, ←/→ (1/16,
   Shift a beat); the rest bubble.

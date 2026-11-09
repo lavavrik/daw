@@ -895,6 +895,27 @@ test('Insert shape ▸ Ramp up on a cutoff lane over the loop range; one undo re
   await expect.poll(() => savedLanes(page, t.slot)).toEqual(before);
 });
 
+test('the Insert shape submenu flips up and left near the window corner', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  const t = (await tracks(page)).at(-1)!;
+  const lane = await addLane(page, t.slot, 'Filter', 'Cutoff');
+  // The lane sits high in the window: open its menu as if right-clicked in the window's bottom-right
+  // corner (the menu goes where the event says, clamped into the window).
+  const vp = page.viewportSize()!;
+  await page.getByTestId(lane).evaluate((el, vp) => {
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: vp.width - 5, clientY: vp.height - 5 }));
+  }, vp);
+  await page.getByTestId('auto-menu-shape').click();
+  const sub = page.getByTestId('auto-shape-menu');
+  await expect(sub).toHaveClass(/\bup\b/);
+  await expect(sub).toHaveClass(/\bleft\b/);
+  const r = (await sub.boundingBox())!;
+  expect(r.y + r.height).toBeLessThanOrEqual(vp.height);
+  expect(r.x + r.width).toBeLessThanOrEqual(vp.width);
+  await page.screenshot({ path: 'test-results/automation-shape-flip.png' });
+});
+
 test('Insert shape ▸ Sine 1/4 over the 4 bars from the playhead: 16 cycles', async ({ page }) => {
   test.setTimeout(60_000);
   await start(page);
@@ -910,6 +931,16 @@ test('Insert shape ▸ Sine 1/4 over the 4 bars from the playhead: 16 cycles', a
   await expect(page.getByTestId('auto-shape-ramp-up')).toBeFocused();
   await expect(page.getByTestId('auto-shape-range')).toHaveText('Bars 5–8');
   await page.screenshot({ path: 'test-results/automation-shape-menu.png' });
+  // ↑ / ↓ wrap, Home / End jump, within the submenu.
+  await page.keyboard.press('End');
+  await expect(page.getByTestId('auto-shape-gate-16')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('auto-shape-ramp-up')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByTestId('auto-shape-gate-16')).toBeFocused();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('auto-shape-ramp-down')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('auto-shape-menu')).toBeHidden();
   await expect(page.getByTestId('auto-menu-shape')).toBeFocused();
@@ -917,6 +948,19 @@ test('Insert shape ▸ Sine 1/4 over the 4 bars from the playhead: 16 cycles', a
   await expect(page.getByTestId('auto-menu')).toBeHidden();
 
   await insertShapeVia(page, lane, 6 * BAR, 'sine-4', /^Bars 5–8$/);
+  // On a point the menu is Linear, Hold, Delete, Insert shape: ↓ / ↑ / End / Home move among them.
+  await clickLane(page, lane, 4 * BAR + BAR / 16, 1, { button: 'right' }); // the first top
+  await expect(page.getByTestId('auto-menu-linear')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('auto-menu-hold')).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(page.getByTestId('auto-menu-shape')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('auto-menu-linear')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByTestId('auto-menu-shape')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('auto-menu')).toBeHidden();
   const pts = (await savedLanes(page, t.slot))[0].points as number[][];
   expect(pts).toHaveLength(65); // 4 breakpoints per cycle + the end
   expect(pts[0][0]).toBe(4 * BAR);

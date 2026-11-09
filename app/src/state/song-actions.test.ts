@@ -10,6 +10,7 @@ import {
   setMode, splitClips, stopTransport, toggleTransport,
 } from './song-actions';
 import { addAudioClip, addAudioTrack } from './audio-actions';
+import { addLane, addPoint } from './automation-actions';
 
 function setup() {
   const sent: number[][] = [];
@@ -110,6 +111,28 @@ describe('clips', () => {
     expect(b.start + b.len).toBe(MAX_SONG_TICKS);
     expect(moveClips(p, sink, [b.id], 0)).toBe(true); // no change: nothing sent
     expect(sent).toHaveLength(1);
+  });
+
+  it('automation follows clips: a time move carries the points in [start, end) and replaces the destination\'s', () => {
+    const { p, sink, d0, d2 } = setup();
+    const a = addClip(p, sink, d0.id, { start: 0, len: 3840 })!;
+    const lane = addLane(p, sink, d0.id, { kind: 'mix', param: 'pan' })!;
+    const other = addLane(p, sink, d2.id, { kind: 'mix', param: 'pan' })!;
+    for (const [tick, value] of [[0, -1], [1920, 0], [3840, 0.5], [9000, 0.2], [10000, 0.9]] as const) addPoint(p, sink, lane.id, { tick, value });
+    addPoint(p, sink, other.id, { tick: 100, value: 1 });
+    const at = () => lane.points.map((x) => [x.tick, x.value]);
+    // Into 7680..11520: 0 and 1920 go along; 3840 (the clip's end) stays; 9000 and 10000 are replaced.
+    expect(moveClips(p, sink, [a.id], 7680)).toBe(true);
+    expect(at()).toEqual([[3840, 0.5], [7680, -1], [9600, 0]]);
+    expect(other.points.map((x) => x.tick)).toEqual([100]); // another track's lanes never move
+    // carry: false (a drag's steps): the clip only.
+    expect(moveClips(p, sink, [a.id], -7680, 0, { carry: false })).toBe(true);
+    expect(a.start).toBe(0);
+    expect(at()).toEqual([[3840, 0.5], [7680, -1], [9600, 0]]);
+    // A duplicate copies (the source keeps its points), replacing what was under the copy.
+    moveClips(p, sink, [a.id], 7680, 0, { carry: false }); // back over its points
+    duplicateClips(p, sink, [a.id]);
+    expect(at()).toEqual([[3840, 0.5], [7680, -1], [9600, 0], [11520, -1], [13440, 0]]);
   });
 
   it('resizeClip edits start/len/offset; invalid values are refused', () => {

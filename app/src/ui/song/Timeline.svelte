@@ -160,6 +160,8 @@
     deleteClips, duplicateClips, makeUnique, moveClips, resizeClip, seek, setLoop, addClip, splitClips, transportPlaying,
   } from '../../state/song-actions';
   import { fileSeconds, setAudioClip, trimAudioClipStart } from '../../state/audio-actions';
+  import { carryPoints } from '../../state/automation-actions';
+  import { useAutoBus } from '../autoBus';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { MAX_SONG_TICKS } from '../../audio/protocol';
   import TrackHeaders from './TrackHeaders.svelte';
@@ -354,8 +356,13 @@
   // ---- drawing -------------------------------------------------------------
   /** Heard song tick while playing in Song mode, else null. Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
-  /** The song playhead: the heard tick while the song plays, else the parked song position (split, Insert shape). */
-  const songPlayhead = () => (playTick !== null && p.playing && p.mode === 'song' ? Math.round(playTick) : p.songPosition);
+  /**
+   * The song playhead (split, Insert shape, Add track ▸ Transition): the
+   * AutoBus's songTick, the one rule the menu bar uses too (the heard tick
+   * while the song plays, else the parked song position).
+   */
+  const autoBus = useAutoBus();
+  const songPlayhead = () => autoBus?.songTick() ?? p.songPosition;
 
   // The playlist is the song's view: with the PAT/SONG switch gone (plan 20)
   // the hidden `p.mode` (which transport ran last) must not change it while
@@ -736,7 +743,8 @@
   });
 
   // ---- pointer ---------------------------------------------------------------
-  type Orig = { id: string; start: number; len: number; offset: number };
+  /** A clip as the drag found it (`trackId`: its track then; audio clips can change tracks). */
+  type Orig = { id: string; start: number; len: number; offset: number; trackId: string };
   type Drag =
     | {
         kind: 'move'; ids: string[]; orig: Orig[]; anchor: Orig; x0: number; y0: number; moved: boolean; last: string; laneHint: boolean; wasMulti: boolean; placed?: boolean;
@@ -772,7 +780,7 @@
     const out: Orig[] = [];
     for (const id of ids) {
       const f = byId.get(id);
-      if (f) out.push({ id, start: f.c.start, len: f.c.len, offset: f.c.offset });
+      if (f) out.push({ id, start: f.c.start, len: f.c.len, offset: f.c.offset, trackId: f.t.id });
     }
     return out;
   };
@@ -905,9 +913,10 @@
         const f = byId.get(a.id);
         if (!f) return;
         const dLane = lane < 0 ? 0 : lane - f.lane;
-        if (!moveClips(p, engine, d.ids, a.start + dt - f.c.start, dLane) && dLane !== 0) {
+        // The clips only: the lanes' points follow once, at the release (carryDrag).
+        if (!moveClips(p, engine, d.ids, a.start + dt - f.c.start, dLane, { carry: false }) && dLane !== 0) {
           // A lane in the group's way is not an Audio lane (or is full): time only.
-          moveClips(p, engine, d.ids, a.start + dt - f.c.start);
+          moveClips(p, engine, d.ids, a.start + dt - f.c.start, 0, { carry: false });
           flashHint('Audio clips move between audio tracks only');
         } else if (dLane !== 0) {
           // On another track now: select it, so the Clip tab follows the clip.
@@ -945,6 +954,23 @@
     }
   }
 
+  /**
+   * A clip drag's release: the moved clips' tracks' lane points follow them,
+   * from where the drag began (state/song-actions.ts: automation follows
+   * clips), inside the drag's gesture (one undo entry). The steps moved the
+   * clips only, so a clip dragged across other automation never eats it on
+   * the way. A clip that changed tracks (audio) leaves its points behind; a
+   * place-and-drag (a new clip) carries nothing: the points were not its.
+   */
+  function carryDrag(orig: Orig[]) {
+    const spans = [];
+    for (const o of orig) {
+      const f = byId.get(o.id);
+      if (f && f.t.id === o.trackId) spans.push({ trackId: o.trackId, start: o.start, end: o.start + o.len, dt: f.c.start - o.start });
+    }
+    carryPoints(p, engine, spans);
+  }
+
   function laneHintOnce(d: { laneHint: boolean }) {
     if (d.laneHint) return;
     d.laneHint = true;
@@ -969,6 +995,7 @@
     if (d.kind === 'box') box = null;
     else if (d.kind === 'ruler' && d.moved && d.quiet) setLoop(p, engine, { ...p.loop }); // the one send
     else if (d.kind === 'move' && !d.moved && d.wasMulti && !e.shiftKey) selected = new Set([d.anchor.id]);
+    else if (d.kind === 'move' && d.moved && !d.placed) carryDrag(d.orig);
     else if (d.kind === 'ruler' && !d.moved) {
       seek(p, engine, seekTick(d.t0, e.altKey));
       // While the pattern transport plays the engine ignores the song position until the song transport plays.

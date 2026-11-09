@@ -203,6 +203,64 @@ export function movePoints(
   });
 }
 
+/** A stretch of song time [start, end) of track `trackId` whose lane points go `dt` ticks along (carryPoints). */
+export interface CarrySpan {
+  trackId: string;
+  start: number;
+  end: number;
+  dt: number;
+}
+
+/**
+ * Automation follows clips (code review of plan 28; as Ableton's default):
+ * the points of track `trackId`'s own lanes inside each span's [start, end)
+ * go `dt` ticks along with the clip that covered them, and they REPLACE
+ * whatever that lane had in the destination [start + dt, end + dt) (so a
+ * sweep moved onto old automation brings its shape, not a merge). `copy`
+ * (a duplicated clip): the source points also stay where they are.
+ * Half-open spans: a point on a clip's end belongs to what follows, so a
+ * clip and its copy right after it never fight over one tick (the
+ * Transition sweeps end one tick before their clip's end for this).
+ * A point in two spans (overlapping clips) goes with the first. A lane the
+ * copy would push over MAX_AUTO_POINTS is left as it was. Lanes of the
+ * Master row never move (no clips). One undo entry with the clip edit that
+ * calls it (song-actions.ts moveClips / duplicateClips, the timeline's drag).
+ */
+export function carryPoints(p: Project, sink: CommandSink, spans: readonly CarrySpan[], copy = false) {
+  const moving = spans.filter((s) => s.dt !== 0 && s.end > s.start);
+  if (!moving.length) return;
+  edit(p, copy ? 'Copy automation' : 'Move automation', () => {
+    for (const t of p.tracks) {
+      const mine = moving.filter((s) => s.trackId === t.id);
+      if (!mine.length) continue;
+      for (const lane of t.automation) {
+        const carried: Want[] = [];
+        const stay: AutoPoint[] = [];
+        for (const x of lane.points) {
+          const s = mine.find((m) => x.tick >= m.start && x.tick < m.end);
+          if (s) carried.push({ old: copy ? null : x, tick: x.tick + s.dt, value: x.value, hold: x.hold, curve: x.curve });
+          if (!s || copy) stay.push(x);
+        }
+        if (!carried.length) continue;
+        const replaced = (tick: number) => mine.some((m) => tick >= m.start + m.dt && tick < m.end + m.dt);
+        // Kept points are all outside the destinations and carried ones all inside, so ticks only
+        // collide between carried points (overlapping spans): the first one wins.
+        const byTick = new Map<number, Want>();
+        for (const x of stay) if (!replaced(x.tick)) byTick.set(x.tick, keep(x));
+        const landed = new Set<number>();
+        for (const w of carried) {
+          if (w.tick < 0 || w.tick > MAX_SONG_TICKS || landed.has(w.tick)) continue; // clips stay in the song: never a point outside
+          landed.add(w.tick);
+          byTick.set(w.tick, w);
+        }
+        const want = [...byTick.values()];
+        if (want.length > MAX_AUTO_POINTS) continue;
+        commitPoints(sink, lane, want);
+      }
+    }
+  });
+}
+
 /** Delete points `ids`. False when none of them is in the lane. */
 export function deletePoints(p: Project, sink: CommandSink, laneId: string, ids: string[]): boolean {
   const f = findLane(p, laneId);

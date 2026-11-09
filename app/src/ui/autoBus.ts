@@ -100,8 +100,8 @@ export interface AutoBus {
   /**
    * The song playhead (a tick): the heard position while the song plays,
    * else the parked song position. Where "at the playhead" edits go when
-   * they are made outside the timeline (Add ▸ Transition, plan 28 Task 3;
-   * the timeline's own songPlayhead is the same rule).
+   * they are made (split, Insert shape, Add ▸ Transition): the timeline's
+   * songPlayhead and the menu bar both read it. shownTick in Song mode.
    */
   songTick(): number;
   /** Evaluate every control now (and start the loop if it should run). */
@@ -254,9 +254,7 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
       };
     },
     songTick() {
-      if (!p.playing || p.mode !== 'song') return p.songPosition;
-      const t = d.heardTicks();
-      return Number.isFinite(t) ? Math.max(0, Math.round(t)) : p.songPosition;
+      return p.mode === 'song' ? Math.round(shownTick()) : p.songPosition;
     },
     touch(owner, target) {
       if (p.mode !== 'song') return false;

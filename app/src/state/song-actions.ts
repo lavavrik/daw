@@ -8,6 +8,11 @@
 // (null/false), except moveClips, which clamps the group's time delta so the
 // whole selection stays in the song. Snapping is the UI's job, not done here.
 //
+// Automation follows clips (code review of plan 28): a time move or a
+// duplicate takes the track's own lane points inside the clips' spans along
+// (automation-actions.ts carryPoints), in the same undo entry. A lane move
+// (audio clips onto another Audio lane) leaves the points on their track.
+//
 // Audio clips (plan 9, Audio tracks) are clips too: moveClips, resizeClip,
 // deleteClips, duplicateClips and splitClips take ids of either kind and
 // send an audio clip as SOURCE, GAIN, SET (audio-actions.ts sendAudioClip).
@@ -19,6 +24,8 @@ import type { AudioClip, AudioTrack, Clip, PatternTrack, Project } from './proje
 import type { CommandSink } from './actions';
 import { patternFocusSlot, play, sendPatternFocus, stop } from './actions';
 import { copyPattern, patternOf } from './pattern-actions';
+import { carryPoints } from './automation-actions';
+import type { CarrySpan } from './automation-actions';
 import { edit } from './edits';
 import {
   MAX_AUDIO_OFFSET, fileSeconds, freeClipIdx, placeAudioClip, sendAudioClip, setAudioClip, ticksPerSecond, updateAudioClip,
@@ -110,8 +117,16 @@ const resend = (sink: CommandSink, f: Found) => (f.audio ? sendAudioClip(sink, f
  * belong to tracks and the engine cannot copy one across tracks, so any
  * mapping would silently change what the clip plays. A selection with a
  * note clip therefore refuses every lane move.
+ *
+ * A time move carries the tracks' lane points inside the clips along (the
+ * header). `carry: false`: the clips only, for a drag's steps; the timeline
+ * carries the points once at the release, from where the drag began
+ * (Timeline.svelte), so a clip dragged across other automation never eats
+ * it on the way.
  */
-export function moveClips(p: Project, sink: CommandSink, ids: string[], dTicks: number, dLane = 0): boolean {
+export function moveClips(
+  p: Project, sink: CommandSink, ids: string[], dTicks: number, dLane = 0, opts?: { carry?: boolean },
+): boolean {
   return edit(p, 'Move clips', () => {
     const found = findClips(p, ids);
     if (!found.length || !Number.isFinite(dTicks) || !Number.isInteger(dLane)) return false;
@@ -135,10 +150,12 @@ export function moveClips(p: Project, sink: CommandSink, ids: string[], dTicks: 
     const dt = Math.min(MAX_SONG_TICKS - maxEnd, Math.max(-minStart, Math.round(dTicks)));
     if (dt === 0 && dLane === 0) return true;
     if (dLane === 0) {
+      const spans: CarrySpan[] = found.map(({ t, c }) => ({ trackId: t.id, start: c.start, end: c.start + c.len, dt }));
       for (const f of found) {
         f.c.start += dt;
         resend(sink, f);
       }
+      if (opts?.carry !== false) carryPoints(p, sink, spans);
       return true;
     }
     // Every removal first, so a slot freed on one track can take a clip coming in.
@@ -190,17 +207,25 @@ export function deleteClips(p: Project, sink: CommandSink, ids: string[]) {
   });
 }
 
-/** Each copy goes right after its source (same lane, pattern or sample, length, offset, ...). Copies that do not fit are skipped. */
+/**
+ * Each copy goes right after its source (same lane, pattern or sample,
+ * length, offset, ...), with a copy of the track's lane points inside the
+ * source (the header). Copies that do not fit are skipped.
+ */
 export function duplicateClips(p: Project, sink: CommandSink, ids: string[]): (Clip | AudioClip)[] {
   return edit(p, 'Duplicate clips', () => {
     const out: (Clip | AudioClip)[] = [];
+    const spans: CarrySpan[] = [];
     for (const f of findClips(p, ids)) {
       const { c } = f;
       const copy = f.audio
         ? placeAudioClip(p, sink, f.t, { ...f.c, start: c.start + c.len })
         : addClip(p, sink, f.t.id, { start: c.start + c.len, len: c.len, patternId: f.c.patternId, offset: f.c.offset });
-      if (copy) out.push(copy);
+      if (!copy) continue;
+      out.push(copy);
+      spans.push({ trackId: f.t.id, start: c.start, end: c.start + c.len, dt: copy.start - c.start });
     }
+    carryPoints(p, sink, spans, true);
     return out;
   });
 }

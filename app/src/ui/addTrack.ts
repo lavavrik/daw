@@ -23,13 +23,26 @@ export type AddKind = 'drum' | 'synth' | 'sampler' | 'audio' | 'master';
 /** The footer's "+ Synth track" patch. */
 const DEEP_BASS = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
 
-export const ADD_ITEMS: { kind: AddKind; label: string; title: string }[] = [
+export interface AddItem {
+  kind: AddKind;
+  label: string;
+  title: string;
+}
+
+export const ADD_ITEMS: AddItem[] = [
   { kind: 'drum', label: 'Drum track', title: 'Add a drum track with the starter kit (as a new project has)' },
   { kind: 'synth', label: 'Synth track', title: 'Add a synth track (Deep Bass)' },
   { kind: 'sampler', label: 'Sampler track', title: 'Add a sampler track (drop a sample on its Sample Player)' },
   { kind: 'audio', label: 'Audio track', title: 'Add an audio track: drop audio files on its lane' },
   { kind: 'master', label: 'Master row', title: 'Show the Master row: automation lanes for the master, reverb and delay' },
 ];
+
+/**
+ * The track kinds and the Master row apart: both Add menus list the track
+ * kinds, then Transition ▸ (state/transitions.ts), then the Master row.
+ */
+export const TRACK_ITEMS = ADD_ITEMS.filter((a) => a.kind !== 'master');
+export const MASTER_ITEM = ADD_ITEMS.find((a) => a.kind === 'master')!;
 
 /** Is the Master row on screen (it has a lane, or it was asked for)? Same rule as the timeline's masterShown. */
 export const masterRowShown = (p: Project) => p.mixer.automation.length > 0 || laneView.master;

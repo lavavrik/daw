@@ -36,7 +36,7 @@
 // before this one.
 import { MAX_ROWS, MAX_TRACKS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
-import { addDrumTrack, addRow, setRowSample, uniqueTrackName } from './actions';
+import { TRACKS_FULL_TEXT, addDrumTrack, addRow, setRowSample, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { banners } from './banners.svelte';
 import { edit } from './edits';
@@ -233,6 +233,13 @@ export async function addKitDrumTrack(
   const { ids, failed } = got;
   const failure = kitFailureText(kit, failed);
   if (failure) deps.onError(failure);
+  // The samples took a moment: another add (a synth, a transition, ...) may
+  // have taken the last track slot meanwhile. Say so rather than drop the
+  // track silently (code review of plan 28).
+  if (p.tracks.length >= MAX_TRACKS) {
+    deps.onError(`No room for the ${kit.name} drum track: ${TRACKS_FULL_TEXT}`);
+    return null;
+  }
   return edit(p, 'Add drum track', () => {
     const name = uniqueTrackName(p, kit.id === STARTER_KIT_ID ? 'Drums' : kit.name);
     const t = addDrumTrack(p, engine, name, kit.rows.map((s) => s.role));

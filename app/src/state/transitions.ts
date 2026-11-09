@@ -4,6 +4,11 @@
 // (housePatches.ts TRANSITION_PATCHES), one pattern holding its notes, one
 // clip of that pattern placed against the playhead's bar, and, for the
 // sweeps, two automation lanes drawn with the shapes of automation-actions.ts.
+// The lanes are the patch's own: the filter's cutoff and the amp VCA's
+// level, both inside the rack, so the track's mixer fader stays the user's
+// to set the transition's level (a fader lane would take it over).
+// Automation follows clips (song-actions.ts), so moving or duplicating the
+// clip takes its sweep along.
 //
 // Placement (owner, after plan 28): a Riser builds INTO a moment, so it ENDS
 // where the user clicked: its clip fills the bars before the playhead's bar
@@ -12,21 +17,28 @@
 // is nothing before, so it starts there instead. A Downlifter (it follows a
 // moment) and an Impact (it IS the moment) START at the playhead's bar.
 //
-//
 //   Riser       8 bars  Noise Sweep  cutoff ramps up 200 Hz → 12 kHz,
-//                                    track volume −24 dB → 0 dB
+//                                    amp level −24 dB → 0 dB
 //   Downlifter  4 bars  Noise Sweep  cutoff ramps down 12 kHz → 200 Hz,
-//                                    track volume 0 dB → −30 dB
+//                                    amp level 0 dB → −30 dB
 //   Impact      1 bar   Impact       one 1/8 hit on beat 1, reverb send −6 dB
 //
+// The level lane is the VCA's linear `level` (0..1); its ramp is bent
+// (a point curve) so it passes the dB midpoint halfway, i.e. it rises or
+// falls about evenly in dB, as a fader ramp would. Each shape's closing
+// point sits one tick before the clip's end: automation that follows a
+// clip takes the points in [start, end), so the sweep's end goes with it
+// and a copy placed right after never fights it for a tick.
+//
 // Built from the ordinary actions (addSynthTrack, renamePattern,
-// setPatternBars, addNotes, addClip, setMix, addLane, insertShape), so the
-// engine gets exactly the commands a user's own edits would send and a saved
-// project holds nothing new. The whole add is ONE undo entry ("Add riser",
+// setPatternBars, addNotes, addClip, setMix, addLane, insertShape,
+// setPointCurve), so the engine gets exactly the commands a user's own
+// edits would send and a saved project holds nothing new. The whole add is ONE undo entry ("Add riser",
 // …): the outer edit(); the nested actions run inside it and make no entry of
 // their own. Everything that can fail (tracks full, too few free automation
-// lanes) is checked BEFORE the first change, so a refusal returns null with
-// no state change, no engine command and no undo entry.
+// lanes, a load in progress, a patch without the module a lane needs) is
+// checked BEFORE the first change, so a refusal returns null with no state
+// change, no engine command and no undo entry.
 //
 // The sweeps' notes: one bar-long C4 per bar, back to back, rather than one
 // note held over the whole clip. Noise Sweep is mono with a full-sustain
@@ -45,13 +57,13 @@
 // so its tail is the track's reverb send (send_a, the Reverb return): −6 dB,
 // louder than any mix preset's send (Pad wash −8), so the hit leaves a long,
 // clearly audible tail on whatever reverb the project's return holds.
-import { moduleDef } from '../audio/catalog';
 import { BAR_TICKS, MAX_AUTO_LANES, MAX_SONG_TICKS } from '../audio/protocol';
-import { TRACKS_FULL_TEXT, uniqueTrackName } from './actions';
+import { LOADING_TEXT, TRACKS_FULL_TEXT, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
-import { addLane, insertShape } from './automation-actions';
+import { addLane, insertShape, setPointCurve } from './automation-actions';
 import type { AutoShape } from './automation-actions';
 import { laneCount } from './automation';
+import { banners } from './banners.svelte';
 import { edit } from './edits';
 import { TRANSITION_PATCHES } from './housePatches';
 import { setMix } from './mixer-actions';
@@ -67,10 +79,26 @@ export type TransitionKind = 'riser' | 'downlifter' | 'impact';
 /** The sweeps' cutoff travel (Task 1's recommended Noise Sweep lane range). */
 export const SWEEP_LO_HZ = 200;
 export const SWEEP_HI_HZ = 12000;
-/** The Riser's volume starts here (dB) and rises to 0 dB. */
+/** The Riser's level starts here (dB) and rises to 0 dB. */
 export const RISER_FROM_DB = -24;
-/** The Downlifter's volume falls from 0 dB to here (dB). */
+/** The Downlifter's level falls from 0 dB to here (dB). */
 export const DOWNLIFTER_TO_DB = -30;
+
+/** A gain in dB as a VCA `level` (linear amplitude, 0 dB = 1). */
+export const dbLevel = (db: number) => 10 ** (db / 20);
+
+/**
+ * The curve (automation.ts bend: f(x) = x^(2^(−3·curve))) that makes a
+ * linear-level ramp from `fromDb` to `toDb` pass their dB midpoint halfway
+ * through, so it moves about evenly in dB. Riser −24 → 0: −0.40 (slow, then
+ * fast); Downlifter 0 → −30: 0.69 (fast, then slow).
+ */
+export function dbRampCurve(fromDb: number, toDb: number): number {
+  const a = dbLevel(fromDb);
+  const b = dbLevel(toDb);
+  const frac = (dbLevel((fromDb + toDb) / 2) - a) / (b - a); // the way along at x = 0.5
+  return Math.min(1, Math.max(-1, -Math.log2(Math.log(frac) / Math.log(0.5)) / 3));
+}
 /** The Impact track's reverb send (dB): a long, audible tail. */
 export const IMPACT_REVERB_SEND_DB = -6;
 /** Every transition note's pitch (C4). */
@@ -78,10 +106,14 @@ export const TRANSITION_PITCH = 60;
 /** The Impact's hit: a 1/8 note (Task 1: one hit; 1/8 is enough). */
 export const IMPACT_HIT_TICKS = BAR_TICKS / 8;
 
-/** A lane a transition draws: the filter's cutoff or the track's volume, with its shape over the clip. */
+/**
+ * A lane a transition draws: the filter's cutoff or the amp VCA's level, with
+ * its shape over the clip and the curve of its first point (0: straight).
+ */
 interface LaneSpec {
-  target: 'cutoff' | 'volume';
+  target: 'cutoff' | 'level';
   shape: AutoShape;
+  curve: number;
 }
 
 export interface TransitionDef {
@@ -110,21 +142,21 @@ const barNotes = (bars: number) =>
 export const TRANSITIONS: readonly TransitionDef[] = [
   {
     kind: 'riser', label: 'Riser', bars: 8, anchor: 'end', patch: TRANSITION_PATCHES.noiseSweep,
-    title: 'Add a Riser track: 8 bars of noise ending at the playhead (the drop), its filter opening and its volume rising',
+    title: 'Add a Riser track: 8 bars of noise ending at the playhead (the drop), its filter opening and its level rising',
     notes: barNotes,
     lanes: [
-      { target: 'cutoff', shape: { kind: 'ramp-up', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ } },
-      { target: 'volume', shape: { kind: 'ramp-up', lo: RISER_FROM_DB, hi: 0 } },
+      { target: 'cutoff', shape: { kind: 'ramp-up', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ }, curve: 0 },
+      { target: 'level', shape: { kind: 'ramp-up', lo: dbLevel(RISER_FROM_DB), hi: 1 }, curve: dbRampCurve(RISER_FROM_DB, 0) },
     ],
     mix: {},
   },
   {
     kind: 'downlifter', label: 'Downlifter', bars: 4, anchor: 'start', patch: TRANSITION_PATCHES.noiseSweep,
-    title: 'Add a Downlifter track: 4 bars of noise from the playhead, its filter closing and its volume falling',
+    title: 'Add a Downlifter track: 4 bars of noise from the playhead, its filter closing and its level falling',
     notes: barNotes,
     lanes: [
-      { target: 'cutoff', shape: { kind: 'ramp-down', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ } },
-      { target: 'volume', shape: { kind: 'ramp-down', lo: DOWNLIFTER_TO_DB, hi: 0 } },
+      { target: 'cutoff', shape: { kind: 'ramp-down', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ }, curve: 0 },
+      { target: 'level', shape: { kind: 'ramp-down', lo: dbLevel(DOWNLIFTER_TO_DB), hi: 1 }, curve: dbRampCurve(0, DOWNLIFTER_TO_DB) },
     ],
     mix: {},
   },
@@ -141,9 +173,12 @@ export const transitionDef = (kind: TransitionKind): TransitionDef => TRANSITION
 
 /** Why transition `kind` can't be added now (its menu item's disabled tooltip), or null. */
 export function transitionBlocked(p: Project, kind: TransitionKind): string | null {
+  if (p.loading) return LOADING_TEXT;
   if (p.tracks.length >= MAX_TRACKS) return TRACKS_FULL_TEXT;
-  const need = transitionDef(kind).lanes.length;
-  if (laneCount(p) + need > MAX_AUTO_LANES) return `A ${transitionDef(kind).label} needs ${need} free automation lanes: all ${MAX_AUTO_LANES} are in use`;
+  const d = transitionDef(kind);
+  const need = d.lanes.length;
+  if (laneCount(p) + need > MAX_AUTO_LANES) return `A ${d.label} needs ${need} free automation lanes: all ${MAX_AUTO_LANES} are in use`;
+  if (d.lanes.some((l) => laneModule(d.patch, l.target) === null)) return `${d.patch.name} has no module for the ${d.label}'s sweep`;
   return null;
 }
 
@@ -170,12 +205,22 @@ export function transitionPlace(playhead: number, bars: number, anchor: 'start' 
   return { start: end - n * BAR_TICKS, bars: n };
 }
 
-/** The lane target a LaneSpec names on the new track (its rack's filter, or the volume fader). */
-function laneTarget(t: SynthTrack, target: LaneSpec['target']): AutoTarget | null {
-  if (target === 'volume') return { kind: 'mix', param: 'fader' };
-  const filter = t.modules.find((m) => moduleDef(m.kind).id === 'filter');
-  return filter ? { kind: 'rack', module: filter.idx, param: 'cutoff' } : null;
+/**
+ * The module of `patch` a LaneSpec drives (the new track's modules keep the
+ * patch's idx): its first filter, or the VCA cabled into its Out (the amp,
+ * before the mixer: the fader stays free). Null: the patch has none.
+ */
+function laneModule(patch: Patch, target: LaneSpec['target']): number | null {
+  if (target === 'cutoff') return patch.modules.find((m) => m.id === 'filter')?.idx ?? null;
+  const outs = new Set(patch.modules.filter((m) => m.id === 'out').map((m) => m.idx));
+  const vcas = new Set(patch.modules.filter((m) => m.id === 'vca').map((m) => m.idx));
+  return patch.cables.find((c) => vcas.has(c.from[0]) && outs.has(c.to[0]))?.from[0] ?? null;
 }
+
+/** The lane target a LaneSpec names (laneModule, checked by transitionBlocked). */
+const laneTarget = (patch: Patch, target: LaneSpec['target']): AutoTarget => ({
+  kind: 'rack', module: laneModule(patch, target)!, param: target === 'cutoff' ? 'cutoff' : 'level',
+});
 
 /**
  * Add transition `kind` with its clip at the bar `playhead` (a song tick) is
@@ -199,11 +244,13 @@ export function addTransition(p: Project, sink: CommandSink, kind: TransitionKin
     addClip(p, sink, t.id, { start, len, patternId: pat.id });
     for (const [param, v] of Object.entries(d.mix)) setMix(p, sink, t.id, param, v);
     for (const l of d.lanes) {
-      const target = laneTarget(t, l.target);
-      const lane = target && addLane(p, sink, t.id, target);
-      // The shape spans the clip; its closing point sits on the clip's end (the range end is exclusive,
-      // the lane is empty there, so the point is written): the value holds after the clip.
-      if (lane) insertShape(p, sink, lane.id, l.shape, { start, end: start + len });
+      const lane = addLane(p, sink, t.id, laneTarget(d.patch, l.target));
+      // The shape spans the clip; its closing point sits one tick before the clip's end (the header:
+      // it moves with the clip), and the value holds after it.
+      const shaped = lane ? insertShape(p, sink, lane.id, l.shape, { start, end: start + len - 1 }) : null;
+      if (lane && shaped?.ok && l.curve) setPointCurve(p, sink, t.id, lane.id, lane.points[0].id, l.curve);
+      // Checked up front (transitionBlocked), so this should never happen; if it does, say so.
+      if (!shaped?.ok) banners.error = `The ${d.label}'s ${l.target} sweep could not be drawn${shaped && !shaped.ok ? `: ${shaped.message}` : ''}`;
     }
     return t;
   });

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import mixerCatalog from '../../engine/mixer_catalog.json' with { type: 'json' };
 import { openAddTrack } from './addTrack';
 import { startApp } from './startApp';
 
@@ -9,6 +10,8 @@ import { startApp } from './startApp';
 // (telemetry slot 5) with the song position of the same block (slot 2).
 
 const BAR = 3840;
+/** The Reverb send's mixer param id, by name (never a hard-coded number). */
+const SEND_A = mixerCatalog.params.find((x) => x.name === 'send_a')!.id;
 const T = { ticks: 2, peakL: 5 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -86,12 +89,14 @@ test('Add ▸ Transition ▸ Riser with the playhead in bar 17: a track, a clip 
   expect(t.patch.name).toBe('Noise Sweep');
   expect(t.clips.map((c: Any) => [c.start, c.len])).toEqual([[8 * BAR, 8 * BAR]]);
   expect(t.automation).toHaveLength(2);
-  // The cutoff opens 200 Hz → 12 kHz and the volume rises −24 → 0 dB over the clip.
+  // The cutoff opens 200 Hz → 12 kHz and the amp level rises −24 → 0 dB over the clip (its last point one
+  // tick before the clip's end: it moves with the clip). The fader has no lane: it stays the user's.
   const lanes = t.automation.map((l: Any) => [...l.points].sort((a: number[], b: number[]) => a[0] - b[0]).map((x: number[]) => [x[0], x[1]]));
-  expect(lanes).toEqual([
-    [[8 * BAR, 200], [16 * BAR, 12000]],
-    [[8 * BAR, -24], [16 * BAR, 0]],
-  ]);
+  expect(lanes).toHaveLength(2);
+  expect(lanes[0]).toEqual([[8 * BAR, 200], [16 * BAR - 1, 12000]]);
+  expect(lanes[1].map((x: number[]) => x[0])).toEqual([8 * BAR, 16 * BAR - 1]);
+  expect(lanes[1][0][1]).toBeCloseTo(10 ** (-24 / 20), 4);
+  expect(lanes[1][1][1]).toBe(1);
   // The lanes are open under the new row.
   await expect(page.getByTestId(`auto-lane-${t.slot}-0`)).toBeVisible();
   await expect(page.getByTestId(`auto-lane-${t.slot}-1`)).toBeVisible();
@@ -149,10 +154,10 @@ test('an Impact plays one hit, with a reverb send', async ({ page }) => {
   expect(t.name).toBe('Impact');
   expect(t.clips.map((c: Any) => [c.start, c.len])).toEqual([[BAR, BAR]]);
   expect(t.automation).toEqual([]);
-  const send = await page.evaluate(() => {
+  const send = await page.evaluate((id) => {
     const p = (window as Any).__daw.project;
-    return p.mixer.channels[p.tracks[0].id].params[17]; // send_a (mixer catalog id 17)
-  });
+    return p.mixer.channels[p.tracks[0].id].params[id];
+  }, SEND_A);
   expect(send).toBe(-6);
 
   await page.evaluate((t) => (window as Any).__daw.actions.seek(t), BAR);
@@ -177,4 +182,33 @@ test('an Impact plays one hit, with a reverb send', async ({ page }) => {
   }
   expect(firstAt).toBeGreaterThanOrEqual(BAR);
   expect(firstAt).toBeLessThan(BAR + BAR / 4); // on beat 1 of bar 2
+});
+
+test('dragging a Riser clip takes its sweep along (on release); one undo puts both back', async ({ page }) => {
+  await start(page);
+  await emptySong(page);
+  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 8 * BAR); // bar 9: the Riser is bars 1–8
+  await openAddTrack(page);
+  await page.getByTestId('add-transition-riser').click();
+  await expect.poll(async () => (await snapshot(page)).tracks[0]?.clips?.[0]?.start).toBe(0);
+  const t = (await snapshot(page)).tracks[0];
+  const ticks = async () => (await snapshot(page)).tracks[0].automation.map((l: Any) => l.points.map((x: number[]) => x[0]).sort((a: number, b: number) => a - b));
+  expect(await ticks()).toEqual([[0, 8 * BAR - 1], [0, 8 * BAR - 1]]);
+
+  // Drag the clip 4 bars right by its body (the timeline's own view: ticks per px, scroll).
+  const v = JSON.parse((await page.getByTestId('timeline').getAttribute('data-view'))!);
+  const b = (await page.getByTestId(`clip-${t.slot}-0`).boundingBox())!;
+  const y = b.y + b.height / 2;
+  await page.mouse.move(b.x + 20, y);
+  await page.mouse.down();
+  await page.mouse.move(b.x + 20 + (4 * BAR) / v.ticksPerPx, y, { steps: 8 });
+  // Mid-drag the clip moves, the points wait for the release.
+  await expect.poll(async () => (await snapshot(page)).tracks[0].clips[0].start).toBe(4 * BAR);
+  expect(await ticks()).toEqual([[0, 8 * BAR - 1], [0, 8 * BAR - 1]]);
+  await page.mouse.up();
+  await expect.poll(ticks).toEqual([[4 * BAR, 12 * BAR - 1], [4 * BAR, 12 * BAR - 1]]);
+
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => (await snapshot(page)).tracks[0].clips[0].start).toBe(0);
+  expect(await ticks()).toEqual([[0, 8 * BAR - 1], [0, 8 * BAR - 1]]);
 });

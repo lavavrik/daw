@@ -137,7 +137,7 @@
   import type { Project } from '../state/project.svelte';
   import { MAX_PATTERNS } from '../audio/protocol';
   import { currentPattern, isPatternTrack } from '../state/project.svelte';
-  import { liveInputTrack, setMetronome } from '../state/actions';
+  import { LOADING_TEXT, liveInputTrack, setMetronome } from '../state/actions';
   import {
     PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern,
   } from '../state/pattern-actions';
@@ -154,13 +154,13 @@
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
   import { wheelOctaveSteps } from '../input/qwertyPiano';
-  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from './addTrack';
+  import { MASTER_ITEM, TRACK_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from './addTrack';
   import { TRANSITIONS, transitionBlocked } from '../state/transitions';
   import type { TransitionKind } from '../state/transitions';
   import { useAutoBus } from './autoBus';
   import { KITS } from '../state/kits';
   import { TEMPLATE_MENU } from '../state/templates';
-  import type { AddKind } from './addTrack';
+  import type { AddItem, AddKind } from './addTrack';
   import { laneView } from './song/laneView.svelte';
   import { noteNames, setNoteNames } from './noteNames.svelte';
   import NumberField from './NumberField.svelte';
@@ -260,7 +260,7 @@
   const slug = (m: string) => m.toLowerCase();
   const kbd = (k: string) => formatKeys(k, IS_MAC);
   /** Why an item is inert while a load / New replaces the session. */
-  const LOADING = 'Loading a project…';
+  const LOADING = LOADING_TEXT;
 
   let root = $state<HTMLElement | null>(null);
   /** Every menu's popover stays in the DOM, hidden while closed (as the ⋯ <details> did: tests read a hidden item's state). */
@@ -753,6 +753,35 @@
   }
 </script>
 
+<!-- One Add menu item (the Add menu below): Drum track ▸ its kits, or a plain item. -->
+{#snippet addItem(a: AddItem)}
+  {@const why = addBlocked(p, a.kind)}
+  {#if a.kind === 'drum'}
+    <!-- Drum track ▸ a kit (plan 25): Starter (what the playlist's "Drum track" adds) and the others. -->
+    <div class="subwrap" data-sub="kits">
+      <button
+        class="it" data-testid="menu-add-drum" bind:this={subBtns.kits} aria-expanded={sub === 'kits'} aria-controls="menu-add-kits"
+        use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? 'Add a drum track made of a built-in kit'}
+        onclick={(e) => subClick('kits', e)} onkeydown={(e) => subBtnKey(e, 'kits')}
+      ><Icon icon={ADD_ICONS.drum} /><span class="l">{a.label}</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+      {#if sub === 'kits'}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="sub" id="menu-add-kits" role="group" aria-label="Drum kits" bind:this={subEl} onkeydown={subKey}>
+          {#each KITS as k (k.id)}
+            <button class="it" data-testid="menu-add-drum-kit-{k.id}" title={k.blurb} onclick={() => addKit(k.id)}>
+              <span class="l">{k.name}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <button class="it" data-testid={`menu-add-${a.kind}`} use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? a.title} onclick={() => add(a.kind)}>
+      <Icon icon={ADD_ICONS[a.kind]} /><span class="l">{a.label}</span>
+    </button>
+  {/if}
+{/snippet}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="menubar" role="group" aria-label="Menu bar" bind:this={root} onfocusout={focusOut}>
   {#each MENUS as m (m)}
@@ -823,56 +852,29 @@
             title={undoLabels.redo ? '' : 'Nothing to redo'} onclick={() => edit(onRedo)}
           ><Icon icon={ArrowClockwise} /><span class="l">{undoLabels.redo ? `Redo ${undoLabels.redo}` : 'Redo'}</span><kbd>{kbd('Shift+Mod+Z')}</kbd></button>
         {:else if m === 'Add'}
-          {#each ADD_ITEMS as a (a.kind)}
-            {@const why = addBlocked(p, a.kind)}
-            {#if a.kind === 'master'}
-              <!-- Transition ▸ Riser / Downlifter / Impact (plan 28 Task 3), after the track kinds. -->
-              {@const trackWhy = addBlocked(p, 'synth')}
-              <div class="subwrap" data-sub="transitions">
-                <button
-                  class="it" data-testid="menu-add-transition" bind:this={subBtns.transitions} aria-expanded={sub === 'transitions'} aria-controls="menu-add-transitions"
-                  use:inertItem={trackWhy ?? (p.loading ? LOADING : null)} title={trackWhy ?? 'Add a transition track at the playhead: a riser, a downlifter or an impact'}
-                  onclick={(e) => subClick('transitions', e)} onkeydown={(e) => subBtnKey(e, 'transitions')}
-                ><Icon icon={TrendUp} /><span class="l">Transition</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
-                {#if sub === 'transitions'}
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
-                  <div class="sub" id="menu-add-transitions" role="group" aria-label="Transitions" bind:this={subEl} onkeydown={subKey}>
-                    {#each TRANSITIONS as tr (tr.kind)}
-                      {@const trWhy = transitionBlocked(p, tr.kind)}
-                      <button class="it" data-testid="menu-add-transition-{tr.kind}" use:inertItem={trWhy} title={trWhy ?? tr.title} onclick={() => addTransitionItem(tr.kind)}>
-                        <span class="l">{tr.label}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
+          <!-- The track kinds, Transition ▸ (plan 28 Task 3), then the Master row (addTrack.ts TRACK_ITEMS / MASTER_ITEM). -->
+          {#each TRACK_ITEMS as a (a.kind)}{@render addItem(a)}{/each}
+          {@const trackWhy = addBlocked(p, 'synth')}
+          <div class="subwrap" data-sub="transitions">
+            <button
+              class="it" data-testid="menu-add-transition" bind:this={subBtns.transitions} aria-expanded={sub === 'transitions'} aria-controls="menu-add-transitions"
+              use:inertItem={trackWhy ?? (p.loading ? LOADING : null)} title={trackWhy ?? 'Add a transition track at the playhead: a riser, a downlifter or an impact'}
+              onclick={(e) => subClick('transitions', e)} onkeydown={(e) => subBtnKey(e, 'transitions')}
+            ><Icon icon={TrendUp} /><span class="l">Transition</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+            {#if sub === 'transitions'}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="sub" id="menu-add-transitions" role="group" aria-label="Transitions" bind:this={subEl} onkeydown={subKey}>
+                {#each TRANSITIONS as tr (tr.kind)}
+                  {@const trWhy = transitionBlocked(p, tr.kind)}
+                  <button class="it" data-testid="menu-add-transition-{tr.kind}" use:inertItem={trWhy} title={trWhy ?? tr.title} onclick={() => addTransitionItem(tr.kind)}>
+                    <span class="l">{tr.label}</span>
+                  </button>
+                {/each}
               </div>
-              <hr />
             {/if}
-            {#if a.kind === 'drum'}
-              <!-- Drum track ▸ a kit (plan 25): Starter (what the playlist's "Drum track" adds) and the others. -->
-              <div class="subwrap" data-sub="kits">
-                <button
-                  class="it" data-testid="menu-add-drum" bind:this={subBtns.kits} aria-expanded={sub === 'kits'} aria-controls="menu-add-kits"
-                  use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? 'Add a drum track made of a built-in kit'}
-                  onclick={(e) => subClick('kits', e)} onkeydown={(e) => subBtnKey(e, 'kits')}
-                ><Icon icon={ADD_ICONS.drum} /><span class="l">{a.label}</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
-                {#if sub === 'kits'}
-                  <!-- svelte-ignore a11y_no_static_element_interactions -->
-                  <div class="sub" id="menu-add-kits" role="group" aria-label="Drum kits" bind:this={subEl} onkeydown={subKey}>
-                    {#each KITS as k (k.id)}
-                      <button class="it" data-testid="menu-add-drum-kit-{k.id}" title={k.blurb} onclick={() => addKit(k.id)}>
-                        <span class="l">{k.name}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {:else}
-              <button class="it" data-testid={`menu-add-${a.kind}`} use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? a.title} onclick={() => add(a.kind)}>
-                <Icon icon={ADD_ICONS[a.kind]} /><span class="l">{a.label}</span>
-              </button>
-            {/if}
-          {/each}
+          </div>
+          <hr />
+          {@render addItem(MASTER_ITEM)}
         {:else if m === 'Patterns'}
           {#if renaming}
             <label class="field" for="menu-pattern-rename-input">Rename “{cur?.name}”</label>

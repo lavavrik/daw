@@ -8,7 +8,7 @@ import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
 import { fakeAudio, fakeDecoder } from '../project/testFixture';
-import { addDrumTrack, removeTrack, toggleStep } from './actions';
+import { TRACKS_FULL_TEXT, addDrumTrack, removeTrack, toggleStep } from './actions';
 import { commandEdits } from './edits';
 import { addDefaultDrumTrack, attachKitSample } from './defaultKit';
 import { KITS, KIT_ROLES, kitById } from './kits';
@@ -231,6 +231,19 @@ describe('addKitDrumTrack', () => {
     expect(fileOf(p, t.rows[0].sampleId)).toBe('starter-kick-punch.wav'); // (the fake deps name files "<kit>-<file>")
     while (p.tracks.length < MAX_TRACKS) addDrumTrack(p, engine);
     expect(await addKitDrumTrack(p, engine, 'garage', d)).toBeNull();
+  });
+
+  it('the last slot taken while its samples load (another add meanwhile): reported, not dropped silently', async () => {
+    const { p, engine, h } = await fresh();
+    const { d, errors, release } = deps({ hold: true });
+    while (p.tracks.length < MAX_TRACKS - 1) addDrumTrack(p, engine);
+    const pending = addKitDrumTrack(p, engine, 'garage', d);
+    addDrumTrack(p, engine); // e.g. a Transition track, while the kit's samples load
+    const undo = h.labels.undo;
+    release();
+    expect(await pending).toBeNull();
+    expect(errors).toEqual([`No room for the Garage drum track: ${TRACKS_FULL_TEXT}`]);
+    expect(h.labels.undo).toBe(undo); // no entry
   });
 });
 

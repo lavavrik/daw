@@ -308,6 +308,7 @@ changes nothing and sends nothing.
 | `setPointCurve(p, sink, owner, laneId, pointId, curve)` (plan 16) | `AUTO_POINT_CURVE` | no such lane on that owner or no such point, NaN, or no change. The curve is clamped to −1..1. A hold or last point takes it (and ignores it until it is linear with a next point). Moves, shape changes and undo keep a point's curve: their SET is followed by the CURVE again |
 | `drawPoints(p, sink, laneId, samples)` | the difference | nothing usable drawn, or more than 512 points would result. The samples are rounded to whole ticks (the last on a tick wins), clamped, and thinned in knob position to `DRAW_TOLERANCE` (0.5 % of the travel); the result replaces every point between the first and last sample's tick. The stroke's ends are always kept |
 | `insertShape(p, sink, laneId, shape, range)` (plan 28) | the difference | see *Shapes* below; refusals return `{ ok: false, message }` instead of null |
+| `carryPoints(p, sink, spans, copy?)` (plan 28 review) | the difference, per lane | nothing to carry. See *Automation follows clips* below |
 | `overrideLane(p, sink, laneId)` | `AUTO_OVERRIDE` only | no such lane. **Not an edit**: no undo entry, no unsaved mark. The manual move's own `setMix` / `setParam` that follows is the edit, and it sets the base |
 
 - **Dense idx.** A point edit computes the lane's new point set. Points keep
@@ -320,6 +321,34 @@ changes nothing and sends nothing.
   - `rollbackRefusedAdd` drops the lanes of a module the engine never added;
   - `removeTrack` takes the track's lanes with the track;
   - the Master row's lanes stay.
+
+### Automation follows clips (plan 28 review)
+
+Lane points live on the song timeline, but a clip carries the points of
+its own track's lanes that lie inside it (as Ableton does by default), so a
+sweep drawn over a clip goes where the clip goes:
+
+- **Move** (`song-actions.ts moveClips`, in time): the points in each moved
+  clip's `[start, end)` go the same distance, and they **replace** the
+  lane's points in the destination `[start + dt, end + dt)` (a sweep moved
+  onto old automation brings its shape, never a merge). Points elsewhere
+  stay. One undo entry with the move.
+- **Duplicate** (`duplicateClips`): the copy gets a copy of the source's
+  points (replacing what was under the copy); the source keeps its own.
+- **Half-open spans.** A point exactly on a clip's end belongs to what
+  follows it, so a clip and its copy right after it never fight over one
+  tick. Shapes drawn for a clip should therefore end one tick before the
+  clip's end (the Transition sweeps do).
+- **The timeline's drag** moves the clips only at each step
+  (`moveClips(…, { carry: false })`) and carries the points once, at the
+  release, from where the drag began (`Timeline.svelte carryDrag`), inside
+  the drag's gesture. So a clip dragged across other automation never eats
+  it on the way, and Escape (which restores the clips) has no points to put
+  back. Mid-drag the points stay put; they jump to the clip on release.
+- **Not carried:** a lane move (audio clips onto another Audio lane: the
+  points stay on their track), a place-and-drag (a new clip: the points
+  under it were not its), resize, split and the Master row (no clips). A
+  lane a copy would push past 512 points is left as it was.
 
 ### Shapes (plan 28 Task 2)
 
@@ -408,16 +437,24 @@ the user's own edits would send:
    - **Downlifter, Impact** (`start`): the clip starts at the playhead's bar
      (moved back so it ends in the song: `transitionStart`);
 4. its mixer settings (`setMix`);
-5. per lane: `addLane`, then `insertShape` over the clip, `[start, end)`:
-   the lane is empty, so the closing point lands on the clip's end and the
-   value holds after it.
+5. per lane: `addLane`, then `insertShape` over `[start, end − 1)`: the
+   closing point lands one tick before the clip's end (inside the clip, so
+   it moves with it: *Automation follows clips*) and the value holds after
+   it; then `setPointCurve` on the first point for the level lane.
 
 | Kind | Bars | Patch | Notes | Lanes / mix |
 |---|---|---|---|---|
-| Riser | 8 | Noise Sweep | one bar-long C4 per bar | Filter `cutoff` ramp-up 200 Hz → 12 kHz; `fader` ramp-up −24 → 0 dB |
-| Downlifter | 4 | Noise Sweep | one bar-long C4 per bar | `cutoff` ramp-down 12 kHz → 200 Hz; `fader` ramp-down 0 → −30 dB |
+| Riser | 8 | Noise Sweep | one bar-long C4 per bar | Filter `cutoff` ramp-up 200 Hz → 12 kHz; amp VCA `level` ramp-up −24 → 0 dB |
+| Downlifter | 4 | Noise Sweep | one bar-long C4 per bar | `cutoff` ramp-down 12 kHz → 200 Hz; amp VCA `level` ramp-down 0 → −30 dB |
 | Impact | 1 | Impact | one 1/8 C4 on beat 1 | `send_a` (Reverb) −6 dB; no lanes |
 
+- **The level lane is in the rack** (the VCA cabled into the patch's Out:
+  `laneModule`), not on the track fader: a fader lane would take the fader
+  over, so the user could not set the transition's level in the mixer.
+  The VCA's `level` is linear (dB 0 = 1), so the ramp's first point gets a
+  curve (`dbRampCurve`: Riser −0.40, Downlifter +0.69) that puts the dB
+  midpoint halfway: it rises or falls about evenly in dB, as a fader ramp
+  would.
 - **Notes.** The sweeps write a note per bar, not one long note: notes are
   not chased, so a song started (or a loop wrapped) mid-clip picks the noise
   up at the next bar line instead of staying silent. Noise Sweep is mono
@@ -428,13 +465,17 @@ the user's own edits would send:
 - **Impact's tail** is its reverb send (house patches hold no Reverb):
   −6 dB, louder than any mix preset's send, on whatever the Reverb return
   holds (the return's own params are the project's, never touched here).
-- **The playhead** is the AutoBus's `songTick()` (the heard tick while the
-  song plays, else the parked song position) in the menu bar, Timeline's
-  `songPlayhead` (the same rule) in the footer.
+- **The playhead** is the AutoBus's `songTick()` (in Song mode its
+  `shownTick`: the heard tick while the song plays, else the parked song
+  position; in Pattern mode the parked song position) for both menus:
+  Timeline's `songPlayhead` reads it too.
 - **Refusals** (`transitionBlocked`, checked before the first change: no
-  state, no command, no entry): all `MAX_TRACKS` tracks used; for a sweep,
-  fewer than 2 of the `MAX_AUTO_LANES` lanes free. The menu items are then
-  inert / disabled with that reason as the tooltip.
+  state, no command, no entry): a load in progress (`p.loading`); all
+  `MAX_TRACKS` tracks used; for a sweep, fewer than 2 of the
+  `MAX_AUTO_LANES` lanes free, or a patch without the module a lane needs.
+  The menu items are then inert / disabled with that reason as the
+  tooltip. A lane that still fails to draw inside the edit (it cannot
+  today) shows the error banner instead of passing silently.
 - **The lanes open** under the new row (`laneView.setOpen`: UI state, not
   undone).
 

@@ -34,14 +34,15 @@
   // appears once its samples are in, a moment later). "Drum track" itself
   // is the starter kit's track, like a new project's default one.
   //
-  // Under "Audio track" (plan 28 Task 3): Transition, a label over one chip
+  // After the track kinds, before "Master row" (plan 28 Task 3; ui/addTrack.ts
+  // TRACK_ITEMS / MASTER_ITEM, as the menu bar): Transition, a label over one chip
   // per transition (state/transitions.ts TRANSITIONS: Riser, Downlifter,
   // Impact; chips as the kits, for the same reason), test ids
   // `add-transition-<kind>`: the menu bar's Add ▸ Transition ▸ items. Each
   // adds its track with the clip at the bar of the song playhead
   // (`playhead`: Timeline's songPlayhead) in one undo entry. A chip is
   // disabled with the reason as its tooltip when the tracks or the
-  // automation lanes are full (transitionBlocked).
+  // automation lanes are full, or a project is loading (transitionBlocked).
   //
   // Dropping a sample (a Finder file or a library sample) on the button makes
   // a Sampler track with it, as the old "+ Sampler track" button did.
@@ -62,8 +63,8 @@
   import { KITS, STARTER_KIT_ID } from '../../state/kits';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
-  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from '../addTrack';
-  import type { AddKind } from '../addTrack';
+  import { MASTER_ITEM, TRACK_ITEMS, addBlocked, addKitTrack, addTrack, addTransitionTrack } from '../addTrack';
+  import type { AddItem, AddKind } from '../addTrack';
   import { TRANSITIONS, transitionBlocked } from '../../state/transitions';
   import type { TransitionKind } from '../../state/transitions';
 
@@ -86,7 +87,6 @@
     master: { testid: 'tl-master-toggle', icon: FadersHorizontal },
   };
   /** The Master row item only while the row has no lane (with a lane it stays: nothing to toggle). */
-  const items = $derived(ADD_ITEMS.filter((it) => it.kind !== 'master' || !p.mixer.automation.length));
   const tracksFull = $derived(p.tracks.length >= MAX_TRACKS);
 
   let open = $state(false);
@@ -234,12 +234,17 @@
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="list" bind:this={list} data-testid="add-track-menu" style:left="{at.left}px" style:bottom={at.below ? null : `${at.bottom}px`} style:top={at.below ? `${at.top}px` : null} style:--room="{at.below ? window.innerHeight - at.top : window.innerHeight - at.bottom}px" onkeydown={listKey}>
-    {#each items as it (it.kind)}
+    {#snippet item(it: AddItem)}
       {@const why = addBlocked(p, it.kind)}
       <button data-testid={ITEM[it.kind].testid} disabled={!!why || (it.kind === 'drum' && addingKit)} title={why ?? it.title} onclick={() => pick(it.kind)}>
         <Icon icon={ITEM[it.kind].icon} />{it.label}
       </button>
+    {/snippet}
+    <!-- The track kinds, Transition, then the Master row (ui/addTrack.ts TRACK_ITEMS / MASTER_ITEM). -->
+    {#each TRACK_ITEMS as it (it.kind)}
+      {@render item(it)}
       {#if it.kind === 'drum'}
+        {@const why = addBlocked(p, it.kind)}
         <div class="kits" role="group" aria-label="Drum track with a kit">
           {#each KITS as k (k.id)}
             <button
@@ -249,16 +254,16 @@
           {/each}
         </div>
       {/if}
-      {#if it.kind === 'audio'}
-        <div class="group-label" aria-hidden="true"><Icon icon={TrendUp} />Transition</div>
-        <div class="kits" role="group" aria-label="Transition track" data-testid="add-transitions">
-          {#each TRANSITIONS as tr (tr.kind)}
-            {@const trWhy = transitionBlocked(p, tr.kind)}
-            <button class="kit" data-testid="add-transition-{tr.kind}" disabled={!!trWhy} title={trWhy ?? tr.title} onclick={() => pickTransition(tr.kind)}>{tr.label}</button>
-          {/each}
-        </div>
-      {/if}
     {/each}
+    <div class="group-label" aria-hidden="true"><Icon icon={TrendUp} />Transition</div>
+    <div class="kits" role="group" aria-label="Transition track" data-testid="add-transitions">
+      {#each TRANSITIONS as tr (tr.kind)}
+        {@const trWhy = transitionBlocked(p, tr.kind)}
+        <button class="kit" data-testid="add-transition-{tr.kind}" disabled={!!trWhy} title={trWhy ?? tr.title} onclick={() => pickTransition(tr.kind)}>{tr.label}</button>
+      {/each}
+    </div>
+    <!-- The Master row item only while the row is not already there for its lanes. -->
+    {#if !p.mixer.automation.length}{@render item(MASTER_ITEM)}{/if}
   </div>
 {/if}
 

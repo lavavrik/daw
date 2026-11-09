@@ -53,3 +53,75 @@ export function stepCellStyle(vel: number, step: number, playing: boolean): Step
     fill: on ? (Math.min(127, vel) / 127) * 100 : 0,
   };
 }
+
+// ---- Step velocity editing (plan 23; docs/architecture/sequencer.md "Step velocity")
+// The maths of the in-cell edits (wheel, Shift-drag, Shift+arrows) and of the
+// velocity lane: no events, no project access. The writes themselves go
+// through state/actions.ts setStepVelocity / stepVelocityGesture.
+
+/** An edit keeps a step lit: 0 (off) stays a click or a right-click. */
+export const STEP_VEL_MIN = 1;
+export const STEP_VEL_MAX = 127;
+/** Wheel travel per velocity step (trackpads send many small deltas). */
+export const VEL_WHEEL_PX = 40;
+/** Shift-drag: one velocity per this many px of vertical travel. */
+export const VEL_DRAG_PX = 2;
+
+/** A velocity an edit may write: rounded, 1..127. */
+export function clampStepVel(v: number): number {
+  return Math.min(STEP_VEL_MAX, Math.max(STEP_VEL_MIN, Math.round(v)));
+}
+
+/**
+ * A wheel event's vertical travel in px (negative = up). Line and page deltas
+ * (Firefox, some mice) count one step each. With Shift, browsers move a mouse
+ * wheel's delta to deltaX, so that axis is read then; a horizontal swipe
+ * without Shift is 0 (the grid's own horizontal scroll, not an edit).
+ */
+export function wheelPx(e: { deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean }): number {
+  const d = e.deltaY !== 0 ? e.deltaY : e.shiftKey ? e.deltaX : 0;
+  return e.deltaMode === 0 ? d : d * VEL_WHEEL_PX;
+}
+
+/**
+ * Accumulate wheel travel `px` onto `acc`: a step (notch = +1 louder for up,
+ * -1 quieter) once |acc| reaches VEL_WHEEL_PX, then acc restarts at 0. At
+ * most one step per event, so a mouse notch (one event of ~100 px) is one
+ * step, not two. A reversal drops the other way's partial travel first.
+ */
+export function wheelNotch(acc: number, px: number): { acc: number; notch: number } {
+  if (px === 0) return { acc, notch: 0 };
+  const a = (Math.sign(acc) === -Math.sign(px) ? 0 : acc) + px;
+  if (Math.abs(a) < VEL_WHEEL_PX) return { acc: a, notch: 0 };
+  return { acc: 0, notch: a < 0 ? 1 : -1 };
+}
+
+/** Velocity per wheel notch: 5, or 1 with Shift (fine). */
+export const wheelVelStep = (fine: boolean) => (fine ? 1 : 5);
+
+/**
+ * Shift-drag: the velocity `dy` px above the press (negative = below), from
+ * the step's velocity at the press. Relative, 1 per VEL_DRAG_PX px (whole
+ * velocities only: the travel is truncated toward 0), clamped to 1..127.
+ */
+export function dragVel(start: number, dy: number): number {
+  return clampStepVel(start + Math.trunc(dy / VEL_DRAG_PX));
+}
+
+/**
+ * A velocity key on a focused cell: Shift+↑ / Shift+↓ = ±5, Alt+Shift+↑ / ↓
+ * = ±1; null for any other key (plain arrows mean nothing on a cell, and
+ * Cmd / Ctrl chords are left to the browser and the app).
+ */
+export function velKeyStep(e: { key: string; shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }): number | null {
+  if (!e.shiftKey || e.metaKey || e.ctrlKey) return null;
+  const dir = e.key === 'ArrowUp' ? 1 : e.key === 'ArrowDown' ? -1 : 0;
+  return dir === 0 ? null : dir * (e.altKey ? 1 : 5);
+}
+
+/** The floating value chip while editing. */
+export const velChip = (v: number) => `vel ${v}`;
+/** A lit cell's tooltip (data-tip). */
+export const velTip = (v: number) => `Velocity ${v} — wheel or Shift-drag to change`;
+/** What the live region says after a keyboard change. */
+export const velStatus = (v: number) => `Velocity ${v}`;

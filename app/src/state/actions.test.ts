@@ -4,8 +4,10 @@ import { Project, currentPattern } from './project.svelte';
 import type { DrumPattern } from './project.svelte';
 import {
   addDrumTrack, addRow, liveInputTrack, moveTrack, play, previewTempo, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
-  setTempo, stop, togglePlay, toggleStep,
+  setStepVelocity, setTempo, stepVelocityGesture, stop, togglePlay, toggleStep,
 } from './actions';
+import { createSweepKeys } from '../history/sweep';
+import { debugStacks } from '../history/history';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
@@ -260,5 +262,96 @@ describe('moveTrack (plan 22 Task 4: reorder the song tracks)', () => {
     expect(p.selectedTrackId).toBe(b.id);
     expect(liveInputTrack(p)?.id).toBe(b.id);
     expect(sent).toEqual([]);
+  });
+});
+
+describe('step velocity (plan 23 Task 1)', () => {
+  /** One drum track with an undo history; step 0 of row 0 lit at 100. */
+  function rig() {
+    const p = new Project();
+    const { sink, sent } = fake();
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    const t = addDrumTrack(p, sink)!;
+    const row = t.rows[0].id;
+    setStep(p, sink, t.id, row, 0, 100);
+    sent.length = 0;
+    const vel = (s = 0) => currentPattern(t).steps[0][s];
+    const entries = () => debugStacks(p.history!).undo.length;
+    return { p, sink, sent, t, row, vel, entries };
+  }
+
+  it('setStepVelocity writes a lit step through SET_STEP, clamped to 1..127, labelled "Step velocity"', () => {
+    const { p, sink, sent, t, row, vel } = rig();
+    expect(setStepVelocity(p, sink, t.id, row, 0, 105)).toBe(105);
+    expect(vel()).toBe(105);
+    expect(sent).toEqual([[Op.SET_STEP, t.slot, 0, 0, 105]]);
+    expect(p.history!.labels.undo).toBe('Step velocity');
+    expect(setStepVelocity(p, sink, t.id, row, 0, 400)).toBe(127);
+    expect(setStepVelocity(p, sink, t.id, row, 0, -3)).toBe(1); // never off
+    expect(vel()).toBe(1);
+  });
+
+  it('refuses an off step (an edit never lights one) and writes nothing for no change', () => {
+    const { p, sink, sent, t, row, vel, entries } = rig();
+    const n = entries();
+    expect(setStepVelocity(p, sink, t.id, row, 1, 80)).toBeNull();
+    expect(vel(1)).toBe(0);
+    expect(setStepVelocity(p, sink, t.id, row, 0, 100)).toBe(100); // already 100
+    expect(setStepVelocity(p, sink, t.id, row, 99, 80)).toBeNull(); // out of range
+    expect(setStepVelocity(p, sink, t.id, 'nope', 0, 80)).toBeNull();
+    expect(setStepVelocity(p, sink, t.id, row, 0, NaN)).toBeNull();
+    expect(sent).toEqual([]);
+    expect(entries()).toBe(n);
+  });
+
+  it('a coalesced burst (wheel / keys) on one cell is one entry; an idle pause starts another', () => {
+    const { p, sink, t, row, vel, entries } = rig();
+    let now = 0;
+    const key = createSweepKeys(1000, () => now);
+    const n = entries();
+    for (const v of [105, 110, 115]) {
+      now += 100;
+      setStepVelocity(p, sink, t.id, row, 0, v, { coalesce: key(`stepvel:${t.id}:${row}:0`) });
+    }
+    expect(entries()).toBe(n + 1);
+    now += 2000; // idle
+    setStepVelocity(p, sink, t.id, row, 0, 90, { coalesce: key(`stepvel:${t.id}:${row}:0`) });
+    expect(entries()).toBe(n + 2);
+    p.history!.undo();
+    expect(vel()).toBe(115);
+    p.history!.undo();
+    expect(vel()).toBe(100);
+  });
+
+  it('a gesture (pointer press .. release) is one entry; cancel puts every touched step back and leaves none', () => {
+    const { p, sink, t, row, vel, entries } = rig();
+    setStep(p, sink, t.id, row, 4, 60);
+    const n = entries();
+    const h = p.history!;
+    // A drag: many writes inside one pointer gesture.
+    h.begin();
+    const g = stepVelocityGesture(p, sink, t.id);
+    for (const v of [104, 110, 120]) g.set(row, 0, v);
+    expect(g.set(row, 2, 90)).toBeNull(); // off: refused, stays off
+    h.commit();
+    expect(entries()).toBe(n + 1);
+    expect(h.labels.undo).toBe('Step velocity');
+    h.undo();
+    expect(vel()).toBe(100);
+    h.redo();
+    expect(vel()).toBe(120);
+
+    // Cancelled (Esc / Cmd+Z mid-drag): back to the values from before, no entry.
+    const m = entries();
+    h.begin();
+    const c = stepVelocityGesture(p, sink, t.id);
+    c.set(row, 0, 30);
+    c.set(row, 4, 127);
+    c.set(row, 0, 50);
+    c.cancel();
+    h.commit();
+    expect([vel(0), vel(4), vel(2)]).toEqual([120, 60, 0]);
+    expect(entries()).toBe(m);
+    expect(h.labels.undo).toBe('Step velocity'); // still the first drag's
   });
 });

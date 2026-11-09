@@ -109,6 +109,56 @@ and custom properties, and its CSS draws them with theme tokens.
   that index (else the previous row's, else "+ Add row"). Rows have no
   context menu (right-click on a cell clears it), so there is no menu entry.
 
+### Step velocity (plan 23)
+A drum step's velocity (1..127; 0 = off) scales its hit by
+`row.gain * vel / 127` in the engine (`engine/src/drums.rs`), so editing it
+needs no engine change: every write is `setStep` / `SET_STEP`. A click
+writes 100, Alt+click the 60 ghost, right-click clears; those are
+unchanged. On top of them, a **lit** cell can be re-levelled in place
+(Task 1):
+- **Wheel**: ±5 per notch, ±1 with Shift. Only a lit cell takes the wheel
+  (`preventDefault`); over an off cell the page scrolls as before, and so
+  does Ctrl/Cmd+wheel (the browser's zoom). Travel accumulates per cell and
+  steps once per 40 px, at most once per event, so a trackpad's small
+  deltas add up and a mouse notch (~100 px) is one step (`wheelPx`,
+  `wheelNotch`). Shift+wheel reads `deltaX` when `deltaY` is 0 (browsers
+  move a Shift-wheel there); a plain horizontal swipe is left to the grid's
+  scroll.
+- **Shift-drag** from a lit cell: vertical and relative, 1 velocity per
+  2 px (truncated), up is louder (`dragVel`). The pointer is captured, so
+  nothing is painted and the step stays lit. Shift + press on an off cell
+  paints like a plain press; nothing else on the cells uses Shift.
+- **Keys** on a focused lit cell: Shift+↑ / Shift+↓ ±5, Alt+Shift+↑ / ↓ ±1
+  (`velKeyStep`). Plain arrows still mean nothing on a cell. The grid's
+  live region (`step-vel-status`) says "Velocity 96" after each change.
+  This is the keyboard path for velocity (the lane, Task 2, is
+  pointer-only). The shortcut layer ignores Shift+arrows and anything with
+  Alt, so the keys never reach the piano.
+- **Range**: every edit clamps to 1..127 (`clampStepVel`): it never turns
+  a step on or off, and an edit on an off step is refused. Accent stays
+  `>= ACCENT_MIN_VEL` (110); the ring and glow follow live.
+- **Feedback**: while editing, a chip ("vel 96", JetBrains Mono, tabular
+  figures; `step-vel-chip`) floats above the cell: for the whole drag, and
+  for 1 s after the last wheel notch or key. A lit cell's `data-tip` is
+  "Velocity 96 — wheel or Shift-drag to change"; an off cell has none.
+
+**Undo**: one entry per gesture, labelled "Step velocity".
+- Wheel and key bursts: `setStepVelocity(..., { coalesce })`, with an
+  idle-aware sweep key per cell (`stepvel:<track>:<row>:<step>`,
+  `history/sweep.ts`, 1 s). The grid settles after each write, so a burst
+  that nets to nothing (up, then down) leaves no entry.
+- A drag runs inside the App's pointer gesture (one entry per press,
+  `history/gestures.ts`) through `stepVelocityGesture(p, sink, trackId)`.
+  It remembers each touched step's value from before its first write, and
+  `cancel()` puts them all back. Esc (a window capture listener while
+  dragging), a lost pointer capture and Cmd/Ctrl+Z mid-drag
+  (`registerDragCancel`) cancel, so the gesture ends where it began and
+  leaves no entry.
+
+The pure maths is in `ui/stepGrid.ts` and the writes are in
+`state/actions.ts`, so the velocity lane (Task 2) shares the clamp, the
+writes and the gesture's begin, commit and cancel.
+
 ### Deleting a row (plan 21 task 7)
 Engine rows are **slot-indexed** (`DrumTrack::rows[MAX_ROWS]`, and every
 pattern's `steps[row][step]`), so deleting a row in the middle means every

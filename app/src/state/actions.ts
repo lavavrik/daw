@@ -8,6 +8,7 @@ import type { DrumRow, DrumTrack, Project, SynthTrack } from './project.svelte';
 import { makeDrumPattern } from './pattern-actions';
 import { edit, markEdited } from './edits';
 import { dropTrackMappings } from './midiMap';
+import { clampStepVel } from '../ui/stepGrid';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -168,6 +169,67 @@ export function toggleStep(p: Project, sink: CommandSink, trackId: string, rowId
     if (!f) return;
     setStep(p, sink, trackId, rowId, step, currentPattern(f.track).steps[f.row][step] > 0 ? 0 : 100);
   });
+}
+
+// ---- Step velocity (plan 23; docs/architecture/sequencer.md "Step velocity")
+// The step grid's in-cell edits (wheel, Shift-drag, Shift+arrows) and the
+// velocity lane write velocities here. An edit only re-levels a LIT step,
+// clamped to 1..127 (ui/stepGrid.ts clampStepVel), so it never turns one on
+// or off: that stays a click / right-click (setStep). Undo, one entry per
+// gesture labelled "Step velocity":
+//   - wheel / key bursts: pass `opts.coalesce` (an idle-aware sweep key per
+//     cell, history/sweep.ts), so a burst merges into one entry;
+//   - drags and lane strokes run inside the App's pointer gesture (one entry
+//     per press, history/gestures.ts); stepVelocityGesture adds the cancel.
+
+/**
+ * Re-level a lit step of the current pattern (SET_STEP). Returns the velocity
+ * it now has (unchanged: no write, no entry), or null when refused: an off
+ * step, a bad step / row / track, NaN.
+ */
+export function setStepVelocity(
+  p: Project, sink: CommandSink, trackId: string, rowId: string, step: number, velocity: number,
+  opts?: { coalesce?: string },
+): number | null {
+  const f = find(p, trackId, rowId);
+  if (!f || Number.isNaN(velocity) || !Number.isInteger(step) || step < 0 || step >= MAX_STEPS) return null;
+  const cur = currentPattern(f.track).steps[f.row][step];
+  if (cur === 0) return null;
+  const v = clampStepVel(velocity);
+  if (v !== cur) edit(p, 'Step velocity', () => setStep(p, sink, trackId, rowId, step, v), opts);
+  return v;
+}
+
+/**
+ * One velocity drag or lane stroke on track `trackId`. `set` re-levels a lit
+ * step (setStepVelocity; null for an off one) and remembers the value each
+ * step had before its first write; `cancel` (Esc, Cmd/Ctrl+Z mid-drag via
+ * registerDragCancel) puts all of those back. Run it inside the pointer
+ * gesture: a cancelled gesture then ends where it began and makes no entry.
+ */
+export interface StepVelocityGesture {
+  set(rowId: string, step: number, velocity: number): number | null;
+  cancel(): void;
+}
+
+export function stepVelocityGesture(p: Project, sink: CommandSink, trackId: string): StepVelocityGesture {
+  const before = new Map<string, { rowId: string; step: number; vel: number }>();
+  return {
+    set(rowId, step, velocity) {
+      const f = find(p, trackId, rowId);
+      const cur = f && Number.isInteger(step) && step >= 0 && step < MAX_STEPS ? currentPattern(f.track).steps[f.row][step] : 0;
+      const k = `${rowId}:${step}`;
+      if (cur > 0 && !before.has(k)) before.set(k, { rowId, step, vel: cur });
+      return setStepVelocity(p, sink, trackId, rowId, step, velocity);
+    },
+    cancel() {
+      // setStep, not setStepVelocity: put back exactly what was there.
+      if (before.size) edit(p, 'Step velocity', () => {
+        for (const b of before.values()) setStep(p, sink, trackId, b.rowId, b.step, b.vel);
+      });
+      before.clear();
+    },
+  };
 }
 
 export function setRowSample(p: Project, sink: CommandSink, trackId: string, rowId: string, sampleId: number | null, name: string) {

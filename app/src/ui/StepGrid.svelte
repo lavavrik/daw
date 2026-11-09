@@ -25,16 +25,27 @@
   // the tab order (opacity only, never display/visibility). One undo entry
   // (actions.ts removeDrumRow). The rows have no context menu (right-click
   // on a cell clears it), so the button is the only way in.
+  //
+  // Step velocity (plan 23 Task 1; docs/architecture/sequencer.md "Step
+  // velocity"): on a LIT cell the wheel (±5 a notch, ±1 with Shift), a
+  // Shift-drag (vertical, 1 per 2 px, up is louder) and Shift+↑ / ↓ (±5;
+  // Alt+Shift ±1) re-level it, clamped to 1..127 so it stays lit. The maths
+  // is in stepGrid.ts, the writes in actions.ts (setStepVelocity: wheel and
+  // keys coalesce per cell; stepVelocityGesture: the drag, with its Esc /
+  // Cmd+Z cancel). A "vel 96" chip floats above the cell while editing.
   import { onDestroy, onMount, tick } from 'svelte';
   import Trash from 'phosphor-svelte/lib/Trash';
   import Icon from './Icon.svelte';
   import { registerDragCancel } from '../history/gestures';
+  import { createSweepKeys } from '../history/sweep';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import { droppedFiles } from '../library/drag';
   import {
-    addRow, removeDrumRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setSwing,
+    addRow, removeDrumRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setStepVelocity, setSwing,
+    stepVelocityGesture,
   } from '../state/actions';
+  import type { StepVelocityGesture } from '../state/actions';
   import { mod } from '../audio/audioClock';
   import type { AudioClock } from '../audio/audioClock';
   import { MAX_ROWS, currentPattern } from '../state/project.svelte';
@@ -47,7 +58,9 @@
   import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
-  import { rowColor, stepCellStyle } from './stepGrid';
+  import {
+    dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelNotch, wheelPx, wheelVelStep,
+  } from './stepGrid';
   import { rangeFill, rangeFillBipolar } from './rangeFill';
 
   let { p, engine, clock, track, onerror }: {
@@ -125,12 +138,129 @@
     // ...which also keeps the click from focusing the cell: focus it, so Space
     // then means the pattern transport (focus is inside the bottom panel).
     (e.currentTarget as HTMLElement).focus({ preventScroll: true });
+    // Shift on a lit cell: a velocity drag, not a paint (Shift on an off cell paints as a plain press).
+    if (e.shiftKey && cur > 0) return startVelDrag(e, rowId, step, cur);
     paintVel = cur > 0 ? 0 : e.altKey ? GHOST : FULL;
     setStep(p, engine, track.id, rowId, step, paintVel);
   }
   function enter(rowId: string, step: number) {
     if (paintVel !== null) setStep(p, engine, track.id, rowId, step, paintVel);
   }
+
+  // ---- velocity (plan 23 Task 1) ---------------------------------------
+  /** Wheel / key bursts: one undo entry per cell, a new one after 1 s idle (history/sweep.ts). */
+  const sweepKey = createSweepKeys();
+  const velKey = (rowId: string, step: number) => `stepvel:${track.id}:${rowId}:${step}`;
+
+  /** The cell whose value chip shows ("vel 96", read live from the pattern), placed in grid px. */
+  let chip = $state<{ rowId: string; step: number; x: number; y: number } | null>(null);
+  let chipTimer = 0;
+  /** null when the chip's row is gone (deleted, another track shown): no chip then. */
+  const chipVel = $derived.by(() => {
+    if (!chip) return null;
+    const r = track.rows.findIndex((x) => x.id === chip!.rowId);
+    return r < 0 ? null : pat.steps[r][chip.step];
+  });
+  /** Show the chip above `cell`; with `ms`, hide it after that long without another edit. */
+  function showChip(cell: HTMLElement, rowId: string, step: number, ms?: number) {
+    const c = cell.getBoundingClientRect();
+    const g = gridEl.getBoundingClientRect();
+    chip = { rowId, step, x: c.left + c.width / 2 - g.left, y: c.top - g.top };
+    clearTimeout(chipTimer);
+    if (ms !== undefined) chipTimer = window.setTimeout(() => (chip = null), ms);
+  }
+  function hideChip() {
+    clearTimeout(chipTimer);
+    chip = null;
+  }
+  onDestroy(() => clearTimeout(chipTimer));
+
+  /** The live region's text (cleared, then set a tick later, so the same value twice is still read out). */
+  let velNews = $state('');
+  function announce(text: string) {
+    velNews = '';
+    void tick().then(() => (velNews = text));
+  }
+
+  /** One coalesced step (wheel notch / key) on a lit cell. */
+  function nudgeVel(cell: HTMLElement, rowId: string, step: number, cur: number, by: number) {
+    const v = setStepVelocity(p, engine, track.id, rowId, step, cur + by, { coalesce: sweepKey(velKey(rowId, step)) });
+    // Coalesced writes only mark the entry stale: settle now, so a burst that
+    // nets to nothing (up then down) leaves no dead entry.
+    p.history?.settle();
+    showChip(cell, rowId, step, 1000);
+    return v;
+  }
+
+  // Wheel: only a lit cell takes it (preventDefault); over an off cell the
+  // page scrolls as before. Travel accumulates per cell (trackpads), one
+  // step per 40 px and at most one per event (stepGrid.ts wheelNotch).
+  let wheelAcc = { key: '', acc: 0 };
+  function wheel(e: WheelEvent, rowId: string, step: number, cur: number) {
+    if (cur === 0 || e.ctrlKey || e.metaKey) return; // Ctrl+wheel / pinch is the browser's zoom
+    const px = wheelPx(e);
+    if (px === 0) return;
+    e.preventDefault();
+    const key = velKey(rowId, step);
+    const n = wheelNotch(wheelAcc.key === key ? wheelAcc.acc : 0, px);
+    wheelAcc = { key, acc: n.acc };
+    if (n.notch !== 0) nudgeVel(e.currentTarget as HTMLElement, rowId, step, cur, n.notch * wheelVelStep(e.shiftKey));
+  }
+
+  /** Shift+↑ / ↓ (±5), Alt+Shift+↑ / ↓ (±1) on a focused lit cell; announced. */
+  function cellKey(e: KeyboardEvent, rowId: string, step: number, cur: number) {
+    const by = velKeyStep(e);
+    if (by === null || cur === 0) return;
+    e.preventDefault();
+    const v = nudgeVel(e.currentTarget as HTMLElement, rowId, step, cur, by);
+    if (v !== null) announce(velStatus(v));
+  }
+
+  // Shift-drag on a lit cell: relative and vertical, the pointer captured
+  // (no paint, the step stays lit). One undo entry: the App's pointer
+  // gesture brackets it. Esc, a lost capture or Cmd/Ctrl+Z (registerDragCancel)
+  // put the value from before back, leaving no entry.
+  let velDrag: { g: StepVelocityGesture; start: number; y: number; end: () => void } | null = null;
+  function startVelDrag(e: PointerEvent, rowId: string, step: number, cur: number) {
+    const cell = e.currentTarget as HTMLElement;
+    const id = e.pointerId;
+    cell.setPointerCapture(id);
+    const move = (ev: PointerEvent) => {
+      if (velDrag && ev.pointerId === id) velDrag.g.set(rowId, step, dragVel(velDrag.start, velDrag.y - ev.clientY));
+    };
+    const up = (ev: PointerEvent) => ev.pointerId === id && end();
+    const lost = () => velDrag && cancelVelDrag(); // capture lost without a release
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation(); // the App's Esc-cancels-learn must not also fire
+      cancelVelDrag();
+    };
+    const end = () => {
+      velDrag = null;
+      hideChip();
+      cell.removeEventListener('pointermove', move);
+      cell.removeEventListener('pointerup', up);
+      cell.removeEventListener('pointercancel', lost);
+      cell.removeEventListener('lostpointercapture', lost);
+      window.removeEventListener('keydown', esc, true);
+    };
+    cell.addEventListener('pointermove', move);
+    cell.addEventListener('pointerup', up);
+    cell.addEventListener('pointercancel', lost);
+    cell.addEventListener('lostpointercapture', lost);
+    window.addEventListener('keydown', esc, true);
+    velDrag = { g: stepVelocityGesture(p, engine, track.id), start: cur, y: e.clientY, end };
+    showChip(cell, rowId, step);
+  }
+  function cancelVelDrag(): boolean {
+    if (!velDrag) return false;
+    velDrag.g.cancel();
+    velDrag.end();
+    return true;
+  }
+  onDestroy(registerDragCancel(cancelVelDrag));
+  onDestroy(() => velDrag?.end());
 
   // ---- playhead -------------------------------------------------------
   let playStep = $state(-1);
@@ -321,7 +451,10 @@
                 data-testid="step-{r}-{s}"
                 aria-label="Row {r + 1} step {s + 1}"
                 aria-pressed={st.on}
+                data-tip={st.on ? velTip(v) : undefined}
                 onpointerdown={(e) => down(e, row.id, s, v)}
+                onwheel={(e) => wheel(e, row.id, s, v)}
+                onkeydown={(e) => cellKey(e, row.id, s, v)}
                 oncontextmenu={(e) => e.preventDefault()}
                 onpointerenter={() => enter(row.id, s)}
                 onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
@@ -350,6 +483,11 @@
       {/key}
     </div>
   {/if}
+
+  {#if chip && chipVel !== null}
+    <span class="vchip mono" data-testid="step-vel-chip" style:left="{chip.x}px" style:top="{chip.y}px">{velChip(chipVel)}</span>
+  {/if}
+  <p class="sr-only" data-testid="step-vel-status" aria-live="polite">{velNews}</p>
 
   <div class="foot" style:--c={track.color}>
     <button
@@ -385,7 +523,7 @@
      data (ui/stepGrid.ts rowColor), passed in as --c on the row. Widths: the
      header's labels line up with the row's controls (tag 5, name 120,
      wave 18, mute 22, gain 104, pan 80; 8 px gaps). */
-  .grid { display: flex; flex-direction: column; gap: 4px; }
+  .grid { display: flex; flex-direction: column; gap: 4px; position: relative; }
   .hdr, .row { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
   .hdr { height: 14px; }
   .tag-h { width: 5px; flex: none; }
@@ -487,6 +625,16 @@
   .row:hover .del, .row:focus-within .del { opacity: 1; }
   .del:hover { color: var(--rec); background: var(--raised); }
   .del:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* The velocity chip: centred over the edited cell, just above it (out of
+     flow, so the rows never move); JetBrains Mono, tabular figures (.mono). */
+  .vchip {
+    position: absolute; z-index: 2; transform: translate(-50%, calc(-100% - 4px)); pointer-events: none;
+    padding: 1px 6px; border-radius: var(--r-xs); white-space: nowrap;
+    background: var(--raised); box-shadow: var(--drop); color: var(--text);
+    font-size: var(--fs-lbl); line-height: 14px;
+  }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 
   .strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
   .strip-name { width: 133px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }

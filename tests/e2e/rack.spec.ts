@@ -186,7 +186,20 @@ test('drag module to a new row', async ({ page }) => {
 
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => anyPos(page)).toBe(false); // flow again
+  // ...exactly as it was drawn before the pinning drag.
+  await expect.poll(async () => maxShift(rects, await panelRects(page))).toBeLessThanOrEqual(1);
 });
+
+/** The largest |Δleft| + |Δtop| (px) of any module in both rect sets, except `skip`. */
+function maxShift(a: Record<number, { left: number; top: number }>, b: Record<number, { left: number; top: number }>, skip: number[] = []) {
+  let worst = 0;
+  for (const [k, r] of Object.entries(a)) {
+    const idx = Number(k);
+    if (skip.includes(idx) || !b[idx]) continue;
+    worst = Math.max(worst, Math.abs(b[idx].left - r.left) + Math.abs(b[idx].top - r.top));
+  }
+  return worst;
+}
 
 // ---- Plan 22 Task 3: free-spot-only placement --------------------------------
 
@@ -440,31 +453,98 @@ test('a near miss snaps to the free spot beside a neighbour; Alt+Left into it do
   expect(await positions(page)).toEqual(pos);
 });
 
-test('positioned rows keep their panels equally tall', async ({ page }) => {
+/** Every module's natural height (without the stretch spacer) and drawn height, by idx. */
+const heights = (page: Page) =>
+  page.locator('[data-testid^="module-"]:not([data-testid^="module-header-"])').evaluateAll((els) => Object.fromEntries(els.map((e) => {
+    const el = e as HTMLElement;
+    const sp = el.querySelector<HTMLElement>(':scope > [data-stretch]');
+    return [Number(el.dataset.testid!.slice('module-'.length)), { h: el.offsetHeight, natural: el.offsetHeight - (sp?.offsetHeight ?? 0) }];
+  })));
+
+test('every row is as tall as the tallest panel; removing it shrinks them (no ratchet)', async ({ page }) => {
   await loadBrass(page);
-  /** Per row (by pos): every panel's height, and its natural height (without the stretch spacer). */
-  const rows = () => page.evaluate(() => {
-    const t = (window as unknown as { __daw: RackDaw }).__daw.project.tracks[1];
-    const out: Record<number, { idx: number; h: number; natural: number }[]> = {};
-    for (const m of t.modules ?? []) {
-      const el = document.querySelector<HTMLElement>(`[data-testid="module-${m.idx}"]`)!;
-      const s = el.querySelector<HTMLElement>(':scope > [data-stretch]')!;
-      (out[m.pos!.row] ??= []).push({ idx: m.idx, h: el.offsetHeight, natural: el.offsetHeight - s.offsetHeight });
-    }
-    return out;
-  });
-  // Pin by a nudge, then every row's panels are as tall as the row (jacks line up as in flow).
+  // Flow and positioned alike: every panel is drawn as tall as the rack's tallest.
+  let hs = await heights(page);
+  const top = Math.max(...Object.values(hs).map((q) => q.natural));
+  expect(Object.values(hs).every((q) => q.h === top)).toBe(true);
   await page.getByTestId('module-header-6').focus();
-  await page.keyboard.press('Alt+ArrowRight');
-  await expect.poll(async () => Object.values(await rows()).every((r) => new Set(r.map((q) => q.h)).size === 1)).toBe(true);
-  // The tallest panel of a row whose panels differ leaves it: the row shrinks to the next tallest (no ratchet).
-  const r0 = Object.values(await rows()).find((r) => new Set(r.map((q) => q.natural)).size > 1)!;
-  const tallest = r0.reduce((x, y) => (y.natural > x.natural ? y : x));
-  const rest = Math.max(...r0.filter((q) => q.idx !== tallest.idx).map((q) => q.natural));
+  await page.keyboard.press('Alt+ArrowRight'); // pin
+  expect(await anyPos(page)).toBe(true);
+  hs = await heights(page);
+  expect(Object.values(hs).every((q) => q.h === top)).toBe(true);
+  // Remove the tallest (every module that tall): the bands shrink to the next tallest.
+  const tallOnes = Object.entries(hs).filter(([, q]) => q.natural === top).map(([k]) => Number(k));
+  const rest = Math.max(...Object.entries(hs).filter(([k]) => !tallOnes.includes(Number(k))).map(([, q]) => q.natural));
+  expect(rest).toBeLessThan(top);
+  for (const i of tallOnes) await page.getByTestId(`module-header-${i}`).getByRole('button', { name: /^Remove / }).click();
+  await expect.poll(async () => Object.values(await heights(page)).every((q) => q.h === rest)).toBe(true);
+});
+
+test('other modules never move up or down: a drag out of a row, Alt+Down, a removal in a middle row', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await loadBrass(page);
+  const rowOf = async () => Object.fromEntries(Object.entries(await positions(page)).map(([k, q]) => [Number(k), q]));
+  // 1. The tallest module of the second flow row to a new row (it was the row's height before plan 22's bands).
+  let before = await panelRects(page);
+  const rowTops = [...new Set(Object.values(before).map((r) => Math.round(r.top)))].sort((a, b) => a - b);
+  const row1 = Object.entries(before).filter(([, r]) => Math.round(r.top) === rowTops[1]).map(([k]) => Number(k));
+  const hs = await heights(page);
+  const tall = row1.reduce((x, y) => (hs[y].natural > hs[x].natural ? y : x));
+  const lastBottom = Math.max(...Object.values(before).map((r) => r.bottom));
+  await dragHeader(page, tall, 0, lastBottom + 40 - before[tall].top);
+  await expect.poll(() => undoLabel(page)).toBe('Move module');
+  expect((await rowOf())[tall]!.row).toBe(rowTops.length); // a new row below the others
+  await expect.poll(async () => maxShift(before, await panelRects(page), [tall])).toBeLessThanOrEqual(1);
+
+  // 2. Alt+Down out of a row: the first module that fits one row down at the same x (not a new row).
+  before = await panelRects(page);
+  const pos = await rowOf();
+  const w = (i: number) => Math.ceil(before[i].width / 10);
+  const free = (i: number) => {
+    const r = pos[i]!.row + 1;
+    return Object.entries(pos).every(([k, q]) => Number(k) === i || q!.row !== r || q!.x + w(Number(k)) <= pos[i]!.x || pos[i]!.x + w(i) <= q!.x);
+  };
+  const lastRow = Math.max(...Object.values(pos).map((q) => q!.row));
+  const down = Number(Object.keys(pos).find((k) => pos[Number(k)]!.row < lastRow - 1 && free(Number(k))));
+  expect(Number.isNaN(down)).toBe(false);
+  await page.getByTestId(`module-header-${down}`).focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(async () => (await rowOf())[down]!.row).toBe(pos[down]!.row + 1);
+  await expect.poll(async () => maxShift(before, await panelRects(page), [down])).toBeLessThanOrEqual(1);
+
+  // 3. Remove a module of a middle row (not the rack's tallest: that would shrink every band).
+  before = await panelRects(page);
+  const now = await rowOf();
+  const maxRow = Math.max(...Object.values(now).map((q) => q!.row));
+  const h2 = await heights(page);
+  const top = Math.max(...Object.values(h2).map((q) => q.natural));
+  const gone = Number(Object.keys(now).find((k) => now[Number(k)]!.row > 0 && now[Number(k)]!.row < maxRow && h2[Number(k)].natural < top));
+  expect(Number.isNaN(gone)).toBe(false);
+  await page.getByTestId(`module-header-${gone}`).getByRole('button', { name: /^Remove / }).click();
+  await expect(page.getByTestId(`module-${gone}`)).toHaveCount(0);
+  await expect.poll(async () => maxShift(before, await panelRects(page), [gone])).toBeLessThanOrEqual(1);
+});
+
+test('a refused nudge flashes the module red and is announced again each time', async ({ page }) => {
+  await loadBrass(page);
   const rects = await panelRects(page);
-  await dragHeader(page, tallest.idx, 0, Math.max(...Object.values(rects).map((r) => r.bottom)) + 40 - rects[tallest.idx].top);
-  const left = r0.find((q) => q.idx !== tallest.idx)!.idx;
-  await expect.poll(async () => (await page.getByTestId(`module-${left}`).evaluate((e) => (e as HTMLElement).offsetHeight))).toBe(rest);
+  expect(Math.abs(rects[1].top - rects[0].top)).toBeLessThan(1);
+  // Module 1 touches module 0 in the flow (its footprint ends where 1 starts): Alt+Left is refused.
+  await page.getByTestId('module-header-1').focus();
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect(page.getByTestId('rack-bump-outline')).toBeVisible();
+  await expect(page.getByTestId('jack-status')).toHaveText(NO_ROOM);
+  // The second refusal clears the region first, then says it again (a polite region re-announces only a change).
+  const seen = page.evaluate(() => new Promise<string[]>((resolve) => {
+    const el = document.querySelector('[data-testid="jack-status"]')!;
+    const texts: string[] = [];
+    new MutationObserver(() => { texts.push(el.textContent ?? ''); if (texts.length >= 2) resolve(texts); })
+      .observe(el, { childList: true, characterData: true, subtree: true });
+  }));
+  await page.keyboard.press('Alt+ArrowLeft');
+  expect(await seen).toEqual(['', NO_ROOM]);
+  expect(await anyPos(page)).toBe(false); // nothing written
+  await expect(page.getByTestId('rack-bump-outline')).toHaveCount(0); // the flash ends
 });
 
 test('dragging near the rail edge scrolls it', async ({ page }) => {

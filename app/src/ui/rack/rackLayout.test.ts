@@ -66,9 +66,10 @@ describe('layoutRack', () => {
     expect(layoutRack(toPositions(p), widths({ 0: 80, 1: 30 }))).toEqual(p);
   });
 
-  it('compacts_gap_rows', () => {
+  it('keeps_empty_rows_as_saved', () => {
+    // An emptied middle row stays an empty band until Tidy: nothing below it changes row.
     const p = layoutRack([{ idx: 0, pos: { row: 0, x: 0 } }, { idx: 1, pos: { row: 5, x: 0 } }], widths({ 0: 10, 1: 10 }))!;
-    expect(by(p, 1).row).toBe(1);
+    expect(by(p, 1).row).toBe(5);
   });
 });
 
@@ -101,6 +102,19 @@ describe('nearestFit', () => {
   it('null_when_no_spot_in_reach', () => {
     expect(nearestFit([P(0, 0, 0, 10), P(1, 1, 0, 3)], 1, 0, 3, 2)).toBeNull();
   });
+  it('ties_go_left', () => {
+    // x 5 is taken (module 1 sits at 5..6); 4 and 6 are both free, one unit away: 4 wins.
+    const s = [P(0, 0, 0, 4), P(1, 0, 5, 1), P(2, 0, 10, 4), P(3, 1, 0, 1)];
+    expect(fits(s, 3, 0, 4)).toBe(true);
+    expect(fits(s, 3, 0, 6)).toBe(true);
+    expect(nearestFit(s, 3, 0, 5, 2)).toBe(4);
+  });
+  it('never_past_max_x', () => {
+    // At MAX_X with the spots to the left taken: x + 1 / + 2 would be out of the saved bounds.
+    const s = [P(0, 0, MAX_X - 3, 3), P(1, 1, 0, 2)];
+    expect(nearestFit(s, 1, 0, MAX_X, 2)).toBe(MAX_X);
+    expect(nearestFit([P(0, 0, MAX_X - 4, 5), P(1, 1, 0, 2)], 1, 0, MAX_X, 2)).toBeNull();
+  });
 });
 
 describe('moveTo', () => {
@@ -132,17 +146,25 @@ describe('moveTo', () => {
     expect(by(r, 1).x).toBe(20);
   });
 
-  it('empty_row_removed_and_renumbered', () => {
+  it('emptied_middle_row_stays', () => {
     const s = [P(0, 0, 0, 4), P(1, 1, 0, 4), P(2, 2, 0, 4)];
     const r = moveTo(s, 1, 0, 6)!;
     expect(by(r, 1).row).toBe(0);
-    expect(by(r, 2)).toEqual(P(2, 1, 0, 4)); // row index only; x unchanged
+    expect(by(r, 2)).toEqual(P(2, 2, 0, 4)); // not renumbered: row 1 is an empty band
   });
 
   it('drop_below_creates_row', () => {
     const s = [P(0, 0, 0, 4), P(1, 0, 4, 4), P(2, 1, 0, 4)];
     expect(by(moveTo(s, 0, 2, 0)!, 0)).toEqual(P(0, 2, 0, 4));
     expect(by(moveTo(s, 0, 99, 0)!, 0).row).toBe(2);
+  });
+
+  it('a_module_alone_in_the_bottom_row_stays_on_a_new_row_drop', () => {
+    // "New row" is one below the others' last row: its own row. No empty row above it.
+    const s = [P(0, 0, 0, 4), P(1, 1, 0, 4)];
+    expect(moveTo(s, 1, 2, 0)).toEqual(s);
+    // Moving it up leaves a trailing empty row: gone, which moves nothing.
+    expect(Math.max(...moveTo(s, 1, 0, 4)!.map((q) => q.row))).toBe(0);
   });
 
   it('x_never_negative', () => {

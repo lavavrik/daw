@@ -31,16 +31,21 @@ units (its width rounded up). The pure layout is
   flex-wrap flow shows instead (one frame, before the first paint in
   practice).
 - **Positioned** (any module has a `pos: {row, x}`). `layoutRack` draws the
-  saved positions; modules without a `pos` go at the end of the bottom row,
-  and empty rows are compacted.
+  saved positions. Modules without a `pos` go at the end of the bottom row.
+  Row numbers are kept as saved: a gap in them is an empty band.
 - Both are drawn the same way:
   - The panels are absolutely positioned inside `.content` at
-    `left = 6 + x·10`. The top of a row is the sum of the heights of the rows
-    above it plus 14 px gaps.
-  - A row is as tall as its tallest panel, measured from the DOM.
-  - Every panel gets `min-height` = its row's height (`box-sizing:
-    border-box`), so a row's jacks line up at the bottom. Panels keep
-    `width: max-content`: far to the right, shrink-to-fit would squeeze
+    `left = 6 + x·10`. Every row band is equally tall: the tallest panel's
+    natural height in the whole rack, measured from the DOM. So row r's top
+    is `6 + r·(band + 14 px)`, and it depends only on r. (Plan 22 fix round
+    1: with each row as tall as its own tallest panel, moving a tall panel
+    out of a row moved every row below it, measured at 110 px.)
+  - Adding a taller module grows every band, and removing the rack's
+    tallest shrinks them. This is accepted: it is the one thing that moves
+    other modules vertically.
+  - Every panel gets `min-height` = the band height (`box-sizing:
+    border-box`), so the jacks of every row line up at the bottom. Panels
+    keep `width: max-content`: far to the right, shrink-to-fit would squeeze
     them.
   - `.content` gets an explicit width (at least 100 %) and height, so the
     rail scrolls both ways.
@@ -56,16 +61,22 @@ units (its width rounded up). The pure layout is
 - Overlap already in the saved data (an older project saved under the push
   rule with different widths, a panel that got wider) is resolved by
   `layoutRack`, deterministically: left to right in each row, each panel
-  starts at the previous one's right edge. A layout without overlap is
+  starts at or after the previous one's right edge. This cascades: one
+  overlap can move several panels further along that row. A layout without
+  overlap is
   drawn exactly as saved (`saved_layout_without_overlap_is_drawn_as_saved`).
   Every move saves the whole drawn layout (`toPositions`), so the
   resolution happens once and the next move writes it into the data.
   Drawing never pushes anything that the saved data doesn't already
   overlap. Plan 22 Task 2 makes a panel's width independent of its values,
   so a knob turn can't create an overlap.
-- Rows below a row that empties move up one row index (compaction). Row
-  heights follow their tallest panel, so a row's top can change when a tall
-  panel leaves or joins a row above it. Columns never change.
+- Rows are never renumbered. A row that a move, nudge or removal empties
+  stays as an empty band, outlined like the rest while dragging (a free
+  spot), until Tidy. Only trailing empty rows go: the row count is the last
+  occupied row + 1, so trimming them moves nothing.
+- "New row" is one below the last row any other module is in. So a module
+  alone in the bottom row stays put when dropped below it, and a drop never
+  leaves an empty row above the mover.
 
 **Measuring.** `measure()` reads every panel's `offsetWidth` and natural
 height (a transform doesn't change them) into `dims`. The layout is derived
@@ -73,9 +84,9 @@ from `dims`.
 
 - The natural height is `offsetHeight` minus the panel's stretch spacer
   (`[data-stretch]` in ModulePanel, its only flex-grow child), which is
-  what the row's `min-height` (or flow's stretch) adds. So a row height
-  never feeds back into the measurement: when the tallest panel leaves a
-  row, the row shrinks to the next tallest.
+  what the band's `min-height` (or flow's stretch) adds. So the band height
+  never feeds back into the measurement: when the rack's tallest panel is
+  removed, the bands shrink to the next tallest.
 - When a size changes, the layout changes, so measure runs again after the
   DOM update. This converges, because positions never change a panel's
   width or natural height.
@@ -98,9 +109,9 @@ handle. A press on its × is not a drag.
     scroll's `measure()` moves the drag point along. It stops when the
     pointer leaves the zone, the rail can't scroll further, or the drag
     ends;
-  - the target row is the row band under the pointer (bands come from the
-    panel rects at the press), and below the last band a dashed "new row"
-    band shows;
+  - the target row is the row band under the pointer (`geometry.bands` at
+    the press, empty rows included), and below the last band a dashed "new
+    row" band shows;
   - x is `round((pointer − grab offset − 6) / 10)`, then the nearest x
     within 2 units (20 px) where the module fits (`nearestFit`, ties to the
     left). A near miss beside a neighbour snaps against it instead of
@@ -111,8 +122,8 @@ handle. A press on its × is not a drag.
     (`rack-drop-refusal`, `data-refused`);
   - the grid is drawn faintly behind the panels (`rack-grid`). It has
     column lines every 10 px, stronger every 50 px, starting at the content
-    padding, and each row band outlined. Colours are `--text-2` mixes. It
-    is hidden otherwise.
+    padding, and each row band outlined. It reaches down through the new-row
+    band. Colours are `--text-2` mixes. It is hidden otherwise.
 - On release, with more than 3 px of travel and a changed placement that
   fits, there is one `setRackLayout(…, 'Move module')`. It runs inside the
   pointer gesture, so it makes one undo entry. A refused drop writes
@@ -126,9 +137,10 @@ handle. A press on its × is not a drag.
   doesn't block other moves. `toPositions` saves such a panel at 1000, and
   `layoutRack` draws it back where it was (the overlap resolution above). A
   move out of bounds writes nothing, and is refused like a move that
-  doesn't fit ("Too far right — move left or Tidy"). Without pushes this is
-  a safety net: a drop's x is clamped, and a 33rd row can't be made from 32
-  modules.
+  doesn't fit ("Too far right — move left or Tidy", "No more rows — move it
+  up or Tidy"). `nearestFit` never offers an x past 1000. Empty bands are
+  kept, so a module in row 31 can make a drop below it a 33rd row, which is
+  refused.
 - In a flow rack the base is the drawn flow (`flowRack`): the first drag
   pins every module where it is and moves this one, in the same entry.
 - Esc, Cmd/Ctrl+Z or redo mid-drag cancel it through `registerDragCancel`,
@@ -140,8 +152,11 @@ or 1 row at the same x. A nudge moves only if the module fits there:
 - A nudge into a neighbour, or Up/Down into a row where that x is taken,
   does nothing. There is no snapping to another x: a nudge goes exactly one
   step or nowhere.
-- The live region says "No free spot there — the module stays". There is
-  no status-line flash: bumping into a neighbour is routine.
+- The module's outline flashes red for 400 ms (`rack-bump-outline`), and
+  the live region says "No free spot there — the module stays". The region
+  is cleared and set again a tick later, so a repeated refusal is announced
+  each time. There is no status-line flash: bumping into a neighbour is
+  routine.
 - Down from the bottom row makes a new row (a module alone in the bottom
   row stays).
 
@@ -158,9 +173,9 @@ disabled when the rack already flows.
 **Tests.** The e2e tests are in `tests/e2e/rack.spec.ts`:
 
 - `cables follow wrapped rows`;
-- the plan 18 drag tests: new row, click, Tidy, undo mid drag, keyboard
-  (and its announcement), wide rack, own spot, x within 0..1000, a panel
-  past 1000 not blocking others, equal row heights (no ratchet), edge
+- the plan 18 drag tests: new row (and undo back to the identical flow),
+  click, Tidy, undo mid drag, keyboard (and its announcement), wide rack,
+  own spot, x within 0..1000, a panel past 1000 not blocking others, edge
   auto-scroll;
 - the plan 22 placement tests:
   - a small drag of the first row's last module moves only it, and every
@@ -169,7 +184,13 @@ disabled when the rack already flows.
     written);
   - a near miss snaps against the neighbour, and Alt+Left into it does
     nothing;
-  - a nudge or drop into the VCA at x 1000 is refused.
+  - a nudge or drop into the VCA at x 1000 is refused;
+  - every band is as tall as the rack's tallest panel, and removing that
+    panel shrinks them (no ratchet);
+  - nothing moves vertically: a drag of row 1's tallest to a new row,
+    Alt+Down out of a row, or removing a module from a middle row leaves
+    every other rect within 1 px;
+  - a refused nudge flashes red and is announced again each time.
 
 ### Look and param controls (plan 20 redesign; plan 21 mechanical faceplates)
 

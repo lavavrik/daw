@@ -36,9 +36,10 @@
   //     exactly what is drawn (plan 22: no module jumps). Until every panel
   //     has been measured, `.content`'s CSS flex-wrap flow shows instead;
   //   - positioned (any `pos`): layoutRack(modules, measured widths).
-  // Either way each panel is absolute at left = PAD + x·GRID, top = the sum
-  // of the rows above (each as tall as its tallest panel) + 14 px gaps,
-  // min-height = its row's height (a row's jacks line up at the bottom), and
+  // Either way each panel is absolute at left = PAD + x·GRID, top = PAD +
+  // row·(band + 14 px), where every band is as tall as the rack's tallest
+  // panel (so a row's top depends only on its index; empty rows stay as
+  // bands until Tidy), min-height = the band (jacks line up at the bottom), and
   // `.content` gets an explicit width (>= 100 %) and height, so the rail
   // scrolls both ways.
   // Measuring: measure() reads every panel's offsetWidth and NATURAL height
@@ -310,23 +311,25 @@
    */
   const placed = $derived(positioned ?? (cols > 0 ? flowRack(modules.map((m) => m.idx), widths, cols) : null));
   /**
-   * Positioned: each panel's left/top in `.content` px, its row's height (the
-   * panel's min-height, so a row's jacks line up as in flow), and
-   * `.content`'s size. Rows are as tall as their tallest panel.
+   * The drawn layout in `.content` px (flow and positioned alike): each
+   * panel's left/top and its min-height, the row bands, and `.content`'s size.
+   * Every row is equally tall (plan 22 fix round 1): the tallest panel's
+   * natural height in the whole rack, so a row's top depends only on its
+   * index. Moving, nudging or removing a module never moves another one up or
+   * down (an emptied middle row stays an empty band; rackLayout.ts keeps row
+   * numbers). Adding a taller module grows every band; removing the tallest
+   * shrinks them. Panels stretch to the band (their spacer), so a row's jacks
+   * line up at the bottom.
    */
   const geometry = $derived.by(() => {
     if (!placed) return null;
-    const rowH: number[] = [];
-    for (const q of placed) rowH[q.row] = Math.max(rowH[q.row] ?? 0, dims.get(q.idx)?.h ?? 0);
-    const tops: number[] = [];
-    let y = PAD;
-    for (let r = 0; r < rowH.length; r++) {
-      tops[r] = y;
-      y += (rowH[r] ?? 0) + ROW_GAP;
-    }
-    const at = new Map(placed.map((q) => [q.idx, { left: PAD + q.x * GRID, top: tops[q.row], height: rowH[q.row] ?? 0 }]));
+    const rowH = Math.max(0, ...placed.map((q) => dims.get(q.idx)?.h ?? 0));
+    const rows = placed.length ? Math.max(...placed.map((q) => q.row)) + 1 : 0;
+    const top = (r: number) => PAD + r * (rowH + ROW_GAP);
+    const bands = Array.from({ length: rows }, (_, r) => ({ top: top(r), bottom: top(r) + rowH }));
+    const at = new Map(placed.map((q) => [q.idx, { left: PAD + q.x * GRID, top: top(q.row), height: rowH }]));
     const right = Math.max(0, ...placed.map((q) => q.x * GRID + (dims.get(q.idx)?.w ?? q.w * GRID)));
-    return { at, w: right + 2 * PAD, h: y - ROW_GAP + PAD };
+    return { at, bands, rowH, w: right + 2 * PAD, h: top(rows) - ROW_GAP + PAD };
   });
   // A move changes no module's identity and maybe no size: re-measure the jacks once it is drawn.
   $effect(() => {
@@ -354,7 +357,7 @@
     idx: number;
     /** The layout the drop applies to (the drawn `placed` at the press). */
     base: Placed[];
-    /** Each base row's band (`.content` px; the row's panels as they are drawn at the press). */
+    /** Each row's band at the press (`.content` px; geometry.bands, empty rows included). */
     bands: { top: number; bottom: number }[];
     /** Pointer at the press, now (viewport, to re-derive `at` after a scroll) and in `.content` px. */
     start: Pt;
@@ -438,8 +441,9 @@
 
   function headerDown(e: PointerEvent, idx: number) {
     if (drag?.kbd) drag = null; // a press cancels a keyboard pick
-    if (e.button !== 0 || !content || drag || mdrag) return;
+    if (e.button !== 0 || !content || drag || mdrag || !geometry) return;
     const base = placed;
+    const bands = geometry.bands;
     const rects = panelRects();
     const me = rects.find((r) => r.idx === idx);
     if (!me || !base) return; // before the capture below: nothing may be left holding the pointer
@@ -447,13 +451,6 @@
     const el = e.currentTarget as HTMLElement;
     el.focus({ preventScroll: true }); // Alt+arrows go on from here
     el.setPointerCapture(e.pointerId);
-    const bands: { top: number; bottom: number }[] = [];
-    for (const q of base) {
-      const r = rects.find((x) => x.idx === q.idx);
-      if (!r) continue;
-      const b = bands[q.row];
-      bands[q.row] = b ? { top: Math.min(b.top, r.top), bottom: Math.max(b.bottom, r.top + r.height) } : { top: r.top, bottom: r.top + r.height };
-    }
     const at = local(e);
     const client = { x: e.clientX, y: e.clientY };
     mdrag = { idx, base, bands, start: client, client, at0: at, at, grab: { x: at.x - me.left, y: at.y - me.top }, w: me.width, h: me.height };
@@ -525,9 +522,9 @@
   // Keyboard: Alt+arrows on a focused header move the module one grid unit /
   // one row at the same x, only if it fits there (moveTo; no snapping: a
   // nudge goes exactly one step or nowhere). A nudge into another module (or
-  // Up/Down into a row where that x is taken) does nothing, and the live
-  // region says so (no status-line flash: bumping into a neighbour is
-  // routine). Quick nudges are one undo entry: coalesce key
+  // Up/Down into a row where that x is taken) does nothing: the module's
+  // outline flashes red and the live region says so (bumped(); no
+  // status-line flash: bumping into a neighbour is routine). Quick nudges are one undo entry: coalesce key
   // sweepKey(`rackmove:<trackId>`), which steps after 1 s idle. The live
   // region says where it went ("Moved VCA to row 2, position 31": row
   // 1-based, position in grid units); a move out of bounds says why (refuse()).
@@ -546,7 +543,7 @@
     const x = Math.min(MAX_X, Math.max(0, me.x + d[1]));
     if (row < 0 || (row === me.row && x === me.x)) return; // at an edge
     const result = moveTo(base, idx, row, x);
-    if (!result) return void (rackStatus = NO_ROOM);
+    if (!result) return bumped(idx);
     if (samePlacement(result, base)) return; // Alt+Down on a module alone in the bottom row
     if (!inBounds(result, base)) return refuse(refusalText(result));
     if (!setRackLayout(p, track.id, toPositions(result), 'Move module', sweepKey(`rackmove:${track.id}`))) return;
@@ -556,6 +553,26 @@
     const el = e.currentTarget as HTMLElement;
     void tick().then(() => el.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
   }
+
+  /**
+   * A refused nudge: the module's outline flashes red (rack-bump-outline,
+   * BUMP_MS) and the live region says NO_ROOM. The region is cleared first
+   * and set a tick later, so a repeated refusal is announced again (the same
+   * text twice is no change to a polite region).
+   */
+  const BUMP_MS = 400;
+  let bump = $state<{ idx: number; n: number } | null>(null);
+  let bumpN = 0;
+  let bumpTimer: ReturnType<typeof setTimeout> | undefined;
+  function bumped(idx: number) {
+    const n = ++bumpN;
+    bump = { idx, n };
+    clearTimeout(bumpTimer);
+    bumpTimer = setTimeout(() => { if (bump?.n === n) bump = null; }, BUMP_MS);
+    rackStatus = '';
+    void tick().then(() => { if (bumpN === n) rackStatus = NO_ROOM; });
+  }
+  onDestroy(() => clearTimeout(bumpTimer));
 
   /** Back to the wrapping flow: every `pos` removed (one undo entry). */
   function tidy() {
@@ -1156,9 +1173,9 @@
       class="content" bind:this={content}
       style:width={geometry ? `max(100%, ${geometry.w}px)` : undefined} style:height={geometry ? `${geometry.h}px` : undefined}
     >
-      {#if mdrag && landing}
-        <!-- The grid while dragging (plan 22), behind the panels (first in .content): 10 px column ticks, every 50 px stronger, from PAD; the row bands. -->
-        <div class="grid" data-testid="rack-grid" aria-hidden="true">
+      {#if mdrag && landing && geometry}
+        <!-- The grid while dragging (plan 22), behind the panels (first in .content): 10 px column ticks, every 50 px stronger, from PAD; the row bands. It reaches through the new-row band below the last row. -->
+        <div class="grid" data-testid="rack-grid" aria-hidden="true" style:height={`${landing.newTop + geometry.rowH + PAD}px`}>
           {#each mdrag.bands as b, i (i)}
             <div class="band" style:top={`${b.top}px`} style:height={`${b.bottom - b.top}px`}></div>
           {/each}
@@ -1193,10 +1210,15 @@
         />
       {/each}
       {#if mdrag && landing}
-        <div class="newrow" data-testid="rack-new-row" style:top={`${landing.newTop}px`} style:height={`${mdrag.h}px`}><span>new row</span></div>
+        <div class="newrow" data-testid="rack-new-row" style:top={`${landing.newTop}px`} style:height={`${geometry?.rowH ?? mdrag.h}px`}><span>new row</span></div>
         <div class="outline" class:refused={!landing.ok} data-testid="rack-drop-outline" data-refused={!landing.ok || undefined}
           style:left={`${landing.left}px`} style:top={`${landing.top}px`} style:width={`${mdrag.w}px`} style:height={`${mdrag.h}px`}
         >{#if landing.refusal}<span data-testid="rack-drop-refusal">{landing.refusal}</span>{/if}</div>
+      {/if}
+      {#if bump && geometry?.at.get(bump.idx)}
+        {@const b = geometry.at.get(bump.idx)!}
+        <div class="outline refused bump" data-testid="rack-bump-outline"
+          style:left={`${b.left}px`} style:top={`${b.top}px`} style:width={`${dims.get(bump.idx)?.w ?? 0}px`} style:height={`${b.height}px`}></div>
       {/if}
       {#if modules.length === 0}
         <p class="empty">Empty rack — pick a patch or add modules. A synth needs at least MIDI In → Oscillator → Out.</p>
@@ -1266,13 +1288,17 @@
   /* The grid while dragging: faint column ticks every 10 px (GRID), stronger every 50, starting at the
      content padding (PAD, 6 px) like the panels' x; each row band outlined. Under the panels (DOM order). */
   .grid {
-    position: absolute; top: 0; right: 0; bottom: 0; left: 6px; pointer-events: none;
+    position: absolute; top: 0; right: 0; left: 6px; pointer-events: none;
     background-image:
       repeating-linear-gradient(to right, color-mix(in srgb, var(--text-2) 22%, transparent) 0 1px, transparent 1px 50px),
       repeating-linear-gradient(to right, color-mix(in srgb, var(--text-2) 9%, transparent) 0 1px, transparent 1px 10px);
   }
-  /* A row band: `top`/`height` in `.content` px (the grid's top is `.content`'s), from PAD to PAD before the right edge. */
+  /* A row band: `top`/`height` in `.content` px (the grid's top is `.content`'s), from PAD to PAD before the right edge.
+     An empty band (a row a move emptied) is outlined like the rest: a free spot. */
   .band { position: absolute; left: 0; right: 6px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--text-2) 20%, transparent); border-radius: var(--r-sm); }
+  /* A refused nudge: the module's outline flashes red (above the panel, under the cables). */
+  .outline.bump { z-index: 3; background: none; animation: bump 400ms ease-out forwards; }
+  @keyframes bump { from { opacity: 1; } to { opacity: 0; } }
   .newrow { left: 6px; right: 6px; padding: 4px 8px; border: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-lbl); }
   /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */
   .cables { position: absolute; z-index: 4; left: 0; top: 0; overflow: visible; pointer-events: none; }

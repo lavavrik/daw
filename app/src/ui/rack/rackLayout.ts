@@ -12,6 +12,10 @@
 //   resolved once and is gone from the data after the next move.
 // - `moveTo` never pushes: only the moved module changes, and only into a
 //   spot where it `fits`; otherwise it returns null (the caller writes nothing).
+// - Rows are never renumbered (plan 22 fix round 1): a row a move or a removal
+//   empties stays as an empty band until Tidy, so no other module changes row.
+//   Only trailing empty rows go, which moves nothing (the row count is the
+//   last occupied row + 1). The rack draws every row equally tall (Rack.svelte).
 
 import type { RackPos } from '../../state/project.svelte';
 
@@ -27,13 +31,9 @@ export interface Placed { idx: number; row: number; x: number; w: number }
 
 const wUnits = (px: number) => Math.max(1, Math.ceil(px / GRID));
 
-/** Renumber rows 0..n-1 in order (drops empty rows / saved gaps) and sort by (row, x, idx). */
-function compact(items: Placed[]): Placed[] {
-  const rows = [...new Set(items.map((p) => p.row))].sort((a, b) => a - b);
-  const map = new Map(rows.map((r, i) => [r, i]));
-  return items
-    .map((p) => ({ ...p, row: map.get(p.row)! }))
-    .sort((a, b) => a.row - b.row || a.x - b.x || a.idx - b.idx);
+/** Sorted by (row, x, idx). Rows keep their numbers: an empty row in the middle stays (an empty band). */
+function ordered(items: Placed[]): Placed[] {
+  return items.sort((a, b) => a.row - b.row || a.x - b.x || a.idx - b.idx);
 }
 
 /**
@@ -60,9 +60,11 @@ export function flowRack(idxs: readonly number[], widthsPx: ReadonlyMap<number, 
 
 /**
  * null when no module has a pos (flow). Saved overlap in a row (older data, a
- * panel that grew) is resolved left to right (push right); a layout without
- * overlap is drawn exactly as saved. Unpositioned modules go at the end of the
- * bottom row in idx order.
+ * panel that grew) is resolved left to right: each panel starts at or after
+ * the previous one's right edge, so one overlap can move several panels of
+ * that row (a cascade). A layout without overlap is drawn exactly as saved,
+ * empty rows (gaps in the saved row numbers) included. Unpositioned modules go
+ * at the end of the bottom row in idx order.
  */
 export function layoutRack(
   mods: readonly { idx: number; pos?: RackPos }[],
@@ -94,7 +96,7 @@ export function layoutRack(
       }
     }
   }
-  return compact(out);
+  return ordered(out);
 }
 
 /**
@@ -110,32 +112,33 @@ export function fits(placed: readonly Placed[], idx: number, row: number, x: num
 
 /**
  * The fitting x in `row` nearest to `x`, at most `reach` units away (ties go
- * left), or null. The drag's outline snaps to a free spot just beside the
- * pointer instead of turning red for a near miss.
+ * left), within 0..MAX_X, or null. The drag's outline snaps to a free spot
+ * just beside the pointer instead of turning red for a near miss.
  */
 export function nearestFit(placed: readonly Placed[], idx: number, row: number, x: number, reach: number): number | null {
   for (let d = 0; d <= reach; d++) {
-    if (fits(placed, idx, row, x - d)) return x - d;
-    if (d && fits(placed, idx, row, x + d)) return x + d;
+    if (x - d <= MAX_X && fits(placed, idx, row, x - d)) return x - d;
+    if (d && x + d <= MAX_X && fits(placed, idx, row, x + d)) return x + d;
   }
   return null;
 }
 
 /**
  * Place `idx` at (row, x), moving nothing else: null when it doesn't fit there
- * (the caller writes nothing and the module stays). x < 0 is clamped to 0;
- * row may be maxRow + 1 (a new, empty row; larger rows clamp to it). Empty
- * rows are removed and the rest renumbered (rows below one that empties move
- * up a row index; their x never changes).
+ * (the caller writes nothing and the module stays). x < 0 is clamped to 0.
+ * The new row is one below the last row any OTHER module is in (larger rows
+ * clamp to it), so a module alone in the bottom row stays put, and no empty
+ * row is ever left above the mover. Rows keep their numbers: a row the move
+ * empties stays (an empty band) unless it is trailing.
  */
 export function moveTo(placed: readonly Placed[], idx: number, row: number, x: number): Placed[] | null {
   const me = placed.find((p) => p.idx === idx);
   if (!me) return null;
-  const maxRow = Math.max(...placed.map((p) => p.row));
-  const r = Math.min(Math.max(0, row), maxRow + 1);
+  const maxOther = Math.max(-1, ...placed.filter((p) => p.idx !== idx).map((p) => p.row));
+  const r = Math.min(Math.max(0, row), maxOther + 1);
   const nx = Math.max(0, x);
   if (!fits(placed, idx, r, nx)) return null;
-  return compact(placed.map((p) => (p.idx === idx ? { ...p, row: r, x: nx } : { ...p })));
+  return ordered(placed.map((p) => (p.idx === idx ? { ...p, row: r, x: nx } : { ...p })));
 }
 
 /**
@@ -144,7 +147,7 @@ export function moveTo(placed: readonly Placed[], idx: number, row: number, x: n
  * started from) only panels whose x the move changed are held to x <= MAX_X:
  * one already drawn past 1000 (a module appended at the end of the bottom row,
  * older overlapping data resolved to the right) must not block every other
- * move. Rows are checked for all (compaction only ever lowers them).
+ * move. Rows are checked for all (only the mover's row changes).
  */
 export function inBounds(placed: readonly Placed[], before?: readonly Placed[]): boolean {
   const was = new Map(before?.map((p) => [p.idx, p.x]));

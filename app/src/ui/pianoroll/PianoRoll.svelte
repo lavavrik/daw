@@ -26,8 +26,9 @@
   // over a darkened "past the end" area.
   //
   // Mouse:
-  // - empty space: click adds a note one grid cell long (velocity 100) and
-  //   keeps dragging it; Shift-drag = box select (adds to the selection);
+  // - empty space: a press adds a note one grid cell long (velocity 100),
+  //   and dragging on stretches it (DRAW AND STRETCH below); Shift-drag =
+  //   box select (adds to the selection);
   // - note body: drag moves (time + pitch, snapped); note end (last 6 px):
   //   drag resizes; Shift-click toggles it in the selection; Alt = no snap;
   // - keyboard: press a key to audition it (noteInput, source 'pianoroll');
@@ -69,15 +70,30 @@
   // each; notes they land on top of each other merge (pattern-actions
   // mergeStacked). The readout says what they did.
   //
+  // DRAW AND STRETCH (owner request pr-drag; theory.md "Draw and stretch").
+  // A press on empty grid creates the note (or the chord stamp's notes) at
+  // once, one grid cell long, its pitch and start from the cell (Snap to
+  // key applied). Dragging on (past DRAG_SLOP) stretches it: the end follows
+  // the pointer, on the nearest grid line (Alt: free), at least one grid
+  // step; the start and the pitch never move (a vertical drag changes
+  // nothing). The readout shows the length live (prMath.stretchReadout).
+  // The gesture is one undo entry (history/gestures.ts brackets the press:
+  // "Add note" / "Add chord", the stretch inside it). Escape or Cmd/Ctrl+Z
+  // mid-drag (registerDragCancel) removes the new notes: the gesture ends
+  // where it began, no entry. A plain click keeps the default length. This
+  // is every way the roll creates notes (normal draw, Snap to key, the
+  // chord stamp; there is no paint / brush tool. The Acid tab's step grid
+  // writes notes through its own path, acid-actions.ts, untouched).
+  //
   // Chord stamp (plan 26 Task 2; theory.md "Chord stamp"): the "Chord"
   // toggle turns chord mode on, its ▾ opens ChordCard (type + inversion).
   // In chord mode, hovering empty grid shows a ghost of the chord on that
-  // row (snapped like a drawn note; prMath.chordStampPitches), and a click
+  // row (snapped like a drawn note; prMath.chordStampPitches), and a press
   // there places every note of it, one grid cell long, as ONE "Add chord"
   // undo entry (addNotes; refused whole, with a hint, when the pattern has
-  // no room for all of it). Notes under the pointer are still moved /
-  // resized as usual; Shift and right-click keep their meaning. Escape
-  // leaves chord mode (after cancelling a drag).
+  // no room for all of it); a drag stretches them all together. Notes under
+  // the pointer are still moved / resized as usual; Shift and right-click
+  // keep their meaning. Escape leaves chord mode (after cancelling a drag).
   //
   // Humanize… (plan 25 Task 3; docs/architecture/sequencer.md "Humanize"):
   // an amount card (HumanizeCard) whose Apply is humanizeNotes on the
@@ -124,7 +140,7 @@
   import { clearPatternText } from '../../state/confirmText';
   import {
     BAR, BEAT, KEYS_W, MIN_ROW_H, chordStampPitches, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
-    readout, snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
+    readout, snap, snapFloor, stretchLen, stretchReadout, tickToX, xToTick, yToPitch, zoomAt,
   } from './prMath';
   import type { View } from './prMath';
 
@@ -174,6 +190,8 @@
    * (the window listener below) moves the ghost without a pointer move.
    */
   let hoverPt = $state.raw<{ x: number; ny: number; alt: boolean; shift: boolean } | null>(null);
+  /** The notes a draw is stretching, for the readout (DRAW AND STRETCH); null when no draw runs. */
+  let stretch = $state.raw<{ pitches: number[]; start: number; len: number } | null>(null);
 
   /** The pattern being edited (the track's current pattern). */
   const pat = $derived(currentPattern(track));
@@ -210,6 +228,8 @@
   });
 
   const readoutText = $derived.by(() => {
+    // The live length wins over a hint still showing from before the press.
+    if (stretch) return `${chordOn ? `${chordLabel} · ` : ''}${stretchReadout(stretch.pitches, stretch.start, stretch.len, gridKey)}`;
     if (hint) return hint;
     if (velShown !== null) return `Velocity ${velShown}`;
     if (chordOn) {
@@ -603,6 +623,16 @@
         /** A time change was applied: from then on `start` is always sent (to come back to dt 0). */
         timeMoved: boolean;
       }
+    | {
+        /**
+         * DRAW AND STRETCH: the notes the press just drew, all at `start`.
+         * `orig`: every note it stretches (a chord's notes that were already
+         * there included); `created`: the ids it added (Escape removes them).
+         */
+        kind: 'draw'; orig: Orig[]; created: string[]; start: number; x0: number; y0: number; moved: boolean;
+        /** Last length sent (-1: none yet). */
+        last: number;
+      }
     | { kind: 'vel'; orig: Orig[]; last: number }
     | { kind: 'box'; base: Set<string> }
     | { kind: 'key' };
@@ -718,41 +748,66 @@
           flashHint('Past the pattern end — raise Length to draw there');
           return;
         }
-        if (chordOn) return stamp(tick, pitch, e.altKey);
-        const at = { pitch: movedPitch(pitch, 0, snapKey), start: e.altKey ? Math.round(tick) : snapFloor(tick, grid) };
-        // A note already there (Snap to key moved the click onto it, or a note
-        // shorter than the cell): select and drag it, never stack a second.
-        const there = noteAt(pat, at.pitch, at.start);
-        const n = there ?? addNote(p, engine, track.id, { ...at, len: grid, vel: 100 });
-        if (!n) {
-          flashHint('Pattern is full (1024 notes)');
-          return;
+        const start = e.altKey ? Math.round(tick) : snapFloor(tick, grid);
+        if (chordOn) {
+          if (!stamp(start, pitch, x, ny)) return;
+        } else {
+          const at = { pitch: movedPitch(pitch, 0, snapKey), start };
+          // A note already there (Snap to key moved the click onto it, or a note
+          // shorter than the cell): select and drag (move) it, never stack a second.
+          const there = noteAt(pat, at.pitch, at.start);
+          if (there) {
+            selected = new Set([there.id]);
+            const orig = snapshot(selected).map((o) => ({ ...o, from: pitch }));
+            drag = { kind: 'move', anchor: orig[0], orig, x0: x, y0: ny, moved: false, last: '0,0', timeMoved: false };
+          } else {
+            const n = addNote(p, engine, track.id, { ...at, len: grid, vel: 100 });
+            if (!n) {
+              flashHint('Pattern is full (1024 notes)');
+              return;
+            }
+            selected = new Set([n.id]);
+            startStretch([n.id], start, x, ny);
+          }
         }
-        selected = new Set([n.id]);
-        const orig = snapshot(selected).map((o) => ({ ...o, from: pitch }));
-        drag = { kind: 'move', anchor: orig[0], orig, x0: x, y0: ny, moved: false, last: '0,0', timeMoved: false };
       }
     }
     canvas.setPointerCapture(e.pointerId);
   }
 
-  /** Chord mode: place the chord on `pitch`'s row at `tick` (one "Add chord" entry), select it. No drag follows. */
-  function stamp(tick: number, pitch: number, alt: boolean) {
+  /** DRAW AND STRETCH: the press at (x, ny) just added `created` (selected, all at `start`): a drag stretches the selection. */
+  function startStretch(created: string[], start: number, x: number, ny: number) {
+    const orig = snapshot(selected);
+    drag = { kind: 'draw', orig, created, start, x0: x, y0: ny, moved: false, last: -1 };
+    stretch = { pitches: orig.map((o) => o.pitch).sort((a, b) => a - b), start, len: grid };
+  }
+
+  /**
+   * Chord mode: place the chord on `pitch`'s row at `start` (one "Add chord"
+   * entry), select it, and stretch it while the press (at x, ny) is dragged.
+   * False when nothing was added (no drag follows).
+   */
+  function stamp(start: number, pitch: number, x: number, ny: number): boolean {
     const pitches = chordStampPitches(pitch, chordType, chordInv, p.key, snapKey);
-    const start = alt ? Math.round(tick) : snapFloor(tick, grid);
     if (!pitches.length) { // every note past 127 (e.g. In key at the top, inverted)
       flashHint('No room on the keyboard for this chord here');
-      return;
+      return false;
     }
     const added = addNotes(p, engine, track.id, pitches.map((pt) => ({ pitch: pt, start, len: grid, vel: 100 })), 'Add chord');
     if (!added) {
       flashHint(`Pattern is full: no room for this ${pitches.length}-note chord (${MAX_NOTES} notes max)`);
-      return;
+      return false;
     }
-    // The whole chord is selected, notes that were already there included.
+    // The whole chord is selected, notes that were already there included
+    // (a drag stretches them with the new ones; Escape puts their length back).
     selected = new Set(pitches.map((pt) => noteAt(pat, pt, start)?.id).filter((id): id is string => !!id));
-    if (!added.length) flashHint('That chord is already there');
+    if (!added.length) {
+      flashHint('That chord is already there');
+      return false;
+    }
     // The new notes are under the pointer now: hoverCell's hit test hides the ghost.
+    startStretch(added.map((n) => n.id), start, x, ny);
+    return true;
   }
 
   function move(e: PointerEvent) {
@@ -768,6 +823,15 @@
       if (velShown === drag.last) return;
       drag.last = velShown;
       schedule(drag.orig.map((o) => ({ id: o.id, vel: velShown! })));
+    } else if (drag.kind === 'draw') {
+      if (!drag.moved && Math.hypot(x - drag.x0, ny - drag.y0) < DRAG_SLOP) return;
+      drag.moved = true;
+      // Only the length: the pointer's row is ignored (a vertical drag changes nothing).
+      const len = stretchLen(drag.start, xToTick(x, v), grid, e.altKey);
+      if (len === drag.last) return;
+      drag.last = len;
+      stretch = { ...stretch!, len };
+      schedule(drag.orig.map((o) => ({ id: o.id, len })));
     } else if (drag.kind === 'box') {
       box = { ...box!, x1: x, y1: y };
       const b = box;
@@ -839,6 +903,14 @@
     if (d.kind === 'key') audition(null, e.timeStamp);
     if (d.kind === 'vel') velShown = null;
     if (d.kind === 'box') box = null;
+    if (d.kind === 'draw') {
+      stretch = null;
+      // Refresh the hover (the chord ghost, the cursor) where the press ended,
+      // without waiting for the next pointer move (a release off the canvas:
+      // its pointerleave clears the hover instead).
+      const { x, y, ny } = local(e);
+      if (x >= 0 && y >= 0 && x < size.w && y < size.h) hover(x, y, ny, { alt: e.altKey, shift: e.shiftKey });
+    }
   }
 
   // Cmd/Ctrl+Z or redo mid-drag cancels the drag like Escape (history/gestures.ts).
@@ -862,6 +934,15 @@
     } else if (d.kind === 'vel') {
       velShown = null;
       updateNotes(p, engine, track.id, d.orig.map((o) => ({ id: o.id, vel: o.vel })));
+    } else if (d.kind === 'draw') {
+      // Remove what the press drew; a chord's notes that were already there
+      // get their length back. Inside the press's gesture: no undo entry.
+      stretch = null;
+      const created = new Set(d.created);
+      const kept = d.orig.filter((o) => !created.has(o.id));
+      if (kept.length) updateNotes(p, engine, track.id, kept.map((o) => ({ id: o.id, len: o.len })));
+      deleteNotes(p, engine, track.id, d.created);
+      selected = new Set([...selected].filter((id) => !created.has(id)));
     } else if (d.moved) {
       updateNotes(p, engine, track.id, d.orig.map((o) => ({ id: o.id, pitch: o.pitch, start: o.start, len: o.len })));
     }

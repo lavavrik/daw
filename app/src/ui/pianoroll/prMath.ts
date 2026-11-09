@@ -6,7 +6,7 @@
 // - y = 0 is the top of the note area (below the bar ruler); row 0 is
 //   `topPitch`, each row is `rowH` px, higher pitches are higher up.
 // The component subtracts the ruler height from pointer y before calling these.
-import { GRID_TICKS } from '../../state/pattern-actions';
+import { GRID_TICKS, MAX_NOTE_LEN } from '../../state/pattern-actions';
 import { NOTE_NAMES, noteName } from '../noteName';
 import { inKey, isKeyRoot, nearestInKey, voiceChord } from '../../music/scales';
 import type { ChordType, MusicKey } from '../../music/scales';
@@ -137,6 +137,28 @@ export function clampMove(
     dp: clamp(dp, -Math.min(...pitches), 127 - Math.max(...pitches)) + 0,
   };
 }
+
+// ---- draw and stretch (owner request pr-drag; theory.md "Draw and stretch") ------
+
+/**
+ * The length of a note (or a chord's notes) being drawn while the press that
+ * created it is dragged: from `start` to the pointer's `tick`, the end on the
+ * grid line nearest the pointer (`free`, Alt: on the pointer's tick). Never
+ * shorter than one grid step, so a press with no reach and a drag left of
+ * the start both keep the default length (the start never moves); at most
+ * MAX_NOTE_LEN.
+ */
+export function stretchLen(start: number, tick: number, grid: number, free: boolean): number {
+  const end = free ? Math.round(tick) : snap(tick, grid);
+  return clamp(end - start, grid, MAX_NOTE_LEN);
+}
+
+/**
+ * The readout while a draw is stretched: "C3 · 1.1.1 · 3×1/16" (the
+ * selected-note readout's format), a chord's pitches ascending: "A3 C4 E4 · …".
+ */
+export const stretchReadout = (pitches: readonly number[], start: number, len: number, grid: GridKey) =>
+  `${pitches.map((pt) => noteName(pt)).join(' ')} · ${formatPos(start)} · ${formatLen(len, grid)}`;
 
 // ---- the key (plan 26; docs/architecture/theory.md) ----------------------------
 

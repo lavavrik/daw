@@ -12,7 +12,7 @@ notes in it without the user knowing any theory.
 | Changing it | `state/key-actions.ts` `setKey` / `applyKey` / `keyCommands` |
 | Transpose, Fit to key | `state/pattern-actions.ts` `transposeNotes`, `fitNotesToKey` |
 | Chord stamp | `state/pattern-actions.ts` `addNotes`, `ui/pianoroll/prMath.ts` `chordStampPitches`, `ChordCard.svelte` |
-| Roll maths | `ui/pianoroll/prMath.ts` `keyRow`, `movedPitch` |
+| Roll maths | `ui/pianoroll/prMath.ts` `keyRow`, `movedPitch`, `stretchLen` / `stretchReadout` (draw and stretch) |
 | Snap to key pref | `ui/pianoroll/snapToKey.svelte.ts` (localStorage `daw.snapToKey`) |
 | UI | `ui/pianoroll/PianoRoll.svelte`, `KeyCard.svelte`, `TransposeCard.svelte`, `ChordCard.svelte` |
 
@@ -125,12 +125,12 @@ key keeps the classic black-key shading and tints nothing
 off by default, not in the project): pitches follow `prMath.movedPitch`:
 
 - a **drawn** note lands on `nearestInKey` of the clicked row (ties up);
-  the drag that follows counts from the clicked row, so pointing at the row
-  above or below moves it as usual. When the snapped pitch already has a
-  note at that start (or the click is past the end of a note shorter than
-  the cell), that note is selected and dragged instead: a draw never
-  stacks a second note on one (review #1; `addNote` refuses an exact
-  duplicate, same pitch and start, anyway);
+  the drag that follows stretches it and never changes its pitch ("Draw
+  and stretch" below). When the snapped pitch already has a note at that
+  start (or the click is past the end of a note shorter than the cell),
+  that note is selected and dragged (moved, counting from the clicked row)
+  instead: a draw never stacks a second note on one (review #1; `addNote`
+  refuses an exact duplicate, same pitch and start, anyway);
 - a **dragged** or **nudged** (↑ / ↓, Shift = octave) note goes to the
   first in-key pitch *in the direction of the move* (`'up'` / `'down'`), so
   a one-row move never snaps back to where it started; a time-only drag
@@ -188,15 +188,15 @@ grid size); chord mode itself starts off whenever the roll opens.
   ghost follows a wheel scroll or zoom, and Alt / Shift pressed or
   released, without a pointer move. When every note of the chord would be
   past 127 the readout says "no room on the keyboard here".
-- **Click** places every note of the ghost, velocity 100, as ONE "Add
+- **Press** places every note of the ghost, velocity 100, as ONE "Add
   chord" undo entry (`addNotes`), and selects the whole chord (notes that
   were already there included). A chord note that would sit exactly on an
   existing note (same pitch and start) is skipped, not stacked; when
   that leaves nothing to add the readout says "That chord is already
-  there" (no entry), and when every note is past 127, "No room on the
-  keyboard for this chord here". No drag follows the
-  click (a drawn single note's follow-up drag would, with Snap to key, snap
-  each chord note on its own and bend the chord).
+  there" (no entry, no drag), and when every note is past 127, "No room on
+  the keyboard for this chord here". Dragging on stretches every note of
+  the chord together ("Draw and stretch" below); it never moves them, so
+  the voicing never bends.
 - **Pitches:** `prMath.chordStampPitches(row, type, inversion, key,
   snapKey)` = `voiceChord` in the project key. With **Snap to key** on, a
   fixed type's root first snaps to the key (`nearestInKey`, ties up: C#4 →
@@ -209,6 +209,42 @@ grid size); chord mode itself starts off whenever the roll opens.
 - **Escape** cancels a drag first, else leaves chord mode, else clears the
   selection. Shift (box select, toggle) and right-click (delete) work as
   in draw mode.
+
+**Draw and stretch** (owner request, branch `pr-drag`: "clicking and
+dragging on a piano roll should stretch a note while it's dragged (all
+modes, including chord)"). Every way the roll creates notes works the
+same: a plain draw, a draw with Snap to key, and the chord stamp (the
+roll has no paint / brush tool; the Acid tab's step grid writes notes
+through its own path, `acid-actions.ts`, and is not affected).
+
+- The **press** on empty grid creates the note(s) at once, one grid cell
+  long: pitch and start from the cell (Snap to key applied, Alt: unsnapped
+  start), as before.
+- **Dragging** on (past the 3 px slop) stretches them: the end follows the
+  pointer, on the grid line nearest it (Alt: to the tick), never shorter
+  than one grid step, at most `MAX_NOTE_LEN`
+  (`prMath.stretchLen`). The start never moves: a drag left of it keeps
+  the one-step minimum. The pitch never changes: a vertical drag does
+  nothing. (Before this, the drag after a draw *moved* the new note; to
+  move it now, release and drag its body.) A chord's notes that were
+  already there (skipped by `addNotes`) are stretched with the new ones.
+  The length goes out through `updateNotes` once per animation frame like
+  every roll drag; it may run past the pattern end, as a resize may.
+- The **readout** shows the notes and their length while the press is
+  held, in the selected-note format (`prMath.stretchReadout`: "C3 ·
+  1.1.1 · 3×1/16"; a chord: "In key · A3 C4 E4 G4 · 1.1.1 · 1/4"). On the
+  release the hover is refreshed at the pointer, so the chord ghost and
+  the cursor are right without a pointer move.
+- **Undo.** The whole press (create + stretch) is one entry, "Add note" /
+  "Add chord": the gesture (`history/gestures.ts`) brackets it, and the
+  first edit names it. No combined action was needed.
+- **Escape** mid-drag removes the notes the press created (a chord's
+  pre-existing notes get their length back); so does **Cmd/Ctrl+Z**
+  mid-drag (`registerDragCancel`, the same cancel). Both run inside the
+  still-open gesture, so it ends where it began: no entry, nothing older
+  undone. Escape then stays in chord mode (a second Escape leaves it).
+- A **click** with no drag keeps the default length (one grid cell). A
+  press on an existing note still selects, moves or resizes it.
 
 **Toolbar width.** The roll's toolbar stays one row at 1280 px
 (`theory.spec` "layout at 1280", `chord-stamp.spec` at 1280 / 1440 /
@@ -238,6 +274,12 @@ select, right-click to delete").
   `tests/e2e/chord-stamp.spec.ts` (Am7 on A3 in one undo, Esc, m9 first
   inversion, the ghost's notes, a near-full pattern refusing, the toolbar on
   one row at 1280 / 1440 / 1680).
+- Draw and stretch: `ui/pianoroll/prMath.test.ts` (`stretchLen`: nearest
+  grid line, the one-step minimum left of the start, Alt, an unsnapped
+  start, the cap; `stretchReadout`); e2e `tests/e2e/pianoroll-stretch.spec.ts`
+  (3 steps in one undo with the live readout, a click's default length,
+  left and vertical drags, Esc and Cmd+Z mid-drag, a chord stretched
+  together and its Esc, Snap to key).
 - e2e `tests/e2e/theory.spec.ts`: the highlight read off the canvas pixels
   (A minor, D major, chromatic), Snap to key drawing and dragging, the pref
   across a reload (and the Key button's badge), Transpose +3 with one undo,

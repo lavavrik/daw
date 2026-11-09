@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  chordStampPitches, clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor,
+  chordStampPitches, clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor, stretchLen, stretchReadout,
   tickToX, xToTick, yToPitch, zoomAt,
 } from './prMath';
 import type { View } from './prMath';
@@ -209,5 +209,42 @@ describe('chordStampPitches (the chord stamp)', () => {
   });
   it('notes past 127 are dropped', () => {
     expect(chordStampPitches(125, 'maj', 0, amin, null)).toEqual([125]);
+  });
+});
+
+describe('draw and stretch (owner request pr-drag)', () => {
+  const MAX = 61440; // pattern-actions MAX_NOTE_LEN
+
+  it('the end goes to the grid line nearest the pointer', () => {
+    expect(stretchLen(0, 3 * 240 + 60, 240, false)).toBe(720); // 3.25 cells -> 3
+    expect(stretchLen(0, 3 * 240 + 130, 240, false)).toBe(960); // 3.54 cells -> 4
+    expect(stretchLen(960, 960 + 480, 480, false)).toBe(480); // 1/8 grid, from beat 2
+  });
+
+  it('never shorter than one grid step: a press with no reach, or a drag left of the start', () => {
+    expect(stretchLen(480, 480, 240, false)).toBe(240);
+    expect(stretchLen(480, 500, 240, false)).toBe(240);
+    expect(stretchLen(480, 0, 240, false)).toBe(240); // left of the start
+    expect(stretchLen(480, -9999, 240, false)).toBe(240);
+  });
+
+  it('free (Alt): the end follows the pointer to the tick, still at least one grid step', () => {
+    expect(stretchLen(0, 1000.4, 240, true)).toBe(1000);
+    expect(stretchLen(0, 100, 240, true)).toBe(240);
+  });
+
+  it('an unsnapped (Alt) start: the end still lands on a grid line', () => {
+    expect(stretchLen(17, 720 + 40, 240, false)).toBe(720 - 17);
+  });
+
+  it('at most MAX_NOTE_LEN', () => {
+    expect(stretchLen(0, 1e9, 240, false)).toBe(MAX);
+  });
+
+  it('readout: the notes, where they start, and the length the roll names', () => {
+    expect(stretchReadout([48], 0, 720, '1/16')).toBe('C3 · 1.1.1 · 3×1/16');
+    expect(stretchReadout([57, 60, 64], 960, 1920, '1/16')).toBe('A3 C4 E4 · 1.2.1 · 1/2');
+    // One note: the same text as the selected-note readout.
+    expect(stretchReadout([48], 0, 720, '1/16')).toBe(readout({ pitch: 48, start: 0, len: 720 }, '1/16'));
   });
 });

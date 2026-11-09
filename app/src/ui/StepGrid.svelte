@@ -33,17 +33,8 @@
   // is in stepGrid.ts, the writes in actions.ts (setStepVelocity: wheel and
   // keys coalesce per cell; stepVelocityGesture: the drag, with its Esc /
   // Cmd+Z cancel). A "vel 96" chip floats above the cell while editing.
-  //
-  // Velocity lane (plan 23 Task 2; VelocityLane.svelte): bars for one row
-  // under the rows, drawn by dragging. Its row is the one whose name or a
-  // cell was last clicked or focused (laneRowId, by row id so it follows
-  // deletes and inserts; until then the first row with a lit step, else
-  // row 0: stepGrid.ts laneRowIndex). View state, not saved. The footer's
-  // "Velocity" toggle shows / hides it (ui/uiPrefs.svelte.ts, localStorage,
-  // shown by default); hidden, it takes no space.
   import { onDestroy, onMount, tick } from 'svelte';
   import Trash from 'phosphor-svelte/lib/Trash';
-  import ChartBar from 'phosphor-svelte/lib/ChartBar';
   import Icon from './Icon.svelte';
   import { registerDragCancel } from '../history/gestures';
   import { createSweepKeys } from '../history/sweep';
@@ -66,12 +57,9 @@
   import type { DrumTrack, Project } from '../state/project.svelte';
   import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
-  import VelocityLane from './VelocityLane.svelte';
-  import { setVelLane, uiPrefs } from './uiPrefs.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
   import {
-    dragVel, laneRowIndex, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx,
-    wheelVelStep,
+    dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
   } from './stepGrid';
   import { rangeFill, rangeFillBipolar } from './rangeFill';
 
@@ -126,12 +114,6 @@
   const GHOST = 60;
   const FULL = 100;
 
-  // ---- velocity lane's row (plan 23 Task 2) ---------------------------
-  /** The row whose name or a cell was last clicked or focused (view state: not saved, not an edit). */
-  let laneRowId = $state<string | null>(null);
-  const laneR = $derived(laneRowIndex(track.rows.map((x) => x.id), laneRowId, pat.steps, pat.stepCount));
-  const pickLane = (rowId: string) => (laneRowId = rowId);
-
   // ---- painting -------------------------------------------------------
   // pointerdown decides the target (on->off, off->on at 100, Alt = 60);
   // entering other cells with the button held applies the same value.
@@ -146,7 +128,6 @@
   onDestroy(registerDragCancel(() => paintVel !== null));
 
   function down(e: PointerEvent, rowId: string, step: number, cur: number) {
-    pickLane(rowId);
     if (e.button === 2) {
       e.preventDefault();
       if (cur > 0) setStep(p, engine, track.id, rowId, step, 0);
@@ -424,8 +405,7 @@
     >
       <span class="tag" aria-hidden="true"></span>
       {#if row.sampleId === null}
-        <!-- svelte-ignore a11y_no_static_element_interactions (a pointer convenience: picks the velocity lane's row; the row's cells are the keyboard path) -->
-        <span class="name empty" data-testid="row-name" title={row.name} onpointerdown={() => pickLane(row.id)}>drop sample</span>
+        <span class="name empty" data-testid="row-name" title={row.name}>drop sample</span>
         <span class="wave-h"></span>
       {:else}
         {@const sid = row.sampleId}
@@ -434,7 +414,6 @@
           type="button" class="name prev" class:on data-testid="row-name"
           title="{row.name} — click to preview{on ? ' (click again to stop)' : ''}"
           aria-label="Preview {row.name}" aria-pressed={on}
-          onpointerdown={() => pickLane(row.id)} onfocus={() => pickLane(row.id)}
           onclick={() => void previewRow(sid, row.name)}
         >{row.name}</button>
         <button
@@ -484,7 +463,6 @@
                 onpointerdown={(e) => down(e, row.id, s, v)}
                 onwheel={(e) => wheel(e, row.id, s, v)}
                 onkeydown={(e) => cellKey(e, row.id, s, v)}
-                onfocus={() => pickLane(row.id)}
                 oncontextmenu={(e) => e.preventDefault()}
                 onpointerenter={() => enter(row.id, s)}
                 onclick={(e) => e.detail === 0 && setStep(p, engine, track.id, row.id, s, v > 0 ? 0 : FULL)}
@@ -500,13 +478,6 @@
       ><Icon icon={Trash} /></button>
     </div>
   {/each}
-
-  {#if uiPrefs.velLane && laneR >= 0}
-    {@const lr = track.rows[laneR]}
-    <VelocityLane
-      {p} {engine} {track} row={lr} vels={pat.steps[laneR]} stepCount={pat.stepCount} color={rowColor(track.slot, laneR)}
-    />
-  {/if}
 
   {#if waveRow}
     {@const w = waveRow}
@@ -552,11 +523,6 @@
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>
-    <button
-      type="button" class="btn vel-tog" class:quiet={!uiPrefs.velLane} data-testid="vel-lane-toggle"
-      aria-pressed={uiPrefs.velLane} title="{uiPrefs.velLane ? 'Hide' : 'Show'} the velocity lane"
-      onclick={() => setVelLane(!uiPrefs.velLane)}
-    ><Icon icon={ChartBar} size={14} />Velocity</button>
   </div>
 </div>
 
@@ -685,7 +651,4 @@
   .add { padding: 4px 12px; }
   .swing { width: 160px; }
   .pct { width: 32px; color: var(--text); }
-  /* The lane toggle: raised while the lane shows, an outline (.btn.quiet) while hidden. */
-  .vel-tog { padding: 4px 10px; }
-  .vel-tog[aria-pressed='false'] { color: var(--text-2); }
 </style>

@@ -120,7 +120,7 @@
   import type { AutoStatus } from '../autoBus';
   import ChoiceParam from './ChoiceParam.svelte';
   import {
-    MECH_DIAL_PX, MECH_TICKS, dragPos, fillSpan, formatValue, fromPos, isClickTravel, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY, toPos,
+    MECH_DIAL_PX, MECH_TICKS, dragPos, fillSpan, formatValue, fromPos, isClickTravel, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY, toPos, widestValue,
   } from './knobMath';
   import type { KnobDef, MechSize } from './knobMath';
 
@@ -280,6 +280,8 @@
   const shown = $derived(dragging ? local : value);
   const angle = $derived(-135 + 270 * toPos(def, shown));
   const readout = $derived(formatValue(def, shown));
+  /** The chip's fixed width: the widest readout over the range (knobMath widestValue), so the value never resizes the control. */
+  const chipCh = $derived(widestValue(def));
 
   function send(v: number) {
     if (v === lastSent) return;
@@ -479,6 +481,7 @@
       <span
         class="readout typeable"
         class:auto={autoStatus === 'on'}
+        style:min-width={`${chipCh}ch`}
         data-testid="knob-readout"
         data-auto={autoStatus === 'on' ? 'on' : undefined}
         onpointerdown={(e) => { if (e.button === 0) { e.stopPropagation(); e.preventDefault(); } }}

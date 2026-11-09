@@ -160,6 +160,29 @@ no hex literals (`noHexColors.test.ts`).
   differently for a flex item (flow) and a `width: max-content` panel
   (positioned), and the two widths must agree for `moveTo`'s snapping.
 
+- **Stable widths (plan 22).** No param value may change a module's
+  width: that would shift every module to its right (a decimal appearing
+  while dragging Attack did exactly that). Three rules keep it so:
+  1. The value chip of every control has `min-width: <n>ch`, with `n` =
+     `knobMath.widestValue(def)`: the widest string `formatValue` can show
+     anywhere in the param's range (min, max, default, a dense position
+     sweep, and every decade's widest 3-digit pattern, so ms -> s and
+     near-zero decimals are covered), in the tabular-numeral mono font.
+     `formatValue` itself reads a linear zero-crossing param's values under
+     a thousandth of its range as 0, so that bound stays small.
+     `knobMath.test.ts` checks it for every catalog and mixer param.
+  2. The rest of a panel is value-independent: a mech knob's cell is a fixed
+     `dial + 12 px` (`+ 10` compact), the knob grid has `knobColumns(n)`
+     columns of those cells, labels are cut with an ellipsis (the title has
+     the full name), the ports and header are static. So a module kind's
+     width is its control layout (columns x cell width, the widest of the
+     faders / knobs / choices / ports rows), never its values.
+  3. A mixer strip is a fixed 132 px; its compact knobs sit in fixed 56 px
+     cells, and their chips (rule 1) stay inside.
+  `tests/e2e/rackwidths.spec.ts` sweeps Attack, and sends every param of
+  every house-patch module (and of a strip) to min and max, asserting no
+  width moves.
+
 Which control draws each param is `app/src/ui/rack/controlMap.ts` (pure,
 `controlMap.test.ts`); `ModulePanel` draws `panelControls(def)` in this
 order, every control keeping the test id `knob-<m>-<param>`:

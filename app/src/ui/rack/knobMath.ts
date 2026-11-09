@@ -226,6 +226,10 @@ export function formatValue(d: KnobDef, v: number): string {
   if (d.choices.length) return d.choices[Math.round(v)] ?? String(v);
   if (d.minLabel && v <= d.min) return minLabelText(d.minLabel);
   const bipolar = d.min < 0;
+  // A linear param that reaches zero (tune, detune, a bipolar amount): what is
+  // under a thousandth of the range reads as 0, not as "0.0843 st" with a
+  // digit more than the chip's fixed width (widestValue) has room for.
+  if (d.curve === 'lin' && d.min <= 0 && !d.integer && Math.abs(v) < (d.max - d.min) / 1000) v = 0;
   if (isNoteParam(d)) return noteName(Math.round(v));
   if (d.name === 'pan' && d.unit === '') {
     const pct = Math.round(Math.abs(v) * 100);
@@ -256,6 +260,36 @@ export function formatValue(d: KnobDef, v: number): string {
     default:
       return `${sig3(v)} ${d.unit}`;
   }
+}
+
+/**
+ * The width, in characters, of the widest readout `formatValue` can produce
+ * for `d` anywhere in its range. The value chip takes this as its `min-width`
+ * (in `ch`, tabular numerals), so no value (a decimal that appears, ms -> s,
+ * "-inf", "off") can change the chip's width, nor the module's or the
+ * mixer strip's. Candidates: the range's min, max and default, plus a dense
+ * sweep of knob positions (so unit changes and every significant-digit
+ * pattern in between are seen). Choice params have no chip (their buttons
+ * are fixed), so they measure their longest choice.
+ */
+export function widestValue(d: KnobDef): number {
+  if (d.choices.length) return Math.max(...d.choices.map((c) => c.length));
+  const SWEEP = 2000;
+  const seen = [d.min, d.max, d.default];
+  for (let i = 0; i <= SWEEP; i++) seen.push(fromPos(d, i / SWEEP));
+  // Every decade's widest 3-digit patterns (1.11, 9.99 x 10^k), both signs,
+  // so a sweep that happens to skip them (near zero, or just under a unit
+  // change such as 999 ms) cannot hide the widest string.
+  const span = Math.max(Math.abs(d.min), Math.abs(d.max));
+  for (let k = Math.floor(Math.log10(span)) + 1; k >= -6; k--) {
+    for (const m of [1.11, 9.99]) for (const sg of [1, -1]) {
+      const v = sg * m * 10 ** k;
+      if (v >= d.min && v <= d.max) seen.push(v);
+    }
+  }
+  let widest = 0;
+  for (const v of seen) widest = Math.max(widest, [...formatValue(d, v)].length);
+  return widest;
 }
 
 /** A MIDI note number param, shown and typed as a note name: the Sample Player's `root` (0..127, integer, no unit). */

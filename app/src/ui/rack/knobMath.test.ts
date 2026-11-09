@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
-import { mixParam } from '../../audio/mixerCatalog';
+import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
 import {
   CLICK_SLOP_PX, DRAG_PX, MECH_DIAL_PX, MECH_TICKS, isClickTravel, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY,
-  toPos, ZERO_ZONE,
+  toPos, widestValue, ZERO_ZONE,
 } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
@@ -423,5 +423,47 @@ describe('mech dial geometry', () => {
     const [xl, yl] = seg(ticks[10]);
     expect(xl).toBeCloseTo(100 - x0, 1);
     expect(yl).toBeCloseTo(y0, 1);
+  });
+});
+
+describe('widestValue', () => {
+  it('is at least the width of the min, max and default readouts', () => {
+    for (const mod of ['filter', 'adsr', 'osc', 'midi_in', 'lfo']) {
+      for (const pd of moduleDef(mod).params) {
+        if (pd.choices.length) continue;
+        const n = widestValue({ ...pd, curve: pd.curve });
+        for (const v of [pd.min, pd.max, pd.default]) expect([...formatValue(pd, v)].length).toBeLessThanOrEqual(n);
+      }
+    }
+  });
+
+  it('covers unit changes and decimals: Attack 1 ms..10 s reads at most "10.0 s"/"999 ms"-wide', () => {
+    expect(widestValue(attack)).toBeGreaterThanOrEqual('999 ms'.length);
+    for (let i = 0; i <= 500; i++) expect([...formatValue(attack, fromPos(attack, i / 500))].length).toBeLessThanOrEqual(widestValue(attack));
+  });
+
+  it('holds over every catalog param and every sampled position', () => {
+    let params = 0;
+    for (const kind of Array.from({ length: 64 }, (_, k) => k)) {
+      let def;
+      try { def = moduleDef(kind); } catch { continue; }
+      for (const pd of def.params) {
+        if (pd.choices.length) continue;
+        params++;
+        const n = widestValue(pd);
+        expect(n).toBeGreaterThan(0);
+        // An independent, off-grid sweep (a prime step count) never beats it.
+        for (let i = 0; i <= 997; i++) expect([...formatValue(pd, fromPos(pd, i / 997))].length).toBeLessThanOrEqual(n);
+      }
+    }
+    expect(params).toBeGreaterThan(40);
+  });
+
+  it('covers every mixer param (fader law, "-inf", pan)', () => {
+    for (const pd of MIX_PARAMS) {
+      if (pd.choices.length) continue;
+      const n = widestValue(pd);
+      for (let i = 0; i <= 997; i++) expect([...formatValue(pd, fromPos(pd, i / 997))].length).toBeLessThanOrEqual(n);
+    }
   });
 });

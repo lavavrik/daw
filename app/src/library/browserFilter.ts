@@ -2,8 +2,9 @@
 // UI state only: nothing here is saved.
 //
 //   tab     which sections show: All = everything, Samples = the folder tree
-//           and the starter-kit samples, Patches = patches/*.json, Kits = the
-//           starter kit (the library has no kit-folder concept).
+//           and the built-in kits' samples, Patches = patches/*.json, Kits =
+//           the built-in kits (state/kits.ts KITS; the library has no
+//           kit-folder concept).
 //   search  case-insensitive substring of the name. A folder stays shown when
 //           it, or anything in its *loaded* listing, matches. Folders never
 //           expanded are not listed (scan.ts is lazy) and so cannot match

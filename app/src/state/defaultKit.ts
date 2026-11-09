@@ -52,6 +52,7 @@ import { whenIdle } from './idle';
 import { MAX_ROWS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
 import { importSample } from './sampleImport';
+import { KITS } from './kits';
 import type { ImportEngine } from './sampleImport';
 import { deferSampleAssign } from './sampleLoads';
 
@@ -62,17 +63,11 @@ export interface KitRow {
   file: string;
 }
 
-/** The default drum track's rows, top to bottom. */
-export const DEFAULT_KIT: readonly KitRow[] = [
-  { name: 'Kick', file: 'kick-punch.wav' },
-  { name: 'Clap', file: 'clap.wav' },
-  { name: 'Closed hat', file: 'hat-closed.wav' },
-  { name: 'Open hat', file: 'hat-open.wav' },
-  { name: 'Snare', file: 'snare.wav' },
-  { name: 'Rim', file: 'rim.wav' },
-  { name: 'Shaker', file: 'shaker.wav' },
-  { name: 'Perc', file: 'perc-tom.wav' },
-];
+/**
+ * The default drum track's rows, top to bottom: the starter kit's
+ * (state/kits.ts KITS[0]), each row named after its role.
+ */
+export const DEFAULT_KIT: readonly KitRow[] = KITS[0].rows.map((r) => ({ name: r.role, file: r.file }));
 
 /** The kit rows a track can hold: the first `max` (the row cap). */
 export function defaultKitRows(max = MAX_ROWS): KitRow[] {

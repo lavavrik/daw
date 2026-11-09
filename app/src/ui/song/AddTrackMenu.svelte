@@ -21,7 +21,18 @@
   // item natively and never also start the song, letters never play notes
   // or arm recording; only Escape and Cmd / Ctrl chords (⌘S, ⌘Z) still
   // reach the global shortcuts on window. The list is position: fixed above the button, so the
-  // song pane's overflow never clips it.
+  // song pane's overflow never clips it. When the top of the list would be
+  // covered there (a short song pane: the top bar sits over it, the footer's
+  // stacking context is under the bar), it opens below the button instead.
+  //
+  // Under "Drum track" (plan 25 Task 1): a kit choice, one chip per built-in
+  // kit (state/kits.ts KITS, the Starter kit first; chips, not rows, so the
+  // list stays short enough to fit above the button), test ids
+  // `add-drum-kit-<kit id>`. It adds a drum track made of that kit: its rows
+  // are the roles (Kick, Clap, …), each with the kit's sound, named after
+  // the kit (state/kit-actions.ts addKitDrumTrack: one undo entry; the track
+  // appears once its samples are in, a moment later). "Drum track" itself
+  // still adds the plain track with four empty rows.
   //
   // Dropping a sample (a Finder file or a library sample) on the button makes
   // a Sampler track with it, as the old "+ Sampler track" button did.
@@ -38,6 +49,8 @@
   import type { CommandSink } from '../../state/actions';
   import type { ImportEngine } from '../../state/sampleImport';
   import { addSamplerTrack } from '../../state/sampler-actions';
+  import { KITS, STARTER_KIT_ID } from '../../state/kits';
+  import { addKitDrumTrack } from '../../state/kit-actions';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
   import { ADD_ITEMS, addBlocked, addTrack } from '../addTrack';
@@ -60,17 +73,24 @@
   let open = $state(false);
   let btn = $state<HTMLButtonElement | null>(null);
   let list = $state<HTMLDivElement | null>(null);
-  /** Where the list sits (fixed, viewport px): its left edge and its bottom 4 px above the button. */
-  let at = $state({ left: 0, bottom: 0 });
+  /**
+   * Where the list sits (fixed, viewport px): its left edge and either its
+   * bottom 4 px above the button or (`below`) its top 4 px under it.
+   */
+  let at = $state({ left: 0, bottom: 0, below: false, top: 0 });
 
   const buttons = () => [...(list?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
 
   function show(focus: 'first' | 'last' = 'first') {
     if (!btn) return;
     const r = btn.getBoundingClientRect();
-    at = { left: r.left, bottom: window.innerHeight - r.top + 4 };
+    at = { left: r.left, bottom: window.innerHeight - r.top + 4, below: false, top: r.bottom + 4 };
     open = true;
     queueMicrotask(() => {
+      // Its top covered (or off screen) above the button: open below it.
+      const lr = list?.getBoundingClientRect();
+      const hit = lr && document.elementFromPoint(lr.left + 8, lr.top + 4);
+      if (lr && (lr.top < 0 || !hit || !list!.contains(hit))) at = { ...at, below: true };
       const bs = buttons();
       bs[focus === 'first' ? 0 : bs.length - 1]?.focus();
     });
@@ -89,6 +109,17 @@
   function pick(kind: AddKind) {
     close(false);
     addTrack(p, engine, kind);
+  }
+  /** A kit's drum track is being made (its samples load first): no second one meanwhile. */
+  let addingKit = $state(false);
+  async function pickKit(kitId: string) {
+    close(false);
+    addingKit = true;
+    try {
+      await addKitDrumTrack(p, engine, kitId);
+    } finally {
+      addingKit = false;
+    }
   }
 
   function listKey(e: KeyboardEvent) {
@@ -174,12 +205,22 @@
 
 {#if open}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="list" bind:this={list} data-testid="add-track-menu" style:left="{at.left}px" style:bottom="{at.bottom}px" onkeydown={listKey}>
+  <div class="list" bind:this={list} data-testid="add-track-menu" style:left="{at.left}px" style:bottom={at.below ? null : `${at.bottom}px`} style:top={at.below ? `${at.top}px` : null} style:--room="{at.below ? window.innerHeight - at.top : window.innerHeight - at.bottom}px" onkeydown={listKey}>
     {#each items as it (it.kind)}
       {@const why = addBlocked(p, it.kind)}
       <button data-testid={ITEM[it.kind].testid} disabled={!!why} title={why ?? it.title} onclick={() => pick(it.kind)}>
         <Icon icon={ITEM[it.kind].icon} />{it.label}
       </button>
+      {#if it.kind === 'drum'}
+        <div class="kits" role="group" aria-label="Drum track with a kit">
+          {#each KITS as k (k.id)}
+            <button
+              class="kit" data-testid="add-drum-kit-{k.id}" disabled={!!why || addingKit}
+              title={why ?? `Add a drum track with the ${k.name} kit — ${k.blurb}`} onclick={() => void pickKit(k.id)}
+            >{k.id === STARTER_KIT_ID ? 'Starter' : k.name}</button>
+          {/each}
+        </div>
+      {/if}
     {/each}
   </div>
 {/if}
@@ -188,8 +229,12 @@
   /* A footer pill (Timeline's .foot .btn size), icon + text. */
   .add { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; font-size: 11px; }
   .add.over { box-shadow: var(--raised-shadow), 0 0 0 2px var(--accent); }
-  .list { position: fixed; z-index: 50; min-width: 170px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .list { position: fixed; z-index: 50; min-width: 170px; max-height: calc(var(--room, 100vh) - 8px); overflow-y: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .list button { display: flex; align-items: center; gap: 8px; font: var(--fs-ctl) var(--font-ui); text-align: left; padding: 5px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .list button:hover:not(:disabled), .list button:focus-visible { background: var(--raised); outline: none; }
   .list button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
+  /* The kit choice under "Drum track": small chips, indented under its label. */
+  .kits { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 6px 4px 28px; max-width: 200px; }
+  .list .kits button.kit { padding: 1px 6px; font-size: var(--fs-lbl); color: var(--text-2); border: 1px solid var(--line); }
+  .list .kits button.kit:hover:not(:disabled), .list .kits button.kit:focus-visible { color: var(--text); border-color: var(--accent); }
 </style>

@@ -11,8 +11,13 @@
   //              ready: folders (listed one level at a time when expanded,
   //                     "N more not shown" past the per-folder cap) and
   //                     samples; Patches (patches/*.json)
-  //            Starter kit (always, read-only, foldable): the bundled CC0
-  //            samples the default drum track is made of
+  //            Kits (always, read-only, foldable; state/kits.ts KITS, plan 25):
+  //            the Starter kit (the bundled CC0 samples the default drum
+  //            track is made of, open by default) and the generated kits
+  //            (Drum Machine, Deep, Garage, Dusty; closed by default). Each
+  //            kit's "Load" (also its header's context menu) loads it onto
+  //            the selected drum track by role (state/kit-actions.ts
+  //            loadKitOntoTrack: one undo entry, steps kept)
   //   tabs     All / Samples / Patches / Kits pick which sections show; the
   //            search box filters them by name (library/browserFilter.ts).
   //            Both are UI state only. While searching, folding a folder only
@@ -22,7 +27,7 @@
   //            removed samples included until the project is reopened;
   //            state/sampleBudget.ts), change folder
   //
-  // Samples (folder and kit alike): click previews (library/preview.ts:
+  // Samples (folder and kits alike): click previews (library/preview.ts:
   // straight to the speakers, never through the engine; big files stream
   // instead of decoding); drag onto a step-grid row, "+ Add row", a
   // Sample Player or the timeline (an audio lane, or below the lanes for a
@@ -33,13 +38,18 @@
   import type { AudioEngine } from '../audio/engine';
   import type { Project } from '../state/project.svelte';
   import { budgetText } from '../state/sampleBudget';
-  import { STARTER_SAMPLE_MIME, startLibraryDrag } from '../library/drag';
+  import { KIT_SAMPLE_MIME, STARTER_SAMPLE_MIME, startLibraryDrag } from '../library/drag';
   import { LibraryLostError, library } from '../library/library.svelte';
   import { bindPreview, clearPreviewCache, previewState, stopPreview, togglePreview } from '../library/sharedPreview.svelte';
   import { listingFromPaths } from '../library/scan';
   import { BROWSER_TABS, folderVisible, hasUnscannedFolder, isFolderOpen, nameMatches, tabSections, type BrowserTab } from '../library/browserFilter';
   import type { LibSample } from '../library/scan';
   import { STARTER_KIT, starterSample } from '../library/starter';
+  import { kitSample } from '../library/kitFiles';
+  import { KITS, STARTER_KIT_ID } from '../state/kits';
+  import type { Kit, KitSound } from '../state/kits';
+  import { loadKitOntoTrack } from '../state/kit-actions';
+  import DownloadSimple from 'phosphor-svelte/lib/DownloadSimple';
   import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
   import Stop from 'phosphor-svelte/lib/Stop';
   import X from 'phosphor-svelte/lib/X';
@@ -71,10 +81,19 @@
   $effect(() => bindPreview(engine));
   const previewing = $derived(previewState.key);
 
-  /** Kit previews are keyed "kit:<file>", apart from any library path. */
+  /** Kit previews are keyed "kit:<file>" (starter) or "kit:<kit id>/<file>", apart from any library path. */
   const KIT = 'kit:';
   const kitSamples = listingFromPaths(STARTER_KIT.files.map((f) => f.path)).samples;
   let kitOpen = $state(true);
+  /** The generated kits shown open (they start closed: five open kits would bury the folder). */
+  let kitsOpen = $state(new Set<string>());
+  const isKitOpen = (k: Kit) => (k.id === STARTER_KIT_ID ? kitOpen : kitsOpen.has(k.id));
+  function foldKit(k: Kit) {
+    if (k.id === STARTER_KIT_ID) return void (kitOpen = !kitOpen);
+    const n = new Set(kitsOpen);
+    if (!n.delete(k.id)) n.add(k.id);
+    kitsOpen = n;
+  }
 
   async function toggle(s: LibSample, kit = false) {
     const k = kit ? KIT + s.path : s.path;
@@ -91,6 +110,69 @@
     if (e.key !== 'Enter') return;
     e.preventDefault();
     void toggle(s, kit);
+  }
+  /** A generated kit's sound: preview it (the bar says "<kit> <role>"). */
+  const soundKey = (k: Kit, s: KitSound) => `${KIT}${k.id}/${s.file}`;
+  async function toggleSound(k: Kit, s: KitSound) {
+    const id = soundKey(k, s);
+    if (previewing === id) return stopPreview();
+    error = null;
+    try {
+      await togglePreview(id, `${k.name} ${s.role}`, () => kitSample(k.id, s.file));
+    } catch (e) {
+      error = e instanceof Error && e.message.includes(s.file) ? e.message : `Couldn't preview the ${k.name} ${s.role}`;
+    }
+  }
+
+  // ---- "Load onto track" (state/kit-actions.ts) -------------------------------
+  /** The selected track, when it is a drum track (the one a kit loads onto). */
+  const target = $derived.by(() => {
+    const t = p.tracks.find((x) => x.id === p.selectedTrackId);
+    return t?.kind === 'drum' ? t : null;
+  });
+  /** The kit loading now (its button says so; one load at a time). */
+  let loadingKit = $state<string | null>(null);
+  const loadTitle = (k: Kit) =>
+    target
+      ? `Load ${k.name} onto "${target.name}": each row named Kick, Clap… gets this kit's sound, missing roles get new rows; steps are kept`
+      : 'Select a drum track to load a kit onto';
+  async function loadKit(k: Kit) {
+    const t = target;
+    if (!t || loadingKit) return;
+    loadingKit = k.id;
+    try {
+      await loadKitOntoTrack(p, engine, t.id, k.id);
+    } finally {
+      loadingKit = null;
+    }
+  }
+  // A kit header's context menu: "Load onto <track>".
+  let kitMenu = $state<{ x: number; y: number; kit: Kit } | null>(null);
+  let kitMenuEl = $state<HTMLDivElement | null>(null);
+  function openKitMenu(e: MouseEvent, k: Kit) {
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    // A keyboard-made contextmenu event has no pointer position: open it under the header.
+    const kbd = e.clientX === 0 && e.clientY === 0;
+    kitMenu = { x: kbd ? r.left : e.clientX, y: kbd ? r.bottom : e.clientY, kit: k };
+  }
+  function closeKitMenu() {
+    kitMenu = null;
+  }
+  $effect(() => {
+    if (!kitMenu || !kitMenuEl) return;
+    kitMenuEl.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    const outside = (e: PointerEvent) => {
+      if (!kitMenuEl?.contains(e.target as Node)) closeKitMenu();
+    };
+    window.addEventListener('pointerdown', outside, true);
+    return () => window.removeEventListener('pointerdown', outside, true);
+  });
+  function kitMenuKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation(); // only this layer closes
+    closeKitMenu();
   }
 
   // A new listing (refresh, another library) may hold other bytes at the same paths.
@@ -129,6 +211,8 @@
   const visibleFolders = (path: string, all: boolean) => lib.listings[path].folders.filter((f) => all || !q || folderVisible(lib.listings, f.path, f.name, q));
   const visibleSamples = (path: string, all: boolean) => lib.listings[path].samples.filter((s) => all || nameMatches(s.name, q));
   const visibleKit = $derived(kitSamples.filter((s) => nameMatches(s.name, q)));
+  /** A generated kit's sounds under the search: all of them when the kit's name matches. */
+  const visibleSounds = (k: Kit) => (nameMatches(k.name, q) ? k.rows : k.rows.filter((s) => nameMatches(`${s.role} ${s.name}`, q)));
   const visiblePatches = $derived(lib.patches.filter((pt) => nameMatches(pt.name, q)));
   const rootShown = $derived(lib.listings[''] ? visibleFolders('', false).length + visibleSamples('', false).length : 0);
   /** Expand lists that folder level (library.expand); a folder gone meanwhile says so once. */
@@ -146,6 +230,7 @@
   }
   const choose = () => library.choose().catch((e) => (error = `Couldn't open the folder — ${e instanceof Error ? e.message : String(e)}`));
   const nameOf = (key: string) => (key.startsWith(KIT) ? key.slice(KIT.length) : key.slice(key.lastIndexOf('/') + 1));
+  const plural = (n: number) => `${n} match${n === 1 ? '' : 'es'}`;
 </script>
 
 {#snippet folder(path: string, depth: number, all: boolean)}
@@ -247,29 +332,69 @@
     {/if}
 
     {#if sections.kit}
-    <section class="kit" data-testid="starter-kit" aria-label="Starter kit">
-      <button class="sec fold" data-testid="starter-kit-toggle" aria-expanded={kitOpen} onclick={() => (kitOpen = !kitOpen)}>
-        <span><Icon icon={kitOpen ? FolderOpen : Folder} size={14} /> Starter kit{#if q && !kitOpen && visibleKit.length} — {visibleKit.length} match{visibleKit.length === 1 ? '' : 'es'}{/if}</span>
-        <span class="ro" title="Built in (CC0): drag a sound into the project; nothing is saved here">read-only</span>
-      </button>
-      {#if kitOpen}
-        <div class="tree">
-          {#each visibleKit as s (s.path)}
-            <div
-              class="item smp" class:on={previewing === KIT + s.path}
-              role="button" tabindex="0" draggable="true" data-testid="kit-sample-{s.path}"
-              title="{s.name} — built-in starter kit: click to preview, drag onto a row or a Sample Player"
-              onclick={() => void toggle(s, true)} onkeydown={(e) => key(e, s, true)}
-              ondragstart={(e) => startLibraryDrag(e, s.path, STARTER_SAMPLE_MIME)}
-            ><span class="tw dot kit-dot"><Icon icon={previewing === KIT + s.path ? Stop : FileAudio} size={14} /></span><span class="nm">{s.name}</span></div>
-          {:else}
-            <p class="dim">{q ? `No kit sounds match "${q}".` : 'No kit sounds.'}</p>
-          {/each}
-        </div>
-      {/if}
-    </section>
+    <div class="kits">
+      <div class="sec kits-ttl"><span>Kits</span><span class="ro" title="Built in (CC0): drag a sound into the project or load a kit onto a drum track; nothing is saved here">read-only</span></div>
+      {#each KITS as k (k.id)}
+        {@const starter = k.id === STARTER_KIT_ID}
+        {@const open = isKitOpen(k)}
+        {@const sounds = starter ? [] : visibleSounds(k)}
+        {@const matches = starter ? visibleKit.length : sounds.length}
+        {#if starter || !q || sounds.length}
+        <section class="kit" data-kit={k.id} data-testid={starter ? 'starter-kit' : `kit-${k.id}`} aria-label={k.name}>
+          <div class="khead" role="group" aria-label="{k.name} kit" oncontextmenu={(e) => openKitMenu(e, k)}>
+            <button class="sec fold" data-testid={starter ? 'starter-kit-toggle' : `kit-${k.id}-toggle`} aria-expanded={open} title={k.blurb} onclick={() => foldKit(k)}>
+              <span><Icon icon={open ? FolderOpen : Folder} size={14} /> {k.name}{#if q && !open && matches} — {plural(matches)}{/if}</span>
+            </button>
+            <button class="load" data-testid="kit-load-{k.id}" disabled={!target || loadingKit !== null} title={loadTitle(k)} onclick={() => void loadKit(k)}>
+              <Icon icon={DownloadSimple} size={12} />{loadingKit === k.id ? 'Loading…' : 'Load'}
+            </button>
+          </div>
+          {#if open}
+            <div class="tree">
+              {#if starter}
+                {#each visibleKit as s (s.path)}
+                  <div
+                    class="item smp" class:on={previewing === KIT + s.path}
+                    role="button" tabindex="0" draggable="true" data-testid="kit-sample-{s.path}"
+                    title="{s.name} — built-in starter kit: click to preview, drag onto a row or a Sample Player"
+                    onclick={() => void toggle(s, true)} onkeydown={(e) => key(e, s, true)}
+                    ondragstart={(e) => startLibraryDrag(e, s.path, STARTER_SAMPLE_MIME)}
+                  ><span class="tw dot kit-dot"><Icon icon={previewing === KIT + s.path ? Stop : FileAudio} size={14} /></span><span class="nm">{s.name}</span></div>
+                {:else}
+                  <p class="dim">{q ? `No kit sounds match "${q}".` : 'No kit sounds.'}</p>
+                {/each}
+              {:else}
+                {#each sounds as s (s.file)}
+                  {@const id = soundKey(k, s)}
+                  <div
+                    class="item smp" class:on={previewing === id}
+                    role="button" tabindex="0" draggable="true" data-testid="kit-sample-{k.id}/{s.file}"
+                    title="{k.name} {s.role}: {s.name} — click to preview, drag onto a row or a Sample Player"
+                    onclick={() => void toggleSound(k, s)}
+                    onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void toggleSound(k, s); } }}
+                    ondragstart={(e) => startLibraryDrag(e, `${k.id}/${s.file}`, KIT_SAMPLE_MIME)}
+                  ><span class="tw dot kit-dot"><Icon icon={previewing === id ? Stop : FileAudio} size={14} /></span><span class="nm">{s.role}</span><span class="snd">{s.name}</span></div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </section>
+        {/if}
+      {/each}
+    </div>
     {/if}
   </div>
+
+  {#if kitMenu}
+    {@const k = kitMenu.kit}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="menu" bind:this={kitMenuEl} data-testid="kit-menu" style:left="{kitMenu.x}px" style:top="{kitMenu.y}px" onkeydown={kitMenuKey}>
+      <div class="menu-ttl">{k.name}</div>
+      <button data-testid="kit-menu-load" disabled={!target || loadingKit !== null} title={loadTitle(k)} onclick={() => { const kit = k; closeKitMenu(); void loadKit(kit); }}>
+        {target ? `Load onto "${target.name}"` : 'Load onto track (select a drum track)'}
+      </button>
+    </div>
+  {/if}
 
   <div class="foot">
     <span class="budget" data-testid="sample-budget" title="Sample memory in the audio engine: removed samples are freed when the project is reopened">Samples {budgetText(p)}</span>
@@ -309,13 +434,29 @@
   code { color: var(--text); font-family: var(--font-mono); }
   .big { display: block; width: calc(100% - 8px); margin: 0 4px 6px; font: inherit; padding: 5px 8px; border-radius: var(--r-md); border: 0; background: var(--accent); color: var(--on-color); font-weight: 700; cursor: pointer; text-align: center; }
   .sec { font: 600 var(--fs-lbl) var(--font-ui); text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin: 8px 4px 2px; }
-  .kit { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 2px; }
+  .kits { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 2px; }
+  .kits-ttl { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .kits-ttl .ro { text-transform: none; letter-spacing: 0; }
+  .khead { display: flex; align-items: center; gap: 4px; margin-right: 4px; }
+  .khead .fold { flex: 1; min-width: 0; width: auto; }
+  .khead .fold > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .load {
+    flex: none; display: inline-flex; align-items: center; gap: 3px; font: var(--fs-lbl) var(--font-ui); padding: 1px 6px;
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer;
+  }
+  .load:hover:not(:disabled), .load:focus-visible { color: var(--text); border-color: var(--accent); outline: none; }
+  .load:disabled { opacity: 0.45; cursor: default; }
+  .snd { margin-left: auto; padding-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: var(--fs-ctl); }
+  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; }
+  .menu button { font: var(--fs-ctl) var(--font-ui); text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
+  .menu button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
   .fold {
     display: flex; align-items: center; gap: 6px; width: calc(100% - 8px); font-family: inherit; text-align: left;
     border: 0; background: transparent; padding: 0; cursor: pointer;
   }
   .fold:hover, .fold:focus-visible { color: var(--text); outline: none; }
-  .fold .ro { text-transform: none; letter-spacing: 0; }
   .tree { display: flex; flex-direction: column; }
   .item {
     display: flex; align-items: center; gap: 4px; width: 100%; box-sizing: border-box; font: inherit; text-align: left;

@@ -244,6 +244,65 @@ once if already idle) and never if `p.generation` moved meanwhile — the kit
 load then just ends. A restore stays busy from its read straight through
 its load, so the kit never retries into the gap between them.
 
+## Built-in kits (`state/kits.ts`, `state/kit-actions.ts`, plan 25 Task 1)
+
+`KITS` lists five drum kits, each `{ id, name, blurb, rows: { role, name,
+file }[] }` with one sound per **role** — Kick, Clap, Closed hat, Open hat,
+Snare, Rim, Shaker, Perc, the default drum track's row names
+(`KIT_ROLES`):
+
+| id | name | character |
+|----|------|-----------|
+| `starter` | Starter kit | `samples/starter/` (unchanged); `KITS[0]`, so `DEFAULT_KIT` derives from it |
+| `drum-machine` | Drum Machine | tight, 909-ish |
+| `deep` | Deep | round kick, soft clap, dusty hats |
+| `garage` | Garage | snappy snare/rim, two-stroke shaker, short hats |
+| `dusty` | Dusty | lo-fi: bit-crushed, sample-rate reduced, hiss, crackle |
+
+The four generated kits are `samples/kits/<id>/<role file>.wav` (`kick.wav`,
+`closed-hat.wav`, …; CC0, `samples/kits/LICENSE.txt`), written by
+`scripts/make-kits.mjs` — 48 kHz 16-bit mono, seeded noise, so byte
+identical on every run. Its comments hold each sound's recipe and its
+measured peak / length / spectral centroid; it shares its building blocks
+with `make-starter-kit.mjs` (`scripts/lib/synth.mjs`). Each role has its own
+peak level (kick -1 dBFS … shaker -11 dBFS) so a kit is balanced at row gain
+1. `state/kits.test.ts` pins the output hashes (`node scripts/make-kits.mjs
+--hashes`), checks the files on disk are that output, every kit has all
+eight roles and the kits stay under the 3 MB budget (about 0.9 MB).
+
+Bundling (`library/kitFiles.ts`): like the starter kit, `import.meta.glob`
+URLs read with `fetch`. A generated kit's file becomes a `File` named
+`<kit id>-<file>` (`garage-kick.wav`), so a saved project's sample and a
+dragged-in row say which kit it came from; starter files keep their names.
+Dragging a generated kit's sound carries `<kit id>/<file>` as
+`application/x-daw-kit-sample` (`library/drag.ts`).
+
+**Load onto track** (`loadKitOntoTrack(p, engine, trackId, kitId)`; the
+Browser's per-kit "Load" and the kit header's context menu, on the
+selected drum track): each row named after a role (`rowHasRole`: case and
+outer spaces ignored) gets the kit's sound, roles the track lacks get new
+rows (up to `MAX_ROWS`; the rest are reported), other rows and all steps are
+kept. **Add track ▸ Drum track ▸ <kit>** (`addKitDrumTrack`): a new track
+named after the kit ("Drums" for the starter kit) whose rows are the roles
+with the kit's sounds. "Drum track" itself still adds the plain empty track.
+
+**One undo entry for an async action — prepare, then commit.** The samples
+load asynchronously (fetch, decode, upload), but the user action must be one
+undo step whose undo restores the previous samples. So nothing visible
+changes until every sound is in: *prepare* fetches all files at once and
+imports them one at a time in role order through `importSample` (each is
+uploaded under a fresh id with its bytes kept, but no row references it
+yet; a failure is reported and that role left out; a sound the engine
+defers while playing is waited for until Stop, `deferSampleAssign`; a
+`busy` refusal is retried once on `whenIdle`, as the default kit does). Then
+*commit* runs one synchronous `edit()` that sets every row (and adds the
+new ones, or the new track): one history entry. Undo is plain `diffApply`
+(the old sample ids go back on the rows, added rows / the new track go), and
+redo re-applies it (the uploaded samples stay in the engine, immutable and
+keyed by id). Unlike `attachKitSample` this is an ordinary edit, not a
+starting point: it marks the project unsaved. A session replaced meanwhile
+(`p.generation`), a load starting, or the target track removed drops the
+commit; edits made while the kit loads stay their own entries, before it.
 ## Validation (`validate`)
 
 Never throws, never lets an out-of-range value through. Unknown fields are
@@ -554,7 +613,10 @@ My Sounds/                any layout; every audio file below is listed
   in a build), read with `fetch` (`starterSample`). Read-only, its own
   foldable section; previews keyed `kit:<file>`; dragged with its own type
   `application/x-daw-starter-sample` (so no library path is mistaken for
-  it). The default kit (above) is made of it.
+  it). The default kit (above) is made of it. It is `KITS[0]` of the
+  Browser's **Kits** list, which also shows the generated kits (closed by
+  default; `library/kitFiles.ts`, previews keyed `kit:<id>/<file>`), each
+  with "Load" onto the selected drum track (see "Built-in kits").
 - **Preview** (`preview.ts`): never through the engine; one at a time;
   work that was superseded never starts. The library hands over the disk
   `File` unread (`sampleBlob`), and its size decides: up to 50 MB (5 MB for

@@ -85,7 +85,9 @@
   //   - dropouts in the last 10 s, MIDI blocked, output latency over 40 ms
   //     (Bluetooth): `topbar-warning` (data-kind), decided by topStatus.ts.
   //     A click opens Audio settings (dropouts, latency) or the MIDI popover
-  //     under the badge (blocked: it says how to unblock).
+  //     under the badge (blocked: it says how to unblock). "MIDI blocked"
+  //     has a × (`topbar-warning-dismiss`) that hides it until MIDI is
+  //     allowed and blocked again (topStatus.ts; localStorage).
   // If the engine dies after start, a red "Audio engine stopped — reload"
   // alert appears before it.
   //
@@ -136,7 +138,8 @@
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC } from '../input/shortcutList';
   import { DEFAULT_OCTAVE } from '../input/qwertyPiano';
-  import { createDropWindow, topWarning } from './topStatus';
+  import { createDropWindow, dismissMidiBlocked, midiBlockedDismissed, topWarning } from './topStatus';
+  import X from 'phosphor-svelte/lib/X';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
   import { banners } from '../state/banners.svelte';
@@ -211,7 +214,11 @@
   // ---- menu bar (MenuBar.svelte) -------------------------------------------
   const mod = IS_MAC ? '⌘' : 'Ctrl+';
   let nameBtn = $state<HTMLElement | null>(null);
-  let menuBar = $state<{ toggle(m: 'File', from: HTMLElement): void; request(cmd: 'new' | 'open'): void } | null>(null);
+  let menuBar = $state<{
+    toggle(m: 'File', from: HTMLElement): void;
+    request(cmd: 'new' | 'open'): void;
+    menuButton(m: 'Options'): HTMLButtonElement | null;
+  } | null>(null);
   /** The open menu (MenuBar binds it): the name button shows File's state. */
   let menuOpen = $state<string | null>(null);
   /** ⌘O / Ctrl+O (App's shortcut): MenuBar.request (the File menu's discard question). */
@@ -282,7 +289,21 @@
   let miniW = $state(66);
   /** View ▸ Performance's live readout. */
   const perf = $derived({ cpu, dropouts, latencyMs, latencyText: latency });
-  const warning = $derived(audio.kind === 'running' ? topWarning({ recentDrops, midi: midi.state, latencyMs }) : null);
+  // The badge's × on "MIDI blocked" (topStatus.ts): re-read on every MIDI
+  // status (App clears it first on a granted one) and after a dismissal.
+  let dismissTick = $state(0);
+  const midiDismissed = $derived.by(() => {
+    void midi;
+    void dismissTick;
+    return midiBlockedDismissed();
+  });
+  const warning = $derived(audio.kind === 'running' ? topWarning({ recentDrops, midi: midi.state, latencyMs, midiDismissed }) : null);
+  function dismissMidi() {
+    dismissMidiBlocked();
+    dismissTick++;
+    if (midiOpen && midiToggle === badge) midiOpen = false;
+    menuBar?.menuButton('Options')?.focus(); // the badge goes: the focus to where "MIDI: blocked" still shows
+  }
   let badge = $state<HTMLElement | null>(null);
   function badgeClick() {
     if (!warning || !badge) return;
@@ -401,10 +422,18 @@
       <AudioStatusPill status={audio} onresume={() => void onAudioResume()} />
     {:else if warning}
       <button
-        class="badge" class:latency={warning.kind === 'latency'} data-testid="topbar-warning" data-kind={warning.kind}
+        class="badge" class:latency={warning.kind === 'latency'} class:dismissable={warning.kind === 'midi'}
+        data-testid="topbar-warning" data-kind={warning.kind}
         title={warning.title} bind:this={badge} onclick={badgeClick}
         aria-haspopup="dialog" aria-expanded={warning.kind === 'midi' ? midiOpen : undefined}
       ><Icon icon={Warning} size={12} weight="bold" />{warning.label}</button>
+      {#if warning.kind === 'midi'}
+        <button
+          class="badge-x" data-testid="topbar-warning-dismiss" aria-label="Hide the MIDI blocked warning"
+          title="Don't show this again (until MIDI is allowed and then blocked again). Options ▸ MIDI still says it."
+          onclick={dismissMidi}
+        ><Icon icon={X} size={10} weight="bold" /></button>
+      {/if}
     {/if}
   </span>
 </header>
@@ -415,7 +444,8 @@
   <Settings
     {engine} hint={latencyHint} busy={restarting || p.loading}
     blocked={banners.exporting ? 'Wait for the export to finish' : null}
-    onApply={onApplyAudio} returnFocus={settingsReturn} onclose={() => (settingsOpen = false)}
+    onApply={onApplyAudio} returnFocus={settingsReturn} fallbackFocus={menuBar?.menuButton('Options') ?? null}
+    onclose={() => (settingsOpen = false)}
   />
 {/if}
 
@@ -500,6 +530,18 @@
   .badge:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
   /* A 24 px hit area around the short badge. */
   .badge::after { content: ''; position: absolute; inset: -4px -2px; }
+  /* "MIDI blocked" carries a × (dismiss) joined to its right end. */
+  .badge.dismissable { border-radius: var(--r-md) 0 0 var(--r-md); padding-right: 6px; }
+  .badge.dismissable::after { inset: -4px 0 -4px -2px; }
+  .badge-x {
+    position: relative; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: var(--pill-h);
+    padding: 0; border: 0; border-left: 1px solid color-mix(in srgb, var(--on-color) 25%, transparent);
+    border-radius: 0 var(--r-md) var(--r-md) 0; background: var(--rec) var(--gloss); box-shadow: var(--raised-shadow);
+    color: var(--on-color); cursor: pointer;
+  }
+  .badge-x:hover { filter: brightness(1.08); }
+  .badge-x:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .badge-x::after { content: ''; position: absolute; inset: -4px -2px -4px 0; }
 
   /* Short windows (< 740 px tall): a 40 px bar, so the piano roll keeps
      C2..C5 at 9 px rows at 1280×720 (pianoroll.spec.ts): 36 px transport

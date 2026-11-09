@@ -5,6 +5,7 @@
   import { addClip, playPattern, playSong, seek, setMode, stopTransport, transportPlaying } from './state/song-actions';
   import type { TransportHooks } from './state/song-actions';
   import TopBar from './ui/TopBar.svelte';
+  import { noteMidiStatus } from './ui/topStatus';
   import Tooltip from './ui/Tooltip.svelte';
   import Browser from './ui/Browser.svelte';
   import SongArea from './ui/SongArea.svelte';
@@ -712,7 +713,9 @@
     });
     // Not awaited: the permission prompt must never block startup/rendering.
     // Bound to `live`, so it outlives an audio restart as is.
-    void connectMidi(live, input, (s) => (midi = s), onCc).then((d) => (uninstallMidi = d));
+    // noteMidiStatus first: a granted status forgets a dismissed "MIDI
+    // blocked" badge (ui/topStatus.ts) before TopBar re-reads it.
+    void connectMidi(live, input, (s) => { noteMidiStatus(s); midi = s; }, onCc).then((d) => (uninstallMidi = d));
     // Test hook: same sink / input / onCc as a real input, source `midi:inject`.
     const injector = createMidiHandler(live, input, onCc);
     window.__daw.midi = { inject: (bytes) => injector.handle('midi:inject', Uint8Array.from(bytes), performance.now()) };

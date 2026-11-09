@@ -181,14 +181,22 @@ test('a suspended context shows the paused pill in the badge slot; its click res
   await expect(slot).toBeEmpty();
 });
 
+/** Web MIDI refused, as a user who blocked it (not left to the headless browser's default). */
+async function refuseMidi(page: Page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'requestMIDIAccess', { value: () => Promise.reject(new DOMException('denied', 'SecurityError')), configurable: true });
+  });
+}
+
 test('short windows (1280×720): the compact 40 px bar, still one row; the short badge keeps a 24 px hit area', async ({ page }) => {
+  await refuseMidi(page);
   await start(page, 720);
   await page.getByTestId('play').click();
   const out = await measure(page);
   expect(out.rows).toBe(1);
   expect(out.height).toBeLessThanOrEqual(41);
   expect(out.docWidth).toBeLessThanOrEqual(1280);
-  // Headless Chrome blocks Web MIDI: the badge says so. A click 3 px above it still opens the popover.
+  // MIDI refused: the badge says so. A click 3 px above it still opens the popover.
   const badge = page.getByTestId('topbar-warning');
   await expect(badge).toHaveText('MIDI blocked');
   const b = (await badge.boundingBox())!;
@@ -512,4 +520,63 @@ test('transports: idle reads as ready (raised, full opacity), playing is filled,
   expect(d.opacity).toBeLessThan(1);
   expect(d.shadow).toBe(false);
   expect(d.cursor).toBe('not-allowed');
+});
+
+// Fix round 1: the MIDI-blocked badge can be hidden for good (until MIDI is
+// allowed and blocked again); Options ▸ MIDI… still says "blocked".
+test('the MIDI-blocked badge has a ×: hidden across reloads, back after MIDI was allowed and blocked again', async ({ page }) => {
+  // The browser's answer, switchable between page loads.
+  await page.addInitScript(() => {
+    const allow = localStorage.getItem('test.midiAllow') === '1';
+    const access = { inputs: new Map(), onstatechange: null };
+    Object.defineProperty(navigator, 'requestMIDIAccess', {
+      value: () => (allow ? Promise.resolve(access) : Promise.reject(new DOMException('denied', 'SecurityError'))),
+      configurable: true,
+    });
+  });
+  await start(page);
+  const badge = page.getByTestId('topbar-warning');
+  const x = page.getByTestId('topbar-warning-dismiss');
+  await expect(badge).toHaveText('MIDI blocked');
+  await expect(x).toHaveAccessibleName('Hide the MIDI blocked warning');
+  await x.click();
+  await expect(badge).toHaveCount(0);
+  await expect(page.getByTestId('audio-status')).toBeEmpty();
+  await expect(page.getByTestId('menu-options')).toBeFocused();
+  await expect(page.getByTestId('midi-status')).toHaveText('MIDI: blocked'); // still said in the menu
+  // Other warnings still show while it is hidden.
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 1));
+  await expect(badge).toHaveText('1 dropout');
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 0));
+  await expect(badge).toHaveCount(0);
+  // Remembered across a reload.
+  await page.reload();
+  await startApp(page);
+  await expect(page.getByTestId('midi-status')).toHaveText('MIDI: blocked');
+  await expect(badge).toHaveCount(0);
+  // Allowed once (the dismissal is forgotten), then blocked again: the badge is back.
+  await page.evaluate(() => localStorage.setItem('test.midiAllow', '1'));
+  await page.reload();
+  await startApp(page);
+  await expect(page.getByTestId('midi-status')).toHaveText('MIDI: no device');
+  await page.evaluate(() => localStorage.setItem('test.midiAllow', '0'));
+  await page.reload();
+  await startApp(page);
+  await expect(badge).toHaveText('MIDI blocked');
+  await expect(x).toBeVisible();
+});
+
+test('the dialog\'s focus goes to Options when the badge that opened it is gone', async ({ page }) => {
+  await fakeMidi(page, null);
+  await start(page);
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 2));
+  const badge = page.getByTestId('topbar-warning');
+  await badge.click();
+  await expect(page.getByTestId('settings')).toBeVisible();
+  // The badge clears meanwhile (a new engine's lower total, as after an audio restart).
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 0));
+  await expect(badge).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('settings')).toBeHidden();
+  await expect(page.getByTestId('menu-options')).toBeFocused();
 });

@@ -328,7 +328,7 @@ test('every item spans the popover\'s inner width; 16 px padding at the sides, 8
   }
   // The hovered item's highlight is that full band (the Options entries once sat in a narrower wrapper).
   await openMenu(page, 'Options');
-  const item = page.getByTestId('menu-notenames');
+  const item = page.getByTestId('note-names');
   await item.hover();
   const hl = await item.evaluate((i) => ({ bg: getComputedStyle(i).backgroundColor, w: i.getBoundingClientRect().width, inner: i.parentElement!.parentElement!.clientWidth - 32 }));
   expect(hl.bg).not.toBe('rgba(0, 0, 0, 0)');
@@ -354,4 +354,82 @@ test('no tooltip on an item whose title equals its text (and no native one eithe
   await expect(page.getByRole('tooltip')).toContainText('Click for audio settings');
   await page.mouse.move(700, 600);
   await expect(item).toHaveAttribute('title', text.trim()); // put back on release
+});
+
+// Fix round 1: submenus follow the pointer (MenuBar.svelte SUBMENUS).
+test('submenus follow the pointer: hover opens, a sibling or leaving closes, a diagonal into it does not', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Options');
+  const item = page.getByTestId('note-names');
+  const solfege = page.getByTestId('menu-notenames-solfege');
+  await item.hover();
+  await expect(item).toHaveAttribute('aria-expanded', 'true'); // after ~150 ms
+  // The click that follows a hover-open keeps it open.
+  await item.click();
+  await expect(item).toHaveAttribute('aria-expanded', 'true');
+  // A sibling item closes it (~200 ms).
+  await page.getByTestId('menu-metronome').hover();
+  await expect(item).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel(page, 'Options')).toBeVisible();
+  // Diagonal: from the item's left end down-right to Solfège (the second
+  // entry), across the items under Note names on the way: it stays open.
+  await item.hover({ position: { x: 20, y: 6 } });
+  await expect(item).toHaveAttribute('aria-expanded', 'true');
+  const ib = (await item.boundingBox())!;
+  const sb = (await solfege.boundingBox())!;
+  await page.mouse.move(ib.x + 20, ib.y + ib.height - 2);
+  await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2, { steps: 6 });
+  await page.waitForTimeout(300); // past the close delay
+  await expect(item).toHaveAttribute('aria-expanded', 'true');
+  await solfege.click();
+  await expect(solfege).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('menu-notenames-letters').click();
+  // Leaving the menu closes the submenu (the menu itself stays open).
+  await page.mouse.move(1000, 600);
+  await expect(item).toHaveAttribute('aria-expanded', 'false');
+  await expect(panel(page, 'Options')).toBeVisible();
+  // The library submenu does the same.
+  await openMenu(page, 'Patterns');
+  const lib = page.getByTestId('menu-pattern-load');
+  await lib.hover();
+  await expect(lib).toHaveAttribute('aria-expanded', 'true');
+  await page.getByTestId('menu-pattern-save').hover();
+  await expect(lib).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('a submenu opened with the mouse: Esc and ← close only it and focus its item; → inside it does nothing', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Options');
+  const item = page.getByTestId('note-names');
+  await item.click();
+  await expect(item).toHaveAttribute('aria-expanded', 'true');
+  await page.getByTestId('menu-metronome').focus(); // the focus anywhere but in the submenu
+  await page.keyboard.press('Escape');
+  await expect(item).toHaveAttribute('aria-expanded', 'false');
+  await expect(item).toBeFocused();
+  await expect(panel(page, 'Options')).toBeVisible();
+  await item.click();
+  await page.getByTestId('menu-metronome').focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(item).toHaveAttribute('aria-expanded', 'false');
+  await expect(item).toBeFocused();
+  await expect(panel(page, 'Options')).toBeVisible(); // not the neighbouring menu
+  // → inside the submenu: nothing (no jump to Help).
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByTestId('menu-notenames-letters')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByTestId('menu-notenames-letters')).toBeFocused();
+  await expect(panel(page, 'Options')).toBeVisible();
+  await expect(panel(page, 'Help')).toBeHidden();
+});
+
+test('the wheel over Options ▸ Keyboard\'s octave row steps the octave', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'Options');
+  const oct = Number(await page.getByTestId('menu-octave').textContent());
+  await page.getByTestId('octave').hover();
+  await page.mouse.wheel(0, -100); // up: one octave higher
+  await expect(page.getByTestId('menu-octave')).toHaveText(String(oct + 1));
+  await page.mouse.wheel(0, 200);
+  await expect(page.getByTestId('menu-octave')).toHaveText(String(oct - 1));
 });

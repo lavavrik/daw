@@ -11,7 +11,7 @@ import { openMenu } from './topbar';
 /** Options ▸ Note names ▸ <style> (the submenu opens on a click on its item). */
 async function pickNames(page: Page, style: 'letters' | 'solfege') {
   await openMenu(page, 'Options');
-  if ((await page.getByTestId('menu-notenames').getAttribute('aria-expanded')) !== 'true') await page.getByTestId('menu-notenames').click();
+  if ((await page.getByTestId('note-names').getAttribute('aria-expanded')) !== 'true') await page.getByTestId('note-names').click();
   await page.getByTestId(`menu-notenames-${style}`).click();
 }
 
@@ -37,7 +37,7 @@ test('solfège: piano roll, Acid, reload, and back to letters', async ({ page })
   // Options ▸ Note names ▸ Solfège (the menu stays open: a setting), then Esc.
   await pickNames(page, 'solfege');
   await expect(page.getByTestId('menu-notenames-solfege')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('menu-notenames')).toContainText('Do Re Mi'); // the item shows the current style
+  await expect(page.getByTestId('note-names')).toContainText('Do Re Mi'); // the item shows the current style
   await page.keyboard.press('Escape'); // closes the submenu
   await page.keyboard.press('Escape'); // closes the menu
   await expect(page.locator('#menu-options-panel')).toBeHidden();
@@ -62,7 +62,7 @@ test('solfège: piano roll, Acid, reload, and back to letters', async ({ page })
 
   // Options ▸ Note names ▸ switches back.
   await openMenu(page, 'Options');
-  await page.getByTestId('menu-notenames').click();
+  await page.getByTestId('note-names').click();
   await expect(page.getByTestId('menu-notenames-solfege')).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('menu-notenames-letters').click();
   await expect(page.getByTestId('acid-key-0')).toHaveText('C');
@@ -81,7 +81,7 @@ test('Options ▸ Note names ▸ is a submenu: → / Enter open it on its first 
   await page.goto('/');
   await startApp(page);
   await openMenu(page, 'Options');
-  const item = page.getByTestId('menu-notenames');
+  const item = page.getByTestId('note-names');
   const letters = page.getByTestId('menu-notenames-letters');
   const solfege = page.getByTestId('menu-notenames-solfege');
   await expect(item).toHaveAttribute('aria-expanded', 'false');

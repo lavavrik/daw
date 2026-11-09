@@ -63,6 +63,7 @@
     blocked = null,
     onApply,
     returnFocus = null,
+    fallbackFocus = null,
     onclose,
   }: {
     engine: AudioEngine;
@@ -76,6 +77,8 @@
     onApply: (hint: LatencyHint) => Promise<string | null>;
     /** Where the focus goes when it closes (what opened it). */
     returnFocus?: HTMLElement | null;
+    /** Where it goes when that is gone meanwhile (a badge that cleared itself): the Options menu button. */
+    fallbackFocus?: HTMLElement | null;
     onclose: () => void;
   } = $props();
 
@@ -83,7 +86,8 @@
   let first = $state<HTMLSelectElement | null>(null);
   function close() {
     dlg?.close(); // first: nothing outside an open modal can take the focus
-    if (returnFocus?.isConnected) returnFocus.focus();
+    // Never <body>: the opener, else the fallback (both gone: the browser's choice).
+    (returnFocus?.isConnected ? returnFocus : fallbackFocus?.isConnected ? fallbackFocus : null)?.focus();
     onclose();
   }
   function key(e: KeyboardEvent) {

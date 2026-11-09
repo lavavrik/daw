@@ -38,16 +38,32 @@
   //             modal Settings.svelte), Metronome, Count-in, Recording offset
   //   Help      Keyboard shortcuts… (ShortcutsSheet), About…
   // Plan 22 moved the top bar's pills in here under their test ids:
-  // keys-target (the track name in Keys play), octave ("Octave N"),
+  // keys-target (the track name in Keys play), octave ("Octave N"; the
+  // wheel over its row steps it), note-names (the Note names ▸ item, the
+  // old Settings select's id),
   // midi-status (the MIDI item's label), cpu / latency / settings-button
   // (View ▸ Performance). The pills' own octave − / + merged into the menu's
   // (menu-octave-down / -up).
   //
   // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names): one open
-  // at a time (`sub`), flying out to the right of their item. → or Enter /
-  // Space on the item opens it on its first entry (a click opens it without
-  // moving the focus); ↑ ↓ Home End move inside; ← or Esc closes it and puts
-  // the focus back on its item (Esc closes only that layer).
+  // at a time (`sub`), flying out to the right of their item.
+  //   Keys: → or Enter / Space on the item opens it on its first entry;
+  //   ↑ ↓ Home End move inside; → inside does nothing. While one is open,
+  //   ← and Esc close ONLY it and focus its item, wherever the focus is (in
+  //   it, on a sibling item, or on its item after a mouse click).
+  //   Pointer (fix round 1): hovering the item opens it after HOVER_OPEN_MS
+  //   (150; a click opens it at once, and a click right after a hover-open
+  //   never toggles it shut again). Hovering a sibling item, or the pointer
+  //   leaving the menu, closes it after HOVER_CLOSE_MS (200), and anything
+  //   back inside its item or the submenu cancels that. That delay is the
+  //   diagonal GRACE: on the way from the item to an entry the pointer
+  //   crosses the items below for a few ms, and the close is only armed, not
+  //   run (one timer from the first crossing, not restarted per item). No
+  //   "safe triangle": the submenu starts level with its item, so the path
+  //   is short. A hover close never fires while a field in the submenu has
+  //   the focus (the library's rename), and moves the focus back to the item
+  //   if it was inside. One delegated `pointerover` / `pointerleave` on the
+  //   popover drives it all (`subHover`); touch pointers are ignored.
   //
   // LOOK (plan 22): the popover has 16 px of padding at the sides and 8 px
   // at the bottom (the owner: "more breathing room on the right and
@@ -116,6 +132,7 @@
   import { tabFor } from '../input/shortcuts';
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
+  import { wheelOctaveSteps } from '../input/qwertyPiano';
   import { ADD_ITEMS, addBlocked, addTrack } from './addTrack';
   import type { AddKind } from './addTrack';
   import { laneView } from './song/laneView.svelte';
@@ -219,10 +236,10 @@
 
   let root = $state<HTMLElement | null>(null);
   /** Every menu's popover stays in the DOM, hidden while closed (as the ⋯ <details> did: tests read a hidden item's state). */
-  const panels: Partial<Record<MenuName, HTMLElement>> = {};
+  const panels: Partial<Record<MenuName, HTMLElement>> = $state({});
   /** The open menu's popover. */
   const panel = () => (open ? (panels[open as MenuName] ?? null) : null);
-  const btns: Partial<Record<MenuName, HTMLButtonElement>> = {};
+  const btns: Partial<Record<MenuName, HTMLButtonElement>> = $state({});
   /** What gets the focus back when the menu closes (its button, the name, or the focus before ⌘O). */
   let opener: HTMLElement | null = null;
 
@@ -248,6 +265,11 @@
     const back = opener?.isConnected ? opener : m ? btns[m] : null;
     close();
     back?.focus();
+  }
+
+  /** Menu `m`'s button (TopBar: where a dialog's focus goes when its own opener is gone). */
+  export function menuButton(m: MenuName): HTMLButtonElement | null {
+    return btns[m] ?? null;
   }
 
   /** Toggle menu `m` (the name button opens File through this, as the ⋯ once was). */
@@ -318,6 +340,13 @@
   function panelKey(e: KeyboardEvent) {
     keepKey(e);
     if (!open || isField(e.target)) return;
+    if (sub && e.key === 'ArrowLeft') {
+      // A submenu open (by the mouse, the focus outside it): ← closes only it.
+      e.preventDefault();
+      e.stopPropagation();
+      closeSub();
+      return;
+    }
     const items = itemsOf();
     const i = items.indexOf(document.activeElement as HTMLElement);
     let next: HTMLElement | undefined;
@@ -349,13 +378,16 @@
       if (e.key !== 'Escape' || e.defaultPrevented || !open) return;
       e.stopPropagation(); // not also "cancel learn" etc.
       e.preventDefault();
-      closeToOpener();
+      if (sub) closeSub(); // the topmost layer only (SUBMENUS)
+      else closeToOpener();
     };
     window.addEventListener('pointerdown', outside, true);
     document.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('keydown', key);
+      clearTimeout(openTimer);
+      clearTimeout(closeTimer);
     };
   });
   /** Tab out of the left block closes the menu. A null relatedTarget (window blur, a press on nothing focusable) is the pointer handler's call. */
@@ -441,6 +473,7 @@
   async function startRename() {
     if (!cur) return;
     draft = cur.name;
+    sub = null;
     renaming = true;
     await tick();
     renameInput?.focus();
@@ -465,6 +498,7 @@
   async function startSave() {
     if (!ptrack || !cur) return;
     draft = defaultLibraryName(ptrack, cur.name);
+    sub = null;
     saving = true;
     await tick();
     saveInput?.focus();
@@ -487,25 +521,94 @@
   type SubName = 'lib' | 'notes';
   /** The open submenu (one at a time). */
   let sub = $state<SubName | null>(null);
-  const subBtns: Partial<Record<SubName, HTMLButtonElement>> = {};
+  const subBtns: Partial<Record<SubName, HTMLButtonElement>> = $state({});
   let subEl = $state<HTMLElement | null>(null);
   const subItems = () => (subEl ? [...subEl.querySelectorAll<HTMLElement>('button, input')] : []);
   async function openSub(s: SubName, focusFirst: boolean) {
+    cancelHover();
     sub = s;
     await tick();
     if (focusFirst) (subItems()[0] ?? subEl?.querySelector<HTMLElement>('[tabindex]'))?.focus();
   }
   function closeSub() {
+    cancelHover();
     const back = sub ? subBtns[sub] : null;
     sub = null;
     back?.focus();
   }
   /** A click on a submenu's item: toggle it (Enter / Space are clicks with detail 0: open on its first entry). */
   function subClick(s: SubName, e: MouseEvent) {
+    if (sub === s && hoverOpenedSub === s) {
+      hoverOpenedSub = null; // the click that follows a hover-open: keep it open
+      return;
+    }
+    hoverOpenedSub = null;
     if (sub === s) closeSub();
     else void openSub(s, e.detail === 0);
   }
+
+  // The pointer (SUBMENUS above).
+  const HOVER_OPEN_MS = 150;
+  const HOVER_CLOSE_MS = 200;
+  let openTimer = 0;
+  let openFor: SubName | null = null;
+  let closeTimer = 0;
+  /** The submenu a hover opened, until the pointer leaves its item (its click then keeps it open). */
+  let hoverOpenedSub: SubName | null = null;
+  function cancelHover() {
+    clearTimeout(openTimer);
+    clearTimeout(closeTimer);
+    openTimer = closeTimer = 0;
+    openFor = null;
+  }
+  function armClose() {
+    if (closeTimer) return; // one grace period from the first crossing (not restarted per item)
+    closeTimer = window.setTimeout(() => {
+      closeTimer = 0;
+      if (!sub) return;
+      const a = document.activeElement;
+      if (a instanceof HTMLInputElement && subEl?.contains(a)) return; // typing in it (the library's rename)
+      if (subEl?.contains(a)) closeSub();
+      else sub = null;
+    }, HOVER_CLOSE_MS);
+  }
+  /** Delegated `pointerover` / `pointerleave` on a popover: open on hovering a submenu's item, close on hovering away. */
+  function subHover(e: PointerEvent) {
+    if (e.pointerType === 'touch') return;
+    const wrap = e.type === 'pointerleave' ? null : (e.target as Element).closest<HTMLElement>('.subwrap[data-sub]');
+    const s = (wrap?.dataset.sub as SubName | undefined) ?? null;
+    const onItem = !!s && !!subBtns[s]?.contains(e.target as Node);
+    if (!onItem) hoverOpenedSub = null;
+    if (s && s === sub) {
+      // Back in the open submenu or on its item: stay.
+      clearTimeout(closeTimer);
+      closeTimer = 0;
+      return;
+    }
+    if (s && onItem) {
+      // On another submenu's item: open it soon (the open one goes with it).
+      clearTimeout(closeTimer);
+      closeTimer = 0;
+      if (openFor === s) return;
+      clearTimeout(openTimer);
+      openFor = s;
+      openTimer = window.setTimeout(() => {
+        openTimer = 0;
+        openFor = null;
+        if (!open || sub === s) return;
+        hoverOpenedSub = s;
+        void openSub(s, false);
+      }, HOVER_OPEN_MS);
+      return;
+    }
+    // A sibling item, or out of the menu.
+    clearTimeout(openTimer);
+    openTimer = 0;
+    openFor = null;
+    if (sub) armClose();
+  }
   function subBtnKey(e: KeyboardEvent, s: SubName) {
+    hoverOpenedSub = null; // a key press on the item is never "the click after a hover"
     if (e.key !== 'ArrowRight') return;
     e.preventDefault();
     e.stopPropagation(); // not panelKey's "next menu"
@@ -525,6 +628,10 @@
       e.preventDefault(); // Esc: the document listener leaves the menu open (topmost layer only)
       e.stopPropagation();
       closeSub();
+      return;
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault(); // nothing further right (never panelKey's "next menu")
+      e.stopPropagation();
       return;
     } else return;
     e.preventDefault();
@@ -557,6 +664,13 @@
 
   // ---- Options -------------------------------------------------------------
   const keysTrack = $derived(liveInputTrack(p));
+  // The wheel over the octave row: accumulated (input/qwertyPiano.ts wheelOctaveSteps).
+  let wheelAcc = 0;
+  function octaveWheel(e: WheelEvent) {
+    const r = wheelOctaveSteps(wheelAcc, e.deltaY, e.deltaMode);
+    wheelAcc = r.acc;
+    if (r.steps) onOctave(Math.min(8, Math.max(0, octave + r.steps)));
+  }
   // Count-in and the offset: one reactive mirror shared with the pattern
   // transport (state/recPrefs.svelte.ts).
   seedRecPrefs(untrack(() => recorder));
@@ -596,6 +710,7 @@
       <div
         class="pop" id={`menu-${slug(m)}-panel`} role="group" aria-label={m} data-testid={`menu-${slug(m)}-panel`}
         hidden={open !== m} bind:this={panels[m]} onkeydown={panelKey} onclickcapture={blockInert}
+        onpointerover={subHover} onpointerleave={subHover}
       >
         {#if m === 'File'}
           {#if confirming}
@@ -672,7 +787,7 @@
             <button class="it" data-testid="menu-pattern-save" use:inertItem={saveWhy} title={saveWhy ?? 'Store a copy of this pattern in the project'} onclick={() => void startSave()}>
               <Icon icon={BookmarkSimple} /><span class="l">Save to project library…</span>
             </button>
-            <div class="subwrap">
+            <div class="subwrap" data-sub="lib">
               <button
                 class="it" data-testid="menu-pattern-load" bind:this={subBtns.lib} aria-expanded={sub === 'lib'} aria-controls="menu-pattern-library"
                 title="Copy a saved pattern into the selected track as a new pattern"
@@ -716,7 +831,8 @@
           </button>
         {:else if m === 'Options'}
           <p class="sec"><Icon icon={Keyboard} size={12} /> Keyboard</p>
-          <div class="oct" role="group" aria-label="Octave">
+          <!-- The wheel steps the octave (as the old top-bar pill did; Svelte's onwheel is passive, and the menu doesn't scroll). -->
+          <div class="oct" role="group" aria-label="Octave" data-testid="menu-octave-row" onwheel={octaveWheel}>
             <span class="l" data-testid="octave">Octave <b data-testid="menu-octave">{octave}</b></span>
             <button class="sq" data-testid="menu-octave-down" aria-label="Octave down" title="Octave down (Z)" use:inertItem={octave <= 0 ? 'Already the lowest octave' : null} onclick={() => onOctave(octave - 1)}>−</button>
             <button class="sq" data-testid="menu-octave-up" aria-label="Octave up" title="Octave up (X)" use:inertItem={octave >= 8 ? 'Already the highest octave' : null} onclick={() => onOctave(octave + 1)}>+</button>
@@ -724,9 +840,10 @@
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
             Keys play: {#if keysTrack}<span class="sw" style:background={keysTrack.color}></span>{/if}<b data-testid="keys-target">{keysTrack?.name ?? '(no track)'}</b>
           </p>
-          <div class="subwrap">
+          <!-- `note-names`: the old Settings select's id, on the control that replaced it. -->
+          <div class="subwrap" data-sub="notes">
             <button
-              class="it" data-testid="menu-notenames" bind:this={subBtns.notes} aria-expanded={sub === 'notes'} aria-controls="menu-notenames-sub"
+              class="it" data-testid="note-names" bind:this={subBtns.notes} aria-expanded={sub === 'notes'} aria-controls="menu-notenames-sub"
               onclick={(e) => subClick('notes', e)} onkeydown={(e) => subBtnKey(e, 'notes')}
             ><Icon icon={TextAa} /><span class="l">Note names</span><span class="cur">{noteNames.style === 'letters' ? 'C D E' : 'Do Re Mi'}</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
             {#if sub === 'notes'}

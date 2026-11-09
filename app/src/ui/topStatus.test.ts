@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DROP_WINDOW_MS, createDropWindow, midiLabel, topWarning } from './topStatus';
+import { DROP_WINDOW_MS, createDropWindow, dismissMidiBlocked, midiBlockedDismissed, midiLabel, noteMidiStatus, topWarning } from './topStatus';
 
 describe('createDropWindow (dropouts in the last 10 s)', () => {
   it('counts the dropouts since the first sample while the app is younger than the window', () => {
@@ -66,5 +66,39 @@ describe('midiLabel (Options ▸ MIDI… names the device)', () => {
     expect(midiLabel({ state: 'no-devices', devices: [] })).toBe('no device');
     expect(midiLabel({ state: 'denied', devices: [] })).toBe('blocked');
     expect(midiLabel({ state: 'unsupported', devices: [] })).toBe('unsupported');
+  });
+});
+
+describe('the MIDI-blocked badge can be dismissed (until MIDI is allowed and blocked again)', () => {
+  const mem = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) };
+  };
+  it('a dismissal hides the midi warning and is remembered', () => {
+    const st = mem();
+    expect(midiBlockedDismissed(st)).toBe(false);
+    dismissMidiBlocked(st);
+    expect(midiBlockedDismissed(st)).toBe(true);
+    expect(topWarning({ recentDrops: 0, midi: 'denied', latencyMs: 12, midiDismissed: true })).toBeNull();
+    // Other warnings still show.
+    expect(topWarning({ recentDrops: 0, midi: 'denied', latencyMs: 90, midiDismissed: true })?.kind).toBe('latency');
+  });
+  it('a granted status (devices or none) forgets it; denied or unsupported keep it', () => {
+    const st = mem();
+    dismissMidiBlocked(st);
+    noteMidiStatus({ state: 'denied', devices: [] }, st);
+    noteMidiStatus({ state: 'unsupported', devices: [] }, st);
+    expect(midiBlockedDismissed(st)).toBe(true);
+    noteMidiStatus({ state: 'no-devices', devices: [] }, st);
+    expect(midiBlockedDismissed(st)).toBe(false);
+    dismissMidiBlocked(st);
+    noteMidiStatus({ state: 'connected', devices: ['K'] }, st);
+    expect(midiBlockedDismissed(st)).toBe(false);
+  });
+  it('a storage that throws (private mode) never breaks the bar', () => {
+    const bad = { getItem: () => { throw new Error('x'); }, setItem: () => { throw new Error('x'); }, removeItem: () => { throw new Error('x'); } };
+    expect(midiBlockedDismissed(bad)).toBe(false);
+    expect(() => dismissMidiBlocked(bad)).not.toThrow();
+    expect(() => noteMidiStatus({ state: 'connected', devices: [] }, bad)).not.toThrow();
   });
 });

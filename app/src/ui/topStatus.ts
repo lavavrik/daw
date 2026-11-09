@@ -11,6 +11,15 @@
 //   4. output latency over BT_LATENCY_MS (Bluetooth-size) → Audio settings.
 // "No MIDI device" and "no Web MIDI" are normal states, not warnings: Options
 // ▸ MIDI… says them in its label (midiLabel).
+//
+// The MIDI-blocked badge can be DISMISSED (fix round 1: a user who blocked
+// MIDI on purpose shouldn't see red forever). Its × stores a flag in
+// localStorage (MIDI_DISMISS_KEY); while it is set the badge skips "MIDI
+// blocked" (Options ▸ MIDI… still says "blocked"). A status that means the
+// browser GRANTED access (a device or none: 'connected' / 'no-devices',
+// only ever reported by connectMidi after a successful request) clears it
+// (noteMidiStatus, called from App's MIDI status callback), so MIDI allowed
+// and later blocked again shows the badge again.
 import { BT_LATENCY_MS } from '../audio/restart';
 import type { MidiStatus } from '../input/midi';
 
@@ -54,7 +63,7 @@ export const BT_TIP = 'High output latency — Bluetooth headphones? Use wired o
 export const MIDI_BLOCKED_TIP = 'MIDI access is blocked. Enable it in Chrome site settings (lock icon > Site settings > MIDI devices), then reload.';
 
 /** The warning badge, or null (the normal state: nothing at the top right). Audio paused / failed is TopBar's (above). */
-export function topWarning(o: { recentDrops: number; midi: MidiStatus['state']; latencyMs: number }): TopWarning | null {
+export function topWarning(o: { recentDrops: number; midi: MidiStatus['state']; latencyMs: number; midiDismissed?: boolean }): TopWarning | null {
   if (o.recentDrops > 0) {
     const n = o.recentDrops;
     return {
@@ -63,7 +72,7 @@ export function topWarning(o: { recentDrops: number; midi: MidiStatus['state']; 
       title: `${n} audio dropout${n === 1 ? '' : 's'} in the last 10 s (the audio thread missed its deadline). Click for audio settings: a larger buffer helps.`,
     };
   }
-  if (o.midi === 'denied') return { kind: 'midi', label: 'MIDI blocked', title: `${MIDI_BLOCKED_TIP} Click for MIDI.` };
+  if (o.midi === 'denied' && !o.midiDismissed) return { kind: 'midi', label: 'MIDI blocked', title: `${MIDI_BLOCKED_TIP} Click for MIDI.` };
   if (o.latencyMs > BT_LATENCY_MS) {
     return { kind: 'latency', label: `${Math.round(o.latencyMs)} ms latency`, title: `${BT_TIP} Click for audio settings.` };
   }
@@ -81,4 +90,44 @@ export function midiTip(m: MidiStatus): string {
   if (m.state === 'denied') return MIDI_BLOCKED_TIP;
   if (m.state === 'unsupported') return 'This browser has no Web MIDI. Use Chrome.';
   return m.state === 'connected' ? `MIDI: ${m.devices.join(', ')}` : 'MIDI: no device connected';
+}
+
+// ---- the dismissible MIDI-blocked badge (see the header) --------------------
+export const MIDI_DISMISS_KEY = 'daw.midiBlockedDismissed';
+type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+/** localStorage, or a no-op where it is missing or throws (private mode, tests). */
+const local = (): Store | null => {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/** Has the user hidden the MIDI-blocked badge? */
+export function midiBlockedDismissed(store: Store | null = local()): boolean {
+  try {
+    return store?.getItem(MIDI_DISMISS_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** The badge's ×: hide "MIDI blocked" until MIDI is granted again. */
+export function dismissMidiBlocked(store: Store | null = local()): void {
+  try {
+    store?.setItem(MIDI_DISMISS_KEY, '1');
+  } catch {
+    /* not remembered: the badge comes back on reload */
+  }
+}
+
+/** Every status connectMidi reports: a granted one forgets the dismissal. */
+export function noteMidiStatus(m: MidiStatus, store: Store | null = local()): void {
+  if (m.state !== 'connected' && m.state !== 'no-devices') return;
+  try {
+    store?.removeItem(MIDI_DISMISS_KEY);
+  } catch {
+    /* nothing to forget */
+  }
 }

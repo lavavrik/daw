@@ -7,8 +7,9 @@ import { validate } from '../project/schema';
 import { addDrumTrack, setStep, setSwing, setStepCount } from './actions';
 import {
   deleteLibraryPattern, droppedRowsText, freeLibraryName, libraryJson, libraryState, loadBlocked, loadPatternFromLibrary,
-  mapLibraryRows, renameLibraryPattern, savePatternToLibrary,
+  loadFactoryPattern, mapLibraryRows, renameLibraryPattern, savePatternToLibrary,
 } from './pattern-library';
+import { DRUM_ROLES, factoryPattern } from './factoryPatterns';
 import { addNote, newPattern, setPatternBars } from './pattern-actions';
 import { MAX_STEPS, Project, currentPattern } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
@@ -51,28 +52,51 @@ function beat(x: ReturnType<typeof setup>) {
 const onSteps = (steps: number[]) => steps.flatMap((v, i) => (v > 0 ? [i] : []));
 
 describe('mapLibraryRows', () => {
-  const row = (sampleName: string | undefined, hits: boolean) => ({ sampleName, steps: hits ? [100] : [0] });
-  it('maps by sample name first, then by index; counts rows with steps that find no place', () => {
+  // Entry rows are named "r" (not a role) unless a test is about roles; target rows "t<i>".
+  const row = (sampleName: string | undefined, hits: boolean, name = 'r') => ({ name, sampleName, steps: hits ? [100] : [0] });
+  /** Target rows with these sample file names (null: none), not named after a role. */
+  const tgt = (...samples: (string | null)[]) => samples.map((sampleName, i) => ({ name: `t${i}`, sampleName }));
+  it('maps by sample name, then by index; counts rows with steps that find no place', () => {
     // Same samples, reordered.
-    expect(mapLibraryRows([row('a', true), row('b', true)], ['b', 'a'])).toEqual({ to: [1, 0], dropped: 0 });
+    expect(mapLibraryRows([row('a', true), row('b', true)], tgt('b', 'a'))).toEqual({ to: [1, 0], dropped: 0 });
     // A renamed (other) sample: by index.
-    expect(mapLibraryRows([row('a', true), row('x', true)], ['a', 'y'])).toEqual({ to: [0, 1], dropped: 0 });
+    expect(mapLibraryRows([row('a', true), row('x', true)], tgt('a', 'y'))).toEqual({ to: [0, 1], dropped: 0 });
     // Fewer rows: the third has nowhere to go.
-    expect(mapLibraryRows([row('a', true), row('b', true), row('c', true)], ['a', 'b'])).toEqual({ to: [0, 1, null], dropped: 1 });
+    expect(mapLibraryRows([row('a', true), row('b', true), row('c', true)], tgt('a', 'b'))).toEqual({ to: [0, 1, null], dropped: 1 });
     // A name match claims its row before any index fallback: c's index (0) is taken by a, so c
     // is dropped (never moved to another free row such as z).
-    expect(mapLibraryRows([row('c', true), row('a', true)], ['a', 'z'])).toEqual({ to: [null, 0], dropped: 1 });
+    expect(mapLibraryRows([row('c', true), row('a', true)], tgt('a', 'z'))).toEqual({ to: [null, 0], dropped: 1 });
     // An empty row only maps by name and is never counted.
-    expect(mapLibraryRows([row('q', false), row(undefined, true)], ['z', 'y'])).toEqual({ to: [null, 1], dropped: 0 });
+    expect(mapLibraryRows([row('q', false), row(undefined, true)], tgt('z', 'y'))).toEqual({ to: [null, 1], dropped: 0 });
     // No samples on either side: by index.
-    expect(mapLibraryRows([row(undefined, true)], [null])).toEqual({ to: [0], dropped: 0 });
+    expect(mapLibraryRows([row(undefined, true)], tgt(null))).toEqual({ to: [0], dropped: 0 });
     // Only the first stepCount steps count as steps: a row whose hits are all past the length
     // claims no row by index and is not counted as dropped (it is still copied where it maps).
-    const late = { sampleName: 'q', steps: [0, 0, 0, 0, 100] };
-    expect(mapLibraryRows([late], ['z'], 4)).toEqual({ to: [null], dropped: 0 });
-    expect(mapLibraryRows([late], ['z'], 16)).toEqual({ to: [0], dropped: 0 });
+    const late = { name: 'r', sampleName: 'q', steps: [0, 0, 0, 0, 100] };
+    expect(mapLibraryRows([late], tgt('z'), 4)).toEqual({ to: [null], dropped: 0 });
+    expect(mapLibraryRows([late], tgt('z'), 16)).toEqual({ to: [0], dropped: 0 });
     // Two rows with one sample: the first free one each.
-    expect(mapLibraryRows([row('a', true), row('a', true)], ['a', 'a'])).toEqual({ to: [0, 1], dropped: 0 });
+    expect(mapLibraryRows([row('a', true), row('a', true)], tgt('a', 'a'))).toEqual({ to: [0, 1], dropped: 0 });
+  });
+
+  it('maps by role name before sample name; other row names are never compared', () => {
+    const kit = (...names: string[]) => names.map((name) => ({ name, sampleName: `${name}.wav` }));
+    // Factory-style rows (roles, no samples) onto a reordered kit: each finds its role.
+    expect(mapLibraryRows([row(undefined, true, 'Kick'), row(undefined, true, 'Clap')], kit('Clap', 'Snare', 'Kick')))
+      .toEqual({ to: [2, 0], dropped: 0 });
+    // A role beats a sample match: the Kick row goes to the Kick row although its sample is on another.
+    expect(mapLibraryRows([row('Snare.wav', true, 'Kick')], kit('Snare', 'Kick'))).toEqual({ to: [1], dropped: 0 });
+    // An empty role row still claims its role row, so another row's index fallback can't take it.
+    expect(mapLibraryRows([row(undefined, true, 'Kick'), row(undefined, false, 'Clap')], kit('Clap', 'Rim')))
+      .toEqual({ to: [null, 0], dropped: 1 });
+    // A role the target lacks falls back to sample, then index.
+    expect(mapLibraryRows([row('x.wav', true, 'Perc')], [{ name: 'Bongo', sampleName: 'x.wav' }])).toEqual({ to: [0], dropped: 0 });
+    // A non-role name is a label: "Snr" does not find "Snr", the sample decides (here: by index).
+    expect(mapLibraryRows([row('a', true, 'Snr'), row('b', true, 'r')], [{ name: 'x', sampleName: null }, { name: 'Snr', sampleName: null }]))
+      .toEqual({ to: [0, 1], dropped: 0 });
+    // Two rows of one role: the first free row of that name each, then the rest by sample / index.
+    expect(mapLibraryRows([row(undefined, true, 'Kick'), row(undefined, true, 'Kick')], kit('Kick', 'Snare')))
+      .toEqual({ to: [0, 1], dropped: 0 });
   });
 
   it('names the drop', () => {
@@ -274,6 +298,52 @@ describe('pattern library', () => {
     const lib = libraryState(v.project.patternLibrary);
     expect(lib.map(libraryJson)).toEqual(json.patternLibrary);
     expect(lib[0].id).not.toBe(x.p.patternLibrary[0].id);
+  });
+
+  it('loads a factory pattern onto a kit track by role: a new pattern, one undo entry; the factory data stays untouched', () => {
+    const x = setup();
+    const kit = addDrumTrack(x.p, x.sink, 'Kit', [...DRUM_ROLES].reverse())!; // role rows, in another order
+    const e = factoryPattern('factory-garage-2-step')!;
+    const frozen = plain(e);
+    const before = plain(serialize(x.p));
+    const r = loadFactoryPattern(x.p, x.sink, kit.id, e.id)!;
+    expect(r.dropped).toBe(0);
+    expect(x.h.labels.undo).toBe('Load factory pattern');
+    expect(kit.patterns).toHaveLength(2);
+    const pat = currentPattern(kit);
+    expect(pat.name).toBe('Garage 2-step');
+    expect(pat.stepCount).toBe(32);
+    expect(pat.swing).toBe(0.5);
+    const rowOf = (role: string) => kit.rows.findIndex((row) => row.name === role);
+    expect(onSteps(pat.steps[rowOf('Kick')])).toEqual([0, 10, 16, 26, 29]);
+    expect(onSteps(pat.steps[rowOf('Snare')])).toEqual([4, 7, 12, 14, 20, 26, 28, 31]);
+    expect(pat.steps[rowOf('Snare')][7]).toBe(45); // a ghost
+    expect(onSteps(pat.steps[rowOf('Clap')])).toEqual([]);
+    // Editing the loaded pattern never reaches the factory entry.
+    setStep(x.p, x.sink, kit.id, kit.rows[0].id, 1, 100);
+    expect(plain(e)).toEqual(frozen);
+    x.h.undo();
+    expect(x.h.undo()).toBe(true);
+    expect(plain(serialize(x.p))).toEqual(before);
+  });
+
+  it('loads a factory bassline into a synth track; refuses another kind and unknown ids', () => {
+    const x = setup();
+    const e = factoryPattern('factory-offbeat')!;
+    expect(e.kind).toBe('synth');
+    const r = loadFactoryPattern(x.p, x.sink, x.s.id, e.id)!;
+    expect(x.h.labels.undo).toBe('Load factory pattern');
+    const pat = currentPattern(x.s);
+    expect(x.s.currentPatternId).toBe(r.pattern.id);
+    expect(pat.name).toBe('Offbeat');
+    expect(pat.bars).toBe(2);
+    expect(pat.notes.map(({ pitch, vel, start, len }) => ({ pitch, vel, start, len }))).toEqual(e.kind === 'synth' ? e.notes : []);
+    const before = plain(serialize(x.p));
+    expect(loadFactoryPattern(x.p, x.sink, x.a.id, e.id)).toBeNull(); // a synth entry on a drum track
+    expect(loadFactoryPattern(x.p, x.sink, x.s.id, 'nope')).toBeNull();
+    expect(loadFactoryPattern(x.p, x.sink, 'nope', e.id)).toBeNull();
+    expect(plain(serialize(x.p))).toEqual(before);
+    expect(x.p.patternLibrary).toEqual([]); // the factory is never part of the project's library
   });
 
   it('freeLibraryName numbers taken names', () => {

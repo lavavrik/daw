@@ -10,7 +10,10 @@
 //   save   (savePatternToLibrary)  copies a pattern under a name;
 //   load   (loadPatternFromLibrary) makes a NEW pattern in a track from an
 //          entry and selects it: it never overwrites anything;
-//   rename / delete an entry.
+//   rename / delete an entry;
+//   load a FACTORY pattern (loadFactoryPattern; state/factoryPatterns.ts):
+//          the same load, from a read-only built-in entry that is never in
+//          the library (no rename, no delete, never saved).
 //
 // Each is ONE undo entry (edit(); the actions a load is built from just run
 // inside it). Names: an entry's name is unique in the library ("Groove",
@@ -20,14 +23,20 @@
 // DRUM ROW MAPPING (mapLibraryRows). An entry's rows rarely line up with the
 // target track's: another kit, rows deleted, reordered or renamed. Each
 // entry row that has steps goes to
-//   1. the first free target row whose sample has the same FILE NAME, else
-//   2. the target row with the same INDEX, if that row is still free, else
-//   3. nowhere: its steps are dropped, and the load reports how many rows
+//   1. the first free target row with the same ROLE name, if the entry row
+//      is named after a role (DRUM_ROLES: "Kick", "Clap", … as DEFAULT_KIT
+//      and every kit name their rows), else
+//   2. the first free target row whose sample has the same FILE NAME, else
+//   3. the target row with the same INDEX, if that row is still free, else
+//   4. nowhere: its steps are dropped, and the load reports how many rows
 //      were ("2 rows not in this kit", the UI flashes it).
-// An entry row with no steps is placed only by name (pass 1: it claims its
-// own sample's row, so it never takes an index another row needs). Row names
-// are not matched: a row is named after its sample's kit slot ("Kick") and
-// may be renamed freely; the sample is what sounds.
+// Role first (spec 2026-11-19-builtin-content §1, plan 25): factory entries
+// have no sample names, and across kits the role is what a row means (a
+// Garage kick on a Deep track's Kick row) even when the file names differ.
+// An entry row with no steps is placed only by role or sample (passes 1-2:
+// it claims its own row, so it never takes an index another row needs).
+// Other row names are not matched: a renamed row ("Bd") is a label the user
+// chose, and its sample is what sounds.
 //
 // The library's saved form is ProjectJson.patternLibrary (schema 5;
 // libraryJson / libraryState convert). Library edits send no engine
@@ -38,6 +47,7 @@ import type { LibraryPatternJson } from '../project/schema';
 import { setStepCount, setSwing } from './actions';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
+import { DRUM_ROLES, factoryPattern } from './factoryPatterns';
 import { freeName, newPattern, patternOf, renamePattern, sendNote, setPatternBars } from './pattern-actions';
 import { LIBRARY_NAME_MAX, MAX_LIBRARY_PATTERNS, MAX_STEPS, currentPattern, isPatternTrack } from './project.svelte';
 import type { DrumPattern, DrumTrack, LibraryPattern, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
@@ -100,27 +110,36 @@ export const kindText = (kind: 'drum' | 'synth') => `${kind} pattern`;
 
 // ---- drum row mapping ---------------------------------------------------------
 
+const ROLES: ReadonlySet<string> = new Set(DRUM_ROLES);
+
 /**
- * Where each of `rows` (an entry's) lands in a track whose rows have the
- * sample file names `target` (null: no sample): a target row index, or
- * null (dropped). `dropped`: how many rows WITH steps found no place. A row
- * "has steps" when one of its first `stepCount` steps is on: steps past the
- * pattern's length are kept (and copied) but neither claim a row by index
- * nor count as dropped. See DRUM ROW MAPPING above. Pure.
+ * Where each of `rows` (an entry's) lands in a track whose rows are
+ * `target` (each row's name and its sample's file name, null: no sample): a
+ * target row index, or null (dropped). `dropped`: how many rows WITH steps
+ * found no place. A row "has steps" when one of its first `stepCount` steps
+ * is on: steps past the pattern's length are kept (and copied) but neither
+ * claim a row by index nor count as dropped. See DRUM ROW MAPPING above. Pure.
  */
 export function mapLibraryRows(
-  rows: { sampleName?: string; steps: number[] }[], target: (string | null)[], stepCount = MAX_STEPS,
+  rows: { name: string; sampleName?: string; steps: number[] }[],
+  target: { name: string; sampleName: string | null }[],
+  stepCount = MAX_STEPS,
 ): { to: (number | null)[]; dropped: number } {
   const to: (number | null)[] = rows.map(() => null);
   const taken = new Set<number>();
-  rows.forEach((r, i) => {
-    if (r.sampleName === undefined) return;
-    const j = target.findIndex((name, k) => name === r.sampleName && !taken.has(k));
-    if (j >= 0) {
-      to[i] = j;
-      taken.add(j);
-    }
-  });
+  /** Pass: each still unplaced row for which `key` gives a value claims the first free target row `match`ing it. */
+  const claim = <K>(key: (r: (typeof rows)[number]) => K | undefined, match: (t: (typeof target)[number], k: K) => boolean) =>
+    rows.forEach((r, i) => {
+      const k = key(r);
+      if (to[i] !== null || k === undefined) return;
+      const j = target.findIndex((t, n) => !taken.has(n) && match(t, k));
+      if (j >= 0) {
+        to[i] = j;
+        taken.add(j);
+      }
+    });
+  claim((r) => (ROLES.has(r.name) ? r.name : undefined), (t, role) => t.name === role);
+  claim((r) => r.sampleName, (t, file) => t.sampleName === file);
   let dropped = 0;
   rows.forEach((r, i) => {
     if (to[i] !== null || !r.steps.slice(0, stepCount).some((v) => v > 0)) return;
@@ -135,6 +154,12 @@ export function mapLibraryRows(
 /** The sample file name of each row of `t` (null: none, or a sample the session has no file for). */
 const rowSampleNames = (p: Project, t: DrumTrack) =>
   t.rows.map((r) => (r.sampleId === null ? null : (p.sampleFiles.get(r.sampleId)?.name ?? null)));
+
+/** The rows of `t` as mapLibraryRows targets. */
+const mapTargets = (p: Project, t: DrumTrack) => {
+  const files = rowSampleNames(p, t);
+  return t.rows.map((r, i) => ({ name: r.name, sampleName: files[i] }));
+};
 
 // ---- actions ------------------------------------------------------------------
 
@@ -177,8 +202,8 @@ export function savePatternToLibrary(p: Project, trackId: string, patternId: str
 /** Why nothing can be saved to the library now (null: it can). */
 export const saveBlocked = (p: Project): string | null => (p.patternLibrary.length >= MAX_LIBRARY_PATTERNS ? LIBRARY_FULL_TEXT : null);
 
-/** Why entry `e` can't be loaded into `t` now (null: it can). */
-export function loadBlocked(t: PatternTrack | null, e: LibraryPattern): string | null {
+/** Why entry `e` (a library or factory one) can't be loaded into `t` now (null: it can). */
+export function loadBlocked(t: PatternTrack | null, e: { kind: 'drum' | 'synth' }): string | null {
   if (!t) return 'Select a drum or synth track';
   if (t.kind !== e.kind) return `A ${kindText(e.kind)}: select a ${e.kind} track`;
   if (t.patterns.length >= MAX_PATTERNS) return `At most ${MAX_PATTERNS} patterns per track`;
@@ -196,26 +221,43 @@ export function loadBlocked(t: PatternTrack | null, e: LibraryPattern): string |
 export function loadPatternFromLibrary(
   p: Project, sink: CommandSink, trackId: string, entryId: string,
 ): { pattern: DrumPattern | NotePatternState; dropped: number } | null {
-  return edit(p, 'Load library pattern', () => {
-    const t = p.tracks.find((x) => x.id === trackId);
-    const e = p.patternLibrary.find((x) => x.id === entryId);
-    if (!t || !isPatternTrack(t) || !e || loadBlocked(t, e)) return null;
-    const name = freeName(t, e.name, false); // before newPattern adds its "Pattern N"
-    if (!newPattern(p, sink, t.id)) return null; // cannot happen after loadBlocked
-    const pat = currentPattern(t);
-    renamePattern(p, sink, t.id, pat.id, name);
-    if (t.kind === 'drum' && e.kind === 'drum') return { pattern: pat, dropped: fillDrum(p, sink, t, e) };
-    if (t.kind === 'synth' && e.kind === 'synth') fillSynth(p, sink, t, e);
-    return { pattern: pat, dropped: 0 };
-  });
+  return edit(p, 'Load library pattern', () => loadEntry(p, sink, trackId, p.patternLibrary.find((x) => x.id === entryId)));
+}
+
+/**
+ * Loads factory pattern `factoryId` (state/factoryPatterns.ts) into track
+ * `trackId`: exactly loadPatternFromLibrary's load (a NEW pattern named
+ * after the entry, drum rows by role first), from the read-only built-in
+ * entry instead of a library one. One undo entry ("Load factory pattern");
+ * the project's library is not touched. Null as loadPatternFromLibrary.
+ */
+export function loadFactoryPattern(
+  p: Project, sink: CommandSink, trackId: string, factoryId: string,
+): { pattern: DrumPattern | NotePatternState; dropped: number } | null {
+  return edit(p, 'Load factory pattern', () => loadEntry(p, sink, trackId, factoryPattern(factoryId) ?? undefined));
+}
+
+/** The load both share, inside the caller's edit(). `e` is only read (its values are copied). */
+function loadEntry(
+  p: Project, sink: CommandSink, trackId: string, e: LibraryPatternJson | undefined,
+): { pattern: DrumPattern | NotePatternState; dropped: number } | null {
+  const t = p.tracks.find((x) => x.id === trackId);
+  if (!t || !isPatternTrack(t) || !e || loadBlocked(t, e)) return null;
+  const name = freeName(t, e.name, false); // before newPattern adds its "Pattern N"
+  if (!newPattern(p, sink, t.id)) return null; // cannot happen after loadBlocked
+  const pat = currentPattern(t);
+  renamePattern(p, sink, t.id, pat.id, name);
+  if (t.kind === 'drum' && e.kind === 'drum') return { pattern: pat, dropped: fillDrum(p, sink, t, e) };
+  if (t.kind === 'synth' && e.kind === 'synth') fillSynth(p, sink, t, e);
+  return { pattern: pat, dropped: 0 };
 }
 
 /** The fresh current pattern of `t` becomes entry `e`'s steps; returns the dropped row count. */
-function fillDrum(p: Project, sink: CommandSink, t: DrumTrack, e: Extract<LibraryPattern, { kind: 'drum' }>): number {
+function fillDrum(p: Project, sink: CommandSink, t: DrumTrack, e: Extract<LibraryPatternJson, { kind: 'drum' }>): number {
   setStepCount(p, sink, t.id, e.stepCount);
   setSwing(p, sink, t.id, e.swing);
   const pat = currentPattern(t);
-  const { to, dropped } = mapLibraryRows(e.rows, rowSampleNames(p, t), e.stepCount);
+  const { to, dropped } = mapLibraryRows(e.rows, mapTargets(p, t), e.stepCount);
   e.rows.forEach((r, i) => {
     const row = to[i];
     if (row === null) return;
@@ -231,7 +273,7 @@ function fillDrum(p: Project, sink: CommandSink, t: DrumTrack, e: Extract<Librar
 }
 
 /** The fresh current pattern of `t` becomes entry `e`'s length and notes (engine idx 0..n-1). */
-function fillSynth(p: Project, sink: CommandSink, t: SynthTrack, e: Extract<LibraryPattern, { kind: 'synth' }>) {
+function fillSynth(p: Project, sink: CommandSink, t: SynthTrack, e: Extract<LibraryPatternJson, { kind: 'synth' }>) {
   setPatternBars(p, sink, t.id, e.bars);
   const pat = currentPattern(t);
   pat.notes = e.notes.slice(0, MAX_NOTES).map((n, idx) => ({ id: crypto.randomUUID(), idx, ...n }));

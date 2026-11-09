@@ -14,7 +14,8 @@
   // (bookmark) turns the picker into a name field like Rename (default
   // "<track> · <pattern>"; Enter saves a copy, Esc or leaving it cancels);
   // Load (books) opens a popover with the library (LibraryList: load,
-  // rename, delete). Not the project's floppy / folder: those save and open
+  // rename, delete) and, below it, the read-only Factory patterns of the
+  // track's kind (plan 25 Task 2). Not the project's floppy / folder: those save and open
   // the project file. The popover closes on a load, Esc (focus back on
   // Load), a press outside it, focus leaving it and its Load button (Tab
   // out), or another track / pattern being selected.
@@ -188,7 +189,7 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <span class="lib" onfocusout={libFocusOut}>
     <button class="btn ic" data-testid="pattern-load" bind:this={loadBtn} aria-label="Load from library" aria-expanded={libOpen}
-      aria-controls="pattern-library-pop" title="Load a pattern from the project's library as a new pattern" onclick={toggleLib}><Icon icon={Books} /></button>
+      aria-controls="pattern-library-pop" title="Load a pattern from the project's library or the factory patterns as a new pattern" onclick={toggleLib}><Icon icon={Books} /></button>
     {#if libOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="pop" id="pattern-library-pop" data-testid="pattern-library-pop" bind:this={pop} onkeydown={popKey}>

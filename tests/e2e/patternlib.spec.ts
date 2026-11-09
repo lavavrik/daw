@@ -6,7 +6,7 @@ import { startApp } from './startApp';
 // Patterns ▸ Save to project library… / Load from library ▸ (a submenu) and
 // the pattern header's Save / Load icon buttons (a popover). A load makes a
 // NEW pattern in the selected track and selects it, as one undo entry; drum
-// rows map by sample name, then by row index, and rows with no place are
+// rows map by role name, then sample name, then by row index, and rows with no place are
 // flashed as "N rows not in this kit". The mapping, undo and validation are
 // unit-tested in app/src/state/pattern-library.test.ts and project/schema.test.ts.
 
@@ -181,7 +181,8 @@ test('header: an empty library popover still closes on Esc; after a save the foc
   await load.click();
   const pop = page.getByTestId('pattern-library-pop');
   await expect(pop.getByTestId('library-empty')).toBeVisible();
-  await expect(pop.getByTestId('pattern-library')).toBeFocused();
+  // No library entry: the focus goes to the first usable button, the first factory pattern (plan 25).
+  await expect(pop.getByTestId('factory-load').first()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(pop).toBeHidden();
   await expect(load).toBeFocused();

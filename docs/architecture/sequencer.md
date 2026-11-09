@@ -308,16 +308,37 @@ Patterns ▸ *Save to project library…* / *Load from library ▸* (a submenu,
   (`loadBlocked`: the list shows that entry greyed, with "drum pattern" /
   "synth pattern", inert with the reason).
 - **Drum row mapping** (`mapLibraryRows`): an entry row with steps goes to
-  the first free target row whose sample has the **same file name**, else to
-  the target row with the **same index** if that one is still free, else
-  nowhere: its steps are dropped and the UI flashes "*N* rows not in this
-  kit". A row without steps maps by name only (it never takes an index
+  the first free target row with the **same role name** when the entry row
+  is named after a role (`DRUM_ROLES`: Kick, Clap, Closed hat, Open hat,
+  Snare, Rim, Shaker, Perc, as `DEFAULT_KIT` and every kit name their rows),
+  else to the first free target row whose sample has the **same file name**,
+  else to the target row with the **same index** if that one is still free,
+  else nowhere: its steps are dropped and the UI flashes "*N* rows not in
+  this kit". Role first (plan 25): factory entries have no sample names, and
+  across kits the role is what a row means even when the files differ. A
+  row without steps maps by role or sample only (it never takes an index
   another row needs); "steps" means steps within the entry's step count
-  (hits past it are copied where the row lands but claim nothing). Row names are not compared: they are labels the user
-  may change; the sample is what plays. So a kit with reordered, deleted or
-  added rows gets every step on the same sound, and a kit of other sounds
-  gets them by position.
-- **Undo:** save, load, rename and delete are one entry each (`edit`). The
+  (hits past it are copied where the row lands but claim nothing). Other
+  row names are not compared: a renamed row ("Bd") is a label the user
+  chose; the sample is what plays. So a kit with reordered, deleted or added
+  rows gets every step on the same sound, and a kit of other sounds gets
+  them by role, else by position.
+- **Factory patterns** (plan 25 Task 2, `state/factoryPatterns.ts`): 28
+  read-only built-in entries in the same `LibraryPatternJson` shape — 12
+  drum grooves (rows named by role, all eight rows in kit order, no sample
+  names; 16 or 32 steps; swing given in the comments as its MPC figure,
+  50 % + 25 % × swing), 8 basslines and 8 chord parts (A minor, so plan 26
+  can transpose them; bass around A1–A2, chords around A3–E5; 1, 2 or 4
+  bars). The Load popover / Load from library ▸ list (`LibraryList.svelte`)
+  shows them under **Factory**, grouped Drums / Bass / Chords, only the
+  groups of the selected track's kind; the rows have no Rename / Delete.
+  `loadFactoryPattern` runs the library load (`loadEntry`, shared with
+  `loadPatternFromLibrary`) on the built-in entry: a new pattern, one undo
+  entry ("Load factory pattern"). They are never part of
+  `Project.patternLibrary` and never saved; a loaded pattern is an ordinary
+  pattern. `factoryPatterns.test.ts` pins the content (A minor, ranges,
+  bounds, every drum entry onto every kit with no dropped row).
+- **Undo:** save, load (library or factory), rename and delete are one entry each (`edit`). The
   library is in the snapshot (serialize), so diffApply restores it
   (history.md, step 4).
 

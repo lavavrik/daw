@@ -14,13 +14,26 @@
   //
   // Esc inside the rename field is prevented (it only ends the rename): the
   // menu's / popover's own Esc handling skips a prevented one.
+  //
+  // FACTORY (plan 25 Task 2; state/factoryPatterns.ts): below the project's
+  // entries, a "Factory" section of the built-in patterns, grouped Drums /
+  // Bass / Chords. Only the groups of the selected track's kind are listed
+  // (a drum track: Drums; a synth track: Bass and Chords; no pattern track:
+  // none). Its rows are read-only: a load button only (test id
+  // factory-load), no Rename / Delete. A load is pattern-library.ts
+  // loadFactoryPattern (a NEW pattern, one undo entry), flashed like a
+  // library load; a full track greys the rows with the reason (inertItem).
+  // There is no search field in this list, so none filters them.
   import { tick } from 'svelte';
   import type { AudioEngine } from '../audio/engine';
   import type { LibraryPattern, PatternTrack, Project } from '../state/project.svelte';
   import { flashHint } from '../state/banners.svelte';
   import {
-    LIBRARY_NAME_MAX, deleteLibraryPattern, droppedRowsText, kindText, loadBlocked, loadPatternFromLibrary, renameLibraryPattern,
+    LIBRARY_NAME_MAX, deleteLibraryPattern, droppedRowsText, kindText, loadBlocked, loadFactoryPattern, loadPatternFromLibrary,
+    renameLibraryPattern,
   } from '../state/pattern-library';
+  import { FACTORY_GROUPS, factoryGroup } from '../state/factoryPatterns';
+  import type { FactoryPattern } from '../state/factoryPatterns';
   import Icon from './Icon.svelte';
   import { blockInert, inertItem } from './inertItem';
   import GridFour from 'phosphor-svelte/lib/GridFour';
@@ -45,11 +58,22 @@
 
   function load(e: LibraryPattern) {
     if (!track) return;
-    const r = loadPatternFromLibrary(p, engine, track.id, e.id);
+    loaded(loadPatternFromLibrary(p, engine, track.id, e.id));
+  }
+  function loadFactory(e: FactoryPattern) {
+    if (!track) return;
+    loaded(loadFactoryPattern(p, engine, track.id, e.id));
+  }
+  function loaded(r: { dropped: number } | null) {
     if (!r) return;
     if (r.dropped > 0) flashHint(droppedRowsText(r.dropped));
     onloaded();
   }
+
+  /** The factory groups the selected track can load (none without a pattern track). */
+  const factory = $derived(
+    track ? FACTORY_GROUPS.filter((g) => g.kind === track.kind).map((g) => ({ ...g, entries: factoryGroup(g.group) })) : [],
+  );
 
   async function startRename(e: LibraryPattern) {
     draft = e.name;
@@ -115,6 +139,26 @@
   {:else}
     <p class="empty" data-testid="library-empty">No saved patterns yet: Save to library stores the current one.</p>
   {/each}
+  {#if factory.length > 0}
+    <p class="sec" data-testid="factory-heading">Factory</p>
+    {#each factory as g (g.group)}
+      <div class="group" role="group" aria-label={`Factory ${g.label.toLowerCase()}`} data-testid={`factory-${g.group}`}>
+        <p class="glabel">{g.label}</p>
+        {#each g.entries as e (e.id)}
+          {@const why = loadBlocked(track, e)}
+          <div class="row" data-factory={e.id} data-testid="factory-entry">
+            <button
+              class="load" data-testid="factory-load" use:inertItem={why}
+              title={why ?? `Load the factory pattern “${e.name}” as a new pattern of ${track?.name ?? 'the track'}`} onclick={() => loadFactory(e)}
+            >
+              <Icon icon={e.kind === 'drum' ? GridFour : PianoKeys} />
+              <span class="l">{e.name}</span>
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/each}
+  {/if}
 </div>
 
 <style>
@@ -142,4 +186,10 @@
     box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); color: var(--text); font: 500 var(--fs-ctl) var(--font-ui);
   }
   .empty { margin: 4px 8px; max-width: 240px; font-size: 11px; color: var(--text-2); }
+  /* Factory: a section label like the popover's "Pattern library", then a small group label per group. */
+  .sec {
+    margin: 10px 8px 2px; font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-2);
+  }
+  .group { display: flex; flex-direction: column; gap: 1px; }
+  .glabel { margin: 6px 8px 2px; font: 600 var(--fs-lbl) var(--font-ui); color: var(--text-2); }
 </style>

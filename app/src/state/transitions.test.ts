@@ -17,7 +17,7 @@ import { MAX_TRACKS, Project, currentPattern } from './project.svelte';
 import type { SynthTrack } from './project.svelte';
 import {
   DOWNLIFTER_TO_DB, IMPACT_HIT_TICKS, IMPACT_REVERB_SEND_DB, RISER_FROM_DB, SWEEP_HI_HZ, SWEEP_LO_HZ, TRANSITIONS,
-  addTransition, transitionBlocked, transitionStart,
+  addTransition, transitionBlocked, transitionPlace, transitionStart,
 } from './transitions';
 import type { TransitionKind } from './transitions';
 
@@ -59,8 +59,11 @@ describe('transitions', () => {
     for (const d of TRANSITIONS) {
       const s = rig();
       const before = plain(serialize(s.p));
-      const t = addTransition(s.p, s.sink, d.kind, 8 * BAR + 700)!;
+      const t = addTransition(s.p, s.sink, d.kind, 8 * BAR + 700)!; // inside bar 9
       expect(t, d.kind).not.toBeNull();
+      // Placed by its anchor: a Riser ends on bar 9 (bars 1–8), the others start there.
+      const pl = transitionPlace(8 * BAR + 700, d.bars, d.anchor);
+      expect(pl).toEqual(d.anchor === 'end' ? { start: 0, bars: 8 } : { start: 8 * BAR, bars: d.bars });
       expect(s.p.history!.labels.undo).toBe(`Add ${d.label.toLowerCase()}`);
       // The track: named after the transition, its patch, selected.
       expect(t.name).toBe(d.label);
@@ -70,11 +73,11 @@ describe('transitions', () => {
       expect(t.patterns).toHaveLength(1);
       const pat = currentPattern(t);
       expect(pat.name).toBe(d.label);
-      expect(pat.bars).toBe(d.bars);
-      expect(pat.notes.map(({ pitch, start, len, vel }) => ({ pitch, start, len, vel }))).toEqual(d.notes);
-      // One clip at the playhead's bar (bar 9), d.bars long.
+      expect(pat.bars).toBe(pl.bars);
+      expect(pat.notes.map(({ pitch, start, len, vel }) => ({ pitch, start, len, vel }))).toEqual(d.notes(pl.bars));
+      // One clip where transitionPlace put it.
       expect(t.clips.map(({ start, len, offset, patternId }) => ({ start, len, offset, patternId }))).toEqual([
-        { start: 8 * BAR, len: d.bars * BAR, offset: 0, patternId: pat.id },
+        { start: pl.start, len: pl.bars * BAR, offset: 0, patternId: pat.id },
       ]);
       // Lanes: one per spec, every point inside the clip's span and the param's range.
       expect(t.automation).toHaveLength(d.lanes.length);
@@ -83,8 +86,8 @@ describe('transitions', () => {
         expect(l.enabled).toBe(true);
         expect(l.points.length).toBeGreaterThanOrEqual(2);
         for (const x of l.points) {
-          expect(x.tick).toBeGreaterThanOrEqual(8 * BAR);
-          expect(x.tick).toBeLessThanOrEqual((8 + d.bars) * BAR);
+          expect(x.tick).toBeGreaterThanOrEqual(pl.start);
+          expect(x.tick).toBeLessThanOrEqual(pl.start + pl.bars * BAR);
           expect(x.value).toBeGreaterThanOrEqual(def.min);
           expect(x.value).toBeLessThanOrEqual(def.max);
         }
@@ -104,9 +107,10 @@ describe('transitions', () => {
     }
   });
 
-  it('Riser: 8 bars, cutoff ramps up, volume −24 → 0 dB', () => {
+  it('Riser: 8 bars ENDING at the playhead (clicked bar 17 → bars 9–16), cutoff ramps up, volume −24 → 0 dB', () => {
     const s = rig();
-    const t = addTransition(s.p, s.sink, 'riser', 8 * BAR)!;
+    const t = addTransition(s.p, s.sink, 'riser', 16 * BAR + 500)!; // inside bar 17
+    expect(t.clips[0]).toMatchObject({ start: 8 * BAR, len: 8 * BAR });
     expect(TRANSITION_PATCHES.noiseSweep.name).toBe('Noise Sweep');
     // One bar-long note per bar, back to back.
     expect(currentPattern(t).notes.map((n) => [n.start, n.len])).toEqual(Array.from({ length: 8 }, (_, i) => [i * BAR, BAR]));
@@ -139,6 +143,19 @@ describe('transitions', () => {
     expect(t.clips[0]).toMatchObject({ start: 0, len: BAR });
     expect(t.automation).toEqual([]);
     expect(s.p.mixer.channels[t.id].params[mixParam('send_a').id]).toBe(IMPACT_REVERB_SEND_DB);
+    s.agrees();
+  });
+
+  it('a Riser near the song start is shortened to the bars before the playhead; at bar 1 it starts there', () => {
+    const s = rig();
+    const short = addTransition(s.p, s.sink, 'riser', 3 * BAR)!; // bar 4: 3 bars before it
+    expect(short.clips[0]).toMatchObject({ start: 0, len: 3 * BAR });
+    expect(currentPattern(short).notes).toHaveLength(3);
+    expect(pts(short, 1)).toEqual([[0, RISER_FROM_DB], [3 * BAR, 0]]);
+    const atStart = addTransition(s.p, s.sink, 'riser', 0)!;
+    expect(atStart.clips[0]).toMatchObject({ start: 0, len: 8 * BAR });
+    expect(transitionPlace(MAX_SONG_TICKS, 8, 'end')).toEqual({ start: MAX_SONG_TICKS - 8 * BAR, bars: 8 });
+    expect(transitionPlace(5 * BAR, 4, 'start')).toEqual({ start: 5 * BAR, bars: 4 });
     s.agrees();
   });
 

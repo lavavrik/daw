@@ -2,8 +2,16 @@
 // Add track ▸ Transition ▸ Riser / Downlifter / Impact. Each one is a synth
 // track named after it ("Riser", "Riser 2", …) with a transition patch
 // (housePatches.ts TRANSITION_PATCHES), one pattern holding its notes, one
-// clip of that pattern at the playhead's bar, and, for the sweeps, two
-// automation lanes drawn with the shapes of automation-actions.ts:
+// clip of that pattern placed against the playhead's bar, and, for the
+// sweeps, two automation lanes drawn with the shapes of automation-actions.ts.
+//
+// Placement (owner, after plan 28): a Riser builds INTO a moment, so it ENDS
+// where the user clicked: its clip fills the bars before the playhead's bar
+// (click bar 17, get bars 9–16, the drop lands on 17). With fewer than 8 bars
+// before the playhead it is shortened to fit (at least 1 bar); at bar 1 there
+// is nothing before, so it starts there instead. A Downlifter (it follows a
+// moment) and an Impact (it IS the moment) START at the playhead's bar.
+//
 //
 //   Riser       8 bars  Noise Sweep  cutoff ramps up 200 Hz → 12 kHz,
 //                                    track volume −24 dB → 0 dB
@@ -82,11 +90,13 @@ export interface TransitionDef {
   label: string;
   /** The menu item's tooltip. */
   title: string;
-  /** Clip and pattern length. */
+  /** Clip and pattern length (a Riser may be shortened to fit before the playhead). */
   bars: number;
+  /** 'end': the clip ends at the playhead's bar (builds into it); 'start': it starts there. */
+  anchor: 'start' | 'end';
   patch: Patch;
-  /** The pattern's notes (ticks from the pattern start). */
-  notes: { pitch: number; start: number; len: number; vel: number }[];
+  /** The pattern's notes for a clip of `bars` bars (ticks from the pattern start). */
+  notes: (bars: number) => { pitch: number; start: number; len: number; vel: number }[];
   lanes: LaneSpec[];
   /** Mixer params set on the new track (param name → value). */
   mix: Record<string, number>;
@@ -99,9 +109,9 @@ const barNotes = (bars: number) =>
 /** The Transition submenu's items, in menu order. */
 export const TRANSITIONS: readonly TransitionDef[] = [
   {
-    kind: 'riser', label: 'Riser', bars: 8, patch: TRANSITION_PATCHES.noiseSweep,
-    title: 'Add a Riser track: 8 bars of noise at the playhead, its filter opening and its volume rising',
-    notes: barNotes(8),
+    kind: 'riser', label: 'Riser', bars: 8, anchor: 'end', patch: TRANSITION_PATCHES.noiseSweep,
+    title: 'Add a Riser track: 8 bars of noise ending at the playhead (the drop), its filter opening and its volume rising',
+    notes: barNotes,
     lanes: [
       { target: 'cutoff', shape: { kind: 'ramp-up', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ } },
       { target: 'volume', shape: { kind: 'ramp-up', lo: RISER_FROM_DB, hi: 0 } },
@@ -109,9 +119,9 @@ export const TRANSITIONS: readonly TransitionDef[] = [
     mix: {},
   },
   {
-    kind: 'downlifter', label: 'Downlifter', bars: 4, patch: TRANSITION_PATCHES.noiseSweep,
-    title: 'Add a Downlifter track: 4 bars of noise at the playhead, its filter closing and its volume falling',
-    notes: barNotes(4),
+    kind: 'downlifter', label: 'Downlifter', bars: 4, anchor: 'start', patch: TRANSITION_PATCHES.noiseSweep,
+    title: 'Add a Downlifter track: 4 bars of noise from the playhead, its filter closing and its volume falling',
+    notes: barNotes,
     lanes: [
       { target: 'cutoff', shape: { kind: 'ramp-down', lo: SWEEP_LO_HZ, hi: SWEEP_HI_HZ } },
       { target: 'volume', shape: { kind: 'ramp-down', lo: DOWNLIFTER_TO_DB, hi: 0 } },
@@ -119,9 +129,9 @@ export const TRANSITIONS: readonly TransitionDef[] = [
     mix: {},
   },
   {
-    kind: 'impact', label: 'Impact', bars: 1, patch: TRANSITION_PATCHES.impact,
+    kind: 'impact', label: 'Impact', bars: 1, anchor: 'start', patch: TRANSITION_PATCHES.impact,
     title: 'Add an Impact track: one hit at the playhead, with a long reverb tail',
-    notes: [{ pitch: TRANSITION_PITCH, start: 0, len: IMPACT_HIT_TICKS, vel: 100 }],
+    notes: () => [{ pitch: TRANSITION_PITCH, start: 0, len: IMPACT_HIT_TICKS, vel: 100 }],
     lanes: [],
     mix: { send_a: IMPACT_REVERB_SEND_DB },
   },
@@ -146,6 +156,20 @@ export function transitionStart(playhead: number, bars: number): number {
   return Math.min(bar, MAX_SONG_TICKS - bars * BAR_TICKS);
 }
 
+/**
+ * Where a transition goes for the playhead at `playhead`: `{ start, bars }`.
+ * 'start': transitionStart. 'end': the clip ends on the playhead's bar line,
+ * shortened to the bars before it (≥ 1); at bar 1 it starts there instead.
+ */
+export function transitionPlace(playhead: number, bars: number, anchor: 'start' | 'end'): { start: number; bars: number } {
+  if (anchor === 'start') return { start: transitionStart(playhead, bars), bars };
+  const end = transitionStart(playhead, 0); // the playhead's bar line, inside the song
+  const before = Math.floor(end / BAR_TICKS);
+  if (before < 1) return { start: 0, bars };
+  const n = Math.min(bars, before);
+  return { start: end - n * BAR_TICKS, bars: n };
+}
+
 /** The lane target a LaneSpec names on the new track (its rack's filter, or the volume fader). */
 function laneTarget(t: SynthTrack, target: LaneSpec['target']): AutoTarget | null {
   if (target === 'volume') return { kind: 'mix', param: 'fader' };
@@ -162,16 +186,16 @@ function laneTarget(t: SynthTrack, target: LaneSpec['target']): AutoTarget | nul
 export function addTransition(p: Project, sink: CommandSink, kind: TransitionKind, playhead: number): SynthTrack | null {
   const d = transitionDef(kind);
   if (transitionBlocked(p, kind)) return null;
-  const start = transitionStart(playhead, d.bars);
-  const len = d.bars * BAR_TICKS;
+  const { start, bars } = transitionPlace(playhead, d.bars, d.anchor);
+  const len = bars * BAR_TICKS;
   return edit(p, `Add ${d.label.toLowerCase()}`, () => {
     const t = addSynthTrack(p, sink, uniqueTrackName(p, d.label), d.patch);
     if (!t) return null; // no free slot (checked above): addSynthTrack changed nothing
     // The fresh track's empty "Pattern 1" becomes the transition's pattern.
     const pat = currentPattern(t);
     renamePattern(p, sink, t.id, pat.id, d.label);
-    setPatternBars(p, sink, t.id, d.bars); // first: addNotes keeps starts inside the pattern
-    addNotes(p, sink, t.id, d.notes);
+    setPatternBars(p, sink, t.id, bars); // first: addNotes keeps starts inside the pattern
+    addNotes(p, sink, t.id, d.notes(bars));
     addClip(p, sink, t.id, { start, len, patternId: pat.id });
     for (const [param, v] of Object.entries(d.mix)) setMix(p, sink, t.id, param, v);
     for (const l of d.lanes) {

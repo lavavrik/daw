@@ -401,8 +401,12 @@ the user's own edits would send:
 1. `addSynthTrack` named after it ("Riser", "Riser 2", …) with its patch
    (`housePatches.ts TRANSITION_PATCHES`);
 2. its "Pattern 1" renamed after it, `bars` long, with its notes;
-3. `addClip` at the start of the playhead's bar (moved back so it ends in
-   the song: `transitionStart`);
+3. `addClip` placed by `transitionPlace` (the def's `anchor`):
+   - **Riser** (`end`): the clip ENDS on the playhead's bar line, building
+     into it (playhead in bar 17 → bars 9–16). With fewer bars before the
+     playhead it is shortened to fit (≥ 1 bar); at bar 1 it starts there.
+   - **Downlifter, Impact** (`start`): the clip starts at the playhead's bar
+     (moved back so it ends in the song: `transitionStart`);
 4. its mixer settings (`setMix`);
 5. per lane: `addLane`, then `insertShape` over the clip, `[start, end)`:
    the lane is empty, so the closing point lands on the clip's end and the

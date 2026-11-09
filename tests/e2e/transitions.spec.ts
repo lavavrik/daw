@@ -68,9 +68,9 @@ function rmsIn(s: [number, number][], from: number, to: number) {
   return Math.sqrt(v.reduce((a, x) => a + x * x, 0) / v.length);
 }
 
-test('Add ▸ Transition ▸ Riser at bar 9: a track, a clip over bars 9–16, two lanes; one undo removes it all', async ({ page }) => {
+test('Add ▸ Transition ▸ Riser with the playhead in bar 17: a track, a clip over bars 9–16 (ending at the drop), two lanes; one undo removes it all', async ({ page }) => {
   await start(page);
-  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 8 * BAR + 500); // inside bar 9
+  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 16 * BAR + 500); // inside bar 17
   const before = await snapshot(page);
 
   await page.getByRole('button', { name: 'Add', exact: true }).click();
@@ -111,13 +111,14 @@ test('a Riser played in Song mode gets louder over its clip', async ({ page }) =
   await start(page);
   await emptySong(page);
   await setTempo(page, 300); // 8 bars in 6.4 s
-  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 2 * BAR); // bar 3
+  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 10 * BAR); // bar 11: the Riser ends here
   // The playlist footer's Add track ▸ Transition ▸ Riser.
   await openAddTrack(page);
   await expect(page.getByTestId('add-transitions')).toBeVisible();
   await page.screenshot({ path: 'test-results/transitions-footer.png' });
   await page.getByTestId('add-transition-riser').click();
-  await expect.poll(async () => (await snapshot(page)).tracks[0]?.clips?.[0]?.start).toBe(2 * BAR);
+  await expect.poll(async () => (await snapshot(page)).tracks[0]?.clips?.[0]?.start).toBe(2 * BAR); // bars 3–10
+  await page.evaluate((t) => (window as Any).__daw.actions.seek(t), 2 * BAR); // play it from its start
 
   await page.getByTestId('play').click();
   const s = await sampleLevel(page, 7000);

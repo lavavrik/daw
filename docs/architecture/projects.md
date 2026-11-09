@@ -361,7 +361,7 @@ patches, factory patterns and mixer presets (`state/mixerPresets.ts`).
 | Template | BPM | Key | Kit | Drums: intro → groove (+ Fill A) | Bass | Chords / stab | Pad | Reverb · Delay · Master |
 |---|---|---|---|---|---|---|---|---|
 | Deep House 122 | 122 | A minor | Deep | Minimal → Deep shuffle | Organ Bass · Deep walk | Tine Keys · Deep m9 progression | Warm Pad · Pad long | Dark · 3/16 dub · Warm |
-| Garage 130 | 130 | F minor | Garage | Minimal → Garage 2-step | Sub Bass · Garage sub | Garage Organ · Garage organ | — | Plate · 1/8 ping-pong · Clean |
+| Garage 130 | 130 | F minor | Garage | Speed garage → Garage 2-step | Sub Bass · Garage sub | Garage Organ · Garage organ | — | Plate · 1/8 ping-pong · Clean |
 | Acid 126 | 126 | A minor | Drum Machine | Four on the floor → Classic house | Acid Line · Acid 303 line | Piano Stab · Classic M1 stab | — | Room · 3/16 dub · Clean |
 | Tech House 125 | 125 | G minor | Drum Machine | Minimal → Tech house | Reese Bass · Rolling 16ths | Brass Stab · Dub chord | Strings · Pad long | Hall · 3/16 dub · Warm |
 
@@ -383,6 +383,17 @@ exactly what the user's own edits would have made, and it goes through
     natural minor.
   - Each track's empty "Pattern 1" is deleted.
   - The drum track opens on its main groove.
+  - The template then adjusts its own placed copies; the factory data never
+    changes:
+    - **The fill takes the main groove's swing.** Fill A ships at 54 %;
+      inside Garage's 62 % 2-step it would flip the feel for its bar.
+    - **`barOrder` re-orders a part's bars.** Deep House's pad plays Pad
+      long (Am9 Fmaj7 Dm9 Em7) as `[0, 2, 1, 3]`: Am9 Dm9 Fmaj7 Em7, the
+      keys' and the walking bass's order.
+    - **`lowest` folds notes under a pitch up an octave.** Garage's sub in F
+      minor would drop to C1–E♭1 (33–39 Hz) in bar 2, under Bass tidy's
+      high-pass knee and inaudible on small monitors. With `lowest: 28` (E1),
+      bar 2 plays D♭2 E♭2 C2.
 - the mix, in this order:
   - each strip's preset: Kick punch on Drums (one strip for the whole kit:
     its low shelf weights the kick and its +1.5 dB top lifts the hats),
@@ -404,21 +415,34 @@ than its pattern repeats it; each section's block is its own clip):
 | 1–4 | intro | sparse groove | — | — | — |
 | 5–8 | intro | main groove | — | — | — |
 | 9–15, 16 | groove | main groove, **Fill A** on 16 | ✓ | ✓ | — |
-| 17–23, 24 | break | nothing (no kick), **Fill A** on 24 | — | ✓ | ✓ |
+| 17–23, 24 | break | nothing (no kick), **Fill A** on 24 (the build into the drop) | — | ✓ | ✓ |
 | 25–32 | drop | main groove | ✓ | ✓ | ✓ |
 
 The drums "thin in": a sparse groove, then the full one. The pad first
 enters in the break, so the drop is the only section with every part.
 
+**Bar 24 keeps its kicks.** Fill A has kicks on beats 1–3, so the break is
+kick-free on bars 17–23 only. That is deliberate (the plan 27 final
+review's ruling): the plan puts Fill A at the end of the break, every
+shipped fill has a kick, and the fill is the build into the drop.
+
 **Balance.** Presets never move faders, so each part's fader is template
-data. The values came from meter readings in the running app: each strip's
-RMS of its meter peaks over 4 bars of the drop. The targets were drums near
-−10 dB, chords near −15, and the bass and pad as close to −16 as the +6 dB
-fader allows. Duck to kick's fixed values (−30 dB threshold, 8:1, keyed
-from a kick near 0 dBFS) take 10–15 dB off the bass and the pad under a
-four-on-the-floor kick, so their faders sit high. Garage's skipping kick
-ducks its sub much less. The master keeps about 4 dB of headroom instead of
-riding the limiter.
+data. The values came from meter readings in the running app (the plan 27
+final review): each strip's RMS of its meter peaks over 4 bars of the drop,
+with Duck to kick at −14 dB / 8:1 (about 7–8 dB on each kick, mixer.md
+"Duck to kick"). The targets were:
+- drums near −10 dB, so the master limiter idles;
+- the bass 4–5 dB under the drums (the acid line, the lead, about 3.5);
+- the chords 5–6 dB under;
+- the pad about 7 dB under, since it swells about 3 dB in the break, where
+  nothing ducks it.
+
+| Template | Drums | Bass | Chords | Pad | Measured at the drop (drums · bass · chords · pad, dB) | Master peak |
+|---|---|---|---|---|---|---|
+| Deep House 122 | −4 | −0.5 | −4 | −4.5 | −9.8 · −14.2 · −15.6 · −17.3 | −1.4 |
+| Garage 130 | −4 | 0 | −5 | — | −10.0 · −13.3 · −15.1 | −2.0 |
+| Acid 126 | −5 | −2 | −6 | — | −9.1 · −12.8 · −14.5 | −3.3 |
+| Tech House 125 | −5 | −0.5 | −4 | −6 | −9.0 · −14.3 · −15.5 · −17.3 | −2.4 |
 
 **Starting one** (`session.newFromTemplate(id)`, the submenu,
 `__daw.newFromTemplate` for e2e). It works like New:
@@ -443,6 +467,8 @@ Tests: `state/templates.test.ts` covers every template. Each one:
 - names only content that exists;
 - has its notes transposed and in key;
 - places the clip count and the sections of the arrangement;
+- plays its fill at the groove's swing, with its bar order and octave fold
+  applied (and the factory data unchanged);
 - gets its presets, faders, sends and ducks;
 - keys ≤ `MAX_KEYS` drum rows;
 - loads through `loadProject` with a valid engine replay;
@@ -450,8 +476,9 @@ Tests: `state/templates.test.ts` covers every template. Each one:
 
 `defaultKit.test.ts` takes New from template through to the kit landing,
 clean and with no history. `tests/e2e/templates.spec.ts` covers the menu,
-32 bars, clean and no undo, sound, Garage in F minor, and the unsaved
-changes question.
+32 bars, clean and no undo, Garage in F minor, the unsaved changes question,
+and sound from every template (Deep House from bar 1, the others from the
+groove at bar 9).
 
 ## Validation (`validate`)
 

@@ -10,6 +10,7 @@ import type { DrumTrackJson, ProjectJson, SynthTrackJson } from '../project/sche
 import { serialize } from '../project/serialize';
 import { checkLog, fakeDecoder, fakeEngine } from '../project/testFixture';
 import { factoryPattern } from './factoryPatterns';
+import { SWING_PRESETS } from './groove';
 import { KIT_ROLES, kitById } from './kits';
 import { DUCK_TO_KICK } from './mixer-actions';
 import { presetById } from './mixerPresets';
@@ -69,6 +70,25 @@ describe('the template table', () => {
   });
 });
 
+describe('the templates\' own adjustments', () => {
+  const notesOf = (j: ProjectJson, track: string) => (byName(j, track) as SynthTrackJson).patterns[0].notes;
+  it('Garage: Speed garage intro; its sub\'s bar 2 sits an octave up (Db2 Eb2 C2), nothing under E1', () => {
+    const j = buildTemplate('garage-130');
+    expect(templateById('garage-130')!.drums.intro).toBe('factory-speed-garage');
+    const bar2 = notesOf(j, 'Bass').filter((n) => n.start >= BAR_TICKS).map((n) => n.pitch);
+    expect(bar2).toEqual([37, 37, 39, 36]);
+    expect(notesOf(j, 'Bass').filter((n) => n.start < BAR_TICKS).map((n) => n.pitch)).toEqual([29, 29, 32]);
+  });
+  it('Deep House: the pad plays Am9 Dm9 Fmaj7 Em7, the keys\' order', () => {
+    const j = buildTemplate('deep-house-122');
+    const lowest = (track: string, bar: number) => Math.min(...notesOf(j, track).filter((n) => Math.floor(n.start / BAR_TICKS) === bar).map((n) => n.pitch));
+    const pcs = (track: string, bar: number) => [...new Set(notesOf(j, track).filter((n) => Math.floor(n.start / BAR_TICKS) === bar).map((n) => n.pitch % 12))].sort((a, b) => a - b);
+    // Bar by bar the pad's notes are the keys' chord (the same pitch classes).
+    for (let bar = 0; bar < 4; bar++) expect(pcs('Pad', bar), `bar ${bar + 1}`).toEqual(pcs('Keys', bar));
+    expect(lowest('Pad', 0)).toBe(57);
+  });
+});
+
 describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template) => {
   const json = buildTemplate(t.id);
 
@@ -98,15 +118,31 @@ describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template)
     }
   });
 
-  it('transposes the factory notes from A minor into its key; every note is in key', () => {
+  it('transposes the factory notes from A minor into its key (plus its bar order and octave fold); every note is in key', () => {
     const shift = factoryShift(t.key);
     for (const part of [t.bass, t.chords, ...(t.pad ? [t.pad] : [])]) {
       const f = factoryPattern(part.pattern)!;
       if (f.kind !== 'synth') throw new Error('synth');
       const got = (byName(json, part.track) as SynthTrackJson).patterns[0].notes;
-      expect(got.map((n) => [n.pitch, n.start, n.len, n.vel])).toEqual(f.notes.map((n) => [n.pitch + shift, n.start, n.len, n.vel]));
+      const want = f.notes.map((n) => {
+        const bar = Math.floor(n.start / BAR_TICKS);
+        const start = part.barOrder ? n.start + (part.barOrder.indexOf(bar) - bar) * BAR_TICKS : n.start;
+        const pitch = n.pitch + shift < (part.lowest ?? 0) ? n.pitch + shift + 12 : n.pitch + shift;
+        return [pitch, start, n.len, n.vel];
+      });
+      expect(got.map((n) => [n.pitch, n.start, n.len, n.vel])).toEqual(want);
       expect(got.every((n) => inKey(n.pitch, t.key))).toBe(true);
+      expect(Math.min(...got.map((n) => n.pitch)), part.track).toBeGreaterThanOrEqual(part.lowest ?? 0);
     }
+  });
+
+  it('the fill plays at the main groove\'s swing (the factory Fill A is unchanged)', () => {
+    const drums = drumsOf(json);
+    const swingOf = (name: string) => drums.patterns.find((p) => p.name === name)!.swing;
+    const groove = factoryPattern(t.drums.groove)!;
+    expect(swingOf('Fill A')).toBe(groove.kind === 'drum' ? groove.swing : NaN);
+    const fill = factoryPattern('factory-fill-a')!;
+    expect(fill.kind === 'drum' && fill.swing).toBe(SWING_PRESETS.find((x) => x.mpc === 54)!.swing); // 54 % as shipped
   });
 
   it('arranges 32 bars: intro thinning in, groove, break (no kick, no bass), drop', () => {

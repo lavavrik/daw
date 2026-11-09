@@ -163,14 +163,32 @@ export function keyLabel(p: Project, key: SidechainKey | null): string {
 }
 
 /**
- * Duck to kick's compressor (plan 27, spec 2026-11-19-builtin-content.md §3):
- * the classic house pump. Deep threshold and a high ratio so every kick pulls
- * the strip down hard, 1 ms attack so the dip lands with the kick's
- * transient, 150 ms release so the level swells back before the next beat
- * (a beat is 469-500 ms at 120-128 bpm), +2 dB makeup for what the dip
- * costs on average. Values fixed by the spec.
+ * Duck to kick's compressor (plan 27, spec 2026-11-19-builtin-content.md §3,
+ * retuned by the plan 27 final review; docs/architecture/mixer.md "Duck to
+ * kick"): the classic house pump, about 7-10 dB on each kick.
+ *
+ * What the comp really hears: a kit kick normalised to -1 dBFS, played by
+ * its row at default gain and centre pan (equal-power: -3 dB per channel)
+ * and at step velocity 120 ("X") or 100 ("x"), keys it at about -4.5 or
+ * -6.1 dBFS. Against that:
+ *   - threshold -14 dB, ratio 8: (key - threshold) * 7/8 = about 8 dB of
+ *     reduction on an accented kick, 7 dB on a plain one; the high ratio
+ *     makes the dip follow the kick's own envelope (deep on the hit, gone as
+ *     the body decays);
+ *   - attack 1 ms: the dip lands with the kick's first cycle;
+ *   - release 100 ms: back within a dB before the next beat (469-500 ms at
+ *     120-128 bpm) on every shipped kit but Deep's 750 ms kick;
+ *   - makeup 0: a ducker is a dip, not a level change (with makeup the strip
+ *     would jump louder whenever the kick stops).
+ * The spec's first values (-30 dB, 8:1, 1 ms, 150 ms, +2 dB: DUCK_TO_KICK_V1)
+ * ducked 20-24 dB and never recovered between kicks.
  */
 export const DUCK_TO_KICK = {
+  comp_on: 1, comp_threshold: -14, comp_ratio: 8, comp_attack: 1, comp_release: 100, comp_makeup: 0,
+} as const;
+
+/** Duck to kick before the plan 27 final review: projects saved then still hold it (hasDuckComp). */
+export const DUCK_TO_KICK_V1 = {
   comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2,
 } as const;
 
@@ -229,9 +247,14 @@ export function duckToKick(p: Project, sink: CommandSink, trackId: string): Duck
   });
 }
 
-/** Does this channel's comp hold exactly Duck to kick's settings? */
+/**
+ * Does this channel's comp hold exactly Duck to kick's settings, today's or
+ * the ones it had before the retune (DUCK_TO_KICK_V1: a project saved then
+ * still unducks when it loses its kick)?
+ */
 export function hasDuckComp(ch: ChannelState): boolean {
-  return Object.entries(DUCK_TO_KICK).every(([name, v]) => ch.params[mixParam(name).id] === v);
+  const is = (values: Record<string, number>) => Object.entries(values).every(([name, v]) => ch.params[mixParam(name).id] === v);
+  return is(DUCK_TO_KICK) || is(DUCK_TO_KICK_V1);
 }
 
 /**
@@ -256,9 +279,11 @@ export function keysLostBy(p: Project, trackId: string, row?: number): { channel
 
 /**
  * Duck to kick without its kick (plan 27 Task 1 review, ruling 6): when a
- * deletion clears a strip's key, a comp still set to DUCK_TO_KICK (−30 dB,
- * 8:1, 1 ms) would now listen to the strip itself and squash it by
- * 15-20 dB. So, in the deleting edit, each such strip's comp is switched off
+ * deletion clears a strip's key, a comp still set to Duck to kick (hasDuckComp:
+ * −14 dB, 8:1, 1 ms; or the old −30 dB values) would now listen to the strip
+ * itself and squash its loud parts (a bass peaking near −6 dBFS by a few dB at
+ * −14, by 15-20 dB at the old −30). So, in the deleting edit, each such
+ * strip's comp is switched off
  * (comp_on 0 only: the other comp values stay, so turning it back on and
  * re-keying restores the duck), and the status line says so: "Duck to kick
  * removed from Bass (kick deleted)". A strip whose comp the user changed
@@ -276,4 +301,26 @@ export function unduckLostKeys(p: Project, sink: CommandSink, lost: { channelId:
     whats.add(what);
   }
   if (names.length) flashHint(`Duck to kick removed from ${names.join(', ')} (${[...whats].join(', ')} deleted)`);
+}
+
+/**
+ * The strip's Sidechain select (ui/mixer/Strip.svelte): setSidechain as the
+ * user's own pick, one "Sidechain" undo entry. Picking "none" on a strip that
+ * is ducked (keyed, its comp at Duck to kick's values: hasDuckComp) also
+ * switches its comp off in the same edit, so it doesn't squash itself; the
+ * same rule as deleting the kick (unduckLostKeys, plan 27 final review). Undo
+ * and other callers use setSidechain itself, which never touches the comp.
+ * False (nothing changed) when setSidechain refuses.
+ */
+export function pickSidechain(p: Project, sink: CommandSink, trackId: string, key: SidechainKey | null): boolean {
+  return edit(p, 'Sidechain', () => {
+    const ch = p.mixer.channels[trackId];
+    const ducked = !!ch?.key && hasDuckComp(ch);
+    if (!setSidechain(p, sink, trackId, key)) return false;
+    if (key === null && ducked) {
+      setMix(p, sink, trackId, 'comp_on', 0); // only switched off, as unduckLostKeys
+      flashHint(`Duck to kick removed from ${p.tracks.find((t) => t.id === trackId)?.name ?? 'this strip'} (sidechain set to none)`);
+    }
+    return true;
+  });
 }

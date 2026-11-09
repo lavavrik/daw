@@ -35,7 +35,7 @@
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
   import { MAX_KEYS, MIX_METER_STRIDE } from '../../audio/protocol';
   import type { ChannelState, Project, SidechainKey } from '../../state/project.svelte';
-  import { duckToKick, keyLabel, kickKey, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { duckToKick, keyLabel, kickKey, pickSidechain, rowKeyAllowed, setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
   import { applyPreset, presetsFor } from '../../state/mixerPresets';
   import type { PresetKind } from '../../state/mixerPresets';
   import { flashHint } from '../../state/banners.svelte';
@@ -140,7 +140,8 @@
   function pickKey(e: Event) {
     const sel = e.currentTarget as HTMLSelectElement;
     releaseSelect(sel); // give the keys back to the piano
-    if (!setSidechain(p, engine, target, dec(sel.value))) sel.value = enc(ch?.key ?? null); // refused: show the old key
+    // pickSidechain: "none" on a ducked strip also switches its comp off (mixer-actions.ts).
+    if (!pickSidechain(p, engine, target, dec(sel.value))) sel.value = enc(ch?.key ?? null); // refused: show the old key
   }
 
   // ---- gain reduction readouts (comp on tracks, limiter on master) ---------

@@ -149,7 +149,8 @@ test('kick plus a held bass: with Duck to kick the bass level dips on every kick
   await page.waitForTimeout(300);
   const pump = await meterRange(page, 'strip-1', 2_000);
   expect(pump.n).toBeGreaterThan(30);
-  expect(pump.max - pump.min).toBeGreaterThanOrEqual(6);
+  // Duck to kick dips about 6.6 dB on the starter kick at vel 100 (mixer.md); the meter ballistics shave some off.
+  expect(pump.max - pump.min).toBeGreaterThanOrEqual(4);
   await page.keyboard.up('KeyA');
 });
 
@@ -188,7 +189,7 @@ test('a track preset on a ducked strip keeps the duck; Flat removes it', async (
   await (await openPresets(page, 1)).getByTestId('preset-bass-tidy').click();
   await expect.poll(() => param(page, 1, 'eq_hp')).toBe(30);
   await expect(s.getByTestId('sc-label')).toHaveText('SC: Drums · Kick');
-  expect(await param(page, 1, 'comp_threshold')).toBe(-30);
+  expect(await param(page, 1, 'comp_threshold')).toBe(-14);
   expect(await param(page, 1, 'comp_ratio')).toBe(8);
   await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'true');
 

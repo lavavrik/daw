@@ -118,3 +118,29 @@ test('a template over unsaved changes asks first, the same way New does', async 
   await expect(page.getByTestId('project-name')).toHaveText('Untitled');
   await expect.poll(() => daw(page, (d) => d.project.tracks.map((t: Any) => t.kind))).toEqual(['drum']);
 });
+
+test('every other template plays too: a couple of bars of its groove each, peak > 0.05', async ({ page }) => {
+  await start(page);
+  for (const id of ['garage-130', 'acid-126', 'tech-house-125']) {
+    await daw(page, (d, a) => d.newFromTemplate(a), id);
+    await kitLanded(page);
+    await daw(page, (d) => d.actions.seek(8 * 3840)); // bar 9: the groove (drums, bass, chords)
+    await page.getByTestId('play').click();
+    await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
+    const peak = await daw<Promise<number>>(page, (d) => new Promise((resolve) => {
+      let max = 0;
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        const t = d.engine.telemetry();
+        max = Math.max(max, t[5], t[6]);
+        if (performance.now() - t0 > 2000) {
+          clearInterval(iv);
+          resolve(max);
+        }
+      }, 20);
+    }));
+    await page.getByTestId('play').click(); // stop
+    await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'false');
+    expect(peak, id).toBeGreaterThan(0.05);
+  }
+});

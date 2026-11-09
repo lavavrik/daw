@@ -5,7 +5,9 @@ import { Project } from './project.svelte';
 import { addDrumTrack, removeDrumRow, removeTrack } from './actions';
 import { banners } from './banners.svelte';
 import { addSynthTrack } from './rack-actions';
-import { DUCK_TO_KICK, duckToKick, kickKey, keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
+import {
+  DUCK_TO_KICK, DUCK_TO_KICK_V1, duckToKick, kickKey, keyLabel, pickSidechain, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo,
+} from './mixer-actions';
 import { KIT_ROLES } from './kits';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -271,8 +273,8 @@ describe('Duck to kick', () => {
     expect(duckToKick(p, sink, s.id)).toEqual({ ok: true });
     expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 0 });
     expect(keyLabel(p, p.mixer.channels[s.id].key)).toBe('Drums · Kick');
-    expect(comp(p, s.id)).toEqual({ comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2 });
-    expect(DUCK_TO_KICK).toEqual({ comp_on: 1, comp_threshold: -30, comp_ratio: 8, comp_attack: 1, comp_release: 150, comp_makeup: 2 });
+    expect(comp(p, s.id)).toEqual({ comp_on: 1, comp_threshold: -14, comp_ratio: 8, comp_attack: 1, comp_release: 100, comp_makeup: 0 });
+    expect(DUCK_TO_KICK).toEqual({ comp_on: 1, comp_threshold: -14, comp_ratio: 8, comp_attack: 1, comp_release: 100, comp_makeup: 0 });
     expect(sent).toContainEqual([Op.MIX_SET_KEY, s.slot, keyCode({ slot: d.slot, row: 0 }), 0, 0]);
     expect(sent).toContainEqual([Op.MIX_SET, s.slot, P('comp_ratio'), 8, 0]);
     expect(p.mixer.channels[s.id].params[P('fader')]).toBe(-4); // nothing else moves
@@ -349,7 +351,7 @@ describe('Duck to kick', () => {
     addDrumTrack(p, sink, 'Drums', [...KIT_ROLES]);
     const s = addSynthTrack(p, sink)!;
     expect(duckToKick(p, sink, s.id).ok).toBe(true);
-    expect(p.mixer.channels[s.id].params[P('comp_threshold')]).toBe(-30);
+    expect(p.mixer.channels[s.id].params[P('comp_threshold')]).toBe(-14);
   });
 
   describe('when the Kick goes away', () => {
@@ -376,7 +378,7 @@ describe('Duck to kick', () => {
       expect(removeDrumRow(p, sink, d.id, d.rows[0].id)).toBe(true);
       expect(p.mixer.channels[bass.id].key).toBeNull();
       expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(0);
-      expect(p.mixer.channels[bass.id].params[P('comp_threshold')]).toBe(-30); // only switched off
+      expect(p.mixer.channels[bass.id].params[P('comp_threshold')]).toBe(-14); // only switched off
       expect(sent).toContainEqual([Op.MIX_SET, bass.slot, P('comp_on'), 0, 0]);
       expect(p.mixer.channels[pad.id].key).toBeNull();
       expect(p.mixer.channels[pad.id].params[P('comp_on')]).toBe(1);
@@ -408,6 +410,40 @@ describe('Duck to kick', () => {
       expect(p.mixer.channels[s.id].key).toBeNull();
       expect(p.mixer.channels[s.id].params[P('comp_on')]).toBe(1);
       expect(p.mixer.channels[bass.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect(banners.hint).toBeNull();
+    });
+
+    it('a strip ducked with the values from before the retune (a saved project) unducks too', () => {
+      const { p, sink, d, bass } = ducked();
+      for (const [name, v] of Object.entries(DUCK_TO_KICK_V1)) setMix(p, sink, bass.id, name, v);
+      removeDrumRow(p, sink, d.id, d.rows[0].id);
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(0);
+      expect(p.mixer.channels[bass.id].params[P('comp_threshold')]).toBe(-30);
+      expect(banners.hint).toBe('Duck to kick removed from Bass, Pad (kick deleted)');
+    });
+
+    it('setting a ducked strip\'s key to none by hand switches its comp off in the same entry; one undo brings both back', () => {
+      const { p, sink, sent, d, bass } = ducked();
+      sent.length = 0;
+      expect(pickSidechain(p, sink, bass.id, null)).toBe(true);
+      expect(p.mixer.channels[bass.id].key).toBeNull();
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(0);
+      expect(p.mixer.channels[bass.id].params[P('comp_threshold')]).toBe(-14); // only switched off
+      expect(sent).toContainEqual([Op.MIX_SET, bass.slot, P('comp_on'), 0, 0]);
+      expect(banners.hint).toBe('Duck to kick removed from Bass (sidechain set to none)');
+      expect(p.history!.labels.undo).toBe('Sidechain');
+      p.history!.undo();
+      expect(p.mixer.channels[bass.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(1);
+    });
+
+    it('picking another key, or none on a strip whose comp is its own, leaves the comp alone', () => {
+      const { p, sink, d, bass, pad } = ducked();
+      expect(pickSidechain(p, sink, bass.id, { trackId: d.id, row: 1 })).toBe(true); // re-keyed: still a duck
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(1);
+      setMix(p, sink, pad.id, 'comp_ratio', 4); // retuned by hand
+      expect(pickSidechain(p, sink, pad.id, null)).toBe(true);
+      expect(p.mixer.channels[pad.id].params[P('comp_on')]).toBe(1);
       expect(banners.hint).toBeNull();
     });
   });

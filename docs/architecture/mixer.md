@@ -360,11 +360,34 @@ playback.
 ### Duck to kick
 
 `duckToKick(p, sink, trackId)` is the one-click pump. It keys the track's comp from the
-Kick row and sets comp on, threshold −30 dB, ratio 8, attack 1 ms, release
-150 ms and makeup +2 dB (`DUCK_TO_KICK`, values fixed by the spec). Together:
-- every kick pulls the track down hard;
-- the dip lands with the kick's transient;
-- the level swells back before the next beat.
+Kick row and sets comp on, threshold −14 dB, ratio 8, attack 1 ms, release
+100 ms and makeup 0 dB (`DUCK_TO_KICK`). Together:
+- every kick pulls the track down by about 7–10 dB;
+- the dip lands with the kick's transient (attack 1 ms) and follows the
+  kick's own envelope, since the ratio is high;
+- the level is back within a dB before the next beat (release 100 ms) on
+  every shipped kit except Deep, whose 750 ms kick still holds 1–2 dB there;
+- no makeup: a ducker is a dip, not a level change (with makeup the strip
+  would jump louder whenever the kick stops, in a break or with the Kick
+  muted).
+
+**The level the duck really hears.** The key is the Kick row's own output:
+- each kit's kick is normalised to −1 dBFS;
+- the row plays it at `row.gain · vel/127`;
+- the equal-power pan law costs 3 dB per channel at centre.
+
+So at default row gain the key peaks at about **−4.5 dBFS on an accented
+step** (`X`, vel 120) and **−6.1 dBFS on a plain one** (`x`, vel 100), never
+the kick file's −1 dBFS. The values were tuned against that key. The
+reduction is about (key − threshold) · 7/8: about 8 dB on an `X` kick and
+7 dB on an `x` kick, a bit more in practice from the knee and ballistics.
+Measured in the templates at the drop, the peak reduction is 6.7–8.2 dB and
+the mean 2–4 dB. A row gain or kick velocity changes the depth with it.
+
+*History.* The spec's first values were −30 dB, 8:1, 1 ms, 150 ms and +2 dB
+(`DUCK_TO_KICK_V1`). Against this key they ducked 20–24 dB and never
+recovered between kicks. The plan 27 final review retuned them; spec §3
+carries a note.
 
 It is one undo entry, "Duck to kick". Fader, pan, EQ and sends are left alone.
 
@@ -385,13 +408,21 @@ happens when:
 
 **Losing the Kick.** Deleting the Kick row (`removeDrumRow`) or its drum
 track (`removeTrack`) clears every key on it. A strip whose comp still holds
-Duck to kick's exact values would then listen to itself at −30 dB and 8:1,
-and squash itself by 15 to 20 dB. So, in the same edit (one undo entry, and
+Duck to kick's exact values (`hasDuckComp`: today's, or the `DUCK_TO_KICK_V1`
+values a project saved before the retune holds) would then listen to itself
+at 8:1 and squash its own loud parts. So, in the same edit (one undo entry, and
 undo brings the duck back), each such strip's comp is switched off. Only
 `comp_on` changes: the other values stay, so re-keying and switching it on
 restores the duck. The top bar says "Duck to kick removed from Bass (kick
 deleted)" (`mixer-actions.ts` `keysLostBy` / `unduckLostKeys`). A strip whose
 comp the user retuned since, or keyed by hand, keeps its settings.
+
+**Setting the key to "none" by hand.** The same rule applies when the user
+picks "none" in a ducked strip's Sidechain select (`pickSidechain`, which
+`Strip.svelte` uses): the comp is switched off in the same "Sidechain" edit,
+and the top bar says "Duck to kick removed from Bass (sidechain set to
+none)". Picking another key keeps the duck, re-keyed. Undo and the other
+callers use `setSidechain`, which never touches the comp.
 
 The menu offers Duck to kick on every track strip except the Kick's own drum
 track.

@@ -19,18 +19,25 @@
 //      (loadFactoryPattern: drum rows by role), transposed from the factory
 //      key (A minor) to the template's key (transposeNotes: a plain semitone
 //      shift keeps a natural-minor line natural minor); the tracks' empty
-//      "Pattern 1" is deleted;
+//      "Pattern 1" is deleted. Then the template's own adjustments, on its
+//      placed copy only (the factory data never changes):
+//        - the fill takes the main groove's swing (a 54 % Fill A inside a
+//          62 % garage groove would flip the feel for its bar);
+//        - `barOrder` re-orders a part's bars (Deep House's pad plays Pad
+//          long's chords in the keys' and bass's order: Am9 Dm9 Fmaj7 Em7);
+//        - `lowest` folds notes under that pitch up an octave (Garage's sub
+//          in F minor would otherwise drop to C1-Eb1, 33-39 Hz, under Bass
+//          tidy's high-pass knee);
 //   4. the mix: a strip preset per track, then the template's fader and
 //      send levels, then Duck to kick on the bass and the pad (AFTER the
 //      preset: every track preset rewrites the whole comp section), and the
-//      reverb, delay and master presets. BALANCE: the faders come from
-//      meter readings in the running app (each strip's RMS of its meter
-//      peaks over 4 bars of the drop): drums near -10 dB, chords -15, bass
-//      and pad as close to -16 as the +6 dB fader allows. Duck to kick's
-//      fixed values (-30 dB, 8:1, keyed from a kick near 0 dBFS) take
-//      10-15 dB off the bass and pad under a four-on-the-floor kick, which
-//      is why their faders sit high. That also leaves the master limiter
-//      headroom instead of riding it;
+//      reverb, delay and master presets. BALANCE (plan 27 final review,
+//      measured in the running app as each strip's RMS of its meter peaks
+//      over 4 bars of the drop, with Duck to kick at -14 dB / 8:1, about
+//      7-8 dB on each kick): drums near -10 dB (the master limiter idles),
+//      bass 4-5 dB under the drums (the acid line, the lead, about 3.5),
+//      chords 5-6 dB under, the pad about 7 dB under (it swells about 3 dB
+//      in the break, where nothing ducks it);
 //   5. the arrangement (ARRANGEMENT): 32 bars of clips in four 8-bar
 //      sections, and the song loop set around them (off).
 //
@@ -38,8 +45,11 @@
 //   intro  1-8   drums only, thinning in: the template's sparse groove for
 //                4 bars, then its main groove
 //   groove 9-16  drums, bass, chords; Fill A on bar 16
-//   break  17-24 no kick and no bass: chords and the pad; Fill A on bar 24
-//                brings the drums back for the drop
+//   break  17-24 no drums and no bass: chords and the pad; Fill A on bar
+//                24 is the build into the drop. Its kicks (beats 1-3) are
+//                kept on purpose (the plan 27 final review's ruling): the
+//                break's "no kick" is bars 17-23, and every shipped fill has
+//                a kick
 //   drop   25-32 everything
 // The pad first enters in the break, so the drop is the only section with
 // every part. Each section's block is its own clip, so the playlist shows the
@@ -49,7 +59,7 @@ import { pitchClass } from '../music/scales';
 import type { MusicKey } from '../music/scales';
 import type { ProjectJson } from '../project/schema';
 import { serialize } from '../project/serialize';
-import { addDrumTrack, selectTrack, setTempo } from './actions';
+import { addDrumTrack, selectTrack, setSwing, setTempo } from './actions';
 import type { CommandSink } from './actions';
 import { factoryPattern } from './factoryPatterns';
 import { setKey } from './key-actions';
@@ -57,10 +67,10 @@ import { KIT_ROLES, kitById } from './kits';
 import { duckToKick, setMix } from './mixer-actions';
 import { applyPreset } from './mixerPresets';
 import { BUILTIN_PATCHES } from './patches';
-import { deletePattern, selectPattern, transposeNotes } from './pattern-actions';
+import { deletePattern, selectPattern, transposeNotes, updateNotes } from './pattern-actions';
 import { loadFactoryPattern } from './pattern-library';
 import { Project, currentPattern } from './project.svelte';
-import type { PatternTrack } from './project.svelte';
+import type { PatternTrack, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
 import { addClip, setLoop } from './song-actions';
 
@@ -82,6 +92,10 @@ export interface SynthPart extends PartStrip {
   track: string;
   patch: string;
   pattern: string;
+  /** Bar i of the placed copy plays the factory pattern's bar barOrder[i] (absent: as written). */
+  barOrder?: readonly number[];
+  /** Notes below this MIDI pitch (after the transposition) go up an octave (absent: none). */
+  lowest?: number;
 }
 
 export interface Template {
@@ -121,17 +135,20 @@ export const TEMPLATES: readonly Template[] = [
     id: 'deep-house-122', name: 'Deep House 122', tempo: 122, key: A_MINOR, kit: 'deep',
     blurb: 'Round kick and swung shaker, a walking organ bass, m9 keys and a warm pad, in A minor',
     drums: { intro: 'factory-minimal', groove: 'factory-deep-shuffle', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { a: -26 } },
-    bass: { track: 'Bass', patch: 'Organ Bass', pattern: 'factory-deep-walk', preset: 'bass-tidy', fader: 6 },
+    bass: { track: 'Bass', patch: 'Organ Bass', pattern: 'factory-deep-walk', preset: 'bass-tidy', fader: -0.5 },
     chords: { track: 'Keys', patch: 'Tine Keys', pattern: 'factory-deep-m9-progression', preset: 'stab-space', fader: -4 },
-    pad: { track: 'Pad', patch: 'Warm Pad', pattern: 'factory-pad-long', preset: 'pad-wash', fader: 6 },
+    // Pad long is Am9 Fmaj7 Dm9 Em7: bars 2 and 3 swapped to follow the keys and the walk (Am Dm F Em).
+    pad: { track: 'Pad', patch: 'Warm Pad', pattern: 'factory-pad-long', preset: 'pad-wash', fader: -4.5, barOrder: [0, 2, 1, 3] },
     // Deep house sits in a dark, damped space; the dotted-8th dub echo on the keys.
     reverb: 'dark', delay: 'delay-dub', master: 'master-warm',
   },
   {
     id: 'garage-130', name: 'Garage 130', tempo: 130, key: { root: 5, scale: 'minor' }, kit: 'garage',
     blurb: 'Skipping 2-step drums, a sub bass and a stabbing organ, in F minor',
-    drums: { intro: 'factory-minimal', groove: 'factory-garage-2-step', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { a: -24 } },
-    bass: { track: 'Bass', patch: 'Sub Bass', pattern: 'factory-garage-sub', preset: 'bass-tidy', fader: 1.5 },
+    // Speed garage thins in with the garage feel (a four-on-the-floor kick at 60 %) before the 2-step.
+    drums: { intro: 'factory-speed-garage', groove: 'factory-garage-2-step', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { a: -24 } },
+    // Bar 2 (Db1 Eb1 C1 after the shift) folds up an octave: nothing under E1 (28).
+    bass: { track: 'Bass', patch: 'Sub Bass', pattern: 'factory-garage-sub', preset: 'bass-tidy', fader: 0, lowest: 28 },
     chords: { track: 'Organ', patch: 'Garage Organ', pattern: 'factory-garage-organ', preset: 'stab-space', fader: -5 },
     // A bright plate on the snare and organ; eighths bouncing left-right.
     reverb: 'plate', delay: 'delay-pingpong', master: 'master-clean',
@@ -141,7 +158,7 @@ export const TEMPLATES: readonly Template[] = [
     blurb: 'A 909-ish classic house groove, a 303 line and an M1 organ stab, in A minor',
     drums: { intro: 'factory-four-on-the-floor', groove: 'factory-classic-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { a: -26 } },
     // The acid line is the lead: a dub echo under it, as the classic records have.
-    bass: { track: 'Acid', patch: 'Acid Line', pattern: 'factory-acid-303-line', preset: 'bass-tidy', fader: 6, sends: { b: -20 } },
+    bass: { track: 'Acid', patch: 'Acid Line', pattern: 'factory-acid-303-line', preset: 'bass-tidy', fader: -2, sends: { b: -20 } },
     chords: { track: 'Stab', patch: 'Piano Stab', pattern: 'factory-classic-m1-stab', preset: 'stab-space', fader: -6 },
     reverb: 'room', delay: 'delay-dub', master: 'master-clean',
   },
@@ -149,10 +166,10 @@ export const TEMPLATES: readonly Template[] = [
     id: 'tech-house-125', name: 'Tech House 125', tempo: 125, key: { root: 7, scale: 'minor' }, kit: 'drum-machine',
     blurb: 'Tight drums, a rolling Reese, a dub brass chord and strings, in G minor',
     drums: { intro: 'factory-minimal', groove: 'factory-tech-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { a: -28 } },
-    bass: { track: 'Bass', patch: 'Reese Bass', pattern: 'factory-rolling-16ths', preset: 'bass-tidy', fader: 6 },
+    bass: { track: 'Bass', patch: 'Reese Bass', pattern: 'factory-rolling-16ths', preset: 'bass-tidy', fader: -0.5 },
     // Dub chord's echoes are written a dotted 8th apart: more of the 3/16 delay thickens them.
     chords: { track: 'Stab', patch: 'Brass Stab', pattern: 'factory-dub-chord', preset: 'stab-space', fader: -4, sends: { b: -10 } },
-    pad: { track: 'Strings', patch: 'Strings', pattern: 'factory-pad-long', preset: 'pad-wash', fader: 4 },
+    pad: { track: 'Strings', patch: 'Strings', pattern: 'factory-pad-long', preset: 'pad-wash', fader: -6 },
     reverb: 'hall', delay: 'delay-dub', master: 'master-warm',
   },
 ];
@@ -235,6 +252,29 @@ function loadPattern(p: Project, t: Template, track: PatternTrack, id: string, s
   return r!.pattern.id;
 }
 
+/**
+ * The template's adjustments to the placed copy of a synth part's pattern
+ * (the current one; see the header): re-order its bars, fold its lowest
+ * notes up an octave.
+ */
+function adjustNotes(p: Project, t: Template, track: SynthTrack, part: SynthPart) {
+  const pat = currentPattern(track);
+  const changes: { id: string; pitch?: number; start?: number }[] = [];
+  for (const n of pat.notes) {
+    const c: { id: string; pitch?: number; start?: number } = { id: n.id };
+    if (part.barOrder) {
+      if (part.barOrder.length !== pat.bars) fail(t, `${part.track}: barOrder needs ${pat.bars} bars`);
+      const from = Math.floor(n.start / BAR_TICKS);
+      const to = part.barOrder.indexOf(from);
+      if (to < 0) fail(t, `${part.track}: barOrder drops bar ${from + 1}`);
+      if (to !== from) c.start = n.start + (to - from) * BAR_TICKS;
+    }
+    if (part.lowest !== undefined && n.pitch < part.lowest) c.pitch = n.pitch + 12;
+    if (c.start !== undefined || c.pitch !== undefined) changes.push(c);
+  }
+  if (changes.length) updateNotes(p, NO_ENGINE, track.id, changes);
+}
+
 /** The track's starting "Pattern 1" goes (the factory loads are its patterns). */
 function dropFirstPattern(p: Project, track: PatternTrack, firstId: string) {
   deletePattern(p, NO_ENGINE, track.id, firstId);
@@ -263,6 +303,7 @@ function synthPart(p: Project, t: Template, part: SynthPart, shift: number) {
   const track = addSynthTrack(p, NO_ENGINE, part.track, patch) ?? fail(t, `no room for ${part.track}`);
   const first = currentPattern(track).id;
   const main = loadPattern(p, t, track, part.pattern, shift);
+  adjustNotes(p, t, track, part);
   dropFirstPattern(p, track, first);
   mix(p, t, track.id, part);
   return { track, main };
@@ -287,6 +328,10 @@ export function buildTemplate(id: string): ProjectJson {
   const firstDrums = currentPattern(drums).id;
   const intro = loadPattern(p, t, drums, t.drums.intro);
   const fill = loadPattern(p, t, drums, t.drums.fill);
+  // The fill (current now) plays at the groove's swing: this copy only.
+  const main = factoryPattern(t.drums.groove);
+  if (main?.kind !== 'drum') fail(t, `"${t.drums.groove}" is not a drum pattern`);
+  else setSwing(p, NO_ENGINE, drums.id, main.swing);
   const groove = loadPattern(p, t, drums, t.drums.groove);
   dropFirstPattern(p, drums, firstDrums);
   mix(p, t, drums.id, t.drums);

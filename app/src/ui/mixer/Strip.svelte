@@ -427,7 +427,8 @@
   {#if kind === 'track' && p.mixer.returns.length}
     <Section title="Sends" {name} testid="sends" aside={`${sendsOn} of ${p.mixer.returns.length}`} bind:open={sendsOpen}>
       {#snippet summary()}
-        <SendBars returns={p.mixer.returns} level={(slot) => val(sendParam(slot))} onopen={() => (sendsOpen = true)} />
+        <!-- Closed = header + bars; open = the knob grid (the bars would repeat it). -->
+        {#if !sendsOpen}<SendBars returns={p.mixer.returns} level={(slot) => val(sendParam(slot))} onopen={() => (sendsOpen = true)} />{/if}
       {/snippet}
       {#each p.mixer.returns as r (r.id)}
         {@const s = sendParam(r.slot)}

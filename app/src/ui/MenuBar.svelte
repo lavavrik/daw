@@ -90,6 +90,10 @@
   //
   // THE MENU ROW: 5 px button padding (the words read as separate targets),
   // and TopBar.svelte keeps 4 px under the row and room to its right.
+  // Below 1400 px wide it is the old tight row (3 px, no gap; ~38 px
+  // narrower) so the bar still fits one row at 1280 px with the "Audio
+  // paused" pill or a warning badge in it (audiostart.spec.ts; the pill
+  // tightens below 1400 px too).
   //
   // KEYBOARD AND FOCUS. Each menu is a button (aria-expanded, aria-controls)
   // and a popover holding a plain list of buttons: no role=menu (plan 20's
@@ -1102,5 +1106,13 @@
     position: absolute; left: calc(100% + 7px); top: -7px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
     max-height: min(360px, 60vh); overflow-y: auto; padding: 6px 6px 8px;
     background: var(--panel); border: 1px solid var(--raised); border-radius: var(--r-menu); box-shadow: var(--lift), var(--drop);
+  }
+  /* Narrow windows: the tight row (THE MENU ROW in the header comment);
+     last, so it wins over the rules above. */
+  @media (max-width: 1399px) {
+    .menubar { gap: 0; }
+    .mb { padding: 0 3px; }
+    .m:first-child .mb { margin-left: -3px; }
+    .pop { left: -3px; }
   }
 </style>

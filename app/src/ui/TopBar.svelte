@@ -16,7 +16,9 @@
   // of it but ↶ ↷ (pushed to the right end), so the hint line gets ~200 px
   // (it had a fixed 128 px: the owner, 2026-11-09, "can't fit a lot of
   // messages"). 4 px under the menu row and 8 px of margin to its right
-  // keep it off the name and the separator.
+  // keep it off the name and the separator (4 px below 1400 px wide, where
+  // the menu row is tight too, so the bar fits one row at 1280 px with the
+  // "Audio paused" pill).
   // Short windows (< 740 px, the 40 px bar): two lines, the 16 px menu row,
   // then name · hint · ↶ ↷ (18 px) on one line. (Plan 21's ruling put the
   // name after the menus on line 1; at 1280 px that line would be ~380 px
@@ -480,6 +482,8 @@
     position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "menu menu" "id undo";
     align-items: center; column-gap: 8px; row-gap: 4px; margin-right: 8px;
   }
+  /* Narrow windows: 4 px to the right (the menu row is tight there too: MenuBar.svelte THE MENU ROW). */
+  @media (max-width: 1399px) { .proj { margin-right: 4px; } }
   .menus { grid-area: menu; }
   .id { grid-area: id; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   /* contain: the hint's (and the name's) length never widens the block: the

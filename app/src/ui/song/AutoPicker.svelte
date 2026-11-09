@@ -252,6 +252,7 @@
     bind:this={pop}
     class="pop"
     role="dialog"
+    tabindex="-1"
     aria-label="Add an automation lane"
     data-testid="auto-picker"
     style:left="{at.left}px"

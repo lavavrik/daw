@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } from './catalog';
 import { MIXER_CATALOG } from './mixerCatalog';
+import { CHORD_TYPES } from '../music/scales';
 
 describe('catalog', () => {
   it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18, accent 19, chord 20, arp 21)', () => {
@@ -10,6 +11,14 @@ describe('catalog', () => {
       'sample_player', 'formant', 'scope', 'accent', 'chord', 'arp',
     ]);
     expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(22).keys()]);
+  });
+  it('the Chord module\'s type choices are scales.ts CHORD_TYPES labels, in wire order (plan 26)', () => {
+    // The engine's Chord `type` param is an index into CHORD_TYPES (theory.rs
+    // CHORDS, pinned by engine/tests/fixtures/scales.json); its catalog labels
+    // must name the same chords in the same order, or the select mislabels them.
+    const type = moduleDef('chord').params[paramIndex(moduleDef('chord'), 'type')];
+    expect(type.choices).toEqual(CHORD_TYPES.map((c) => c.label));
+    expect(CHORD_TYPES[type.default].id).toBe('inKey');
   });
   it('the accent is an inline shaping module: gate/vel in, cv out (plan 17)', () => {
     const a = moduleDef('accent');

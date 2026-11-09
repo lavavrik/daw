@@ -26,6 +26,11 @@ const TYPE: usize = 0;
 const INVERSION: usize = 1;
 const K: ModuleKind = ModuleKind::Chord;
 
+/// Offs per [`Chord::flush`] call: half a `NoteBuf`, so a chunk still fits
+/// after the Arp (each Off in gives at most one event out, plus the Off of
+/// its sounding note).
+pub const FLUSH_CHUNK: usize = super::NOTE_BUF / 2;
+
 #[derive(Clone)]
 pub struct Chord {
     /// Per input pitch: the output pitches its note-on produced.
@@ -103,20 +108,32 @@ impl Chord {
         self.made_n[n] = 0;
     }
 
-    /// The module is going away: an Off for every output pitch still held.
-    pub fn flush(&mut self, out: &mut NoteBuf) {
-        for (p, c) in self.count.iter().enumerate() {
+    /// The module is going away: an Off for every output pitch still held,
+    /// at most [`FLUSH_CHUNK`] per call (up to 128 pitches can be held, more
+    /// than a `NoteBuf`). Returns `true` while more remain: the caller
+    /// (`Rack::flush_note_module`) hands each chunk on and calls again, so no
+    /// Off is ever dropped. The last call forgets every chord.
+    pub fn flush(&mut self, out: &mut NoteBuf) -> bool {
+        let mut n = 0;
+        for (p, c) in self.count.iter_mut().enumerate() {
             if *c > 0 {
+                if n == FLUSH_CHUNK {
+                    return true;
+                }
                 out.push(NoteEvent::Off { note: p as u8 });
+                *c = 0;
+                n += 1;
             }
         }
         self.reset();
+        false
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::theory::DEFAULT_KEY;
+    use super::super::NOTE_BUF;
     use super::*;
 
     fn run(c: &mut Chord, ev: NoteEvent, params: &[f32]) -> Vec<NoteEvent> {
@@ -170,8 +187,30 @@ mod tests {
         assert_eq!(&again[3..], &[60, 63, 67].map(|n| NoteEvent::On { note: n, vel: 50 }));
         assert_eq!(run(&mut c, NoteEvent::Bend(0.5), &[0.0, 0.0]), [NoteEvent::Bend(0.5)]);
         let mut out = NoteBuf::new();
-        c.flush(&mut out);
+        assert!(!c.flush(&mut out), "all in one chunk");
         assert_eq!(out.as_slice(), &[60, 63, 67].map(|n| NoteEvent::Off { note: n }));
         assert_eq!(run(&mut c, NoteEvent::Off { note: 60 }, &[0.0, 0.0]), [NoteEvent::Off { note: 60 }], "flushed: passes through");
+    }
+
+    #[test]
+    fn a_big_flush_comes_in_chunks_and_drops_nothing() {
+        let mut c = Chord::new();
+        for k in 0..16u8 {
+            run(&mut c, NoteEvent::On { note: 30 + 3 * k, vel: 100 }, &[5.0, 0.0]); // m9
+        }
+        let held = c.count.iter().filter(|&&n| n > 0).count();
+        assert!(held > NOTE_BUF, "{held} pitches held");
+        let mut all = Vec::new();
+        loop {
+            let mut out = NoteBuf::new();
+            let more = c.flush(&mut out);
+            assert!(out.as_slice().len() <= FLUSH_CHUNK);
+            all.extend_from_slice(out.as_slice());
+            if !more {
+                break;
+            }
+        }
+        assert_eq!(all.len(), held, "one Off per held pitch");
+        assert!(c.count.iter().all(|&n| n == 0) && c.made_n.iter().all(|&n| n == 0));
     }
 }

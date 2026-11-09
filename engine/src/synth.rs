@@ -766,14 +766,21 @@ mod tests {
             assert_eq!(e.command(OP_SET_LOOP, 0.0, 7680.0, 0.0, 0.0), OK);
             assert_eq!(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0), OK);
         };
-        let mut a = arp_or_drawn(120.0, true);
-        let mut d = arp_or_drawn(120.0, false);
-        song(&mut a);
-        song(&mut d);
-        let frames = 2 * 7680 * 25 + 40_000; // twice round the loop and on
-        let (x, y) = (play(&mut a, frames), play(&mut d, frames));
-        assert!(y.iter().any(|v| v.abs() > 0.01));
-        assert_eq!(x.iter().zip(&y).position(|(p, q)| p != q), None);
+        // 120 BPM: the 2-bar loop is a whole number of sub-blocks (192 000
+        // frames). 124 and 133 BPM: the wrap falls mid-sub-block, so the
+        // first boundary after it is past the downbeat step.
+        for bpm in [120.0, 124.0, 133.0] {
+            let mut a = arp_or_drawn(bpm, true);
+            let mut d = arp_or_drawn(bpm, false);
+            song(&mut a);
+            song(&mut d);
+            let loop_frames = 7680.0 * 48000.0 * 60.0 / (bpm * 960.0);
+            let frames = (2.0 * loop_frames) as usize + 40_000; // twice round the loop and on
+            let (x, y) = (play(&mut a, frames), play(&mut d, frames));
+            assert!(y.iter().any(|v| v.abs() > 0.01));
+            let first = x.iter().zip(&y).position(|(p, q)| p != q);
+            assert_eq!(first, None, "{bpm} BPM (loop of {loop_frames} frames)");
+        }
     }
 
     #[test]

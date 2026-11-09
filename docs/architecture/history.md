@@ -300,7 +300,7 @@ Order:
    `state/pattern-library.ts` `libraryState`, so an open library list keeps
    its rows and focus). Last the **key** (plan 26): `state/key-actions.ts`
    `applyKey`, a no-op when it did not change, which also sends the
-   engine's key command (`keyCommands`; none until plan 26 Task 3).
+   engine's key command (`keyCommands`: `SET_KEY` root, scale index).
 
 **No stuck notes:** the engine releases a note that is removed or changed
 (`NOTE_REMOVE`/`NOTE_SET`), a clip that is removed or changed, a pattern

@@ -19,17 +19,30 @@
 //! frame is at or after `round(frame(T))`, which is exactly where the
 //! sequencer's own note at tick T is applied (`tick_to_offset` rounds, the
 //! rack applies a note at its next sub-block): an arpeggio of a held note
-//! renders bit for bit like the same notes drawn in a pattern
-//! (`synth.rs` `arp_renders_like_drawn_notes_*`, Pattern and Song mode). Nothing accumulates: the
-//! clock is the transport's tick, or a tick count advanced by exactly one
-//! sub-block of ticks per sub-block.
+//! renders bit for bit like the same notes drawn in a pattern at gates below
+//! 100 % (`synth.rs` `arp_renders_like_drawn_notes_*`: Pattern mode, and Song
+//! mode across loop wraps on and off the sub-block grid, 120/124/133 BPM).
+//! Nothing accumulates: the clock is the transport's tick, or a tick count
+//! advanced by exactly one sub-block of ticks per sub-block.
 //!
-//! The first key from silence starts on the next grid step (one that fell
-//! inside the sub-block the key arrived in counts, so a pattern note on the
-//! grid plays at once); stopped, it starts at once. A transport jump (Play,
-//! Stop, loop wrap, seek) or a switch between the two clocks ends the
-//! sounding note and restarts the pattern from its first note on the new
-//! clock's grid.
+//! The first key from silence starts on the first grid step whose frame
+//! falls after the previous sub-block boundary (one inside the sub-block the
+//! key arrived in counts, so a pattern note on the grid plays at once);
+//! stopped, it starts at once. A transport jump (Play, Stop, loop wrap, seek)
+//! or a switch between the two clocks ends the sounding note and restarts the
+//! pattern from its first note with the same rule on the new clock, so the
+//! downbeat after a loop wrap that lands mid-sub-block still plays. (Side
+//! effect: a Play or seek to a point just past a grid step, within one
+//! sub-block, plays that step at once, at most one sub-block early.)
+//!
+//! # Gate extremes
+//! * At 100 % a step's Off is due with the next step's On: the On goes first,
+//!   then the old Off (a repeated pitch is just re-pressed), so a mono MIDI In
+//!   ties the steps (and glides with glide on) instead of retriggering. This
+//!   is where the arp differs from drawn notes, whose Offs go first.
+//! * A note lasts at least one sub-block (`RACK_BLOCK` frames): a very short
+//!   gate at a very high tempo would otherwise put its On and Off in one
+//!   sub-block and never sound.
 //!
 //! # Random
 //! Random picks from an xorshift generator that is re-seeded whenever the
@@ -41,12 +54,14 @@
 //! # Keys, latch, pedal
 //! Held keys are kept in the order played (As played) and sorted for the
 //! other modes. A key-off removes the key unless `latch` is on or the
-//! sustain pedal is down (the pedal is the arp's: MIDI In never sees it,
-//! or it would hold every step's Off). With latch on, the released set keeps
+//! sustain pedal is down (the pedal is the arp's: MIDI In never sees it go
+//! down, or it would hold every step's Off; pedal-up is passed on, so a
+//! pedal that was down before the Arp was added is released). With latch on, the released set keeps
 //! playing; a key pressed while no key is down starts a new set. Turning
 //! latch off (or lifting the pedal) drops the released keys. **Stop clears
 //! a latch** (keys still physically held keep playing on the free clock), so
-//! Stop always silences sequenced arps. An Off for a key the arp does not
+//! Stop always silences sequenced arps (Stop pressed while already stopped
+//! leaves a live latch alone: toggle Latch or panic). An Off for a key the arp does not
 //! hold (pressed before the module was added) passes through. Allocation-free.
 
 use super::{param, Ctx, NoteBuf, NoteEvent};
@@ -208,9 +223,15 @@ impl Arp {
             },
             NoteEvent::Sustain(on) => {
                 self.pedal = on;
-                if !on && !latch {
-                    self.drop_released();
-                    self.stop_if_empty(out);
+                if !on {
+                    if !latch {
+                        self.drop_released();
+                        self.stop_if_empty(out);
+                    }
+                    // Pedal-up also reaches MIDI In: a pedal pressed before
+                    // the Arp was added is down there, and would sustain
+                    // every step's Off for good. Always safe.
+                    out.push(ev);
                 }
             }
             NoteEvent::AllOff => {
@@ -295,11 +316,6 @@ impl Arp {
         }
     }
 
-    /// The first grid step at or after tick `t` (the transport clock).
-    fn grid_from(t: f64, step: f64) -> f64 {
-        (t / step - 1e-6).ceil() * step
-    }
-
     /// The first grid step strictly after tick `t` (the transport clock).
     fn grid_after(t: f64, step: f64) -> f64 {
         ((t / step + 1e-6).floor() + 1.0) * step
@@ -334,10 +350,12 @@ impl Arp {
                 self.free = 0.0;
             }
             if self.running {
-                // On the new clock: the first grid step that rounds onto
-                // this boundary or later (stopped: at once).
+                // On the new clock, as for a first key: the first grid step
+                // whose frame falls after the previous boundary's, so a step
+                // inside the sub-block ending here (the downbeat after a loop
+                // wrap that lands mid-sub-block) plays now; stopped: at once.
                 self.restart();
-                self.next = if playing { Arp::grid_from(ctx.ticks - 0.5 * tpf, step) } else { 0.0 };
+                self.next = if playing { Arp::grid_after(ctx.ticks - span + 0.5 * tpf, step) } else { 0.0 };
                 self.start = false;
             }
         }
@@ -361,20 +379,25 @@ impl Arp {
         for _ in 0..8 {
             let off = self.sounding.is_some() && due(self.off_at);
             let on = self.running && self.n_held > 0 && due(self.next);
-            if off && (!on || self.off_at <= self.next) {
+            if off && (!on || self.off_at < self.next) {
                 if let Some(n) = self.sounding.take() {
                     out.push(NoteEvent::Off { note: n });
                 }
             } else if on {
-                if let Some(n) = self.sounding.take() {
-                    out.push(NoteEvent::Off { note: n });
-                }
+                // Gate 100 % (the Off due with this step): the new On first,
+                // then the old Off, so a mono MIDI In ties (or glides); the
+                // same pitch again is just re-pressed.
+                let old = self.sounding.take();
                 let j = self.pick(params);
                 let (note, vel) = self.note_at(j, as_played);
                 out.push(NoteEvent::On { note, vel });
+                if let Some(n) = old.filter(|&n| n != note) {
+                    out.push(NoteEvent::Off { note: n });
+                }
                 self.sounding = Some(note);
                 let t = self.next;
-                self.off_at = t + step * gate;
+                // Never shorter than one sub-block: a note is never zero length.
+                self.off_at = t + (step * gate).max(span);
                 self.next = if playing { Arp::grid_after(t, step) } else { t + step };
             } else {
                 break;
@@ -471,13 +494,17 @@ mod tests {
 
     #[test]
     fn gate_length_follows_the_gate_param() {
-        for gate in [10.0f32, 25.0, 100.0] {
+        for gate in [10.0f32, 25.0, 99.0] {
             let mut a = Arp::new();
             let p = params(2.0, 0.0, 1.0, gate, 0.0);
             let evs = drive(&mut a, &p, true, 0.0, 3 * 6000, &[(0, on(60))]);
             let first_off = offs(&evs)[0].0;
             assert_eq!(first_off, boundary(6000.0 * gate as f64 / 100.0), "gate {gate} %");
         }
+        // 100 %: one held pitch is re-pressed step after step, never let go.
+        let mut a = Arp::new();
+        let evs = drive(&mut a, &params(2.0, 0.0, 1.0, 100.0, 0.0), true, 0.0, 3 * 6000, &[(0, on(60))]);
+        assert_eq!((ons(&evs).len(), offs(&evs).len()), (3, 0));
     }
 
     #[test]
@@ -588,6 +615,47 @@ mod tests {
     }
 
     #[test]
+    fn gate_100_puts_the_next_on_before_the_previous_off() {
+        // Gate 100 %: the next step's On comes first, then the old note's Off,
+        // on the same boundary, so a mono patch ties (or glides) step to step.
+        let mut a = Arp::new();
+        let p = params(2.0, 0.0, 1.0, 100.0, 0.0);
+        let evs = drive(&mut a, &p, true, 0.0, 3 * 6000, &[(0, on(60)), (0, on(64))]);
+        let at = boundary(6000.0);
+        let there: Vec<NoteEvent> = evs.iter().filter(|e| e.0 == at).map(|e| e.1).collect();
+        assert_eq!(there, [on(64), NoteEvent::Off { note: 60 }]);
+        // The same pitch again: just the On (MIDI In re-presses it), no Off after it.
+        let mut a = Arp::new();
+        let evs = drive(&mut a, &p, true, 0.0, 3 * 6000, &[(0, on(60))]);
+        let there: Vec<NoteEvent> = evs.iter().filter(|e| e.0 == at).map(|e| e.1).collect();
+        assert_eq!(there, [on(60)]);
+    }
+
+    #[test]
+    fn a_note_lasts_at_least_one_sub_block() {
+        // 1/32 at gate 10 % = 12 ticks; at half a tick per frame that is 24
+        // frames, less than a sub-block: the Off still waits for the next one.
+        let tpf = 0.5;
+        let mut a = Arp::new();
+        let p = params(3.0, 0.0, 1.0, 10.0, 0.0);
+        let mut out = NoteBuf::new();
+        a.input(on(60), &p, &mut out);
+        let mut got = Vec::new();
+        for m in 0..40 {
+            let b = m * RACK_BLOCK;
+            let mut out = NoteBuf::new();
+            let ctx = Ctx { sr: SR as f32, bpm: 1800.0, playing: true, ticks: b as f64 * tpf, ticks_per_frame: tpf };
+            a.tick(&ctx, &p, &mut out);
+            got.extend(out.as_slice().iter().map(|&e| (b, e)));
+        }
+        let (o, f) = (ons(&got), offs(&got));
+        assert!(o.len() >= 3);
+        for (k, &(t_on, _)) in o.iter().enumerate().take(3) {
+            assert_eq!(f[k].0, t_on + RACK_BLOCK, "step {k}: the Off one sub-block after its On");
+        }
+    }
+
+    #[test]
     fn passthrough_and_flush() {
         let p = params(2.0, 0.0, 1.0, 100.0, 0.0);
         let mut a = Arp::new();
@@ -595,7 +663,10 @@ mod tests {
         a.input(NoteEvent::Off { note: 50 }, &p, &mut out);
         a.input(NoteEvent::Bend(0.25), &p, &mut out);
         a.input(NoteEvent::Sustain(true), &p, &mut out);
-        assert_eq!(out.as_slice(), &[NoteEvent::Off { note: 50 }, NoteEvent::Bend(0.25)], "the pedal is the arp's");
+        assert_eq!(out.as_slice(), &[NoteEvent::Off { note: 50 }, NoteEvent::Bend(0.25)], "pedal-down is the arp's");
+        let mut up = NoteBuf::new();
+        a.clone().input(NoteEvent::Sustain(false), &p, &mut up);
+        assert_eq!(up.as_slice(), &[NoteEvent::Sustain(false)], "pedal-up reaches MIDI In");
         let evs = drive(&mut a, &p, true, 0.0, 6000, &[(0, on(60)), (10, NoteEvent::Off { note: 60 })]);
         assert_eq!(ons(&evs), [(0, 60)], "the pedal holds the released key");
         let mut out = NoteBuf::new();

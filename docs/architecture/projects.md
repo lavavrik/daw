@@ -136,8 +136,8 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   `harmonicMinor`, `minorPentatonic`, `majorPentatonic`, `chromatic`). A new
   project, New, and every file older than schema 6 are in A minor. The
   engine gets it through `state/key-actions.ts` `keyCommands`, appended by
-  `projectCommands` after the transport (none until plan 26 Task 3's
-  `SET_KEY`).
+  `projectCommands` after the transport (`SET_KEY` root, scale index; the
+  Chord module's In key follows it, see modular.md "Note modules").
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is

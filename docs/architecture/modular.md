@@ -928,29 +928,42 @@ sub-block.
   frame `round(frame(T))`: exactly where the sequencer's own note at T
   applies (`tick_to_offset` rounds; the rack applies notes at its next
   sub-block). So a held note arpeggiated at 1/16, gate 50 % renders **bit for
-  bit** like sixteen 120-tick notes drawn in the pattern, at 120 and 128 BPM
-  and across a Song loop wrap (`synth.rs` `arp_renders_like_drawn_notes_*`).
+  bit** like sixteen 120-tick notes drawn in the pattern, in Pattern mode at
+  120 and 128 BPM and across Song loop wraps both on and off the sub-block
+  grid (120, 124, 133 BPM; `synth.rs` `arp_renders_like_drawn_notes_*`).
   The clock never accumulates: it is the transport tick, or (stopped) a
   tick count advanced by exactly one sub-block of ticks per sub-block.
 - **Stopped** (live playing) it runs its own clock at the project tempo: the
   first key from silence plays at once, then every step.
-- **Starting.** The first key from silence while playing waits for the next
-  grid step (a step inside the sub-block the key arrived in counts, so a
-  pattern note on the grid plays at once). A transport jump (Play, Stop,
-  loop wrap, seek) or a switch of clock ends the sounding note and restarts
-  the pattern from its first note on the new grid.
+- **Starting and jumps.** The first key from silence while playing, and the
+  restart after a transport jump (Play, Stop, loop wrap, seek), both take the
+  first grid step whose frame falls after the previous sub-block boundary: a
+  step inside the sub-block that ends here plays now (a pattern note on the
+  grid; the downbeat after a loop wrap that lands mid-sub-block). A jump also
+  ends the sounding note and restarts the pattern from its first note. Side
+  effect: a Play or seek to a point just past a grid step (within one
+  sub-block) plays that step at once, at most one sub-block early.
+- **Gate extremes.** At 100 % a step's Off is due with the next On: the On
+  goes first, then the old Off (a repeated pitch is just re-pressed), so a
+  mono patch ties, or glides with glide on, instead of retriggering (here the
+  arp differs from drawn notes, whose Offs go first). A note lasts at least
+  one sub-block, so a tiny gate at a huge tempo is never zero length.
 - **Random** is an xorshift re-seeded whenever the pattern restarts (first
   key from silence, i.e. every pattern pass or clip that plays the chord
   again, and every jump), so playback, replays and the export pick the same
   notes; a pick never repeats the previous one.
 - **Latch, pedal, Stop.** With latch on, released keys keep playing; a key
   pressed while none is down starts a new set; latch off drops them. The
-  sustain pedal holds released keys in the arp (it is not passed to MIDI In,
-  which would hold every step's Off). **Stop clears a latch** (keys still
-  held keep going on the free clock), so Stop always silences sequenced arps.
+  sustain pedal holds released keys in the arp (pedal-down is not passed to
+  MIDI In, which would hold every step's Off; pedal-up is, so a pedal that
+  was down before the Arp was added gets released). **Stop clears a latch**
+  (keys still held keep going on the free clock), so Stop always silences
+  sequenced arps; Stop pressed while already stopped leaves a live latch
+  alone (toggle Latch, or panic).
 - **Offs it does not own** (a key pressed before the module was added) pass
   through; removing a Chord or Arp (`Edit::Remove`) first releases what it
-  holds (a Chord's Offs through the Arp), so no voice hangs.
+  holds (a Chord's Offs through the Arp, in chunks of 24 so none is ever
+  dropped from a `NoteBuf`), so no voice hangs.
 
 Param edits on note modules apply at once, never behind the 2 ms declick
 (`Rack::set_param`): they change no signal, and a fade would dip the output

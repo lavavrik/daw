@@ -729,20 +729,23 @@ impl Rack {
     /// holds, so no voice hangs. A Chord's Offs go on through the Arp (they
     /// were its keys), an Arp's straight to MIDI In.
     fn flush_note_module(&mut self, i: usize) {
-        let mut out = NoteBuf::new();
-        match self.slots.get_mut(i).and_then(|s| s.module.as_mut()) {
-            Some(Module::Chord(c)) => c.flush(&mut out),
-            Some(Module::Arp(a)) => {
-                a.flush(&mut out);
-                self.deliver(&out);
+        loop {
+            let mut out = NoteBuf::new();
+            let more = match self.slots.get_mut(i).and_then(|s| s.module.as_mut()) {
+                Some(Module::Chord(c)) => c.flush(&mut out),
+                Some(Module::Arp(a)) => {
+                    a.flush(&mut out);
+                    self.deliver(&out);
+                    return;
+                }
+                _ => return,
+            };
+            // In chunks (`Chord::flush`): never more Offs than a NoteBuf holds.
+            self.arp_then_deliver(&out);
+            if !more {
                 return;
             }
-            _ => return,
         }
-        if let Some(s) = self.slots.get_mut(i) {
-            s.module = None; // out of the path before its Offs go through the Arp
-        }
-        self.arp_then_deliver(&out);
     }
 
     /// The Arp's clock at a sub-block start (`Arp::tick`), its notes to MIDI In.
@@ -1135,10 +1138,6 @@ mod tests {
         m
     }
 
-    /// Plan 11 review: mono MIDI In `vel` feeds an ADSR `vel`, which latches
-    /// it on the gate's rising sample. A note from silence must deliver its
-    /// own velocity at once (not glide in from the previous note's); a
-    /// legato note keeps the ADSR's latched velocity while MIDI `vel` glides.
     /// MIDI In's held pitches (V/oct -> MIDI) after a render: the gate-high channels.
     fn held_pitches(r: &Rack) -> Vec<i32> {
         let (pitch, gate) = (&r.outs[0], &r.outs[1]);
@@ -1181,6 +1180,49 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_chord_under_sixteen_held_chords_leaves_no_voice() {
+        // 16 voices, 16 m9 chords on roots 30, 33, … 75: 80 output pitches,
+        // more than one NoteBuf of Offs (the flush goes out in chunks).
+        let fx = &mut FxPool::empty();
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::MidiIn, fx), OK);
+        assert_eq!(r.set_param(0, 0, 16.0), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Chord, fx), OK);
+        assert_eq!(r.set_param(1, 0, 5.0), OK); // m9
+        for k in 0..16u8 {
+            r.note(NoteEvent::On { note: 30 + 3 * k, vel: 100 });
+        }
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r).len(), 16, "every voice holds a chord note");
+        assert_eq!(r.remove_module(1), OK); // silent rack (no Out): applies at once
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r), [] as [i32; 0], "no voice left hanging");
+    }
+
+    #[test]
+    fn a_pedal_down_before_the_arp_came_is_released_through_it() {
+        let fx = &mut FxPool::empty();
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::MidiIn, fx), OK);
+        r.note(NoteEvent::Sustain(true)); // MIDI In's pedal goes down
+        assert_eq!(r.add_module(1, ModuleKind::Arp, fx), OK);
+        assert_eq!(r.set_param(1, 0, 3.0), OK); // 1/32
+        r.note(NoteEvent::Sustain(false)); // must reach MIDI In through the Arp
+        r.note(NoteEvent::On { note: 60, vel: 100 });
+        r.note(NoteEvent::On { note: 64, vel: 100 });
+        // Stopped, 124 BPM: a 1/32 step is ~2900 frames; play several.
+        let ctx = Ctx { sr: SR, bpm: 124.0, playing: false, ticks: 0.0, ticks_per_frame: 124.0 * 960.0 / 60.0 / SR as f64 };
+        let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+        for _ in 0..200 {
+            r.render_add(&ctx, &mut FxPool::empty(), SampleView::NONE, &mut l, &mut rr);
+        }
+        r.note(NoteEvent::Off { note: 60 });
+        r.note(NoteEvent::Off { note: 64 });
+        r.render_add(&ctx, &mut FxPool::empty(), SampleView::NONE, &mut l, &mut rr);
+        assert_eq!(held_pitches(&r), [] as [i32; 0], "the steps' Offs were not sustained");
+    }
+
+    #[test]
     fn note_module_params_never_dip_the_output() {
         let (mut r, _) = sounding_square_osc();
         assert_eq!(r.add_module(9, ModuleKind::Arp, &mut FxPool::empty()), OK);
@@ -1193,6 +1235,10 @@ mod tests {
         assert!(!dipped(&render(&mut r, 512)));
     }
 
+    /// Plan 11 review: mono MIDI In `vel` feeds an ADSR `vel`, which latches
+    /// it on the gate's rising sample. A note from silence must deliver its
+    /// own velocity at once (not glide in from the previous note's); a
+    /// legato note keeps the ADSR's latched velocity while MIDI `vel` glides.
     #[test]
     fn mono_velocity_reaches_adsr_on_fresh_notes() {
         use super::modules::NoteEvent;

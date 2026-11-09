@@ -75,14 +75,18 @@ pub enum NoteEvent {
     AllOff,
 }
 
-/// Capacity of a [`NoteBuf`]: one event through Chord makes at most 10
-/// (the old chord's 5 Offs, the new one's 5 Ons), Arp adds at most 2 per
-/// event and its tick a few.
+/// Capacity of a [`NoteBuf`]. The worst cases: one event through the Chord
+/// makes at most 10 (the old chord's 5 Offs, the new one's 5 Ons) and the Arp
+/// passes each on as at most one, plus one Off of its sounding note; an Arp
+/// tick makes at most 2 per loop pass (8 passes). A Chord's flush on removal
+/// (up to 128 Offs) goes out in chunks of `chord::FLUSH_CHUNK` (24), which fit
+/// through the Arp.
 pub const NOTE_BUF: usize = 48;
 
 /// A fixed buffer of note events: what a note module (Chord, Arp) hands to
 /// the next stage of the rack's note path (`Rack::note`). Allocation-free;
-/// events past the capacity are dropped (never reached: see `NOTE_BUF`).
+/// every producer stays within `NOTE_BUF` (see there), so `push` past the
+/// capacity, which would drop the event, never happens.
 #[derive(Clone, Copy)]
 pub struct NoteBuf {
     evs: [NoteEvent; NOTE_BUF],

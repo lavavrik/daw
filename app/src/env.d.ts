@@ -33,6 +33,8 @@ declare global {
       openFrom: (dir: FileSystemDirectoryHandle) => Promise<string[]>;
       /** Project ▸ New, as the menu runs it (e2e). */
       newProject: () => Promise<void>;
+      /** File ▸ New from template ▸ <id> (state/templates.ts), as the menu runs it (e2e). */
+      newFromTemplate: (id: string) => Promise<void>;
       /** The OPFS autosave (e2e: lastSaved, flush). */
       autosave: Autosave;
       /** The Browser's library (e2e: attach(handle) with an OPFS folder). */

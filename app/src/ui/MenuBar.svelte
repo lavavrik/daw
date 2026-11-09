@@ -10,7 +10,9 @@
   // discard question; Options: rec-offset).
   //
   // CONTENTS
-  //   File      New, Open… ⌘O, Save ⌘S, Save as… ⇧⌘S, Export WAV…, Undo take
+  //   File      New, New from template ▸ (plan 27: Empty, Deep House 122,
+  //             Garage 130, Acid 126, Tech House 125; state/templates.ts),
+  //             Open… ⌘O, Save ⌘S, Save as… ⇧⌘S, Export WAV…, Undo take
   //   Edit      Undo / Redo, named from the history ("Undo Add note"), ⌘Z / ⇧⌘Z
   //   Add       Drum / Synth / Sampler / Audio track, Master row: the same
   //             actions as the playlist footer's buttons (ui/addTrack.ts)
@@ -46,7 +48,8 @@
   // (menu-octave-down / -up).
   //
   // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names, Add ▸ Drum
-  // track ▸ one item per built-in kit, menu-add-drum-kit-<id>): one open
+  // track ▸ one item per built-in kit, menu-add-drum-kit-<id>, File ▸ New
+  // from template ▸ one item per template, menu-template-<id>): one open
   // at a time (`sub`), flying out to the right of their item.
   //   Keys: → or Enter / Space on the item opens it on its first entry;
   //   ↑ ↓ Home End move inside; → inside does nothing. While one is open,
@@ -108,9 +111,11 @@
   // together with a menu: opening either is a press outside the other.
   //
   // NEW / OPEN ask inline in the File menu (no confirm()) when something
-  // would be lost (project/discard.ts). ⌘O goes through `request`, which
-  // opens the File menu on that question, or runs at once when nothing would
-  // be lost (still inside the key press: the folder picker needs a gesture).
+  // would be lost (project/discard.ts). New from template ▸ <template> asks
+  // the same question, in the same place ("Discard and start new"). ⌘O goes
+  // through `request`, which opens the File menu on that question, or runs at
+  // once when nothing would be lost (still inside the key press: the folder
+  // picker needs a gesture).
   import { tick, untrack } from 'svelte';
   import type { Component } from 'svelte';
   import type { AudioEngine } from '../audio/engine';
@@ -136,6 +141,7 @@
   import { wheelOctaveSteps } from '../input/qwertyPiano';
   import { ADD_ITEMS, addBlocked, addKitTrack, addTrack } from './addTrack';
   import { KITS } from '../state/kits';
+  import { TEMPLATE_MENU } from '../state/templates';
   import type { AddKind } from './addTrack';
   import { laneView } from './song/laneView.svelte';
   import { noteNames, setNoteNames } from './noteNames.svelte';
@@ -159,6 +165,7 @@
   import FadersHorizontal from 'phosphor-svelte/lib/FadersHorizontal';
   import FileAudio from 'phosphor-svelte/lib/FileAudio';
   import FilePlus from 'phosphor-svelte/lib/FilePlus';
+  import Files from 'phosphor-svelte/lib/Files';
   import FloppyDisk from 'phosphor-svelte/lib/FloppyDisk';
   import FloppyDiskBack from 'phosphor-svelte/lib/FloppyDiskBack';
   import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
@@ -251,6 +258,7 @@
   function show(m: MenuName, from: HTMLElement | null = btns[m] ?? null) {
     cancelHover();
     confirming = null;
+    template = null;
     renaming = false;
     saving = false;
     sub = null;
@@ -260,6 +268,7 @@
   function close() {
     cancelHover();
     confirming = null;
+    template = null;
     renaming = false;
     saving = false;
     sub = null;
@@ -405,24 +414,36 @@
   // ---- File ----------------------------------------------------------------
   /** New/Open waiting for "Discard and …" (only asked when something would be lost). */
   let confirming = $state<'new' | 'open' | null>(null);
+  /** The template New from template ▸ would start, while its "Discard and start new" is asked (else null: plain New). */
+  let template: string | null = null;
   const warning = $derived(discardWarning(p, restoreOffer));
   function run(cmd: 'new' | 'open' | 'save' | 'saveAs' | 'export') {
     if ((cmd === 'new' || cmd === 'open') && discardWarning(p, restoreOffer) !== null && confirming !== cmd) {
       confirming = cmd;
+      sub = null;
       // The focus goes to Cancel (the safe answer), not to "Discard".
       void tick().then(() => panel()?.querySelector<HTMLElement>('[data-testid="project-discard-cancel"]')?.focus());
       return;
     }
+    const id = template;
+    template = null;
     closeToOpener();
-    if (cmd === 'new') void session.newProject();
+    if (cmd === 'new' && id !== null) void session.newFromTemplate(id);
+    else if (cmd === 'new') void session.newProject();
     else if (cmd === 'open') void session.open();
     else if (cmd === 'save') void session.save();
     else if (cmd === 'export') void runExport(p, engine.context);
     else void session.saveAs();
   }
+  /** File ▸ New from template ▸ `id`: New with that template (asks first, as New). */
+  function newFrom(id: string) {
+    template = id; // kept through the "Discard and start new" question (show / close / Cancel drop it)
+    run('new');
+  }
   /** Cancel on the discard question: back to the list, the focus on its first item. */
   async function cancelDiscard() {
     confirming = null;
+    template = null;
     await tick();
     panel()?.querySelector<HTMLElement>('[data-testid="project-new"]')?.focus();
   }
@@ -432,6 +453,7 @@
    * when something would be lost, else the folder picker opens at once.
    */
   export function request(cmd: 'new' | 'open') {
+    template = null; // never a template's question carried over
     const active = document.activeElement;
     opener = active instanceof HTMLElement && active !== document.body ? active : (btns.File ?? null);
     if (discardWarning(p, restoreOffer) !== null) {
@@ -529,7 +551,7 @@
     }
   }
   // ---- submenus (SUBMENUS above) --------------------------------------------
-  type SubName = 'lib' | 'notes' | 'kits';
+  type SubName = 'lib' | 'notes' | 'kits' | 'templates';
   /** The open submenu (one at a time). */
   let sub = $state<SubName | null>(null);
   const subBtns: Partial<Record<SubName, HTMLButtonElement>> = $state({});
@@ -734,6 +756,24 @@
             </div>
           {:else}
             <button class="it" data-testid="project-new" onclick={() => run('new')}><Icon icon={FilePlus} /><span class="l">New</span></button>
+            <!-- New from template ▸ (plan 27): Empty (= New) and the templates (state/templates.ts). -->
+            <div class="subwrap" data-sub="templates">
+              <button
+                class="it" data-testid="project-new-template" bind:this={subBtns.templates} aria-expanded={sub === 'templates'} aria-controls="menu-templates"
+                use:inertItem={p.loading ? LOADING : null} title="Start a new project from a template: tempo, key, tracks, mix and a 32-bar arrangement"
+                onclick={(e) => subClick('templates', e)} onkeydown={(e) => subBtnKey(e, 'templates')}
+              ><Icon icon={Files} /><span class="l">New from template</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+              {#if sub === 'templates'}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="sub" id="menu-templates" role="group" aria-label="Templates" bind:this={subEl} onkeydown={subKey}>
+                  {#each TEMPLATE_MENU as t (t.id)}
+                    <button class="it" data-testid="menu-template-{t.id}" title={t.blurb} onclick={() => newFrom(t.id)}>
+                      <span class="l">{t.name}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
             <button class="it" data-testid="project-open" onclick={() => run('open')}><Icon icon={FolderOpen} /><span class="l">Open…</span><kbd>{kbd('Mod+O')}</kbd></button>
             <button class="it" data-testid="project-save" onclick={() => run('save')}><Icon icon={FloppyDisk} /><span class="l">Save</span><kbd>{kbd('Mod+S')}</kbd></button>
             <button class="it" data-testid="project-save-as" onclick={() => run('saveAs')}><Icon icon={FloppyDiskBack} /><span class="l">Save as…</span><kbd>{kbd('Shift+Mod+S')}</kbd></button>

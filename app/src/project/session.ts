@@ -12,6 +12,7 @@ import { markBusy, markIdle } from '../state/idle';
 import { Project } from '../state/project.svelte';
 import { folderInUse, pickProjectFolder, readProject, writeProject } from './fsFolder';
 import { loadProject } from './load';
+import { EMPTY_TEMPLATE_ID, buildTemplate, templateById } from '../state/templates';
 import type { LoadEngine, SampleDecoder } from './load';
 import { fingerprintOf, projectFiles, projectFingerprint, serialize } from './serialize';
 
@@ -21,6 +22,13 @@ export interface SessionEngine extends LoadEngine {
 
 export interface ProjectSession {
   newProject(): Promise<void>;
+  /**
+   * File ▸ New from template ▸ (plan 27 Task 2; state/templates.ts): like
+   * New, the session is replaced by template `id` (EMPTY_TEMPLATE_ID: New
+   * itself), with no undo history, not dirty; then its kit's samples land
+   * as a starting point (onFresh). An unknown id is an error banner.
+   */
+  newFromTemplate(id: string): Promise<void>;
   open(): Promise<void>;
   save(): Promise<void>;
   saveAs(): Promise<void>;
@@ -92,9 +100,11 @@ export interface SessionOptions {
   /**
    * After New built its fresh session (the default kit's drum track, empty
    * rows; history cleared; marked saved): App starts loading the kit into
-   * it (state/defaultKit.ts loadDefaultKit, not awaited).
+   * it (state/defaultKit.ts loadDefaultKit, not awaited). New from template
+   * calls it the same way, with the template's kit (`kitId`; New: the
+   * starter kit, undefined).
    */
-  onFresh?: (trackId: string) => void;
+  onFresh?: (trackId: string, kitId?: string) => void;
   /** The folder picker (tests pass a fake). */
   pick?: () => Promise<FileSystemDirectoryHandle | null>;
 }
@@ -224,6 +234,45 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
     await saveInto(dir, dir.name);
   }
 
+  async function newProject() {
+    try {
+      await replace(serialize(new Project()), new Map());
+      const kit = addDefaultDrumTrack(p, engine); // like a fresh start
+      p.history?.clear(); // that track is the starting point, not an edit
+      p.folder = null;
+      markSaved(p);
+      if (kit) opts.onFresh?.(kit.id);
+      banners.error = null;
+      banners.load = null;
+    } catch (e) {
+      banners.error = `Couldn't start a new project — ${message(e)}`;
+    }
+  }
+
+  /**
+   * New from template: the template's project (built from shipped content,
+   * so it validates; its drum rows are empty) replaces the session through
+   * the same load as Open, then it is a fresh session exactly as New's is:
+   * history cleared, no folder, marked saved; its kit's samples then land
+   * as the starting point (onFresh: loadDefaultKit with the template's kit).
+   */
+  async function newFromTemplate(id: string) {
+    const t = templateById(id);
+    try {
+      if (!t) throw new Error(`no template "${id}"`);
+      await replace(buildTemplate(t.id), new Map());
+      p.history?.clear(); // the load cleared it; nothing since is an edit
+      p.folder = null;
+      markSaved(p);
+      const drums = p.tracks.find((x) => x.kind === 'drum');
+      if (drums) opts.onFresh?.(drums.id, t.kit);
+      banners.error = null;
+      banners.load = null;
+    } catch (e) {
+      banners.error = `Couldn't start "${t?.name ?? id}" — ${message(e)}`;
+    }
+  }
+
   return {
     saveTo,
     openFrom,
@@ -244,20 +293,7 @@ export function createProjectSession(p: Project, engine: SessionEngine, opts: Se
           banners.error = `Couldn't open "${dir?.name ?? 'project'}" — ${message(e)}`;
         }
       }),
-    newProject: () =>
-      once(async () => {
-        try {
-          await replace(serialize(new Project()), new Map());
-          const kit = addDefaultDrumTrack(p, engine); // like a fresh start
-          p.history?.clear(); // that track is the starting point, not an edit
-          p.folder = null;
-          markSaved(p);
-          if (kit) opts.onFresh?.(kit.id);
-          banners.error = null;
-          banners.load = null;
-        } catch (e) {
-          banners.error = `Couldn't start a new project — ${message(e)}`;
-        }
-      }),
+    newProject: () => once(newProject),
+    newFromTemplate: (id) => once(() => (id === EMPTY_TEMPLATE_ID ? newProject() : newFromTemplate(id))),
   };
 }

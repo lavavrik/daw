@@ -5,7 +5,8 @@ shape + `validate`), `migrate.ts` (older schema versions → the current
 one), `serialize.ts` (pure `serialize`, `projectFingerprint`),
 `load.ts` (`loadProject`: reset + command replay), `commands.ts`
 (`projectCommands`: the pure replay-order builder), `fsFolder.ts` (folder
-I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
+I/O), `session.ts` (Project menu: New / New from template / Open… / Save /
+Save As…, banners),
 `autosave.ts` (OPFS autosave + restore on start).
 
 ```
@@ -349,6 +350,108 @@ counts as failed.
 (`loadDefaultKit`) is still landing, the kit load waits for it before
 committing (`kitSamples.ts trackDefaultKitLoad` / `defaultKitLoad`), so the
 starter samples are part of the "before" and one undo restores them.
+
+## Templates (`state/templates.ts`, plan 27 Task 2)
+
+**File ▸ New from template ▸** offers *Empty* (plain New) and four house
+templates. Each one replaces the session with a complete, mixed, arranged
+32-bar project built only from shipped content: a built-in kit, house
+patches, factory patterns and mixer presets (`state/mixerPresets.ts`).
+
+| Template | BPM | Key | Kit | Drums: intro → groove (+ Fill A) | Bass | Chords / stab | Pad | Reverb · Delay · Master |
+|---|---|---|---|---|---|---|---|---|
+| Deep House 122 | 122 | A minor | Deep | Minimal → Deep shuffle | Organ Bass · Deep walk | Tine Keys · Deep m9 progression | Warm Pad · Pad long | Dark · 3/16 dub · Warm |
+| Garage 130 | 130 | F minor | Garage | Minimal → Garage 2-step | Sub Bass · Garage sub | Garage Organ · Garage organ | — | Plate · 1/8 ping-pong · Clean |
+| Acid 126 | 126 | A minor | Drum Machine | Four on the floor → Classic house | Acid Line · Acid 303 line | Piano Stab · Classic M1 stab | — | Room · 3/16 dub · Clean |
+| Tech House 125 | 125 | G minor | Drum Machine | Minimal → Tech house | Reese Bass · Rolling 16ths | Brass Stab · Dub chord | Strings · Pad long | Hall · 3/16 dub · Warm |
+
+**Building one** (`buildTemplate(id)`, a `ProjectJson`). The ordinary
+actions run on a fresh `Project` that has no history and an engine sink
+that discards every command, and the result is serialized. So a template is
+exactly what the user's own edits would have made, and it goes through
+`validate` and `loadProject` like any opened project:
+- tempo and key (`setTempo`, `setKey`);
+- the tracks:
+  - **Drums**, with the kit's eight role rows, empty;
+  - Bass, Chords (named Keys, Organ or Stab) and, where there is one, Pad,
+    each with its house patch;
+- the patterns, each loaded by `loadFactoryPattern`, which maps drum rows by
+  role:
+  - The factory synth patterns are written in A minor. For F minor and G
+    minor they are moved with `transposeNotes`, by the nearer way (−4 and
+    −2 semitones, `factoryShift`). A plain shift keeps a natural-minor line
+    natural minor.
+  - Each track's empty "Pattern 1" is deleted.
+  - The drum track opens on its main groove.
+- the mix, in this order:
+  - each strip's preset: Kick punch on Drums (one strip for the whole kit:
+    its low shelf weights the kick and its +1.5 dB top lifts the hats),
+    Bass tidy, Stab space on the chords, Pad wash;
+  - the template's fader and send levels (a touch of reverb on the drums,
+    more delay where the part wants it: Dub chord's echoes are written a
+    dotted 8th apart, the acid line gets a dub echo);
+  - **Duck to kick** on the bass and the pad. It must come after their
+    presets, because every track preset rewrites the whole comp section.
+    Both strips key the same Kick row: one of `MAX_KEYS`;
+  - the reverb, delay and master presets;
+- the clips (`addClip`) and the song loop around the 32 bars (off).
+
+**The arrangement** (`ARRANGEMENT`, four 8-bar sections; a clip longer
+than its pattern repeats it; each section's block is its own clip):
+
+| Bars | Section | Drums | Bass | Chords | Pad |
+|---|---|---|---|---|---|
+| 1–4 | intro | sparse groove | — | — | — |
+| 5–8 | intro | main groove | — | — | — |
+| 9–15, 16 | groove | main groove, **Fill A** on 16 | ✓ | ✓ | — |
+| 17–23, 24 | break | nothing (no kick), **Fill A** on 24 | — | ✓ | ✓ |
+| 25–32 | drop | main groove | ✓ | ✓ | ✓ |
+
+The drums "thin in": a sparse groove, then the full one. The pad first
+enters in the break, so the drop is the only section with every part.
+
+**Balance.** Presets never move faders, so each part's fader is template
+data. The values came from meter readings in the running app: each strip's
+RMS of its meter peaks over 4 bars of the drop. The targets were drums near
+−10 dB, chords near −15, and the bass and pad as close to −16 as the +6 dB
+fader allows. Duck to kick's fixed values (−30 dB threshold, 8:1, keyed
+from a kick near 0 dBFS) take 10–15 dB off the bass and the pad under a
+four-on-the-floor kick, so their faders sit high. Garage's skipping kick
+ducks its sub much less. The master keeps about 4 dB of headroom instead of
+riding the limiter.
+
+**Starting one** (`session.newFromTemplate(id)`, the submenu,
+`__daw.newFromTemplate` for e2e). It works like New:
+- the menu asks the same inline "Discard and start new" question when
+  something would be lost (`discardWarning`);
+- the template's JSON replaces the session through `loadProject` (the same
+  `replace` as Open);
+- the history is cleared, there is no folder, and the project is marked
+  saved;
+- `onFresh(drumTrackId, kitId)` then has the App drop the old session's
+  autosave and start `loadDefaultKit(…, kitId)`.
+
+That is the default kit's mechanism with the template's kit: row *i* gets
+the kit's *i*-th sound, fetched through `library/kitFiles.ts kitSample` and
+attached by `attachKitSample` as part of the **starting point**. So once the
+samples land the template is complete, with no dirty mark, no version bump
+(nothing autosaves) and no undo history. *Empty* is plain New. An unknown id
+is an error banner, and the session is unchanged.
+
+Tests: `state/templates.test.ts` covers every template. Each one:
+- builds and validates with no warnings;
+- names only content that exists;
+- has its notes transposed and in key;
+- places the clip count and the sections of the arrangement;
+- gets its presets, faders, sends and ducks;
+- keys ≤ `MAX_KEYS` drum rows;
+- loads through `loadProject` with a valid engine replay;
+- round-trips through `serialize`.
+
+`defaultKit.test.ts` takes New from template through to the kit landing,
+clean and with no history. `tests/e2e/templates.spec.ts` covers the menu,
+32 bars, clean and no undo, sound, Garage in F minor, and the unsaved
+changes question.
 
 ## Validation (`validate`)
 

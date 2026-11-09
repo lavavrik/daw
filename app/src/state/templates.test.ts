@@ -1,0 +1,182 @@
+// Project templates (plan 27 Task 2): every template builds from shipped
+// content, validates, loads, round-trips and arranges 32 bars as
+// state/templates.ts's header says.
+import { describe, expect, it } from 'vitest';
+import { BAR_TICKS, MAX_KEYS } from '../audio/protocol';
+import { inKey } from '../music/scales';
+import { loadProject } from '../project/load';
+import { validate } from '../project/schema';
+import type { DrumTrackJson, ProjectJson, SynthTrackJson } from '../project/schema';
+import { serialize } from '../project/serialize';
+import { checkLog, fakeDecoder, fakeEngine } from '../project/testFixture';
+import { factoryPattern } from './factoryPatterns';
+import { KIT_ROLES, kitById } from './kits';
+import { DUCK_TO_KICK } from './mixer-actions';
+import { presetById } from './mixerPresets';
+import { BUILTIN_PATCHES } from './patches';
+import { Project } from './project.svelte';
+import { ARRANGEMENT, SONG_BARS, TEMPLATES, buildTemplate, factoryShift, templateById, templateClipCount } from './templates';
+import type { Template } from './templates';
+
+const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+const synths = (j: ProjectJson) => j.tracks.filter((t): t is SynthTrackJson => t.kind === 'synth');
+const drumsOf = (j: ProjectJson) => j.tracks.find((t): t is DrumTrackJson => t.kind === 'drum')!;
+const byName = (j: ProjectJson, name: string) => j.tracks.find((t) => t.name === name)!;
+const mixOf = (j: ProjectJson, name: string) => j.mixer.tracks.find((m) => m.slot === byName(j, name).slot)!;
+/** Bars (1-based) where `t` has a clip playing. */
+const barsPlayed = (t: { clips: { start: number; len: number }[] }) => {
+  const bars = new Set<number>();
+  for (const c of t.clips) for (let b = c.start / BAR_TICKS; b < (c.start + c.len) / BAR_TICKS; b++) bars.add(b + 1);
+  return bars;
+};
+
+describe('the template table', () => {
+  it('has the plan\'s four templates, in menu order', () => {
+    expect(TEMPLATES.map((t) => [t.name, t.tempo])).toEqual([
+      ['Deep House 122', 122], ['Garage 130', 130], ['Acid 126', 126], ['Tech House 125', 125],
+    ]);
+    expect(TEMPLATES.map((t) => t.key)).toEqual([
+      { root: 9, scale: 'minor' }, { root: 5, scale: 'minor' }, { root: 9, scale: 'minor' }, { root: 7, scale: 'minor' },
+    ]);
+    expect(templateById('garage-130')?.kit).toBe('garage');
+    expect(templateById('nope')).toBeUndefined();
+  });
+
+  it.each(TEMPLATES.map((t) => [t.name, t] as const))('%s names only shipped content', (_, t: Template) => {
+    expect(kitById(t.kit)).toBeDefined();
+    for (const id of [t.drums.intro, t.drums.groove, t.drums.fill]) expect(factoryPattern(id)?.kind, id).toBe('drum');
+    expect(t.drums.fill).toBe('factory-fill-a');
+    for (const part of [t.bass, t.chords, t.pad].filter((x) => x !== undefined)) {
+      expect(BUILTIN_PATCHES.some((p) => p.name === part.patch), part.patch).toBe(true);
+      expect(factoryPattern(part.pattern)?.kind, part.pattern).toBe('synth');
+      expect(presetById(part.preset)?.kind, part.preset).toBe('track');
+    }
+    expect(presetById(t.drums.preset)?.kind).toBe('track');
+    expect(presetById(t.reverb)?.kind).toBe('reverb');
+    expect(presetById(t.delay)?.kind).toBe('delay');
+    expect(presetById(t.master)?.kind).toBe('master');
+  });
+
+  it('the factory shift goes the nearer way', () => {
+    expect(factoryShift({ root: 9, scale: 'minor' })).toBe(0);
+    expect(factoryShift({ root: 5, scale: 'minor' })).toBe(-4); // F minor
+    expect(factoryShift({ root: 7, scale: 'minor' })).toBe(-2); // G minor
+    expect(factoryShift({ root: 0, scale: 'minor' })).toBe(3); // C minor: up 3, not down 9
+  });
+
+  it('an unknown template throws', () => {
+    expect(() => buildTemplate('nope')).toThrow(/unknown template/);
+  });
+});
+
+describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template) => {
+  const json = buildTemplate(t.id);
+
+  it('validates cleanly (no warnings)', () => {
+    const v = validate(roundJson(json));
+    expect('error' in v ? v.error : v.warnings).toEqual([]);
+  });
+
+  it('sets the tempo, key and name; tracks with kit rows (empty), patches and factory patterns', () => {
+    expect([json.name, json.tempo, json.key]).toEqual([t.name, t.tempo, t.key]);
+    const names = ['Drums', t.bass.track, t.chords.track, ...(t.pad ? [t.pad.track] : [])];
+    expect(json.tracks.map((x) => x.name)).toEqual(names);
+    const drums = drumsOf(json);
+    expect(drums.rows.map((r) => r.name)).toEqual([...KIT_ROLES]);
+    expect(drums.rows.every((r) => r.sample === null)).toBe(true); // they land after the load
+    expect(json.samples).toEqual([]);
+    expect(drums.patterns.map((p) => p.name).sort()).toEqual(
+      [...new Set([t.drums.intro, t.drums.groove, t.drums.fill])].map((id) => factoryPattern(id)!.name).sort(),
+    );
+    // The step grid opens on the main groove.
+    expect(drums.patterns.find((p) => p.engineIdx === drums.currentPattern)!.name).toBe(factoryPattern(t.drums.groove)!.name);
+    const parts = [t.bass, t.chords, ...(t.pad ? [t.pad] : [])];
+    for (const part of parts) {
+      const s = byName(json, part.track) as SynthTrackJson;
+      expect(s.patch.name).toBe(part.patch);
+      expect(s.patterns.map((p) => p.name)).toEqual([factoryPattern(part.pattern)!.name]); // no empty "Pattern 1"
+    }
+  });
+
+  it('transposes the factory notes from A minor into its key; every note is in key', () => {
+    const shift = factoryShift(t.key);
+    for (const part of [t.bass, t.chords, ...(t.pad ? [t.pad] : [])]) {
+      const f = factoryPattern(part.pattern)!;
+      if (f.kind !== 'synth') throw new Error('synth');
+      const got = (byName(json, part.track) as SynthTrackJson).patterns[0].notes;
+      expect(got.map((n) => [n.pitch, n.start, n.len, n.vel])).toEqual(f.notes.map((n) => [n.pitch + shift, n.start, n.len, n.vel]));
+      expect(got.every((n) => inKey(n.pitch, t.key))).toBe(true);
+    }
+  });
+
+  it('arranges 32 bars: intro thinning in, groove, break (no kick, no bass), drop', () => {
+    const clips = json.tracks.flatMap((x): { start: number; len: number }[] => x.clips);
+    expect(clips).toHaveLength(templateClipCount(t));
+    expect(Math.max(...clips.map((c) => c.start + c.len))).toBe(SONG_BARS * BAR_TICKS);
+    expect(Math.min(...clips.map((c) => c.start))).toBe(0);
+    const drums = drumsOf(json);
+    const patName = (engineIdx: number) => drums.patterns.find((p) => p.engineIdx === engineIdx)!.name;
+    const at = (bar: number) => drums.clips.filter((c) => c.start === (bar - 1) * BAR_TICKS).map((c) => patName(c.pattern));
+    expect(at(1)).toEqual([factoryPattern(t.drums.intro)!.name]);
+    expect(at(5)).toEqual([factoryPattern(t.drums.groove)!.name]);
+    expect(at(16)).toEqual(['Fill A']);
+    expect(at(24)).toEqual(['Fill A']);
+    expect(at(25)).toEqual([factoryPattern(t.drums.groove)!.name]);
+    // The break: drums only on its last bar (the fill), no bass; chords throughout.
+    const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+    const drumBars = barsPlayed(drums);
+    expect(range(17, 23).filter((b) => drumBars.has(b))).toEqual([]);
+    expect(range(1, 32).filter((b) => !drumBars.has(b))).toEqual(range(17, 23));
+    expect([...barsPlayed(byName(json, t.bass.track) as SynthTrackJson)].sort((a, b) => a - b)).toEqual([...range(9, 16), ...range(25, 32)]);
+    expect([...barsPlayed(byName(json, t.chords.track) as SynthTrackJson)].sort((a, b) => a - b)).toEqual(range(9, 32));
+    if (t.pad) expect([...barsPlayed(byName(json, t.pad.track) as SynthTrackJson)].sort((a, b) => a - b)).toEqual(range(17, 32));
+    expect(json.loop).toEqual({ on: false, start: 0, end: SONG_BARS * BAR_TICKS });
+    expect(ARRANGEMENT.drums.filter((c) => c.pattern === 'fill').map((c) => c.bar + 1)).toEqual([16, 24]);
+  });
+
+  it('mixes: strip presets, faders, sends, Duck to kick on the bass and pad, return and master presets', () => {
+    const p = (name: string, param: string) => mixOf(json, name).params[param];
+    const kick = drumsOf(json).rows.findIndex((r) => r.name === 'Kick');
+    const drumSlot = drumsOf(json).slot;
+    const ducked = [t.bass.track, ...(t.pad ? [t.pad.track] : [])];
+    for (const name of ducked) {
+      expect(mixOf(json, name).key, name).toEqual({ track: drumSlot, row: kick });
+      for (const [k, v] of Object.entries(DUCK_TO_KICK)) expect(p(name, k), `${name} ${k}`).toBe(v);
+    }
+    expect(mixOf(json, t.chords.track).key).toBeNull();
+    expect(mixOf(json, 'Drums').key).toBeNull();
+    // The strip presets' EQ (the duck leaves EQ alone).
+    expect(p('Drums', 'eq_low')).toBe(presetById(t.drums.preset)!.params.eq_low);
+    expect(p(t.bass.track, 'eq_hp')).toBe(presetById(t.bass.preset)!.params.eq_hp);
+    expect(p(t.chords.track, 'eq_hp')).toBe(presetById(t.chords.preset)!.params.eq_hp);
+    if (t.pad) expect(p(t.pad.track, 'eq_hp')).toBe(presetById(t.pad.preset)!.params.eq_hp);
+    // Sends: the template's own where it sets one, else the preset's.
+    expect(p('Drums', 'send_a')).toBe(t.drums.sends?.a ?? presetById(t.drums.preset)!.params.send_a);
+    expect(p(t.chords.track, 'send_b')).toBe(t.chords.sends?.b ?? presetById(t.chords.preset)!.params.send_b);
+    // The balance: the template's faders.
+    expect(p('Drums', 'fader')).toBe(t.drums.fader);
+    for (const part of [t.bass, t.chords, ...(t.pad ? [t.pad] : [])]) expect(p(part.track, 'fader')).toBe(part.fader);
+    for (const [ch, id] of [['reverb', t.reverb], ['delay', t.delay], ['master', t.master]] as const) {
+      for (const [k, v] of Object.entries(presetById(id)!.params)) expect(json.mixer[ch][k], `${ch} ${k}`).toBe(v);
+    }
+  });
+
+  it('keys at most MAX_KEYS distinct drum rows', () => {
+    const rows = new Set(json.mixer.tracks.flatMap((m) => (m.key && m.key.row !== null ? [`${m.key.track}:${m.key.row}`] : [])));
+    expect(rows.size).toBeGreaterThan(0);
+    expect(rows.size).toBeLessThanOrEqual(MAX_KEYS);
+  });
+
+  it('loads through the real load (a valid engine replay) and round-trips through serialize', async () => {
+    const p = new Project();
+    const e = fakeEngine();
+    expect(await loadProject(p, e, roundJson(json), new Map(), fakeDecoder)).toEqual([]);
+    expect(checkLog(e.log).errors).toEqual([]);
+    expect(serialize(p)).toEqual(roundJson(json));
+    expect(p.tracks.map((x) => x.name)[0]).toBe('Drums');
+  });
+
+  it('builds the same project every time', () => {
+    expect(buildTemplate(t.id)).toEqual(json);
+  });
+});

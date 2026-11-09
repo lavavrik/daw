@@ -59,6 +59,8 @@ test('keyboard: ↓ opens on the first item, ↑ ↓ Home End move, ← → go t
   await expect(panel(page, 'File')).toBeVisible();
   await expect(page.getByTestId('project-new')).toBeFocused();
   await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('project-new-template')).toBeFocused(); // plan 27: New from template ▸
+  await page.keyboard.press('ArrowDown');
   await expect(page.getByTestId('project-open')).toBeFocused();
   await page.keyboard.press('End');
   await expect(page.getByTestId('undo-take')).toBeFocused(); // inert (no take), but reachable

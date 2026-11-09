@@ -264,12 +264,13 @@
    * pending autosave is dropped and its autosave deleted (not overwritten by
    * the untouched New session, which would then be offered back as "Restore
    * last session" on the next start); the first real edit autosaves as
-   * usual. Only the owner tab touches the autosave. Then the kit loads.
+   * usual. Only the owner tab touches the autosave. Then the kit loads (New
+   * from template: the template's kit, `kitId`, into its drum track).
    */
-  function onFresh(trackId: string) {
+  function onFresh(trackId: string, kitId?: string) {
     autosave.cancel();
     if (ownerClaim?.owns) void deleteAutosave();
-    void loadDefaultKit(project, live, trackId, kitDeps);
+    void loadDefaultKit(project, live, trackId, kitDeps, kitId);
   }
 
   /** "Mar 3, 14:05" (or just "14:05" today). */
@@ -389,6 +390,8 @@
   openFrom: (dir) => (session ? session.openFrom(dir) : Promise.reject(new Error('audio not started'))),
   // Project ▸ New without the menu (e2e: New in the very task audio started).
   newProject: () => (session ? session.newProject() : Promise.reject(new Error('audio not started'))),
+  // File ▸ New from template ▸ <id> without the menu (e2e).
+  newFromTemplate: (id: string) => (session ? session.newFromTemplate(id) : Promise.reject(new Error('audio not started'))),
   autosave,
   history: null,
   // The project as undo / save see it (e2e: the restart's serialize-equality check).

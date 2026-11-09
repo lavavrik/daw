@@ -10,7 +10,7 @@ import type { ProjectJson, SampleJson } from '../project/schema';
 import { createProjectSession, markSaved } from '../project/session';
 import type { SessionEngine } from '../project/session';
 import { projectFingerprint, serialize } from '../project/serialize';
-import { fakeAudio, fakeDecoder } from '../project/testFixture';
+import { fakeAudio, fakeDecoder, fakeEngine } from '../project/testFixture';
 import { toggleStep } from './actions';
 import { commandEdits } from './edits';
 import { markBusy, markIdle } from './idle';
@@ -318,5 +318,57 @@ describe('loadDefaultKit', () => {
       expect(errors).toEqual([]);
       expect(rowsOf(p).every((r) => r.sampleId !== null)).toBe(true);
     });
+  });
+});
+
+describe('a template\'s kit (File ▸ New from template, plan 27 Task 2)', () => {
+  it('New from template, then its kit lands: every row filled from that kit, not dirty, no version bump, no undo history', async () => {
+    const p = new Project();
+    const base = fakeEngine();
+    const engine: SessionEngine & typeof base = Object.assign(base, {
+      context: fakeDecoder,
+      send(op: number, a = 0, b = 0, c = 0, d = 0) {
+        base.log.push({ op, args: [a, b, c, d] });
+        commandEdits(p, op); // App: e.onCommand
+        return true;
+      },
+    });
+    const h = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, engine, from, to) });
+    p.history = h;
+    const fetched: string[] = [];
+    const d: KitDeps = {
+      fetchFile: async (file, kitId) => (fetched.push(`${kitId}/${file}`), new File([fakeAudio(20)], `${kitId}-${file}`, { type: 'audio/wav' })),
+      onError: (m) => { throw new Error(m); },
+    };
+    let landing: Promise<void> | null = null;
+    const s = createProjectSession(p, engine, {
+      onFresh: (trackId, kitId) => (landing = loadDefaultKit(p, engine, trackId, d, kitId)),
+    });
+    await s.newFromTemplate('deep-house-122');
+    expect(landing).not.toBeNull();
+    const v0 = p.version;
+    expect([p.dirty, h.canUndo]).toEqual([false, false]);
+    await landing;
+    const rows = rowsOf(p);
+    expect(rows.map((r) => r.name)).toEqual(NAMES); // the Deep kit's roles
+    expect(rows.map((r) => p.sampleFiles.get(r.sampleId!)?.name)).toEqual(
+      ['kick.wav', 'clap.wav', 'closed-hat.wav', 'open-hat.wav', 'snare.wav', 'rim.wav', 'shaker.wav', 'perc.wav'].map((f) => `deep-${f}`),
+    );
+    expect(fetched.every((f) => f.startsWith('deep/'))).toBe(true);
+    expect(p.dirty).toBe(false);
+    expect(p.version).toBe(v0);
+    expect(p.savedFingerprint).toBe(projectFingerprint(p)); // the baseline includes the kit
+    expect([h.canUndo, h.canRedo]).toEqual([false, false]);
+    // The rest of the template is intact: tempo, its four tracks, the Bass ducked from the Kick row.
+    expect(p.tempo).toBe(122);
+    expect(p.tracks.map((t) => t.name)).toEqual(['Drums', 'Bass', 'Keys', 'Pad']);
+    expect(p.mixer.channels[p.tracks[1].id].key).toEqual({ trackId: p.tracks[0].id, row: 0 });
+  });
+
+  it('an unknown kit id loads nothing', async () => {
+    const { p, t, engine } = fresh();
+    const { d } = deps();
+    await loadDefaultKit(p, engine, t.id, d, 'nope');
+    expect(rowsOf(p).every((r) => r.sampleId === null)).toBe(true);
   });
 });

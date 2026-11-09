@@ -201,6 +201,36 @@ describe('project session', () => {
     expect(p.dirty).toBe(false);
     expect(p.savedFingerprint).toBe(projectFingerprint(p));
   });
+  it('New from template replaces the session like New: the template, not dirty, history cleared, onFresh with its kit (plan 27)', async () => {
+    const { p } = await buildFixture();
+    markEdited(p);
+    let cleared = 0;
+    p.history = { clear: () => cleared++, settle: () => {}, transact: (_l: string, fn: () => unknown) => fn() } as unknown as Project['history'];
+    const fresh: [string, string | undefined][] = [];
+    const s = createProjectSession(p, engine(), { onFresh: (trackId, kitId) => fresh.push([trackId, kitId]) });
+    await s.newFromTemplate('garage-130');
+    expect(banners.error).toBeNull();
+    expect([p.name, p.tempo, p.key]).toEqual(['Garage 130', 130, { root: 5, scale: 'minor' }]);
+    expect(p.tracks.map((t) => t.name)).toEqual(['Drums', 'Bass', 'Organ']);
+    expect(fresh).toEqual([[p.tracks[0].id, 'garage']]);
+    expect(cleared).toBeGreaterThan(0);
+    expect(p.folder).toBeNull();
+    expect(p.dirty).toBe(false);
+    expect(p.savedFingerprint).toBe(projectFingerprint(p));
+  });
+  it('New from template ▸ Empty is New; an unknown template is an error banner and changes nothing', async () => {
+    const { p } = await buildFixture();
+    const fresh: [string, string | undefined][] = [];
+    const s = createProjectSession(p, engine(), { onFresh: (trackId, kitId) => fresh.push([trackId, kitId]) });
+    await s.newFromTemplate('nope');
+    expect(banners.error).toBe('Couldn\'t start "nope" — no template "nope"');
+    expect(p.name).toBe('Fixture');
+    expect(fresh).toEqual([]);
+    await s.newFromTemplate('empty');
+    expect(banners.error).toBeNull();
+    expect(p.tracks.map((t) => t.kind)).toEqual(['drum']);
+    expect(fresh).toEqual([[p.tracks[0].id, undefined]]); // the starter kit, as New
+  });
   it('New is not an edit: its default track bumps no version, so the untouched session is never autosaved (final I1)', async () => {
     const { p } = await buildFixture();
     markEdited(p); // the old session had edits

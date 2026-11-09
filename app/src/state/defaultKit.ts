@@ -4,6 +4,12 @@
 // from the starter kit (library/starter.ts). Restoring an autosave or
 // opening a project never adds it.
 //
+// File ▸ New from template (plan 27 Task 2, state/templates.ts) uses the
+// same two steps with another built-in kit: the template's drum track is
+// built with the kit's role rows (empty), and loadDefaultKit(…, kitId)
+// fills them the same way, so a template's samples are part of its
+// starting point too.
+//
 // Two steps:
 //   1. addDefaultDrumTrack (synchronous, part of building the fresh
 //      session, before markSaved / history.clear): the drum track with the
@@ -41,7 +47,7 @@
 // "drop it again". It waits on the busy / idle signal (state/idle.ts
 // whenIdle), not a timer; if the session is replaced meanwhile the signal
 // never comes for it and the load just ends there.
-import { starterSample } from '../library/starter';
+import { kitSample } from '../library/kitFiles';
 import type { ProjectJson, SampleJson } from '../project/schema';
 import { fingerprintOf, serialize } from '../project/serialize';
 import { addDrumTrack, setRowSample } from './actions';
@@ -52,7 +58,8 @@ import { whenIdle } from './idle';
 import { MAX_ROWS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
 import { importSample } from './sampleImport';
-import { KITS, STARTER_KIT_ID } from './kits';
+import { KITS, STARTER_KIT_ID, kitById } from './kits';
+import type { Kit } from './kits';
 import { rememberKitSample, trackDefaultKitLoad } from './kitSamples';
 import type { ImportEngine } from './sampleImport';
 import { deferSampleAssign } from './sampleLoads';
@@ -93,8 +100,8 @@ export function addDefaultDrumTrack(p: Project, sink: CommandSink): DrumTrack | 
 }
 
 export interface KitDeps {
-  /** The kit file as a File (the app: fetched from the bundle). */
-  fetchFile(file: string): Promise<File>;
+  /** File `file` of kit `kitId` as a File (the app: fetched from the bundle, library/kitFiles.ts). */
+  fetchFile(file: string, kitId: string): Promise<File>;
   /** A sample could not be loaded (the app: the error banner). */
   onError(message: string): void;
   /**
@@ -105,9 +112,9 @@ export interface KitDeps {
   landedAfterEdit?(): void;
 }
 
-/** The app's: the bundled starter kit, problems in the error banner. */
+/** The app's: the bundled kits, problems in the error banner. */
 export const appKitDeps: KitDeps = {
-  fetchFile: (file) => starterSample(file),
+  fetchFile: (file, kitId) => kitSample(kitId, file),
   onError: (m) => (banners.error = m),
 };
 
@@ -121,24 +128,35 @@ function emptyRow(p: Project, trackId: string, rowId: string): boolean {
 /**
  * Step 2: fill the default track's rows (track `trackId`, built by
  * addDefaultDrumTrack) from the kit. Resolves when every row is done
- * (loaded, failed, deferred until Stop, or skipped).
+ * (loaded, failed, deferred until Stop, or skipped). `kitId`: another
+ * built-in kit (a template's, state/templates.ts) for a track whose rows are
+ * that kit's roles in its order: row i gets the kit's i-th sound, as the
+ * default track's rows get the starter kit's. An unknown id loads nothing.
  */
-export function loadDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps = appKitDeps): Promise<void> {
+export function loadDefaultKit(
+  p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps = appKitDeps, kitId = STARTER_KIT_ID,
+): Promise<void> {
+  const kit = kitById(kitId);
+  if (!kit) return Promise.resolve();
   // Registered so a kit loaded onto this track meanwhile waits for it
   // (state/kitSamples.ts, kit-actions.ts loadKitOntoTrack).
-  const done = fillDefaultKit(p, engine, trackId, deps);
+  const done = fillDefaultKit(p, engine, trackId, kit, deps);
   trackDefaultKitLoad(p, trackId, done);
   return done;
 }
 
-async function fillDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps) {
+async function fillDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, kit: Kit, deps: KitDeps) {
   const gen = p.generation;
   const v0 = p.version; // the session as it started: any change of it is a user edit
   const t = p.tracks.find((x) => x.id === trackId);
   if (t?.kind !== 'drum') return;
-  const jobs = t.rows.slice(0, DEFAULT_KIT.length).map((r, i) => ({ rowId: r.id, kit: DEFAULT_KIT[i] }));
+  const kitText = kit.id === STARTER_KIT_ID ? 'Starter kit' : `${kit.name} kit`;
+  // Row i takes sound i, named after its role (the starter kit: DEFAULT_KIT[i]).
+  const jobs = t.rows.slice(0, kit.rows.length).map((r, i): { rowId: string; kit: KitRow } => ({
+    rowId: r.id, kit: { name: kit.rows[i].role, file: kit.rows[i].file },
+  }));
   // All fetches at once; imports one at a time in row order (ids follow the rows).
-  const files = jobs.map((j) => deps.fetchFile(j.kit.file).then((file) => ({ file }), (error: unknown) => ({ error })));
+  const files = jobs.map((j) => deps.fetchFile(j.kit.file, kit.id).then((file) => ({ file }), (error: unknown) => ({ error })));
   for (const [i, j] of jobs.entries()) {
     const got = await files[i];
     if (p.generation !== gen) return; // the session was replaced
@@ -158,15 +176,15 @@ async function fillDefaultKit(p: Project, engine: ImportEngine & CommandSink, tr
       if (!empty()) continue;
       r = await importSample(p, engine, got.file, empty);
       if (p.generation !== gen) return;
-      if (!r.ok && r.busy) r = { ok: false, error: `Couldn't load the starter kit's "${j.kit.file}" — drag it in from the Browser's Starter kit` };
+      if (!r.ok && r.busy) r = { ok: false, error: `Couldn't load the ${kitText}'s "${j.kit.file}" — drag it in from the Browser's ${kitText}` };
     }
     if (!r.ok) {
       if (r.error) deps.onError(r.error);
       continue;
     }
     const attach = (id: number) => {
-      // A starter-kit load reuses it (kitSamples.ts); only in the session that imported it.
-      if (p.generation === gen) rememberKitSample(p, STARTER_KIT_ID, j.kit.file, id);
+      // A load of the same kit reuses it (kitSamples.ts); only in the session that imported it.
+      if (p.generation === gen) rememberKitSample(p, kit.id, j.kit.file, id);
       if (attachKitSample(p, engine, trackId, j.rowId, id) && p.version !== v0) deps.landedAfterEdit?.();
     };
     if (r.deferred) deferSampleAssign(r.id, j.kit.name, attach);

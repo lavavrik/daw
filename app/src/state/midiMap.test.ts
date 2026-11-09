@@ -63,7 +63,7 @@ describe('MIDI mappings', () => {
     // A Master-row channel too.
     expect(learnMidi(p, 10, 'reverb', { kind: 'mix', param: 'rev_size' })).toBe(true);
     applyCc(p, sink, 10, 0);
-    expect(p.mixer.reverb.params[mixParam('rev_size').id]).toBe(mixParam('rev_size').min);
+    expect(p.mixer.returns.find((r) => r.id === 'reverb')!.params[mixParam('rev_size').id]).toBe(mixParam('rev_size').min);
   });
 
   it('mapped fader follows the fader law; a knob still uses ccValue', async () => {

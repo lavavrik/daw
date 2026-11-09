@@ -508,7 +508,7 @@
       {@const color = r.trackId === MASTER_ROW ? MASTER_GREY : (trackById.get(r.trackId)?.color ?? MASTER_GREY)}
       <div class="row lane" class:compact={r.h < 40} class:lifted={reorder?.id === r.trackId} style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
         {#if info}
-          {@const label = targetLabel(info.owner, info.lane.target)}
+          {@const label = targetLabel(p, info.owner, info.lane.target)}
           <div class="lrow">
             <button
               type="button" class="en" class:on={info.lane.enabled} aria-pressed={info.lane.enabled}
@@ -538,7 +538,7 @@
             aria-valuenow={r.h}
             aria-valuemin={LANE_MIN_H}
             aria-valuemax={LANE_MAX_H}
-            aria-label={`Height of the ${targetLabel(info.owner, info.lane.target)} lane`}
+            aria-label={`Height of the ${targetLabel(p, info.owner, info.lane.target)} lane`}
             tabindex="0"
             data-testid={`lane-resize-${laneId}`}
             title="Drag to resize the lane · double-click: default height ({AUTO_H} px) · ↑/↓: 8 px (Shift: 1 px)"

@@ -9,6 +9,8 @@ import { DUCK_TO_KICK, accepts, duckToKick, setMix } from './mixer-actions';
 import { KIT_ROLES } from './kits';
 import { MIX_PRESETS, applyPreset, presetById, presetsFor } from './mixerPresets';
 import type { PresetKind } from './mixerPresets';
+import { findReturn } from './returns';
+import type { ReturnKind } from './returns';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
@@ -19,10 +21,10 @@ function fake() {
 }
 const P = (n: string) => mixParam(n).id;
 /** The catalog's channel kind and wire index of a preset kind (a track: any slot). */
-const CHANNEL: Record<PresetKind, { kind: MixTarget; index: number }> = {
+const CHANNEL: Record<PresetKind, { kind: MixTarget; index: number; retKind?: ReturnKind }> = {
   track: { kind: 'track', index: 0 },
-  reverb: { kind: 'return', index: MIX_RETURN0 },
-  delay: { kind: 'return', index: MIX_RETURN0 + 1 },
+  reverb: { kind: 'return', index: MIX_RETURN0, retKind: 'reverb' },
+  delay: { kind: 'return', index: MIX_RETURN0 + 1, retKind: 'delay' },
   master: { kind: 'master', index: MIX_MASTER },
 };
 function withHistory(p: Project, sink: ReturnType<typeof fake>['sink']) {
@@ -47,7 +49,7 @@ describe('mixer presets: the tables', () => {
       for (const [name, v] of Object.entries(pr.params)) {
         const def = MIX_PARAMS.find((d) => d.name === name);
         expect(def, `${pr.name}: ${name}`).toBeDefined();
-        expect(accepts(def!, ch.kind, ch.index), `${pr.name}: ${name} on ${pr.kind}`).toBe(true);
+        expect(accepts(def!, ch.kind, ch.index, ch.retKind), `${pr.name}: ${name} on ${pr.kind}`).toBe(true);
         expect(Number.isFinite(v), `${pr.name}: ${name}`).toBe(true);
         expect(v, `${pr.name}: ${name}`).toBeGreaterThanOrEqual(def!.min);
         expect(v, `${pr.name}: ${name}`).toBeLessThanOrEqual(def!.max);
@@ -116,9 +118,9 @@ describe('applyPreset', () => {
     const { sink, sent } = fake();
     const s = addSynthTrack(p, sink)!;
     expect(applyPreset(p, sink, 'reverb', 'hall')).toBe(true);
-    expect(p.mixer.reverb.params[P('rev_decay')]).toBeGreaterThan(3);
+    expect(findReturn(p, 'reverb')!.params[P('rev_decay')]).toBeGreaterThan(3);
     expect(applyPreset(p, sink, 'delay', 'delay-dub')).toBe(true);
-    expect(p.mixer.delay.params[P('delay_time')]).toBe(mixParam('delay_time').choices.indexOf('3/16'));
+    expect(findReturn(p, 'delay')!.params[P('delay_time')]).toBe(mixParam('delay_time').choices.indexOf('3/16'));
     expect(applyPreset(p, sink, 'master', 'master-warm')).toBe(true);
     expect(p.mixer.master.params[P('eq_on')]).toBe(1);
     sent.length = 0;

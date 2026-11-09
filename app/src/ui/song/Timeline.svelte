@@ -249,8 +249,8 @@
     for (const r of layout) {
       if (r.kind !== 'lane') continue;
       const f = r.laneId ? info.get(r.laneId) : undefined;
-      const def = f ? targetDef(f.owner, f.lane.target) : null;
-      if (f && def) out.push({ row: r, ...f, def, label: targetLabel(f.owner, f.lane.target) });
+      const def = f ? targetDef(p, f.owner, f.lane.target) : null;
+      if (f && def) out.push({ row: r, ...f, def, label: targetLabel(p, f.owner, f.lane.target) });
       else if (!r.laneId) out.push({ row: r, empty: true as const });
     }
     return out;

@@ -26,7 +26,10 @@
 //      re-sent; a clip that moved between Audio lanes keeps its UI id: a
 //      new clip takes the id of a clip leaving another Audio track with the
 //      same sample, length, offset, loop, gain and fades);
-//   3. mixer params by name, then sidechain keys (their sources exist now);
+//   3. mixer params by name: the track strips; the returns (plan 29: a
+//      return that goes turns its slot Off, one that comes gets RETURN_KIND
+//      first, which resets its slot; see diffReturns), then their params;
+//      the master; then sidechain keys (their sources exist now);
 //   3b. automation lanes (plan 10), matched by engine lane: the engine lost
 //      the lanes of the tracks and modules step 1 removed (the state drops
 //      them there too). Then, explicitly CLEAR FIRST, THEN RE-TARGET: every
@@ -47,7 +50,7 @@
 //      the key (plan 26: state/key-actions.ts applyKey, which also sends the
 //      engine's key command, keyCommands).
 // The project name is not restored (a Save As names the project, not an edit).
-import { MAX_CLIPS, MAX_NOTES, MIX_RETURN0, MIX_MASTER, Op, packPort } from '../audio/protocol';
+import { MAX_CLIPS, MAX_NOTES, MIX_MASTER, Op, packPort } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
@@ -56,6 +59,8 @@ import type { CommandSink } from '../state/actions';
 import { markEdited } from '../state/edits';
 import { accepts, setMix, setSidechain } from '../state/mixer-actions';
 import type { MixChannelTarget } from '../state/mixer-actions';
+import { KIND_CODE, findReturn, newReturn, returnChannel } from '../state/returns';
+import type { ReturnKind, ReturnState } from '../state/returns';
 import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-actions';
 import { patchRack } from '../state/rack-actions';
 import { sendClip, setLoop } from '../state/song-actions';
@@ -66,11 +71,11 @@ import type {
   AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumRow, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
   Project, SidechainKey, SynthTrack, Track,
 } from '../state/project.svelte';
-import { laneCommands, lanesState, midiMapState, trackCommands, trackState } from '../project/commands';
-import { MASTER_CHANNEL_INDEX, pointCommands, pointMap } from '../state/automation';
+import { laneCommands, lanesState, masterChannelIndex, midiMapState, trackCommands, trackState } from '../project/commands';
+import { pointCommands, pointMap } from '../state/automation';
 import type { PointTuple } from '../state/automation';
 import type {
-  AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, PatternTrackJson, ProjectJson, SynthTrackJson,
+  AudioTrackJson, ClipJson, DrumTrackJson, LaneJson, MixParamsJson, PatternTrackJson, ProjectJson, ReturnJson, SynthTrackJson,
 } from '../project/schema';
 import { laneJson } from '../project/serialize';
 import { libraryJson, libraryState } from '../state/pattern-library';
@@ -137,18 +142,21 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   }
   if (order.some((t, i) => p.tracks[i] !== t)) p.tracks = order;
 
-  // 3. Mixer: params by name, then keys.
-  const params = (target: MixChannelTarget, ch: ChannelState, kind: MixTarget, index: number, ps: MixParamsJson) => {
+  // 3. Mixer: params by name (strips, returns, master), then keys.
+  const params = (target: MixChannelTarget, ch: ChannelState, kind: MixTarget, index: number, ps: MixParamsJson, retKind?: ReturnKind) => {
     for (const def of MIX_PARAMS) {
-      if (!accepts(def, kind, index)) continue;
+      if (!accepts(def, kind, index, retKind)) continue;
       const v = ps[def.name] ?? def.default;
       if (ch.params[def.id] !== v) setMix(p, sink, target, def.name, v);
     }
   };
   const strips = new Map(to.mixer.tracks.map((s) => [s.slot, s]));
   for (const t of order) params(t.id, p.mixer.channels[t.id], 'track', t.slot, strips.get(t.slot)?.params ?? {});
-  params('reverb', p.mixer.reverb, 'return', MIX_RETURN0, to.mixer.reverb);
-  params('delay', p.mixer.delay, 'return', MIX_RETURN0 + 1, to.mixer.delay);
+  diffReturns(p, sink, to.mixer.returns);
+  for (const rj of to.mixer.returns) {
+    const r = findReturn(p, rj.id)!;
+    params(r.id, r, 'return', returnChannel(r), rj.params, r.kind);
+  }
   params('master', p.mixer.master, 'master', MIX_MASTER, to.mixer.master);
   const keyOf = (t: Track): SidechainKey | null => {
     const k = strips.get(t.slot)?.key;
@@ -180,6 +188,39 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
   syncPatternFocus(p, sink); // the pattern transport (if it runs) follows the restored selection
   markEdited(p); // also when only UI-only fields (names) changed
+}
+
+/**
+ * Step 3's returns, before their params: `p.mixer.returns` becomes `want`'s
+ * (same ids, kinds, slots, names and order) and the engine learns each
+ * slot's kind. A live return is kept (its state object and UI survive) when
+ * `want` has it with the same id, kind and slot. Any other is gone: its slot
+ * goes Off (RETURN_KIND 0; the engine fades its tail). A wanted return that
+ * is not kept is new: RETURN_KIND of its kind resets its slot to the
+ * catalog defaults and so does its state, and step 3 then sends its params
+ * (MIX_SET after RETURN_KIND, as the engine needs). The engine ignores a
+ * RETURN_KIND of the kind a slot already runs, so a new return taking the
+ * slot of a different one of the same kind is sent Off first (a clean slot,
+ * as a load would leave it).
+ */
+function diffReturns(p: Project, sink: CommandSink, want: ReturnJson[]) {
+  const live = p.mixer.returns;
+  const sameOne = (r: ReturnState, w: ReturnJson) => r.id === w.id && r.kind === w.kind && r.slot === w.slot;
+  for (const r of live) {
+    const w = want.find((x) => x.slot === r.slot);
+    if (w && sameOne(r, w)) continue;
+    if (!w || w.kind === r.kind) sink.send(Op.RETURN_KIND, r.slot, KIND_CODE.off);
+  }
+  const next = want.map((w) => {
+    const r = live.find((x) => sameOne(x, w));
+    if (r) {
+      if (r.name !== w.name) r.name = w.name;
+      return r;
+    }
+    sink.send(Op.RETURN_KIND, w.slot, KIND_CODE[w.kind]);
+    return newReturn(w.id, w.kind, w.name, w.slot);
+  });
+  if (next.length !== live.length || next.some((r, i) => r !== live[i])) p.mixer.returns = next;
 }
 
 /**
@@ -476,7 +517,7 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
     for (const lj of tj.automation) want.set(lj.lane, { owner: trackOwner(tj.slot), channel: tj.slot, patch: tj.kind === 'synth' ? tj.patch : null, lj });
   }
   for (const mj of to.mixer.automation) {
-    want.set(mj.lane, { owner: mj.channel, channel: MASTER_CHANNEL_INDEX[mj.channel], patch: null, lj: mj });
+    want.set(mj.lane, { owner: mj.channel, channel: masterChannelIndex(to.mixer, mj.channel), patch: null, lj: mj });
   }
   // Clear first...
   for (const [i, e] of engine) {
@@ -519,7 +560,7 @@ function diffLanes(p: Project, sink: CommandSink, engine: Map<number, EngineLane
   const oldOf = (ch: MasterChannel) => masterOld.filter((x) => x.channel === ch).map((x) => x.lane);
   if (!same(masterOld.map((x) => ({ channel: x.channel, ...laneJson(x.lane) })), to.mixer.automation)) {
     const lanes: { channel: MasterChannel; lane: AutomationLane }[] = [];
-    for (const ch of ['reverb', 'delay', 'master'] as const) {
+    for (const ch of new Set(to.mixer.automation.map((mj) => mj.channel))) {
       const mine = to.mixer.automation.filter((mj) => mj.channel === ch);
       const got = reuse(oldOf(ch), mine) ?? oldOf(ch);
       mine.forEach((mj, k) => lanes.push({ channel: ch, lane: got[k] }));

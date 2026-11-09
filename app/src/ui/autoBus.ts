@@ -78,7 +78,7 @@ export interface AutoBusDeps {
 }
 
 export interface AutoBus {
-  /** Follow `target` on `owner` (a track id, or 'reverb' / 'delay' / 'master'); returns the unregister. */
+  /** Follow `target` on `owner` (a track id, a return id or 'master'); returns the unregister. */
   register(owner: MixChannelTarget, target: AutoTarget, fn: AutoFn): () => void;
   /**
    * A manual move of the control is about to be sent: in Song mode, with an
@@ -156,8 +156,8 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
     if (cache && cache.key.every((k, i) => k === key[i])) return cache;
     const map = new Map<string, { lane: AutomationLane; def: AutoDef }>();
     for (const x of projectLanes(p)) {
-      const def = targetDef(x.owner, x.lane.target);
-      if (def) map.set(keyOf(isMasterChannel(x.owner) ? x.owner : x.owner.id, x.lane.target), { lane: x.lane, def });
+      const def = targetDef(p, x.owner, x.lane.target);
+      if (def) map.set(keyOf(typeof x.owner === 'string' ? x.owner : x.owner.id, x.lane.target), { lane: x.lane, def });
     }
     cache = { key, map, ids: new Set([...map.values()].map((x) => x.lane.id)) };
     return cache;
@@ -277,8 +277,8 @@ export function createAutoBus(d: AutoBusDeps): AutoBus {
       return true;
     },
     canAutomate(owner, target) {
-      const o = isMasterChannel(owner) ? owner : p.tracks.find((t) => t.id === owner);
-      return !!o && targetDef(o, target) !== null;
+      const o = isMasterChannel(p, owner) ? owner : p.tracks.find((t) => t.id === owner);
+      return !!o && targetDef(p, o, target) !== null;
     },
     canLearn: (owner, target) => canLearn(p, owner, target),
     midiCc: (owner, target) => mappingFor(p, owner, target)?.cc ?? null,

@@ -29,9 +29,9 @@ import { edit } from './edits';
 import type { MixChannelTarget } from './mixer-actions';
 import type { AutoPoint, AutoTarget, AutomationLane, Project } from './project.svelte';
 
-/** The owner a lane belongs to, from a track id or a Master row channel name. */
+/** The owner a lane belongs to, from a track id or a Master row channel (a return id or 'master'). */
 function ownerOf(p: Project, owner: MixChannelTarget): AutoOwner | null {
-  if (isMasterChannel(owner)) return owner;
+  if (isMasterChannel(p, owner)) return owner;
   return p.tracks.find((t) => t.id === owner) ?? null;
 }
 
@@ -39,23 +39,23 @@ function ownerOf(p: Project, owner: MixChannelTarget): AutoOwner | null {
 export function findLane(p: Project, laneId: string): { lane: AutomationLane; owner: AutoOwner; def: AutoDef } | null {
   for (const x of projectLanes(p)) {
     if (x.lane.id !== laneId) continue;
-    const def = targetDef(x.owner, x.lane.target);
+    const def = targetDef(p, x.owner, x.lane.target);
     return def ? { lane: x.lane, owner: x.owner, def } : null;
   }
   return null;
 }
 
 /**
- * A new, enabled lane without points on `owner` (a track id, or 'reverb' /
- * 'delay' / 'master' for the Master row) driving `target`; it takes the
+ * A new, enabled lane without points on `owner` (a track id, or a return id
+ * or 'master' for the Master row) driving `target`; it takes the
  * lowest free engine lane. Refused (null) when the target is not
  * automatable there (targetDef), already has a lane on that owner, or all
  * MAX_AUTO_LANES are in use.
  */
 export function addLane(p: Project, sink: CommandSink, owner: MixChannelTarget, target: AutoTarget): AutomationLane | null {
   const o = ownerOf(p, owner);
-  if (!o || !targetDef(o, target)) return null;
-  const lanes = isMasterChannel(o) ? p.mixer.automation.filter((x) => x.channel === o).map((x) => x.lane) : o.automation;
+  if (!o || !targetDef(p, o, target)) return null;
+  const lanes = typeof o === 'string' ? p.mixer.automation.filter((x) => x.channel === o).map((x) => x.lane) : o.automation;
   if (lanes.some((l) => sameTarget(l.target, target))) return null;
   if (laneCount(p) >= MAX_AUTO_LANES) return null;
   const engineLane = freeLane(p);
@@ -63,14 +63,14 @@ export function addLane(p: Project, sink: CommandSink, owner: MixChannelTarget, 
   return edit(p, 'Add automation lane', () => {
     const lane: AutomationLane = { id: crypto.randomUUID(), lane: engineLane, target: { ...target }, enabled: true, points: [] };
     let live: AutomationLane;
-    if (isMasterChannel(o)) {
+    if (typeof o === 'string') {
       p.mixer.automation.push({ channel: o, lane });
       live = p.mixer.automation[p.mixer.automation.length - 1].lane; // reactive proxy
     } else {
       o.automation.push(lane);
       live = o.automation[o.automation.length - 1];
     }
-    const c = laneSetCommand(engineLane, o, target);
+    const c = laneSetCommand(p, engineLane, o, target);
     sink.send(c[0], c[1], c[2], c[3], c[4]);
     return live;
   });
@@ -81,7 +81,7 @@ export function removeLane(p: Project, sink: CommandSink, laneId: string): boole
   const f = findLane(p, laneId);
   if (!f) return false;
   return edit(p, 'Remove automation lane', () => {
-    if (isMasterChannel(f.owner)) p.mixer.automation = p.mixer.automation.filter((x) => x.lane.id !== laneId);
+    if (typeof f.owner === 'string') p.mixer.automation = p.mixer.automation.filter((x) => x.lane.id !== laneId);
     else f.owner.automation = f.owner.automation.filter((l) => l.id !== laneId);
     sink.send(Op.AUTO_LANE_CLEAR, f.lane.lane);
     return true;

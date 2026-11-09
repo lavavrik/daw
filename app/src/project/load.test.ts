@@ -422,17 +422,49 @@ describe('loadProject', () => {
     expect(await loadProject(p, e, v2, files, fakeDecoder)).toEqual([]);
     expect(checkLog(e.log).errors).toEqual([]);
     const out = serialize(p);
-    expect(out.schemaVersion).toBe(6);
+    expect(out.schemaVersion).toBe(7);
     // Params appended to the catalog since are written with their defaults.
     expect(out).toEqual({
       ...v2,
-      schemaVersion: 6,
+      schemaVersion: 7,
       tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
       mixer: { ...withAppendedMixer(v2.mixer), automation: [] },
       midiMap: [],
       patternLibrary: [],
       key: { root: 9, scale: 'minor' },
     });
+  });
+
+  it('orphan send resets on load: a send to a slot with no return loads at its default, its lanes and mappings dropped', async () => {
+    const { p: src, drums, synth } = await buildFixture();
+    learnMidi(src, 30, drums.id, { kind: 'mix', param: 'send_a' }); // slot 0 has a return: kept
+    const json = roundJson(serialize(src)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const strip = json.mixer.tracks.find((s: { slot: number }) => s.slot === drums.slot);
+    strip.params.send_e = -6; // slot 4: no return there
+    strip.params.send_e_pre = 1;
+    json.tracks[0].automation.push({ lane: 60, enabled: true, target: { mix: 'send_e' }, points: [[0, -12, 0]] });
+    json.midiMap.push({ cc: 31, track: synth.slot, target: { mix: 'send_e' } });
+    const p = new Project();
+    const e = fakeEngine();
+    const warnings = await loadProject(p, e, json, filesOf(json, src), fakeDecoder);
+    expect(checkLog(e.log).errors).toEqual([]);
+    const ch = p.mixer.channels[p.tracks.find((t) => t.slot === drums.slot)!.id];
+    expect(ch.params[mixParam('send_e').id]).toBe(mixParam('send_e').default);
+    expect(ch.params[mixParam('send_e_pre').id]).toBe(0);
+    expect(ch.params[mixParam('send_a').id]).toBe(-10); // a send to a live return is untouched
+    // Nothing reached the engine for the orphan: RESET_ALL left it at its default.
+    const sendE = mixParam('send_e').id;
+    expect(e.log.some((x) => 'op' in x && x.op === Op.MIX_SET && (x.args[1] === sendE || x.args[1] === sendE + 1))).toBe(false);
+    expect(p.tracks[0].automation.some((l) => l.target.kind === 'mix' && l.target.param === 'send_e')).toBe(false);
+    expect(p.midiMap.map((m) => m.cc)).toEqual([30]);
+    const w = warnings.join('\n');
+    expect(w).toMatch(/send_e.*no return/);
+    expect(w).toMatch(/send_e_pre.*no return/);
+    expect(w).toMatch(/MIDI CC 31.*send_e/);
+    // Saved again, the strip carries the default (no warning the second time).
+    const again = roundJson(serialize(p));
+    expect(again.mixer.tracks.find((s: { slot: number }) => s.slot === drums.slot)!.params.send_e).toBe(mixParam('send_e').default);
+    expect(await loadProject(new Project(), fakeEngine(), again, filesOf(again, p), fakeDecoder)).toEqual([]);
   });
 
   it('the pattern library survives a save and reopen; a load replaces the old session\'s', async () => {
@@ -521,7 +553,7 @@ describe('loadProject', () => {
     // A failure before anything changed (invalid file) keeps the folder.
     const q = new Project();
     q.folder = { name: 'Old Song' } as FileSystemDirectoryHandle;
-    await expect(loadProject(q, fakeEngine(), { schemaVersion: 7 }, new Map(), fakeDecoder)).rejects.toThrow();
+    await expect(loadProject(q, fakeEngine(), { schemaVersion: 99 }, new Map(), fakeDecoder)).rejects.toThrow();
     expect(q.folder).not.toBeNull();
   });
 

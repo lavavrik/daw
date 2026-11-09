@@ -1,7 +1,7 @@
 // Mixer edits. Like actions.ts: mutate Project.mixer AND send the matching
-// engine command. Channel index on the wire: the track's slot, or
-// MIX_RETURN0 (+ 1) / MIX_MASTER for the shared channels.
-import { MAX_KEYS, MIX_RETURN0, MIX_MASTER, Op, keyCode } from '../audio/protocol';
+// engine command. Channel index on the wire: the track's slot, a return's
+// MIX_RETURN0 + slot (state/returns.ts returnChannel), or MIX_MASTER.
+import { MAX_KEYS, MIX_MASTER, Op, keyCode } from '../audio/protocol';
 import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
@@ -9,37 +9,49 @@ import type { CommandSink } from './actions';
 import { edit } from './edits';
 import { flashHint } from './banners.svelte';
 import { rowHasRole } from './kits';
+import { findReturn, returnChannel } from './returns';
+import type { ReturnKind } from './returns';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
 
-export type MixChannelTarget = string /* trackId */ | 'reverb' | 'delay' | 'master';
+/** A mixer channel by owner string: a track id, a return id (state/returns.ts) or 'master'. */
+export type MixChannelTarget = string;
 
-interface Resolved {
+/** A channel as the wire and `accepts` see it. `retKind`: a return's kind. */
+export interface ResolvedChannel {
   ch: ChannelState;
   index: number;
   kind: MixTarget;
+  retKind?: ReturnKind;
 }
 
-function resolve(p: Project, target: MixChannelTarget): Resolved | null {
-  switch (target) {
-    case 'reverb': return { ch: p.mixer.reverb, index: MIX_RETURN0, kind: 'return' };
-    case 'delay': return { ch: p.mixer.delay, index: MIX_RETURN0 + 1, kind: 'return' };
-    case 'master': return { ch: p.mixer.master, index: MIX_MASTER, kind: 'master' };
-  }
+/** The channel `target` names in `p`, or null (no such track or return). */
+export function resolveChannel(p: Project, target: MixChannelTarget): ResolvedChannel | null {
+  if (target === 'master') return { ch: p.mixer.master, index: MIX_MASTER, kind: 'master' };
+  const r = findReturn(p, target);
+  if (r) return { ch: r, index: returnChannel(r), kind: 'return', retKind: r.kind };
   const t = p.tracks.find((x) => x.id === target);
   const ch = p.mixer.channels[target];
   return t && ch ? { ch, index: t.slot, kind: 'track' } : null;
 }
 
+/** The state of the channel `target` names, if it exists. */
+export const channelState = (p: Project, target: MixChannelTarget): ChannelState | undefined => resolveChannel(p, target)?.ch;
+
 /**
- * Does channel `index` (of kind `kind`) take `def`? Mirrors the engine's
- * MixParam::accepts (engine/src/mixer/catalog.rs): reverb-group params only
- * on the Reverb return, delay-group params only on the Delay return (both are
- * 'return' channels), everything else by `appliesTo`. Also the rule for
- * mixer params in a project file (project/schema.ts).
+ * Does a channel of kind `kind` (engine channel `index`; a return of kind
+ * `retKind`) take `def`? The APP's rule, stricter than the engine's
+ * MixParam::accepts (engine/src/mixer/catalog.rs), which lets both effect
+ * groups onto any return slot since a slot can hold either effect: here a
+ * reverb-group param needs a return whose kind is 'reverb' and a delay-group
+ * param one whose kind is 'delay' (no `retKind`: neither); everything else
+ * goes by `appliesTo`. `index` only names the channel (every slot of a kind
+ * takes the same params). Also the rule for mixer params, lanes and MIDI
+ * mappings in a project file (project/schema.ts) and for what a save writes
+ * (project/serialize.ts).
  */
-export function accepts(def: MixParamDef, kind: MixTarget, index: number): boolean {
-  if (def.group === 'reverb') return index === MIX_RETURN0;
-  if (def.group === 'delay') return index === (MIX_RETURN0 + 1);
+export function accepts(def: MixParamDef, kind: MixTarget, index: number, retKind?: ReturnKind): boolean {
+  if (def.group === 'reverb') return kind === 'return' && retKind === 'reverb';
+  if (def.group === 'delay') return kind === 'return' && retKind === 'delay';
   return def.appliesTo.includes(kind);
 }
 
@@ -53,11 +65,11 @@ export function setMix(
   opts?: { coalesce?: string; label?: string },
 ) {
   return edit(p, opts?.label ?? `Set ${MIX_PARAMS.find((d) => d.name === param)?.label ?? param}`, () => {
-    const r = resolve(p, target);
+    const r = resolveChannel(p, target);
     const def = MIX_PARAMS.find((d) => d.name === param);
     // The engine rejects params the channel does not take; so do we (nothing
     // stored, nothing sent).
-    if (!r || !def || !accepts(def, r.kind, r.index)) return;
+    if (!r || !def || !accepts(def, r.kind, r.index, r.retKind)) return;
     const v = clampParam(def, value);
     r.ch.params[def.id] = v;
     sink.send(Op.MIX_SET, r.index, def.id, v);
@@ -65,7 +77,7 @@ export function setMix(
 }
 
 const flag = (p: Project, target: MixChannelTarget, name: string): number | null => {
-  const r = resolve(p, target);
+  const r = resolveChannel(p, target);
   return r ? r.ch.params[mixParam(name).id] : null;
 };
 
@@ -92,7 +104,7 @@ export function toggleSolo(p: Project, sink: CommandSink, trackId: string, o: { 
   });
 }
 
-/** Tracks and the two returns. */
+/** Tracks and the returns. */
 export function toggleMute(p: Project, sink: CommandSink, target: MixChannelTarget) {
   return edit(p, 'Mute', () => {
     const cur = flag(p, target, 'mute');

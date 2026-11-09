@@ -35,7 +35,8 @@
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
   import { MAX_KEYS, MIX_METER_STRIDE } from '../../audio/protocol';
   import type { ChannelState, Project, SidechainKey } from '../../state/project.svelte';
-  import { duckToKick, keyLabel, kickKey, pickSidechain, rowKeyAllowed, setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { channelState, duckToKick, keyLabel, kickKey, pickSidechain, rowKeyAllowed, setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
+  import { KIND_NAME, findReturn } from '../../state/returns';
   import { applyPreset, presetsFor } from '../../state/mixerPresets';
   import type { PresetKind } from '../../state/mixerPresets';
   import { flashHint } from '../../state/banners.svelte';
@@ -62,7 +63,7 @@
     p: Project;
     engine: AudioEngine;
     bus: MeterBus;
-    /** Track id, or 'reverb' / 'delay' / 'master'. */
+    /** Track id, a return's id, or 'master'. */
     target: MixChannelTarget;
     kind: MixTarget;
     /** Mixer channel index (meters): track slot or MIX_*. */
@@ -77,9 +78,9 @@
 
   /** The strip colour: the track's, or a neutral for returns and the master. */
   const knobColor = $derived(color ?? 'var(--text-dim)');
-  const ch = $derived<ChannelState | undefined>(
-    kind === 'track' ? p.mixer.channels[target] : p.mixer[target as 'reverb' | 'delay' | 'master'],
-  );
+  const ch = $derived<ChannelState | undefined>(channelState(p, target));
+  /** A return's effect (null: a track or the master). */
+  const retKind = $derived(kind === 'return' ? (findReturn(p, target)?.kind ?? null) : null);
   const val = (n: string) => ch?.params[mixParam(n).id] ?? mixParam(n).default;
   const set = (n: string, v: number) => setMix(p, engine, target, n, v);
   /** The lane target of mixer param `n` on this channel (Knob / Fader follow it: ui/autoBus.ts). */
@@ -88,17 +89,17 @@
   const group = (g: string): MixParamDef[] => MIX_PARAMS.filter((d) => d.group === g && d.appliesTo.includes(kind));
   const eqKnobs = $derived(group('eq').filter((d) => d.name !== 'eq_on'));
   const compKnobs = $derived(group('comp').filter((d) => d.name !== 'comp_on'));
-  const fxKnobs = $derived(target === 'reverb' ? group('reverb') : target === 'delay' ? group('delay') : []);
+  const fxKnobs = $derived(retKind ? group(retKind) : []);
   const ceilingDb = $derived(kind === 'master' ? val('limiter_ceiling') : 0);
 
   // ---- presets -------------------------------------------------------------
-  const presets = $derived(presetsFor(kind === 'track' ? 'track' : (target as Exclude<PresetKind, 'track'>)));
+  const presets = $derived(presetsFor(kind === 'track' ? 'track' : kind === 'master' ? 'master' : (retKind ?? 'reverb') as PresetKind));
   /** Duck to kick is offered on track strips, except the drum track that plays the Kick. */
   const canDuck = $derived(kind === 'track' && kickKey(p)?.trackId !== target);
   const presetsTitle = $derived(
     kind === 'track' ? `Presets: EQ, comp and sends in one go${canDuck ? '; Duck to kick' : ''}`
     : kind === 'master' ? 'Presets: the master EQ and limiter in one go'
-    : `Presets: this return's EQ and ${target === 'reverb' ? 'reverb' : 'delay'} in one go`,
+    : `Presets: this return's EQ and ${retKind ?? 'effect'} in one go`,
   );
   function duck() {
     const r = duckToKick(p, engine, target);
@@ -330,7 +331,7 @@
   {/if}
 
   {#if fxKnobs.length}
-    <Section title={target === 'reverb' ? 'Reverb' : 'Delay'} {name} testid="fx">
+    <Section title={retKind ? KIND_NAME[retKind] : ''} {name} testid="fx">
       {#each fxKnobs as d (d.id)}
         <!-- Synced delay times are clamped to 2 s by the engine: say so. -->
         <Knob variant="mech" size="sm" def={d} value={val(d.name)} color={knobColor} moduleName={name} testid={`knob-${d.name}`} auto={autoOf(d.name)} onchange={(v) => set(d.name, v)}

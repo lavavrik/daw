@@ -140,7 +140,7 @@ test('save then load reproduces the beat', async ({ page }) => {
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { names, version: json.schemaVersion, tmp: await dir.getFileHandle('project.json.tmp').then(() => true, () => false) };
   }, dirName);
-  expect(listing).toMatchObject({ version: 6, tmp: false }); // plan 26: schema v6
+  expect(listing).toMatchObject({ version: 7, tmp: false }); // plan 29: schema v7
   // The kick plus the default kit's other seven rows (plan 8 Task 4: the kit is in the project).
   expect(listing.names).toHaveLength(8);
   expect(listing.names).toContainEqual(expect.stringMatching(/^\d+-[0-9a-f]{8}-kick\.wav$/)); // <id>-<content hash>-<name>
@@ -494,7 +494,7 @@ test('v1 project opens in v6', async ({ page }) => {
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
     return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
   }, dst);
-  expect(out.schemaVersion).toBe(6);
+  expect(out.schemaVersion).toBe(7);
   // Everything but the version, the sample file names (they carry the content
   // hash), the empty lanes (v2 -> v3), mappings (v3 -> v4), pattern library
   // (v4 -> v5) and key (v5 -> v6) is as saved in v1.
@@ -565,7 +565,7 @@ test('v2 project opens in v6', async ({ page }) => {
     await (window as unknown as { __daw: Daw }).__daw.saveTo(dir);
     return JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
   }, dst);
-  expect(out.schemaVersion).toBe(6);
+  expect(out.schemaVersion).toBe(7);
   // Everything but the version, the sample file names (they carry the content
   // hash), the mode (Song, switched above to listen), the empty lanes, mappings,
   // pattern library and key is as saved in v2.

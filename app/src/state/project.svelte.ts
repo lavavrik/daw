@@ -6,6 +6,8 @@ import type { History } from '../history/history';
 import type { MidiMapping } from './midiMap';
 import { DEFAULT_KEY } from '../music/scales';
 import type { MusicKey } from '../music/scales';
+import { defaultReturns } from './returns';
+import type { ReturnState } from './returns';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -146,8 +148,12 @@ export type LibraryPattern =
   | { id: string; name: string; kind: 'drum'; stepCount: 16 | 32 | 64; swing: number; rows: LibraryDrumRow[] }
   | { id: string; name: string; kind: 'synth'; bars: number; notes: LibraryNote[] };
 
-/** The mixer channels a Master row lane can target. */
-export type MasterChannel = 'reverb' | 'delay' | 'master';
+/**
+ * The mixer channels a Master row lane (or a MIDI mapping off a track) can
+ * target: a return's id (state/returns.ts) or 'master'. Tell one from a
+ * track id with automation.ts isMasterChannel(p, x).
+ */
+export type MasterChannel = string;
 
 export interface DrumTrack {
   kind: 'drum';
@@ -302,8 +308,8 @@ export interface ChannelState {
 export interface MixerState {
   /** Keyed by track id; created with the track, deleted with it. */
   channels: Record<string, ChannelState>;
-  reverb: ChannelState;
-  delay: ChannelState;
+  /** The returns (plan 29), in creation order; at most MAX_RETURNS, unique ids and slots. */
+  returns: ReturnState[];
   master: ChannelState;
   /** The Master row's lanes (returns and master), in creation order. */
   automation: { channel: MasterChannel; lane: AutomationLane }[];
@@ -322,7 +328,7 @@ export interface SampleFile {
 
 export const newChannel = (): ChannelState => ({ params: defaultMixParams(), key: null });
 export const newMixer = (): MixerState => ({
-  channels: {}, reverb: newChannel(), delay: newChannel(), master: newChannel(), automation: [],
+  channels: {}, returns: defaultReturns(), master: newChannel(), automation: [],
 });
 
 export class Project {

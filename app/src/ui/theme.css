@@ -77,6 +77,15 @@
   --track-5: #9b8cff;
   --track-6: #f47cc3;
   --track-7: #e0d45a;
+  /* Return colours by engine slot (plan 29; state/returns.ts returnColor): derived from the slot, never saved. */
+  --return-0: #7aa2ff;
+  --return-1: #ffa26b;
+  --return-2: #6be0a6;
+  --return-3: #d78cff;
+  --return-4: #ffd86b;
+  --return-5: #6bd3ff;
+  --return-6: #ff8fa3;
+  --return-7: #b8e06b;
   --cat-source: #ffb347;
   --cat-filter: #5cc8ff;
   --cat-modulation: #9b8cff;

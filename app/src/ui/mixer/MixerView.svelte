@@ -1,8 +1,9 @@
 <script lang="ts">
   // The Mixer tab: the whole mixer, whatever track is selected. A horizontal
   // scroll of strips — one per track in track order (same order and colours
-  // as the track headers), then the Reverb and Delay returns and the Master,
-  // which are styled neutrally so they never pass for tracks. Clicking a
+  // as the track headers), then the returns (p.mixer.returns, in creation
+  // order; plan 29) and the Master, which are styled neutrally so they never
+  // pass for tracks. Clicking a
   // track strip's name selects that track (the tab stays on the mixer).
   //
   // Meters: the app's one frame loop (ui/vis/frameLoop.ts) ticks the
@@ -20,7 +21,8 @@
   // selection falls back to the Master.
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../../audio/engine';
-  import { MIX_RETURN0, MIX_MASTER } from '../../audio/protocol';
+  import { MIX_MASTER } from '../../audio/protocol';
+  import { returnChannel } from '../../state/returns';
   import { selectTrack } from '../../state/actions';
   import type { Project } from '../../state/project.svelte';
   import { createMeterBus } from './meterBus';
@@ -42,8 +44,7 @@
   });
   $effect(() => analyserBus().sync([
     ...p.tracks.map((t) => ({ ch: t.slot, key: t.id })),
-    { ch: MIX_RETURN0, key: 'reverb' },
-    { ch: MIX_RETURN0 + 1, key: 'delay' },
+    ...p.mixer.returns.map((r) => ({ ch: returnChannel(r), key: r.id })),
   ]));
 </script>
 
@@ -63,8 +64,10 @@
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet — add one in the track list.</p>{/if}
   <div class="gap" aria-hidden="true"></div>
-  <Strip {p} {engine} {bus} target="reverb" kind="return" channel={MIX_RETURN0} name="Reverb" subtitle="Return (send A)" />
-  <Strip {p} {engine} {bus} target="delay" kind="return" channel={(MIX_RETURN0 + 1)} name="Delay" subtitle="Return (send B)" />
+  {#each p.mixer.returns as r (r.id)}
+    <!-- Send A..H is the tracks' send to slot 0..7 (plan 29 Task 7 redesigns these strips). -->
+    <Strip {p} {engine} {bus} target={r.id} kind="return" channel={returnChannel(r)} name={r.name} subtitle={`Return (send ${String.fromCharCode(65 + r.slot)})`} />
+  {/each}
   <Strip {p} {engine} {bus} target="master" kind="master" channel={MIX_MASTER} name="Master" subtitle="Limiter → output" />
   <AnalyserPanel {p} />
 </div>

@@ -41,8 +41,9 @@ Web MIDI input ─▶ input/midi.ts parseMidi ─▶ { t: 'cc', cc, v }  (CC 0..
 
 `Project.midiMap: MidiMapping[]`, each `{ cc, owner, target }`. `owner` and
 `target` name a control exactly as automation names a lane target: `owner`
-is a track id or a Master-row channel (`'reverb' | 'delay' | 'master'`, the
-`MixChannelTarget` of mixer-actions), `target` an `AutoTarget`
+is a track id or a Master-row channel (a return's id, such as `'reverb'` /
+`'delay'`, or `'master'`; the `MixChannelTarget` of mixer-actions, plan 29),
+`target` an `AutoTarget`
 (`{kind:'mix', param}` on the owner's strip, `{kind:'rack', module, param}`
 on a synth track's rack).
 
@@ -112,7 +113,7 @@ adds `[]`:
 ```ts
 type MidiMapJson =
   | { cc: number; track: number /* slot */; target: { mix: string } | { rack: [moduleIdx: number, name: string] } }
-  | { cc: number; channel: 'reverb' | 'delay' | 'master'; target: { mix: string } };
+  | { cc: number; channel: string /* a return id or 'master' */; target: { mix: string } };
 ```
 
 `validate` drops (with a warning) a malformed entry, a cc outside 0..119, an

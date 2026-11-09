@@ -6,8 +6,9 @@ import { addDrumTrack, removeDrumRow, removeTrack } from './actions';
 import { banners } from './banners.svelte';
 import { addSynthTrack } from './rack-actions';
 import {
-  DUCK_TO_KICK, DUCK_TO_KICK_V1, duckToKick, kickKey, keyLabel, pickSidechain, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo,
+  DUCK_TO_KICK, DUCK_TO_KICK_V1, accepts, duckToKick, kickKey, keyLabel, pickSidechain, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo,
 } from './mixer-actions';
+import { findReturn } from './returns';
 import { KIT_ROLES } from './kits';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -71,14 +72,52 @@ describe('mixer state', () => {
     setMix(p, sink, 'delay', 'rev_decay', 2);
     setMix(p, sink, 'reverb', 'delay_feedback', 0.5);
     expect(sent).toEqual([]);
-    expect(p.mixer.delay.params[P('rev_decay')]).toBe(mixParam('rev_decay').default);
-    expect(p.mixer.reverb.params[P('delay_feedback')]).toBe(mixParam('delay_feedback').default);
+    expect(findReturn(p, 'delay')!.params[P('rev_decay')]).toBe(mixParam('rev_decay').default);
+    expect(findReturn(p, 'reverb')!.params[P('delay_feedback')]).toBe(mixParam('delay_feedback').default);
     setMix(p, sink, 'reverb', 'rev_decay', 2);
     setMix(p, sink, 'delay', 'delay_feedback', 0.5);
     expect(sent).toEqual([
       [Op.MIX_SET, MIX_RETURN0, P('rev_decay'), 2, 0],
       [Op.MIX_SET, MIX_RETURN0 + 1, P('delay_feedback'), 0.5, 0],
     ]);
+  });
+
+  it('accepts: on a return, a reverb-group param needs a Reverb return and a delay-group one a Delay return', () => {
+    const rev = mixParam('rev_size');
+    const del = mixParam('delay_feedback');
+    const fader = mixParam('fader');
+    for (const slot of [0, 1, 5, 7]) {
+      const ch = MIX_RETURN0 + slot;
+      expect(accepts(rev, 'return', ch, 'reverb')).toBe(true);
+      expect(accepts(rev, 'return', ch, 'delay')).toBe(false);
+      expect(accepts(rev, 'return', ch)).toBe(false);
+      expect(accepts(del, 'return', ch, 'delay')).toBe(true);
+      expect(accepts(del, 'return', ch, 'reverb')).toBe(false);
+      expect(accepts(fader, 'return', ch, 'delay')).toBe(true);
+    }
+    expect(accepts(rev, 'track', 0, 'reverb')).toBe(false); // never on a track or the master
+    expect(accepts(del, 'master', MIX_MASTER, 'delay')).toBe(false);
+    expect(accepts(mixParam('send_h'), 'track', 3)).toBe(true);
+    expect(accepts(mixParam('send_h'), 'return', MIX_RETURN0 + 7, 'reverb')).toBe(false);
+  });
+
+  it('setMix on a return goes by its id to its slot\'s channel; its kind picks the effect params', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    p.mixer.returns.push({ id: 'r6', kind: 'delay', name: 'Delay 2', slot: 6, params: MIX_PARAMS.map((d) => d.default), key: null });
+    setMix(p, sink, 'r6', 'delay_time', 3);
+    setMix(p, sink, 'r6', 'rev_size', 0.5); // not on a Delay return
+    toggleMute(p, sink, 'r6');
+    expect(sent).toEqual([
+      [Op.MIX_SET, MIX_RETURN0 + 6, P('delay_time'), 3, 0],
+      [Op.MIX_SET, MIX_RETURN0 + 6, P('mute'), 1, 0],
+    ]);
+    expect(findReturn(p, 'r6')!.params[P('delay_time')]).toBe(3);
+    // A return that is gone (or never was) takes nothing.
+    sent.length = 0;
+    p.mixer.returns = p.mixer.returns.filter((r) => r.id !== 'delay');
+    setMix(p, sink, 'delay', 'fader', -3);
+    expect(sent).toEqual([]);
   });
 
   it('solo and mute toggle', () => {

@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { migrate } from './migrate';
 import { SCHEMA_VERSION, validate } from './schema';
+import { projectCommands } from './commands';
+import { MIX_MASTER, Op } from '../audio/protocol';
 
 const v1Fixture = () => JSON.parse(readFileSync(new URL('./testdata/v1-fixture.json', import.meta.url), 'utf8'));
 /** Frozen plan-9 save (schema 2) of buildFixture + addAudioFixture: Audio tracks, no automation. */
@@ -35,8 +37,32 @@ const withEmptyMidiMap = (v3: J): J => ({ ...v3, schemaVersion: 4, midiMap: [] }
 const withEmptyLibrary = (v4: J): J => ({ ...v4, schemaVersion: 5, patternLibrary: [] });
 /** What v5 -> v6 must make of a v5 project: the key A minor, nothing else changes. */
 const withAMinor = (v5: J): J => ({ ...v5, schemaVersion: 6, key: { root: 9, scale: 'minor' } });
+const isJ = (v: unknown): v is J => typeof v === 'object' && v !== null && !Array.isArray(v);
+/**
+ * What v6 -> v7 must make of a v6 project: `mixer.reverb` / `mixer.delay`
+ * become `mixer.returns`, the Reverb on slot 0 and the Delay on slot 1 with
+ * the ids 'reverb' / 'delay' (so lane and MIDI owners stay valid), nothing
+ * else changes. A mixer that is not an object read as all defaults, so it
+ * becomes one holding just the two default returns.
+ */
+const withReturns = (v6: J): J => {
+  const { reverb, delay, ...rest } = isJ(v6.mixer) ? v6.mixer : {};
+  return {
+    ...v6,
+    schemaVersion: 7,
+    mixer: {
+      ...rest,
+      returns: [
+        { id: 'reverb', kind: 'reverb', name: 'Reverb', slot: 0, params: reverb ?? {} },
+        { id: 'delay', kind: 'delay', name: 'Delay', slot: 1, params: delay ?? {} },
+      ],
+    },
+  };
+};
+/** v5 -> current. */
+const fromV5 = (v5: J): J => withReturns(withAMinor(v5));
 /** v4 -> current. */
-const fromV4 = (v4: J): J => withAMinor(withEmptyLibrary(v4));
+const fromV4 = (v4: J): J => fromV5(withEmptyLibrary(v4));
 /** v3 -> current. */
 const fromV3 = (v3: J): J => fromV4(withEmptyMidiMap(v3));
 /** v2 -> current. */
@@ -53,7 +79,7 @@ const V1 = (): Record<string, unknown>[] => [
 
 describe('schema migration', () => {
   it('migrates v1 to v2 losslessly (and on to v6)', () => {
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
     for (const v1 of V1()) {
       const before = JSON.stringify(v1);
       const v6 = migrate(v1) as Record<string, unknown>;
@@ -67,7 +93,7 @@ describe('schema migration', () => {
       expect(a).toEqual(validate(withEmptyAutomation({ ...v1, schemaVersion: 2 })));
       expect(a).toEqual(validate(fromV2({ ...v1, schemaVersion: 2 })));
       if ('error' in a) throw new Error(a.error);
-      expect(a.project.schemaVersion).toBe(6);
+      expect(a.project.schemaVersion).toBe(7);
       expect(a.project.patternLibrary).toEqual([]);
       expect(a.project.key).toEqual({ root: 9, scale: 'minor' });
     }
@@ -158,7 +184,7 @@ describe('schema migration', () => {
       const before = JSON.stringify(v5);
       const v6 = migrate(v5);
       expect(JSON.stringify(v5)).toBe(before);
-      expect(v6).toEqual(withAMinor(v5));
+      expect(v6).toEqual(fromV5(v5));
       expect(validate(v5)).toEqual(validate(withAMinor(v5)));
       const r = validate(v5);
       expect('project' in r && r.project.key).toEqual({ root: 9, scale: 'minor' });
@@ -166,14 +192,59 @@ describe('schema migration', () => {
     // The v5 fixture reads with no warnings, as itself plus A minor.
     const r = validate(v5Fixture());
     expect('warnings' in r && r.warnings).toEqual([]);
-    expect('project' in r && r.project).toEqual(withAMinor(v5Fixture()));
+    expect('project' in r && r.project).toEqual(fromV5(v5Fixture()));
+  });
+
+  it('migrate 6→7: the Reverb and the Delay become returns 0 and 1; params, lanes, MIDI maps and the replay are unchanged', () => {
+    const v6s: J[] = [
+      withAMinor(v5Fixture()),
+      { schemaVersion: 6, name: 'A', mixer: { tracks: [], reverb: { rev_size: 0.3 }, master: {} } }, // no delay: defaults
+      { schemaVersion: 6, mixer: null },
+      { schemaVersion: 6, mixer: { returns: 'junk', reverb: {}, delay: {} } }, // never written by v6: replaced
+      { schemaVersion: 6 },
+    ];
+    for (const v6 of v6s) {
+      const before = JSON.stringify(v6);
+      const v7 = migrate(v6);
+      expect(JSON.stringify(v6)).toBe(before); // the input is not changed
+      expect(v7).toEqual(withReturns(v6));
+      expect(validate(v6)).toEqual(validate(withReturns(v6)));
+    }
+    const fx = v5Fixture();
+    const r = validate(fx);
+    if ('error' in r) throw new Error(r.error);
+    expect(r.warnings).toEqual([]);
+    expect(r.project.mixer.returns).toEqual([
+      { id: 'reverb', kind: 'reverb', name: 'Reverb', slot: 0, params: fx.mixer.reverb },
+      { id: 'delay', kind: 'delay', name: 'Delay', slot: 1, params: fx.mixer.delay },
+    ]);
+    expect(r.project.mixer.automation).toEqual(fx.mixer.automation); // the Master row lanes keep their owners
+    expect(r.project.midiMap).toEqual(fx.midiMap); // so do the MIDI maps ('delay' is the Delay return's id)
+    expect(r.project.midiMap.some((m) => 'channel' in m && m.channel === 'delay')).toBe(true);
+
+    // The replay: the pre-plan-29 command stream of this fixture (frozen in
+    // testdata/v5-replay.json, master on channel 34), plus a RETURN_KIND for
+    // every slot before the returns' MIX_SETs, and the master on 40.
+    const old = JSON.parse(readFileSync(new URL('./testdata/v5-replay.json', import.meta.url), 'utf8')) as number[][];
+    const OLD_MASTER = 34;
+    const moved = old.map((c) =>
+      c[0] === Op.MIX_SET && c[1] === OLD_MASTER ? [c[0], MIX_MASTER, ...c.slice(2)]
+      : c[0] === Op.AUTO_LANE_SET && c[2] === 1 && c[3] === OLD_MASTER ? [...c.slice(0, 3), MIX_MASTER, ...c.slice(4)]
+      : c);
+    const cmds = projectCommands(r.project, new Map(r.project.samples.map((s) => [s.id, s.id]))).commands.map((c) => [...c] as number[]);
+    expect(cmds.filter((c) => c[0] !== Op.RETURN_KIND)).toEqual(moved);
+    const kinds = cmds.filter((c) => c[0] === Op.RETURN_KIND);
+    expect(kinds).toEqual([[Op.RETURN_KIND, 0, 1], [Op.RETURN_KIND, 1, 2], ...[2, 3, 4, 5, 6, 7].map((s) => [Op.RETURN_KIND, s, 0])]);
+    const lastKind = cmds.indexOf(kinds[kinds.length - 1]);
+    const firstReturnSet = cmds.findIndex((c) => c[0] === Op.MIX_SET && c[1] >= 32 && c[1] < MIX_MASTER);
+    expect(firstReturnSet).toBeGreaterThan(lastKind);
   });
 
   it('leaves current, newer and non-project input to validate', () => {
-    const v6 = { schemaVersion: 6, name: 'x' };
-    expect(migrate(v6)).toBe(v6);
-    const v7 = { schemaVersion: 7 };
+    const v7 = { schemaVersion: 7, name: 'x' };
     expect(migrate(v7)).toBe(v7);
+    const v8 = { schemaVersion: 8 };
+    expect(migrate(v8)).toBe(v8);
     for (const x of [null, 'x', [], { tracks: [] }]) expect(migrate(x)).toBe(x);
   });
 });

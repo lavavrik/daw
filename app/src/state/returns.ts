@@ -1,0 +1,81 @@
+// The mixer's returns (plan 29): up to MAX_RETURNS shared effect channels,
+// each a Reverb or a Delay, kept in `p.mixer.returns` in creation order.
+//
+//   - `slot` is the engine slot (channel MIX_RETURN0 + slot). A return keeps
+//     its slot for life, and undo brings a deleted one back on the same slot,
+//     so a track's send to it (catalog param send_a..send_h = slot 0..7) and
+//     its colour (`--return-<slot>`, never stored) follow it.
+//   - `id` is the owner string of its lanes and MIDI mappings, like a track
+//     id. The two a new project starts with (and the two a pre-v7 file
+//     migrates to) are 'reverb' and 'delay'; added ones get a UUID.
+//   - The engine is told a slot's kind with Op.RETURN_KIND, which resets that
+//     slot's params: so every builder sends it BEFORE the slot's MIX_SETs
+//     (project/commands.ts mixerCommands, history/diffApply.ts).
+//
+// Pure helpers here; the add / rename / delete actions are plan 29 Task 5.
+import { MAX_RETURNS, MIX_RETURN0 } from '../audio/protocol';
+import { defaultMixParams } from '../audio/mixerCatalog';
+import type { ChannelState, Project } from './project.svelte';
+
+export { MAX_RETURNS };
+
+export type ReturnKind = 'reverb' | 'delay';
+
+/** One return strip. `key` (from ChannelState) is always null: returns have no sidechain. */
+export interface ReturnState extends ChannelState {
+  id: string;
+  kind: ReturnKind;
+  /** Trimmed, 1..RETURN_NAME_MAX characters; need not be unique. */
+  name: string;
+  /** Engine slot 0..MAX_RETURNS-1, unique. */
+  slot: number;
+}
+
+/** Longest return name. */
+export const RETURN_NAME_MAX = 24;
+
+/** Op.RETURN_KIND's b: what a slot runs. */
+export const KIND_CODE: Record<ReturnKind | 'off', 0 | 1 | 2> = { off: 0, reverb: 1, delay: 2 };
+
+/** A kind as the UI and the default names say it. */
+export const KIND_NAME: Record<ReturnKind, string> = { reverb: 'Reverb', delay: 'Delay' };
+
+/** The engine mixer channel of a return. */
+export const returnChannel = (r: Pick<ReturnState, 'slot'>): number => MIX_RETURN0 + r.slot;
+
+/** A return's colour: the theme token of its slot (ui/theme.css). */
+export const returnColor = (slot: number): string => `var(--return-${slot})`;
+
+/** A fresh return with the catalog defaults. */
+export const newReturn = (id: string, kind: ReturnKind, name: string, slot: number): ReturnState =>
+  ({ id, kind, name, slot, params: defaultMixParams(), key: null });
+
+/** What a new project (and OP_RESET_ALL) starts with: Reverb on slot 0, Delay on slot 1. */
+export const defaultReturns = (): ReturnState[] => [
+  newReturn('reverb', 'reverb', KIND_NAME.reverb, 0),
+  newReturn('delay', 'delay', KIND_NAME.delay, 1),
+];
+
+export function findReturn(p: Project, id: string): ReturnState | undefined {
+  return p.mixer.returns.find((r) => r.id === id);
+}
+
+/** The first return of `kind` in creation order (where track presets send). */
+export function firstReturnOfKind(p: Project, kind: ReturnKind): ReturnState | undefined {
+  return p.mixer.returns.find((r) => r.kind === kind);
+}
+
+/** The lowest slot no return holds, or null when all MAX_RETURNS are taken. */
+export function freeSlot(p: Project): number | null {
+  const used = new Set(p.mixer.returns.map((r) => r.slot));
+  for (let s = 0; s < MAX_RETURNS; s++) if (!used.has(s)) return s;
+  return null;
+}
+
+/** "Reverb N" / "Delay N": N is the lowest integer >= 2 that no return of that kind is named with. */
+export function nextReturnName(p: Project, kind: ReturnKind): string {
+  const taken = new Set(p.mixer.returns.filter((r) => r.kind === kind).map((r) => r.name));
+  let n = 2;
+  while (taken.has(`${KIND_NAME[kind]} ${n}`)) n++;
+  return `${KIND_NAME[kind]} ${n}`;
+}

@@ -19,10 +19,10 @@
 // as lanes come and go.
 import { moduleDef } from '../../audio/catalog';
 import type { MixParamDef } from '../../audio/mixerCatalog';
-import { automatableParams, isMasterChannel, sameTarget } from '../../state/automation';
+import { automatableParams, sameTarget } from '../../state/automation';
 import type { AutoOwner } from '../../state/automation';
 import type { AutoTarget, MasterChannel, Project } from '../../state/project.svelte';
-import { mixLabel, moduleTitles, targetLabel } from './autoLabels';
+import { channelName, mixLabel, moduleTitles, targetLabel } from './autoLabels';
 import { MASTER_ROW } from './tlMath';
 
 export interface PickItem {
@@ -55,25 +55,25 @@ const MIX_GROUPS: { id: string; name: string; has: (d: MixParamDef) => boolean }
   { id: 'comp', name: 'Comp', has: (d) => d.group === 'comp' },
 ];
 
-const CHANNEL_NAME: Record<MasterChannel, string> = { master: 'Master', reverb: 'Reverb', delay: 'Delay' };
-const CHANNELS: MasterChannel[] = ['master', 'reverb', 'delay'];
+/** The Master row's channels: the master, then the returns in creation order. */
+const channels = (p: Project): MasterChannel[] => ['master', ...p.mixer.returns.map((r) => r.id)];
 
-/** The groups of one owner (`ownerId`: its track id or channel), `used` = targets that have a lane. */
-export function ownerGroups(owner: AutoOwner, ownerId: string, used: readonly AutoTarget[]): PickGroup[] {
+/** The groups of one owner of `p` (`ownerId`: its track id or channel), `used` = targets that have a lane. */
+export function ownerGroups(p: Project, owner: AutoOwner, ownerId: string, used: readonly AutoTarget[]): PickGroup[] {
   const item = (target: AutoTarget, label: string): PickItem => ({
     owner: ownerId,
     target,
     label,
-    lane: targetLabel(owner, target),
+    lane: targetLabel(p, owner, target),
     used: used.some((u) => sameTarget(u, target)),
   });
-  const all = automatableParams(owner);
+  const all = automatableParams(p, owner);
   const mix = all.filter((x) => x.target.kind === 'mix');
-  if (isMasterChannel(owner)) {
+  if (typeof owner === 'string') {
     // A Master row channel: one group, its params by what the lane calls
     // them minus the channel ("Ceiling", "EQ Low cut"); the fader is "Volume".
     const items = mix.map((x) => item(x.target, x.target.param === 'fader' ? 'Volume' : mixLabel(x.def as MixParamDef)));
-    return [{ key: `${ownerId}:mix`, name: CHANNEL_NAME[owner], section: null, items }];
+    return [{ key: `${ownerId}:mix`, name: channelName(p, owner), section: null, items }];
   }
   const out: PickGroup[] = [];
   for (const g of MIX_GROUPS) {
@@ -98,11 +98,12 @@ export function ownerGroups(owner: AutoOwner, ownerId: string, used: readonly Au
   return out;
 }
 
-/** The groups of a timeline row's owner: a track's (by id), or the Master row's three channels. */
+/** The groups of a timeline row's owner: a track's (by id), or the Master row's channels (master, returns). */
 export function rowGroups(p: Project, rowId: string): PickGroup[] {
   if (rowId === MASTER_ROW) {
-    return CHANNELS.flatMap((c) =>
+    return channels(p).flatMap((c) =>
       ownerGroups(
+        p,
         c,
         c,
         p.mixer.automation.filter((x) => x.channel === c).map((x) => x.lane.target),
@@ -110,7 +111,7 @@ export function rowGroups(p: Project, rowId: string): PickGroup[] {
     );
   }
   const t = p.tracks.find((x) => x.id === rowId);
-  return t ? ownerGroups(t, t.id, t.automation.map((l) => l.target)) : [];
+  return t ? ownerGroups(p, t, t.id, t.automation.map((l) => l.target)) : [];
 }
 
 const norm = (q: string) => q.trim().toLowerCase();

@@ -67,7 +67,7 @@
   import { moduleDef } from '../../audio/catalog';
   import type { MixParamDef } from '../../audio/mixerCatalog';
   import type { CommandSink } from '../../state/actions';
-  import { isMasterChannel } from '../../state/automation';
+  import { channelState } from '../../state/mixer-actions';
   import type { AutoDef, AutoOwner } from '../../state/automation';
   import { BAR_TICKS, MAX_AUTO_POINTS } from '../../audio/protocol';
   import { laneView } from './laneView.svelte';
@@ -146,10 +146,10 @@
   function baseValue(): number {
     const t = lane.target;
     if (t.kind === 'mix') {
-      const ch = isMasterChannel(owner) ? p.mixer[owner] : p.mixer.channels[owner.id];
+      const ch = channelState(p, typeof owner === 'string' ? owner : owner.id);
       return ch?.params[(def as MixParamDef).id] ?? def.default;
     }
-    if (isMasterChannel(owner) || owner.kind !== 'synth') return def.default;
+    if (typeof owner === 'string' || owner.kind !== 'synth') return def.default;
     const m = owner.modules.find((x) => x.idx === t.module);
     const i = m ? moduleDef(m.kind).params.findIndex((d) => d.name === t.param) : -1;
     return m && i >= 0 ? m.params[i] : def.default;
@@ -301,7 +301,7 @@
   const valueAt = (y: number) => fromPos(def, yToPos(y, h));
   const pointById = (id: string) => lane.points.find((x) => x.id === id);
   /** The lane's owner as setPointCurve takes it: a track id or a Master row channel. */
-  const ownerId = () => (isMasterChannel(owner) ? owner : owner.id);
+  const ownerId = () => (typeof owner === 'string' ? owner : owner.id);
   /** The point whose segment an Alt-press at (x, y) would bend, or null. */
   const segmentAt = (x: number, y: number) => segmentHit(geom, x, y, view, h);
 

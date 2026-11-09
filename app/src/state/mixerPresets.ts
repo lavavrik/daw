@@ -26,9 +26,10 @@ import type { CommandSink } from './actions';
 import { edit } from './edits';
 import { setMix, setSidechain } from './mixer-actions';
 import type { MixChannelTarget } from './mixer-actions';
+import { findReturn } from './returns';
 import type { Project } from './project.svelte';
 
-/** Which strips a preset is for (the two returns differ: each has its own effect). */
+/** Which strips a preset is for (a return's kind picks its presets: each effect has its own). */
 export type PresetKind = 'track' | 'reverb' | 'delay' | 'master';
 
 export interface MixPreset {
@@ -123,14 +124,16 @@ export function presetsFor(kind: PresetKind): MixPreset[] {
   return MIX_PRESETS.filter((x) => x.kind === kind);
 }
 
-/** The preset kind of a mixer channel: a track id is 'track' (if it has a strip), else null. */
+/** The preset kind of a mixer channel: 'master', a return's kind, 'track' for a track id (if it has a strip), else null. */
 export function presetKindOf(p: Project, channel: MixChannelTarget): PresetKind | null {
-  if (channel === 'reverb' || channel === 'delay' || channel === 'master') return channel;
+  if (channel === 'master') return channel;
+  const r = findReturn(p, channel);
+  if (r) return r.kind;
   return p.mixer.channels[channel] && p.tracks.some((t) => t.id === channel) ? 'track' : null;
 }
 
 /**
- * Apply preset `presetId` to `channel` (a track id, 'reverb', 'delay' or
+ * Apply preset `presetId` to `channel` (a track id, a return id or
  * 'master'): every param of the preset through setMix (state + MIX_SET), in
  * catalog order, as ONE undo entry "Preset: <name>". On a keyed track strip
  * (header): Flat also clears the key; any other track preset skips the comp

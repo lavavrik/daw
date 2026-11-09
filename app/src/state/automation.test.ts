@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { MIX_PARAMS } from '../audio/mixerCatalog';
+import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { moduleDef } from '../audio/catalog';
 import { toPos } from '../ui/rack/knobMath';
 import { automatableParams, laneCount, targetDef, laneSetCommand, laneValueAt, nextBreakpoint, pointCommands, thin } from './automation';
 import { laneCommands } from '../project/commands';
 import { trackPatch } from './patches';
-import { AUTO_KIND, MIX_MASTER, autoPoint, packAutoParam } from '../audio/protocol';
+import { AUTO_KIND, MIX_MASTER, MIX_RETURN0, autoPoint, packAutoParam } from '../audio/protocol';
 import { paramIndex } from '../audio/catalog';
 import type { PointTuple } from './automation';
 import { MAX_AUTO_POINTS, Op } from '../audio/protocol';
@@ -162,9 +162,9 @@ describe('automation (pure)', () => {
     const audio = addAudioTrack(p, nullSink)!;
     const trackMix = MIX_PARAMS.filter((d) => !d.integer && d.appliesTo.includes('track') && d.group !== 'reverb' && d.group !== 'delay');
     const names = (xs: { target: { kind: string; param: string } }[]) => xs.map((x) => x.target.param);
-    expect(names(automatableParams(drums))).toEqual(trackMix.map((d) => d.name));
-    expect(names(automatableParams(audio))).toEqual(trackMix.map((d) => d.name)); // Audio slots: mixer targets only
-    const sp = automatableParams(synth);
+    expect(names(automatableParams(p, drums))).toEqual(trackMix.map((d) => d.name));
+    expect(names(automatableParams(p, audio))).toEqual(trackMix.map((d) => d.name)); // Audio slots: mixer targets only
+    const sp = automatableParams(p, synth);
     expect(names(sp.slice(0, trackMix.length))).toEqual(trackMix.map((d) => d.name));
     const rack = sp.slice(trackMix.length);
     expect(rack.length).toBeGreaterThan(0);
@@ -177,23 +177,30 @@ describe('automation (pure)', () => {
     expect(rack.some((x) => x.target.param === 'cutoff')).toBe(true);
     expect(rack.some((x) => x.target.param === 'wave' || x.target.param === 'voices')).toBe(false);
     // Integer, choice and flag params are never offered.
-    for (const x of [...sp, ...automatableParams('reverb'), ...automatableParams('delay'), ...automatableParams('master')]) {
+    for (const x of [...sp, ...automatableParams(p, 'reverb'), ...automatableParams(p, 'delay'), ...automatableParams(p, 'master')]) {
       expect(x.def.integer).toBe(false);
     }
-    expect(names(automatableParams('master'))).toEqual(['fader', 'eq_hp', 'eq_low', 'eq_mid_freq', 'eq_mid_gain', 'eq_mid_q', 'eq_high', 'limiter_ceiling']);
-    expect(names(automatableParams('reverb'))).toContain('rev_size');
-    expect(names(automatableParams('reverb'))).not.toContain('delay_feedback');
-    expect(names(automatableParams('delay'))).toEqual(expect.arrayContaining(['delay_feedback', 'delay_high_cut', 'pan']));
-    expect(names(automatableParams('delay'))).not.toContain('delay_time');
+    expect(names(automatableParams(p, 'master'))).toEqual(['fader', 'eq_hp', 'eq_low', 'eq_mid_freq', 'eq_mid_gain', 'eq_mid_q', 'eq_high', 'limiter_ceiling']);
+    expect(names(automatableParams(p, 'reverb'))).toContain('rev_size');
+    expect(names(automatableParams(p, 'reverb'))).not.toContain('delay_feedback');
+    expect(names(automatableParams(p, 'delay'))).toEqual(expect.arrayContaining(['delay_feedback', 'delay_high_cut', 'pan']));
+    expect(names(automatableParams(p, 'delay'))).not.toContain('delay_time');
+    // Any return by its id: its kind's params on its slot's channel; a missing one has none.
+    p.mixer.returns.push({ id: 'r5', kind: 'delay', name: 'Delay 2', slot: 5, params: MIX_PARAMS.map((d) => d.default), key: null });
+    expect(names(automatableParams(p, 'r5'))).toEqual(names(automatableParams(p, 'delay')));
+    expect(laneSetCommand(p, 3, 'r5', { kind: 'mix', param: 'delay_feedback' })).toEqual(
+      [Op.AUTO_LANE_SET, 3, AUTO_KIND.MIX, MIX_RETURN0 + 5, mixParam('delay_feedback').id]);
+    expect(automatableParams(p, 'nope')).toEqual([]);
+    expect(targetDef(p, 'nope', { kind: 'mix', param: 'fader' })).toBeNull();
   });
 
   it('a Scope\'s params are never automation targets (they only change the view)', () => {
     const p = new Project();
     const synth = addSynthTrack(p, nullSink)!;
     synth.modules.push({ idx: 30, kind: moduleDef('scope').kind, params: moduleDef('scope').params.map((d) => d.default) });
-    expect(automatableParams(synth).some((x) => x.target.kind === 'rack' && x.target.module === 30)).toBe(false);
-    for (const param of ['time', 'gain_a', 'gain_b']) expect(targetDef(synth, { kind: 'rack', module: 30, param })).toBeNull();
-    expect(automatableParams(synth).some((x) => x.target.param === 'cutoff')).toBe(true);
+    expect(automatableParams(p, synth).some((x) => x.target.kind === 'rack' && x.target.module === 30)).toBe(false);
+    for (const param of ['time', 'gain_a', 'gain_b']) expect(targetDef(p, synth, { kind: 'rack', module: 30, param })).toBeNull();
+    expect(automatableParams(p, synth).some((x) => x.target.param === 'cutoff')).toBe(true);
   });
 
   it('one AUTO_LANE_SET builder: the live lane and its saved form encode the same target', () => {
@@ -205,16 +212,16 @@ describe('automation (pure)', () => {
       lane: 5, enabled: true, points: [] as [number, number, 0 | 1][],
       target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] as [number, string] },
     });
-    for (const { target } of automatableParams(synth)) {
-      expect(laneSetCommand(5, synth, target)).toEqual(laneCommands(json(target), synth.slot, patch)[0]);
+    for (const { target } of automatableParams(p, synth)) {
+      expect(laneSetCommand(p, 5, synth, target)).toEqual(laneCommands(json(target), synth.slot, patch)[0]);
     }
-    for (const { target } of automatableParams('master')) {
-      expect(laneSetCommand(5, 'master', target)).toEqual(laneCommands(json(target), MIX_MASTER, null)[0]);
+    for (const { target } of automatableParams(p, 'master')) {
+      expect(laneSetCommand(p, 5, 'master', target)).toEqual(laneCommands(json(target), MIX_MASTER, null)[0]);
     }
     const filter = synth.modules.find((m) => m.kind === moduleDef('filter').kind)!;
-    expect(laneSetCommand(7, synth, { kind: 'rack', module: filter.idx, param: 'cutoff' }))
+    expect(laneSetCommand(p, 7, synth, { kind: 'rack', module: filter.idx, param: 'cutoff' }))
       .toEqual([Op.AUTO_LANE_SET, 7, AUTO_KIND.RACK, synth.slot, packAutoParam(filter.idx, paramIndex(moduleDef('filter'), 'cutoff'))]);
-    expect(laneSetCommand(1, drums, { kind: 'mix', param: 'pan' })).toEqual([Op.AUTO_LANE_SET, 1, AUTO_KIND.MIX, drums.slot, 1]);
+    expect(laneSetCommand(p, 1, drums, { kind: 'mix', param: 'pan' })).toEqual([Op.AUTO_LANE_SET, 1, AUTO_KIND.MIX, drums.slot, 1]);
   });
 
   it('laneCount counts every track\'s lanes and the Master row\'s', () => {

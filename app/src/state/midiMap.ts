@@ -12,7 +12,7 @@
 //     messages (120/123 are our panic). CC1 and CC64 keep their built-in
 //     meaning (mod wheel, sustain) and are also learnable.
 //   - A control is named exactly as automation names a lane target: an owner
-//     (a track id, or 'reverb' / 'delay' / 'master') plus an AutoTarget. Unlike
+//     (a track id, a return id or 'master') plus an AutoTarget. Unlike
 //     a lane, an INTEGER param (octave, unison, voices) may be mapped too: the
 //     knob's own taper and clampParam round it (mappingDef). Choice params
 //     and 0..1 on/off flags are never learnable (learnableDef: learnMidi
@@ -34,10 +34,11 @@ import { faderDb } from '../ui/mixer/mixMath';
 import { fromPos } from '../ui/rack/knobMath';
 import type { KnobDef } from '../ui/rack/knobMath';
 import type { CommandSink } from './actions';
-import { MASTER_CHANNEL_INDEX, isMasterChannel, sameTarget } from './automation';
+import { isMasterChannel, sameTarget } from './automation';
 import type { AutoDef } from './automation';
 import { edit, markEdited } from './edits';
-import { accepts, setMix } from './mixer-actions';
+import { accepts, resolveChannel, setMix } from './mixer-actions';
+import { findReturn } from './returns';
 import type { MixChannelTarget } from './mixer-actions';
 import { setParam } from './rack-actions';
 import type { AutoTarget, Project } from './project.svelte';
@@ -54,7 +55,7 @@ export function learnableDef(def: Pick<AutoDef, 'choices' | 'integer' | 'min' | 
   return !(def.integer && def.min === 0 && def.max === 1);
 }
 
-/** One mapping: CC `cc` moves `target` of `owner` (a track id, or a Master-row channel). */
+/** One mapping: CC `cc` moves `target` of `owner` (a track id, or a Master-row channel: a return id or 'master'). */
 export interface MidiMapping {
   cc: number;
   owner: MixChannelTarget;
@@ -63,8 +64,6 @@ export interface MidiMapping {
 
 /** CC numbers a mapping may use: 0..119 (120..127 are channel-mode messages). */
 export const LEARNABLE_CC = (cc: number) => Number.isInteger(cc) && cc >= 0 && cc <= 119;
-
-const MASTER_NAMES = { reverb: 'Reverb', delay: 'Delay', master: 'Master' } as const;
 
 const isControl = (m: MidiMapping, owner: MixChannelTarget, target: AutoTarget) => m.owner === owner && sameTarget(m.target, target);
 
@@ -76,10 +75,11 @@ const isControl = (m: MidiMapping, owner: MixChannelTarget, target: AutoTarget) 
  * params are allowed (a learned octave knob steps through its values).
  */
 export function mappingDef(p: Project, owner: MixChannelTarget, target: AutoTarget): AutoDef | null {
-  if (isMasterChannel(owner)) {
+  if (isMasterChannel(p, owner)) {
     if (target.kind !== 'mix') return null;
     const def = MIX_PARAMS.find((d) => d.name === target.param);
-    return def && accepts(def, owner === 'master' ? 'master' : 'return', MASTER_CHANNEL_INDEX[owner]) ? def : null;
+    const ch = resolveChannel(p, owner)!;
+    return def && accepts(def, ch.kind, ch.index, ch.retKind) ? def : null;
   }
   const t = p.tracks.find((x) => x.id === owner);
   if (!t) return null;
@@ -201,7 +201,7 @@ export function applyCc(
  * for a control that no longer resolves.
  */
 export function mappingLabel(p: Project, m: MidiMapping): string {
-  const owner = isMasterChannel(m.owner) ? MASTER_NAMES[m.owner] : (p.tracks.find((t) => t.id === m.owner)?.name ?? '?');
+  const owner = m.owner === 'master' ? 'Master' : (findReturn(p, m.owner) ?? p.tracks.find((t) => t.id === m.owner))?.name ?? '?';
   const param = mappingDef(p, m.owner, m.target)?.label ?? m.target.param;
   if (m.target.kind === 'mix') return `${owner} · ${param}`;
   const t = p.tracks.find((x) => x.id === m.owner);

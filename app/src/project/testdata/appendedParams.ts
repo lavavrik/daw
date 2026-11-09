@@ -38,7 +38,19 @@ export const APPENDED_TRACK_MIX_PARAMS: Record<string, number> = Object.fromEntr
   ['c', 'd', 'e', 'f', 'g', 'h'].flatMap((x) => [[`send_${x}`, -60], [`send_${x}_pre`, 0]]),
 );
 
-/** A fixture's `mixer` as a save writes it today: every track strip gains the appended params. */
-export function withAppendedMixer<T extends { tracks: { params: Record<string, number> }[] }>(mixer: T): T {
-  return { ...mixer, tracks: mixer.tracks.map((t) => ({ ...t, params: { ...t.params, ...APPENDED_TRACK_MIX_PARAMS } })) };
+/**
+ * A fixture's `mixer` as a save writes it today: every track strip gains the
+ * appended params, and (schema 7, plan 29) `reverb` / `delay` are the
+ * returns 'reverb' (slot 0) and 'delay' (slot 1).
+ */
+export function withAppendedMixer<T extends { tracks: { params: Record<string, number> }[]; reverb?: unknown; delay?: unknown }>(mixer: T) {
+  const { reverb, delay, ...rest } = mixer;
+  return {
+    ...rest,
+    tracks: mixer.tracks.map((t) => ({ ...t, params: { ...t.params, ...APPENDED_TRACK_MIX_PARAMS } })),
+    returns: [
+      { id: 'reverb', kind: 'reverb', name: 'Reverb', slot: 0, params: reverb ?? {} },
+      { id: 'delay', kind: 'delay', name: 'Delay', slot: 1, params: delay ?? {} },
+    ],
+  };
 }

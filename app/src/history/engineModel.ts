@@ -1,7 +1,7 @@
 // Test helper (not a test): a model of the engine state a command stream
 // builds -- tracks, patterns, rows, racks, clips, audio clips (staged and
-// committed), mixer, keys, automation lanes (targets validated, unique ticks,
-// cleared with their target), transport --
+// committed), mixer, return slot kinds (plan 29), keys, automation lanes
+// (targets validated, unique ticks, cleared with their target), transport --
 // following engine.rs's command semantics. history tests replay "load A,
 // edit, diffApply back" through it and compare with "load A": the same
 // engine state means undo restored everything the engine plays.
@@ -43,6 +43,8 @@ export interface EngineModel {
   /** MAX_AUTO_LANES lanes; null: no target (cleared). */
   autos: (AutoLane | null)[];
   mixer: number[][];
+  /** Per return slot, what RETURN_KIND set: 0 off / 1 reverb / 2 delay (RESET_ALL: 1, 2, then off). */
+  returnKinds: number[];
   keys: number[];
   tempo: number;
   /** The song key (SET_KEY, plan 26): [root, scale index]; A minor after RESET_ALL. */
@@ -73,6 +75,7 @@ export function blankModel(): EngineModel {
     slots: new Array(MAX_TRACKS).fill(null),
     autos: new Array(MAX_AUTO_LANES).fill(null),
     mixer: Array.from({ length: MIX_CHANNELS }, defaultMixParams),
+    returnKinds: Array.from({ length: MAX_RETURNS }, (_, s) => (s === 0 ? 1 : s === 1 ? 2 : 0)),
     keys: new Array(MAX_TRACKS).fill(-1),
     tempo: 124, songKey: [9, 1], metronome: 0, mode: 0, loop: [0, 0], input: -1, errors: [],
   };
@@ -329,6 +332,16 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       }
       case Op.RACK_DISCONNECT: { const t = slotOf(a, 'synth'); if (t) delete t.cables[b]; break; }
       case Op.MIX_SET: m.mixer[a][b] = cc; break;
+      case Op.RETURN_KIND: {
+        if (!Number.isInteger(a) || a < 0 || a >= MAX_RETURNS) { bad('return slot'); break; }
+        if (b !== 0 && b !== 1 && b !== 2) { bad('return kind'); break; }
+        // A new kind resets the slot's strip and params (engine.rs); the same kind is a no-op.
+        if (m.returnKinds[a] !== b) {
+          m.returnKinds[a] = b;
+          m.mixer[MIX_RETURN0 + a] = defaultMixParams();
+        }
+        break;
+      }
       case Op.MIX_SET_KEY: slotOf(a); m.keys[a] = b; break;
       case Op.PLAY: case Op.STOP: case Op.SEEK: case Op.NOTE_ON: case Op.NOTE_OFF: case Op.SET_PATTERN_FOCUS: break;
       default: bad('unexpected op');
@@ -358,5 +371,5 @@ export function view(m: EngineModel, json: ProjectJson) {
       : { kind: t.kind, current: t.current, patterns, modules: t.modules, cables: t.cables, clips: t.clips };
   });
   const autos = m.autos.map((l) => (l && (l.target.length || l.enabled !== 1) ? l : null));
-  return { slots, autos, mixer: m.mixer, keys: m.keys, tempo: m.tempo, songKey: m.songKey, metronome: m.metronome, mode: m.mode, loop: m.loop, input: m.input };
+  return { slots, autos, mixer: m.mixer, returnKinds: m.returnKinds, keys: m.keys, tempo: m.tempo, songKey: m.songKey, metronome: m.metronome, mode: m.mode, loop: m.loop, input: m.input };
 }

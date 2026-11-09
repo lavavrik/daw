@@ -1,10 +1,12 @@
 // Project -> project.json (schema.ts). Pure: reads the project, changes
 // nothing, same input -> same output. Plan 7's undo snapshots and autosave
 // (Task 4) build on this, and App's "● unsaved" mark compares fingerprints.
-import { MIX_RETURN0, MIX_MASTER } from '../audio/protocol';
+import { MIX_MASTER } from '../audio/protocol';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import { accepts } from '../state/mixer-actions';
+import { returnChannel } from '../state/returns';
+import type { ReturnKind } from '../state/returns';
 import { trackPatch } from '../state/patches';
 import { currentPattern, MAX_STEPS } from '../state/project.svelte';
 import type { AudioTrack, AutomationLane, ChannelState, DrumTrack, PatternTrack, Project, SynthTrack } from '../state/project.svelte';
@@ -26,9 +28,9 @@ export function sampleFilePath(id: number, name: string, hash: string): string {
   return `samples/${id}-${hash}-${safe}`;
 }
 
-function mixParams(ch: ChannelState, kind: MixTarget, index: number): MixParamsJson {
+function mixParams(ch: ChannelState, kind: MixTarget, index: number, retKind?: ReturnKind): MixParamsJson {
   const out: MixParamsJson = {};
-  for (const def of MIX_PARAMS) if (accepts(def, kind, index)) out[def.name] = ch.params[def.id];
+  for (const def of MIX_PARAMS) if (accepts(def, kind, index, retKind)) out[def.name] = ch.params[def.id];
   return out;
 }
 
@@ -125,8 +127,9 @@ export function serialize(p: Project): ProjectJson {
         key: ch?.key && keySlot !== null ? { track: keySlot, row: ch.key.row } : null,
       };
     }),
-    reverb: mixParams(p.mixer.reverb, 'return', MIX_RETURN0),
-    delay: mixParams(p.mixer.delay, 'return', (MIX_RETURN0 + 1)),
+    returns: p.mixer.returns.map((r) => ({
+      id: r.id, kind: r.kind, name: r.name, slot: r.slot, params: mixParams(r, 'return', returnChannel(r), r.kind),
+    })),
     master: mixParams(p.mixer.master, 'master', MIX_MASTER),
     automation: p.mixer.automation.map((x) => ({ channel: x.channel, ...laneJson(x.lane) })),
   };
@@ -147,7 +150,7 @@ export function serialize(p: Project): ProjectJson {
     selection: { track: slotOf(p.selectedTrackId), synth: slotOf(p.lastSynthTrackId) },
     midiMap: p.midiMap.flatMap((m): MidiMapJson[] => {
       const t = m.target;
-      if (isMasterChannel(m.owner)) return t.kind === 'mix' ? [{ cc: m.cc, channel: m.owner, target: { mix: t.param } }] : [];
+      if (isMasterChannel(p, m.owner)) return t.kind === 'mix' ? [{ cc: m.cc, channel: m.owner, target: { mix: t.param } }] : [];
       const slot = slotOf(m.owner);
       if (slot === null) return []; // cannot happen: a track's removal drops its mappings
       return [{ cc: m.cc, track: slot, target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] } }];

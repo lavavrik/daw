@@ -17,6 +17,26 @@ import type { ProjectJson } from '../project/schema';
 import { addAudioFixture, addAutomationFixture, buildFixture, nullSink } from '../project/testFixture';
 import { addLane, addPoint, deletePoints, drawPoints, movePoints, removeLane, setLaneEnabled, setPointShape } from '../state/automation-actions';
 import { blankModel, run, view } from './engineModel';
+import { MIX_RETURN0 } from '../audio/protocol';
+import { defaultMixParams, mixParam } from '../audio/mixerCatalog';
+import { KIND_CODE } from '../state/returns';
+import type { ReturnKind } from '../state/returns';
+import type { Project as P } from '../state/project.svelte';
+import type { CommandSink } from '../state/actions';
+
+/**
+ * A return added by hand (Task 5's addReturn does this for the app): the
+ * state, and RETURN_KIND before any param, as the engine needs.
+ */
+function addReturnByHand(p: P, sink: CommandSink, id: string, slot: number, kind: ReturnKind) {
+  p.mixer.returns.push({ id, kind, name: `${kind} ${slot}`, slot, params: defaultMixParams(), key: null });
+  sink.send(Op.RETURN_KIND, slot, KIND_CODE[kind]);
+}
+function removeReturnByHand(p: P, sink: CommandSink, id: string) {
+  const r = p.mixer.returns.find((x) => x.id === id)!;
+  p.mixer.returns = p.mixer.returns.filter((x) => x !== r);
+  sink.send(Op.RETURN_KIND, r.slot, KIND_CODE.off);
+}
 import { diffApply } from './diffApply';
 
 const ids = (json: ProjectJson) => new Map(json.samples.map((s) => [s.id, s.id]));
@@ -163,6 +183,55 @@ describe('diffApply', () => {
       setSidechain(p, sink, synth2.id, { trackId: drums.id, row: 1 });
       setSidechain(p, sink, drums.id, { trackId: synth.id, row: null });
     }));
+
+  it('an undo that re-adds a return on slot 3 sends RETURN_KIND 3 1 before that slot\'s MIX_SETs', async () => {
+    const r = await rig();
+    addReturnByHand(r.p, r.sink, 'r3', 3, 'reverb');
+    setMix(r.p, r.sink, 'r3', 'rev_size', 0.2);
+    setMix(r.p, r.sink, 'r3', 'fader', -4);
+    setMix(r.p, r.sink, r.drums.id, 'send_d', -12);
+    const A = serialize(r.p);
+    expect(A.mixer.returns.map((x) => [x.id, x.slot, x.kind])).toEqual([['reverb', 0, 'reverb'], ['delay', 1, 'delay'], ['r3', 3, 'reverb']]);
+    setMix(r.p, r.sink, r.drums.id, 'send_d', -60);
+    removeReturnByHand(r.p, r.sink, 'r3');
+    const B = serialize(r.p);
+    expect(r.m.errors).toEqual([]);
+
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A); // undo the delete
+    expect(r.m.errors).toEqual([]);
+    const kindAt = r.log.findIndex((c) => c[0] === Op.RETURN_KIND);
+    expect(r.log[kindAt]).toEqual([Op.RETURN_KIND, 3, 1, 0, 0]);
+    const sets = r.log.map((c, i) => [c, i] as const).filter(([c]) => c[0] === Op.MIX_SET && c[1] === MIX_RETURN0 + 3);
+    expect(sets.map(([c]) => c[2]).sort()).toEqual([mixParam('fader').id, mixParam('rev_size').id].sort());
+    expect(sets.every(([, i]) => i > kindAt)).toBe(true);
+    expect(serialize(r.p)).toEqual(A);
+    expect(view(r.m, A)).toEqual(loaded(A));
+
+    r.log.length = 0;
+    diffApply(r.p, r.sink, A, B); // redo: the slot goes Off again
+    expect(r.m.errors).toEqual([]);
+    expect(r.log).toContainEqual([Op.RETURN_KIND, 3, 0, 0, 0]);
+    expect(serialize(r.p)).toEqual(B);
+    expect(view(r.m, B)).toEqual(loaded(B));
+  });
+
+  it('a return that took a freed slot is told apart from the one it replaced (same kind: Off first, then a clean slot)', async () => {
+    const r = await rig();
+    addReturnByHand(r.p, r.sink, 'old', 4, 'delay');
+    setMix(r.p, r.sink, 'old', 'delay_feedback', 0.8);
+    const A = serialize(r.p);
+    removeReturnByHand(r.p, r.sink, 'old');
+    addReturnByHand(r.p, r.sink, 'new', 4, 'delay');
+    setMix(r.p, r.sink, 'new', 'pan', 0.5);
+    const B = serialize(r.p);
+    r.log.length = 0;
+    diffApply(r.p, r.sink, B, A);
+    expect(r.log.filter((c) => c[0] === Op.RETURN_KIND)).toEqual([[Op.RETURN_KIND, 4, 0, 0, 0], [Op.RETURN_KIND, 4, 2, 0, 0]]);
+    expect(r.m.errors).toEqual([]);
+    expect(serialize(r.p)).toEqual(A);
+    expect(view(r.m, A)).toEqual(loaded(A));
+  });
 
   it('transport settings', () =>
     roundTrip(({ p, sink }) => {

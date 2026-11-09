@@ -15,7 +15,7 @@ describe('automation picker groups', () => {
   it('splits a track mixer into Volume / Pan / Sends / EQ / Comp, continuous params only', () => {
     const p = new Project();
     const d = addDrumTrack(p, sink)!;
-    const gs = ownerGroups(d, d.id, []);
+    const gs = ownerGroups(p, d, d.id, []);
     expect(names(gs)).toEqual(['Volume', 'Pan', 'Sends', 'EQ', 'Comp']);
     expect(gs.every((g) => g.section === 'Mixer')).toBe(true);
     expect(labels(gs[0])).toEqual(['Volume']);
@@ -32,7 +32,7 @@ describe('automation picker groups', () => {
   it('follows the mixer groups with each module, in rack order, by its rack title', () => {
     const p = new Project();
     const s = addSynthTrack(p, sink, 'Bass', STARTER_PATCHES.find((x) => x.name === 'Deep Bass'))! as SynthTrack;
-    const gs = ownerGroups(s, s.id, []);
+    const gs = ownerGroups(p, s, s.id, []);
     const rack = gs.filter((g) => g.section === 'Rack');
     expect(names(rack)).toContain('Filter');
     expect(names(rack)).toContain('Oscillator 2');
@@ -45,7 +45,7 @@ describe('automation picker groups', () => {
   it('marks targets that already have a lane as used', () => {
     const p = new Project();
     const d = addDrumTrack(p, sink)!;
-    const gs = ownerGroups(d, d.id, [{ kind: 'mix', param: 'pan' }]);
+    const gs = ownerGroups(p, d, d.id, [{ kind: 'mix', param: 'pan' }]);
     expect(gs.find((g) => g.name === 'Pan')!.items[0].used).toBe(true);
     expect(gs.find((g) => g.name === 'Volume')!.items[0].used).toBe(false);
   });
@@ -116,7 +116,7 @@ describe('automation picker search', () => {
 
     it('never makes a used param the best match', () => {
     const d = addDrumTrack(p, sink)!;
-    const used = ownerGroups(d, d.id, [{ kind: 'mix', param: 'pan' }]);
+    const used = ownerGroups(p, d, d.id, [{ kind: 'mix', param: 'pan' }]);
     const f = filterGroups(used, 'pan');
     const rows = pickerRows(f, new Set(f.map((g) => g.key)));
     expect(rows[bestMatch(rows, 'pan')].kind).toBe('group');

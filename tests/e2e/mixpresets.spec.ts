@@ -38,10 +38,11 @@ async function openPresets(page: Page, id: string | number) {
   return card;
 }
 
-/** Mixer param `name` of channel `ch` (a track index, or 'reverb' / 'delay' / 'master'). */
+/** Mixer param `name` of channel `ch` (a track index, a return id such as 'reverb' / 'delay', or 'master'). */
 const param = (page: Page, ch: number | string, name: string) =>
   daw<number>(page, (d, a) => {
-    const c = typeof a.ch === 'number' ? d.project.mixer.channels[d.project.tracks[a.ch].id] : d.project.mixer[a.ch];
+    const m = d.project.mixer;
+    const c = typeof a.ch === 'number' ? m.channels[d.project.tracks[a.ch].id] : a.ch === 'master' ? m.master : m.returns.find((r: { id: string }) => r.id === a.ch)!;
     return c.params[a.id];
   }, { ch, id: mixerCatalog.params.find((x) => x.name === name)!.id });
 

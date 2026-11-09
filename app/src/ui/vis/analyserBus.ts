@@ -65,7 +65,7 @@ const HEARD_PEAK = 1e-3;
 /** Bars at or under this (dB) count as dark for the idle check. */
 const QUIET_DB = -60;
 
-/** A mixer strip that can be shown: its channel and who it belongs to (track id, 'reverb', 'delay'). */
+/** A mixer strip that can be shown: its channel and who it belongs to (a track or return id). */
 export interface LiveStrip {
   ch: number;
   key: string;
@@ -73,7 +73,7 @@ export interface LiveStrip {
 
 export interface AnalyserBus {
   subscribe(v: AnalyserView): () => void;
-  /** Show the Master or one strip (mixer channel 0..(MIX_RETURN0 + 1); `key` identifies its owner). */
+  /** Show the Master or one strip (mixer channel 0..MIX_MASTER-1: a track or return; `key` identifies its owner). */
   select(src: AnalyserSource, key?: string): void;
   /** A strip's ∿ button: show it, or back to the Master if it is shown. */
   toggle(ch: number, key: string): void;

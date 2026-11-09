@@ -20,6 +20,16 @@
 //                      top-level `key: { root: 9, scale: 'minor' }` (A minor,
 //                      the house default; replacing anything under that
 //                      name, which v5 never wrote). Nothing else changes.
+//   v6 -> v7 (plan 29): multiple returns. `mixer.reverb` and `mixer.delay`
+//                      become `mixer.returns`: the Reverb on slot 0 (id
+//                      'reverb', name "Reverb") and the Delay on slot 1 (id
+//                      'delay', name "Delay"), each with its params as they
+//                      were. The ids are the old channel names, so the
+//                      Master row lanes and MIDI mappings that name them
+//                      stay valid unchanged, and track sends need nothing
+//                      (send_a / send_b are slots 0 / 1). A mixer that is
+//                      not an object read as all defaults, so it becomes
+//                      one with just the two default returns. Lossless.
 //
 // Anything that is not a v1..current project object (no or a bad
 // schemaVersion, a NEWER version than this build knows) is returned as is
@@ -41,6 +51,14 @@ const STEPS = new Map<unknown, (json: Json) => Json>([
   [3, (json) => ({ ...json, schemaVersion: 4, midiMap: [] })],
   [4, (json) => ({ ...json, schemaVersion: 5, patternLibrary: [] })],
   [5, (json) => ({ ...json, schemaVersion: 6, key: { root: 9, scale: 'minor' } })],
+  [6, (json) => {
+    const { reverb, delay, ...rest } = isObj(json.mixer) ? json.mixer : {};
+    const returns = [
+      { id: 'reverb', kind: 'reverb', name: 'Reverb', slot: 0, params: reverb ?? {} },
+      { id: 'delay', kind: 'delay', name: 'Delay', slot: 1, params: delay ?? {} },
+    ];
+    return { ...json, schemaVersion: 7, mixer: { ...rest, returns } };
+  }],
 ]);
 
 /** `json` brought up to the current schema version (see above). */

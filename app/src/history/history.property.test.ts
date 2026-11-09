@@ -270,7 +270,7 @@ async function sequence(seed: number, ops: number) {
     // Automation (plan 10).
     (log) => {
       const owner = r.pick([...p.tracks.map((t) => t), 'reverb', 'delay', 'master'] as const)!;
-      const target = r.pick(automatableParams(owner))?.target;
+      const target = r.pick(automatableParams(p, owner))?.target;
       if (target) (log.push('addLane'), addLane(p, sink, typeof owner === 'string' ? owner : owner.id, target));
     },
     (log) => {

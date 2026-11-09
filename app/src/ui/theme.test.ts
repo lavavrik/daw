@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CATALOG } from '../audio/catalog';
 import {
-  CATALOG_CATEGORIES, CATALOG_SIGNALS, CATEGORY_COLORS, RADII, SIGNAL_COLORS, THEME, TRACK_COLORS, catalogCategoryColor, jackColor, jackSignal,
+  CATALOG_CATEGORIES, CATALOG_SIGNALS, CATEGORY_COLORS, RADII, RETURN_COLORS, SIGNAL_COLORS, THEME, TRACK_COLORS, catalogCategoryColor, jackColor, jackSignal,
   moduleColor, rackCategory, tokenName,
 } from './theme';
 import { TRACK_COLORS as STATE_TRACK_COLORS } from '../state/palette';
@@ -34,6 +34,7 @@ function expected(): Map<string, string> {
   for (const [k, v] of Object.entries(THEME)) out.set(`--${tokenName(k)}`, v);
   for (const [k, v] of Object.entries(RADII)) out.set(`--r-${k}`, `${v}px`);
   TRACK_COLORS.forEach((c, i) => out.set(`--track-${i}`, c));
+  RETURN_COLORS.forEach((c, i) => out.set(`--return-${i}`, c));
   for (const [k, v] of Object.entries(CATEGORY_COLORS)) out.set(`--cat-${k}`, v);
   for (const [k, v] of Object.entries(SIGNAL_COLORS)) out.set(`--sig-${k}`, v);
   return out;

@@ -389,7 +389,7 @@ describe('lean history', () => {
     expect(mAfter.tracks).toBe(mBefore.tracks);
     expect(mAfter.mixer).not.toBe(mBefore.mixer);
     expect(mAfter.mixer.tracks[0]).toBe(mBefore.mixer.tracks[0]);
-    expect(mAfter.mixer.reverb).toBe(mBefore.mixer.reverb);
+    expect(mAfter.mixer.returns).toBe(mBefore.mixer.returns);
   });
 
   it('snapshots are frozen', () => {

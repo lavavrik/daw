@@ -86,7 +86,7 @@ describe('transitions', () => {
       // Lanes: one per spec, every point inside the clip's span and the param's range.
       expect(t.automation).toHaveLength(d.lanes.length);
       for (const l of t.automation) {
-        const def = targetDef(t, l.target)!;
+        const def = targetDef(s.p, t, l.target)!;
         expect(l.enabled).toBe(true);
         expect(l.points.length).toBeGreaterThanOrEqual(2);
         for (const x of l.points) {

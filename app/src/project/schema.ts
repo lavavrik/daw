@@ -1,9 +1,10 @@
-// project.json: the saved form of a Project (schemaVersion 6) and its
+// project.json: the saved form of a Project (schemaVersion 7) and its
 // validator. See docs/architecture/projects.md. An older file is migrated
 // first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had; v2 -> v3
 // adds automation lanes, which v2 never had; v3 -> v4 adds the MIDI CC
 // mappings, which v3 never had; v4 -> v5 adds the pattern library, which v4
-// never had; v5 -> v6 adds the key, A minor for older files).
+// never had; v5 -> v6 adds the key, A minor for older files; v6 -> v7 turns
+// the fixed Reverb and Delay into the first two of `mixer.returns`).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
@@ -23,8 +24,18 @@
 //     default, an out-of-range one is clamped, and an object that cannot be
 //     placed (bad slot, unknown kind, dangling reference) is dropped. Each of
 //     these adds a warning (a missing optional field silently gets its
-//     default). Only a missing/newer schemaVersion is an error.
-import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_RETURN0, MIX_MASTER, BAR_TICKS } from '../audio/protocol';
+//     default). Only a missing/newer schemaVersion is an error, and (plan
+//     29) a returns list that cannot be placed: more than MAX_RETURNS, a
+//     malformed entry, a missing or duplicate id, an unknown kind, a slot
+//     out of range or used twice, an empty name. A return owns sends, lanes
+//     and MIDI mappings, so guessing would move them onto the wrong one.
+//   - A track's sends are saved by catalog name (send_a..send_h = return
+//     slot 0..7): a send, lane or mapping on a slot no return holds (an
+//     "orphan") is reset / dropped with a warning.
+import {
+  MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_RETURNS, MAX_SONG_TICKS, MIX_RETURN0, MIX_MASTER, BAR_TICKS,
+  sendParam, sendPreParam,
+} from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
 import type { MixParamDef } from '../audio/mixerCatalog';
@@ -33,6 +44,8 @@ import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import { learnableDef } from '../state/midiMap';
 import { accepts } from '../state/mixer-actions';
+import { RETURN_NAME_MAX } from '../state/returns';
+import type { ReturnKind } from '../state/returns';
 import { validatePatch } from '../state/patches';
 import type { Patch } from '../state/patches';
 import {
@@ -45,10 +58,10 @@ import type { MusicKey } from '../music/scales';
 
 /**
  * Plan 9: 2 (Audio tracks); plan 10: 3 (automation); plan 14: 4 (MIDI
- * mappings); plan 21: 5 (the pattern library); plan 26: 6 (the key). Older
- * files are migrated (migrate.ts).
+ * mappings); plan 21: 5 (the pattern library); plan 26: 6 (the key); plan
+ * 29: 7 (mixer.returns). Older files are migrated (migrate.ts).
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -90,13 +103,13 @@ export type LibraryPatternJson =
 /**
  * One MIDI CC mapping: CC `cc` (0..119, unique) moves a param of track
  * `track` (by slot: its mixer strip {mix}, or module `moduleIdx` of its rack
- * {rack}: synth tracks only) or of a Master-row channel (by name; {mix}
- * only). Params by catalog name; integer ones allowed. One mapping per
- * control.
+ * {rack}: synth tracks only) or of a Master-row channel (a return's id, or
+ * 'master'; {mix} only). Params by catalog name; integer ones allowed. One
+ * mapping per control.
  */
 export type MidiMapJson =
   | { cc: number; track: number; target: { mix: string } | { rack: [moduleIdx: number, name: string] } }
-  | { cc: number; channel: 'reverb' | 'delay' | 'master'; target: { mix: string } };
+  | { cc: number; channel: string; target: { mix: string } };
 
 interface TrackCommon {
   /** Engine track slot 0..31, unique. */
@@ -135,8 +148,8 @@ export interface LaneJson {
 /** One saved breakpoint (see LaneJson.points). */
 export type PointJson = [tick: number, value: number, hold: 0 | 1, curve?: number];
 
-/** A Master row lane: a lane of the Reverb, Delay or master channel. */
-export type MasterLaneJson = { channel: 'reverb' | 'delay' | 'master' } & LaneJson;
+/** A Master row lane: a lane of a return (`channel`: its id) or of the master ('master'). */
+export type MasterLaneJson = { channel: string } & LaneJson;
 
 export interface DrumTrackJson extends TrackCommon {
   kind: 'drum';
@@ -230,10 +243,24 @@ export type PatternTrackJson = DrumTrackJson | SynthTrackJson;
 /** Mixer params by catalog name (MIX_PARAMS[].name). */
 export type MixParamsJson = Record<string, number>;
 
+/**
+ * A return (plan 29, state/returns.ts): `id` is the owner string of its
+ * lanes and mappings (unique; not 'master'), `slot` its engine slot 0..7
+ * (unique; the tracks' send to it is send_a..send_h by slot), `name` trimmed
+ * 1..24 characters. Its colour comes from the slot and is not saved.
+ */
+export interface ReturnJson {
+  id: string;
+  kind: ReturnKind;
+  name: string;
+  slot: number;
+  params: MixParamsJson;
+}
+
 export interface MixerJson {
   tracks: { slot: number; params: MixParamsJson; key: KeyJson | null }[];
-  reverb: MixParamsJson;
-  delay: MixParamsJson;
+  /** At most MAX_RETURNS, in creation order. */
+  returns: ReturnJson[];
   master: MixParamsJson;
   /** The Master row's lanes. */
   automation: MasterLaneJson[];
@@ -324,6 +351,12 @@ export function validate(input: unknown): Validated {
   }
   const r = new Reader();
 
+  // The returns first: they decide which track sends (and their lanes and
+  // mappings) have somewhere to go.
+  const rets = readReturns(r, isObj(json.mixer) ? json.mixer.returns : undefined);
+  if ('error' in rets) return rets;
+  const returnSlots = new Set(rets.map((x) => x.slot));
+
   const name = r.str(json.name, 'Untitled', 'Project name');
   const tempo = Math.round(r.num(json.tempo, 124, 20, 300, 'Tempo') * 10) / 10;
   const metronome = r.bool(json.metronome, false, 'Metronome');
@@ -370,7 +403,7 @@ export function validate(input: unknown): Validated {
     else if (t.color !== undefined) r.warn(`Track "${tname}": bad colour "${String(t.color)}"`);
     const at = `Track "${tname}"`;
     const common = { slot, name: tname, color };
-    const auto = (rack: Patch | null) => readLanes(r, t.automation, lanes, at, (target) => laneDef(target, 'track', slot, rack));
+    const auto = (rack: Patch | null) => readLanes(r, t.automation, lanes, at, (target) => laneDef(target, { kind: 'track', index: slot, returnSlots }, rack));
     if (kind === 'audio') {
       tracks.push({ kind, ...common, clips: readAudioClips(r, t.clips, sampleIds, at), automation: auto(null) });
     } else if (kind === 'drum') {
@@ -392,8 +425,8 @@ export function validate(input: unknown): Validated {
     }
   }
 
-  const mixer = readMixer(r, json.mixer, tracks, lanes);
-  const midiMap = readMidiMap(r, json.midiMap, tracks);
+  const mixer = readMixer(r, json.mixer, tracks, lanes, rets);
+  const midiMap = readMidiMap(r, json.midiMap, tracks, rets);
   const patternLibrary = readLibrary(r, json.patternLibrary);
   const key = readKey(r, json.key);
   const sel = isObj(json.selection) ? json.selection : {};
@@ -698,8 +731,32 @@ function readCurrentAndClips(
   return { currentPattern, clips };
 }
 
+/**
+ * A mixer channel as the readers check it: its kind and engine channel, a
+ * return's kind, and (a track strip) the slots that hold a return, so a send
+ * to an empty slot is caught (orphanWhy).
+ */
+interface Chan {
+  kind: MixTarget;
+  index: number;
+  retKind?: ReturnKind;
+  returnSlots?: ReadonlySet<number>;
+}
+
+/** The return slot each track send param (send_a..send_h and their _pre flags) feeds. */
+const SEND_SLOT = new Map<string, number>(
+  Array.from({ length: MAX_RETURNS }, (_, s) => [[sendParam(s), s], [sendPreParam(s), s]] as [string, number][]).flat(),
+);
+
+/** Why mixer param `name` cannot be used on track channel `ch`: it is a send to a slot no return holds (null: it can). */
+function orphanWhy(name: string, ch: Chan): string | null {
+  const slot = SEND_SLOT.get(name);
+  if (slot === undefined || ch.kind !== 'track' || !ch.returnSlots || ch.returnSlots.has(slot)) return null;
+  return `${name} feeds no return (slot ${slot} is empty)`;
+}
+
 /** Params of one mixer channel by name: unknown or not-for-this-channel ones are dropped. */
-function readMixParams(r: Reader, v: unknown, kind: MixTarget, index: number, at: string): MixParamsJson {
+function readMixParams(r: Reader, v: unknown, ch: Chan, at: string): MixParamsJson {
   const out: MixParamsJson = {};
   if (v === undefined) return out;
   if (!isObj(v)) {
@@ -709,13 +766,64 @@ function readMixParams(r: Reader, v: unknown, kind: MixTarget, index: number, at
   for (const [name, x] of Object.entries(v)) {
     const def = MIX_PARAMS.find((d) => d.name === name);
     if (!def) r.warn(`${at}: unknown param "${name}" (ignored)`);
-    else if (!accepts(def, kind, index)) r.warn(`${at}: ${name} does not apply here (ignored)`);
-    else out[name] = r.num(x, def.default, def.min, def.max, `${at} ${name}`, def.integer);
+    else if (!accepts(def, ch.kind, ch.index, ch.retKind)) r.warn(`${at}: ${name} does not apply here (ignored)`);
+    else {
+      const val = r.num(x, def.default, def.min, def.max, `${at} ${name}`, def.integer);
+      const orphan = orphanWhy(name, ch);
+      // An orphan send at its default is what every save writes for the empty slots: no warning.
+      if (orphan && val !== def.default) r.warn(`${at}: ${orphan} (reset)`);
+      out[name] = orphan ? def.default : val;
+    }
   }
   return out;
 }
 
-function readMixer(r: Reader, v: unknown, tracks: TrackJson[], lanes: Lanes): MixerJson {
+/**
+ * The returns (see the top: a list that cannot be placed is an error, not a
+ * warning). Missing: none. Names are trimmed and cut to RETURN_NAME_MAX.
+ */
+function readReturns(r: Reader, v: unknown): ReturnJson[] | { error: string } {
+  if (v === undefined) return [];
+  if (!Array.isArray(v)) return { error: 'Mixer: "returns" is not a list' };
+  if (v.length > MAX_RETURNS) return { error: `Mixer: ${v.length} returns (at most ${MAX_RETURNS})` };
+  const out: ReturnJson[] = [];
+  const ids = new Set<string>();
+  const slots = new Set<number>();
+  for (const [i, x] of v.entries()) {
+    if (!isObj(x)) return { error: `Mixer: return ${i + 1} is malformed` };
+    const id = x.id;
+    if (typeof id !== 'string' || id === '') return { error: `Mixer: return ${i + 1} has no id` };
+    const at = `Mixer return "${id}"`;
+    if (id === 'master') return { error: `${at}: a return cannot have the id "master"` };
+    if (ids.has(id)) return { error: `Mixer: the return id "${id}" is used twice` };
+    ids.add(id);
+    const kind = x.kind;
+    if (kind !== 'reverb' && kind !== 'delay') return { error: `${at}: unknown kind "${String(kind)}" (Reverb or Delay)` };
+    const slot = x.slot;
+    if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 0 || slot >= MAX_RETURNS) {
+      return { error: `${at}: slot ${String(slot)} is not in 0..${MAX_RETURNS - 1}` };
+    }
+    if (slots.has(slot)) return { error: `${at}: slot ${slot} is used twice` };
+    slots.add(slot);
+    let name = typeof x.name === 'string' ? x.name.trim() : '';
+    if (name === '') return { error: `${at}: no name` };
+    if (name.length > RETURN_NAME_MAX) {
+      r.warn(`${at}: name cut to ${RETURN_NAME_MAX} characters`);
+      name = name.slice(0, RETURN_NAME_MAX).trim();
+    }
+    out.push({ id, kind, name, slot, params: readMixParams(r, x.params, { kind: 'return', index: MIX_RETURN0 + slot, retKind: kind }, at) });
+  }
+  return out;
+}
+
+/** A Master row channel (a return id or 'master') of `returns`, or null. */
+function masterChan(channel: unknown, returns: ReturnJson[]): Chan | null {
+  if (channel === 'master') return { kind: 'master', index: MIX_MASTER };
+  const ret = returns.find((x) => x.id === channel);
+  return ret ? { kind: 'return', index: MIX_RETURN0 + ret.slot, retKind: ret.kind } : null;
+}
+
+function readMixer(r: Reader, v: unknown, tracks: TrackJson[], lanes: Lanes, returns: ReturnJson[]): MixerJson {
   const o = isObj(v) ? v : {};
   const strips: MixerJson['tracks'] = [];
   const seen = new Set<number>();
@@ -736,46 +844,47 @@ function readMixer(r: Reader, v: unknown, tracks: TrackJson[], lanes: Lanes): Mi
       if (src && rowOk) key = { track: src.slot, row: row as number | null };
       else r.warn(`${at}: sidechain key ${JSON.stringify(s.key)} has no source (dropped)`);
     } else if (s.key !== null && s.key !== undefined) r.warn(`${at}: malformed sidechain key (dropped)`);
-    strips.push({ slot: t.slot, params: readMixParams(r, s.params, 'track', t.slot, at), key });
+    const returnSlots = new Set(returns.map((x) => x.slot));
+    strips.push({ slot: t.slot, params: readMixParams(r, s.params, { kind: 'track', index: t.slot, returnSlots }, at), key });
   }
   return {
     tracks: strips,
-    reverb: readMixParams(r, o.reverb, 'return', MIX_RETURN0, 'Mixer Reverb'),
-    delay: readMixParams(r, o.delay, 'return', MIX_RETURN0 + 1, 'Mixer Delay'),
-    master: readMixParams(r, o.master, 'master', MIX_MASTER, 'Mixer Master'),
-    automation: readMasterLanes(r, o.automation, lanes),
+    returns,
+    master: readMixParams(r, o.master, { kind: 'master', index: MIX_MASTER }, 'Mixer Master'),
+    automation: readMasterLanes(r, o.automation, lanes, returns),
   };
 }
 
-const MASTER_CHANNELS = { reverb: ['return', MIX_RETURN0], delay: ['return', MIX_RETURN0 + 1], master: ['master', MIX_MASTER] } as const;
-
-/** The Master row's lanes: each names its channel; one of another channel is dropped. */
-function readMasterLanes(r: Reader, v: unknown, lanes: Lanes): MasterLaneJson[] {
+/** The Master row's lanes: each names its channel (a return id or 'master'); one of a missing return is dropped. */
+function readMasterLanes(r: Reader, v: unknown, lanes: Lanes, returns: ReturnJson[]): MasterLaneJson[] {
   const out: MasterLaneJson[] = [];
   const raw = arr(v);
   for (const x of raw) {
     const ch = isObj(x) ? x.channel : undefined;
-    if (ch !== 'reverb' && ch !== 'delay' && ch !== 'master') {
-      r.warn(`Master row: dropped an automation lane of channel "${String(ch)}" (no such channel)`);
+    const c = masterChan(ch, returns);
+    if (!c) {
+      r.warn(`Master row: dropped an automation lane of channel "${String(ch)}" (no such return)`);
       continue;
     }
-    const [kind, index] = MASTER_CHANNELS[ch];
+    const channel = ch as string;
     // One lane at a time, so a duplicate target is caught against this channel's earlier lanes only.
-    const mine = out.filter((l) => l.channel === ch);
-    const got = readLanes(r, [x], lanes, `Master row ${ch}`, (t) => laneDef(t, kind, index, null), mine);
-    for (const l of got) out.push({ channel: ch, ...l });
+    const mine = out.filter((l) => l.channel === channel);
+    const got = readLanes(r, [x], lanes, `Master row ${channel}`, (t) => laneDef(t, c, null), mine);
+    for (const l of got) out.push({ channel, ...l });
   }
   return out;
 }
 
 /**
  * The MIDI mappings. Dropped, with a warning: a malformed entry, a CC
- * outside 0..119 (or not an integer), an unknown track slot or channel, a
- * target the owner does not have or that is not learnable (a choice or an
+ * outside 0..119 (or not an integer), an unknown track slot or return, a
+ * target the owner does not have (a send to a slot no return holds
+ * included) or that is not learnable (a choice or an
  * on/off flag: mappingTargetWhy), a CC already mapped,
  * and a control that already has a CC (first wins, as in learnMidi).
  */
-function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] {
+function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[], returns: ReturnJson[]): MidiMapJson[] {
+  const returnSlots = new Set(returns.map((x) => x.slot));
   const out: MidiMapJson[] = [];
   if (v !== undefined && !Array.isArray(v)) r.warn('MIDI mappings: not a list (none kept)');
   const ccs = new Map<number, string>(); // cc -> control key
@@ -791,7 +900,7 @@ function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] 
       r.warn(`${at}: not a learnable CC (0..119; dropped)`);
       continue;
     }
-    let owner: { track: number } | { channel: 'reverb' | 'delay' | 'master' };
+    let owner: { track: number } | { channel: string };
     let why: string | null;
     if (x.track !== undefined) {
       const t = tracks.find((tj) => tj.slot === x.track);
@@ -800,16 +909,15 @@ function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] 
         continue;
       }
       owner = { track: t.slot };
-      why = mappingTargetWhy(x.target, 'track', t.slot, t.kind === 'synth' ? t.patch : null);
+      why = mappingTargetWhy(x.target, { kind: 'track', index: t.slot, returnSlots }, t.kind === 'synth' ? t.patch : null);
     } else {
-      const ch = x.channel;
-      if (ch !== 'reverb' && ch !== 'delay' && ch !== 'master') {
-        r.warn(`${at}: no channel "${String(ch)}" (dropped)`);
+      const c = masterChan(x.channel, returns);
+      if (!c) {
+        r.warn(`${at}: no return "${String(x.channel)}" (dropped)`);
         continue;
       }
-      owner = { channel: ch };
-      const [kind, index] = MASTER_CHANNELS[ch];
-      why = mappingTargetWhy(x.target, kind, index, null);
+      owner = { channel: x.channel as string };
+      why = mappingTargetWhy(x.target, c, null);
     }
     if (why !== null) {
       r.warn(`${at}: ${why} (dropped)`);
@@ -835,22 +943,24 @@ function readMidiMap(r: Reader, v: unknown, tracks: TrackJson[]): MidiMapJson[] 
 }
 
 /**
- * Why a mapping cannot use `target` on a mixer channel (`kind`, `index`) and,
+ * Why a mapping cannot use `target` on mixer channel `ch` and,
  * for a synth track, its rack `patch` (validated); null when it can. Like
  * laneDef, but integer params are allowed (state/midiMap.ts mappingDef);
  * choices and 0..1 flags are not (learnableDef).
  */
-function mappingTargetWhy(target: unknown, kind: MixTarget, index: number, patch: Patch | null): string | null {
+function mappingTargetWhy(target: unknown, ch: Chan, patch: Patch | null): string | null {
   if (!isObj(target)) return 'no target';
   if (typeof target.mix === 'string') {
     const name = target.mix;
     const def = MIX_PARAMS.find((d) => d.name === name);
     if (!def) return `unknown param "${name}"`;
-    if (!accepts(def, kind, index)) return `${name} does not apply here`;
+    if (!accepts(def, ch.kind, ch.index, ch.retKind)) return `${name} does not apply here`;
+    const orphan = orphanWhy(name, ch);
+    if (orphan) return orphan;
     return learnableDef(def) ? null : `${name} is not learnable (a choice or an on/off switch)`;
   }
   const rack = target.rack;
-  if (kind === 'track' && Array.isArray(rack) && rack.length === 2 && typeof rack[1] === 'string') {
+  if (ch.kind === 'track' && Array.isArray(rack) && rack.length === 2 && typeof rack[1] === 'string') {
     const [mod, name] = rack as [unknown, string];
     if (!patch) return `${name}: only synth tracks have a rack`;
     const pm = patch.modules.find((m) => m.idx === mod);
@@ -869,13 +979,15 @@ interface Lanes {
 }
 
 /**
- * The catalog def of a lane target on a mixer channel (`kind`, `index`) and,
- * for a synth track, its rack `patch` (validated); null when the engine
- * would refuse it: unknown, integer, not on this channel, a rack target off
- * a synth track, or a module the rack does not have. `why` says which.
+ * The catalog def of a lane target on mixer channel `ch` and, for a synth
+ * track, its rack `patch` (validated); null when the engine would refuse it
+ * or it would drive nothing: unknown, integer, not on this channel (on a
+ * return: its kind's effect only), a send to a slot no return holds, a rack
+ * target off a synth track, or a module the rack does not have. `why` says
+ * which.
  */
 function laneDef(
-  target: unknown, kind: MixTarget, index: number, patch: Patch | null,
+  target: unknown, ch: Chan, patch: Patch | null,
 ): { def: MixParamDef | ParamDef } | { why: string } {
   if (!isObj(target)) return { why: 'no target' };
   if (typeof target.mix === 'string') {
@@ -883,7 +995,9 @@ function laneDef(
     const def = MIX_PARAMS.find((d) => d.name === name);
     if (!def) return { why: `unknown param "${name}"` };
     if (def.integer) return { why: `${name} cannot be automated` };
-    if (!accepts(def, kind, index)) return { why: `${name} does not apply here` };
+    if (!accepts(def, ch.kind, ch.index, ch.retKind)) return { why: `${name} does not apply here` };
+    const orphan = orphanWhy(name, ch);
+    if (orphan) return { why: orphan };
     return { def };
   }
   const rack = target.rack;

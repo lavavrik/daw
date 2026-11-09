@@ -307,8 +307,10 @@ export interface ModelState {
  * problem per command (with its index) and the final transport state. Rules
  * beyond the per-op ranges: RESET_ALL only while stopped; slot-addressed ops
  * need a track of the right kind; rack ops need the modules/ports; a row's
- * sample must be uploaded first; MIX_SET_KEY sources must exist; and once a
- * key was sent no track/mixer-param command may follow (keys last).
+ * sample must be uploaded first; MIX_SET_KEY sources must exist; once a
+ * key was sent no track/mixer-param command may follow (keys last); and
+ * (plan 29) a return slot's RETURN_KIND comes before its MIX_SETs (it resets
+ * them), and an effect param only goes to a slot of that effect's kind.
  */
 export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState } {
   const errors: string[] = [];
@@ -325,6 +327,9 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
   let autoSent = false;
   /** Staged audio-clip gain/fades per address (SOURCE/GAIN stage, SET commits). */
   let staged = new Map<number, { source: boolean; fades: number }>();
+  /** Per return slot: its kind (0 off, 1 reverb, 2 delay; RESET_ALL's layout) and whether a MIX_SET reached it. */
+  const freshReturns = () => Array.from({ length: MAX_RETURNS }, (_, s) => ({ kind: s === 0 ? 1 : s === 1 ? 2 : 0, set: false }));
+  let rets = freshReturns();
   const int = (v: number, lo: number, hi: number) => Number.isInteger(v) && v >= lo && v <= hi;
   const inR = (v: number, lo: number, hi: number) => Number.isFinite(v) && v >= lo && v <= hi;
   log.forEach((e, i) => {
@@ -366,7 +371,15 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
       case Op.RESET_ALL:
         if (playing) bad('RESET_ALL while playing');
         st = fresh(); samples = new Set(); racks = new Map(); keysSent = false; staged = new Map();
-        lanes = new Map(); autoSent = false;
+        lanes = new Map(); autoSent = false; rets = freshReturns();
+        break;
+      case Op.RETURN_KIND:
+        afterKeys();
+        if (!int(a, 0, MAX_RETURNS - 1) || !int(b, 0, 2)) { bad('return slot or kind'); break; }
+        if (rets[a].kind !== b) {
+          if (rets[a].set) bad(`RETURN_KIND after a MIX_SET on return slot ${a} (it resets them)`);
+          rets[a] = { kind: b, set: false };
+        }
         break;
       case Op.AUTO_LANE_SET: {
         autoSent = true;
@@ -501,6 +514,11 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         const ok = def.appliesTo.includes(a < MAX_TRACKS ? 'track' : a < MIX_RETURN0 + MAX_RETURNS ? 'return' : 'master');
         if (!ok) bad(`${def.name} not on channel ${a}`);
         if (!inR(c, def.min, def.max)) bad('mix value');
+        if (a >= MIX_RETURN0 && a < MIX_RETURN0 + MAX_RETURNS) {
+          const ret = rets[a - MIX_RETURN0];
+          ret.set = true;
+          if ((def.group === 'reverb' && ret.kind !== 1) || (def.group === 'delay' && ret.kind !== 2)) bad(`${def.name} on a return slot of kind ${ret.kind}`);
+        }
         break;
       }
       case Op.MIX_SET_KEY:

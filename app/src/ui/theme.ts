@@ -5,11 +5,23 @@
 //   THEME.<camelKey>     <-> --<kebab-key>   (tokenName below)
 //   RADII.<k>            <-> --r-<k>  (px)
 //   TRACK_COLORS[i]      <-> --track-<i>
+//   RETURN_COLORS[i]     <-> --return-<i>
 //   CATEGORY_COLORS.<k>  <-> --cat-<k>
 //   SIGNAL_COLORS.<k>    <-> --sig-<k>
 // See docs/architecture/ui-theme.md.
 
 export { TRACK_COLORS } from '../state/palette';
+
+/**
+ * The returns' colours by engine slot (plan 29): a return's colour is
+ * `var(--return-<slot>)` (state/returns.ts returnColor), derived, never
+ * saved, so undoing a delete brings the same colour back. Canvas code that
+ * needs the value reads it here.
+ */
+export const RETURN_COLORS: readonly string[] = [
+  '#7aa2ff', '#ffa26b', '#6be0a6', '#d78cff',
+  '#ffd86b', '#6bd3ff', '#ff8fa3', '#b8e06b',
+];
 
 export const THEME = {
   // Surfaces

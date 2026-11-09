@@ -11,7 +11,7 @@ Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 6
+  project.json            schemaVersion 7
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -20,11 +20,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 6)
+## project.json (schemaVersion 7)
 
 ```jsonc
 {
-  "schemaVersion": 6, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 7, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -58,7 +58,10 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   "mixer": {
     "tracks": [{ "slot": 0, "params": { "fader": 0, "pan": 0, ... }, "key": null },
                { "slot": 1, "params": { ... }, "key": { "track": 0, "row": 0 } }],
-    "reverb": { "rev_size": 0.6, ... }, "delay": { "delay_time": 6, ... },
+    "returns": [                           // plan 29: up to 8, creation order
+      { "id": "reverb", "kind": "reverb", "name": "Reverb", "slot": 0, "params": { "rev_size": 0.6, ... } },
+      { "id": "delay", "kind": "delay", "name": "Delay", "slot": 1, "params": { "delay_time": 6, ... } },
+      { "id": "3f1c…", "kind": "reverb", "name": "Reverb 2", "slot": 2, "params": { ... } } ],
     "master": { "fader": 0, "limiter_ceiling": -0.3, ... },
     "automation": [{ "channel": "master", "lane": 2, "enabled": false,   // the Master row's lanes
                      "target": { "mix": "limiter_ceiling" }, "points": [[0, 0, 0], [7680, -3, 0]] }]
@@ -68,7 +71,7 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   "midiMap": [                             // plan 14: MIDI CC mappings, learning order
     { "cc": 74, "track": 1, "target": { "rack": [4, "cutoff"] } },  // a track by slot
     { "cc": 7, "track": 0, "target": { "mix": "fader" } },
-    { "cc": 10, "channel": "reverb", "target": { "mix": "rev_size" } } ],  // Master row channel by name
+    { "cc": 10, "channel": "reverb", "target": { "mix": "rev_size" } } ],  // Master row channel: a return id or "master"
   "patternLibrary": [                      // plan 21: saved patterns, by value, saving order
     { "kind": "drum", "name": "Groove", "stepCount": 16, "swing": 0,
       "rows": [{ "name": "Kick", "sampleName": "kick.wav", "steps": [100, 0, 0, 0, ...] }] },  // 64 velocities
@@ -100,9 +103,23 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   `Project.generation` (bumped by `blankState`) after its engine upload, so
   an upload from a session that New / Open / Restore replaced never lands
   in the new one.
+- **Returns** (plan 29; mixer.md, `state/returns.ts`): `mixer.returns`,
+  at most 8, in creation order. `id` is the owner string of the return's
+  lanes and MIDI mappings (unique, never `master`; the two a new project
+  starts with, and the two an older file migrates to, are `reverb` and
+  `delay`; added ones get a UUID). `slot` is the engine slot 0..7 (channel
+  32 + slot), unique and kept for life, so undo puts a deleted return back
+  where it was. `kind` is `reverb` or `delay` and decides which effect
+  params it takes (`rev_*` on a Reverb, `delay_*` on a Delay). `name` is
+  trimmed, 1..24 characters, need not be unique. The colour comes from the
+  slot (`--return-<slot>`) and is not saved. A track's **sends** stay in its
+  strip params by catalog name, `send_a`..`send_h` = slot 0..7 (and their
+  `_pre` flags): by slot, which is the same as by return since a return
+  never changes slot. A save writes all eight on every strip.
 - **Automation lanes** (plan 10, spec addendum §3.4; automation.md) live
-  inside their owner: a track's in its `automation`, the Master row's
-  (Reverb, Delay, master) in `mixer.automation` with their `channel`. A
+  inside their owner: a track's in its `automation`, the Master row's (the
+  returns and the master) in `mixer.automation` with their `channel` (a
+  return's id, or `master`). A
   target is a non-integer catalog param, by name: `{mix: name}` on the
   owner's channel, or `{rack: [moduleIdx, name]}` on a synth track's rack.
   `lane` is the engine lane. A lane's `points` are listed in **engine idx
@@ -119,8 +136,8 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   top-level `midiMap`, because a mapping names project tracks. Each maps a
   CC number (0..119, omni) to one control, named like an automation target:
   a track by `slot` with `{mix: name}` (its strip) or `{rack: [moduleIdx,
-  name]}` (its rack: synth tracks only), or a Master-row `channel`
-  (`reverb` / `delay` / `master`) with `{mix: name}`. Unlike a lane target,
+  name]}` (its rack: synth tracks only), or a Master-row `channel` (a
+  return's id, or `master`) with `{mix: name}`. Unlike a lane target,
   an integer param may be mapped. One mapping per CC and per control. A
   load turns the slots into the new track ids (`commands.ts`
   `midiMapState`); no engine command (the engine knows nothing of MIDI CC).
@@ -163,10 +180,11 @@ folder's sample list all get it). It is pure (the input is not changed).
 | 3 → 4 | 14 | MIDI CC mappings. A v3 project has none: a top-level `midiMap: []` is added; nothing else changes, so it is lossless. |
 | 4 → 5 | 21 | The pattern library. A v4 project has none: a top-level `patternLibrary: []` is added; nothing else changes, so it is lossless. |
 | 5 → 6 | 26 | The key. A v5 project has none: a top-level `key: { root: 9, scale: "minor" }` (A minor, the house default) is added; nothing else changes. |
+| 6 → 7 | 29 | Multiple returns. `mixer.reverb` and `mixer.delay` become `mixer.returns`: `{id: "reverb", kind: "reverb", name: "Reverb", slot: 0}` and `{id: "delay", kind: "delay", name: "Delay", slot: 1}`, each with its params unchanged. The ids are the old channel names, so Master row lanes and MIDI mappings (`channel: "reverb"` / `"delay"`) stay valid as they are, and track sends need nothing (`send_a` / `send_b` are slots 0 / 1). A mixer that is not an object (which read as all defaults) becomes one with just the two default returns. Lossless; the replay is the old one plus a `RETURN_KIND` per slot (no-ops after `RESET_ALL`, so exports render bit-identical) and the master on channel 40. |
 
 A version newer than the build knows stays an error ("saved by a newer
 version of the app"); a save always writes the current version.
-`migrate.test.ts` pins v1 → v6 (through v2, v3, v4, v5) on a frozen genuine v1 save
+`migrate.test.ts` pins v1 → v7 (through v2, v3, v4, v5, v6) on a frozen genuine v1 save
 (`project/testdata/v1-fixture.json`) and minimal v1 files, v2 → v4 on a
 frozen genuine v2 save with Audio tracks (`project/testdata/v2-fixture.json`,
 the plan-9 save of `buildFixture` + `addAudioFixture`), and v3 → v4 on a
@@ -175,9 +193,12 @@ plan-13 save of `buildFixture` + `addAudioFixture` + `addAutomationFixture`),
 and v4 → v5 on `project/testdata/v4-fixture.json` (the v3 fixture as schema
 4 saves it: plus three MIDI mappings; v3 → v4 adds nothing else),
 and v5 → v6 on `project/testdata/v5-fixture.json` (the v4 fixture as schema
-5 saves it: plus two library patterns; v4 → v5 adds nothing else);
-`load.test.ts` `a v2 project loads and saves as v6` opens the v2 one and
-checks the save.
+5 saves it: plus two library patterns; v4 → v5 adds nothing else), and
+v6 → v7 on that fixture too: the same params, lanes and mappings, and a
+replay equal to the frozen pre-plan-29 one (`project/testdata/v5-replay.json`)
+apart from the added `RETURN_KIND`s and the master's channel 34 → 40;
+`load.test.ts` `a v2 project loads and saves as v6` (now v7) opens the v2
+one and checks the save.
 
 ## Sample memory (spec addendum §3.3)
 
@@ -484,8 +505,13 @@ groove at bar 9).
 
 Never throws, never lets an out-of-range value through. Unknown fields are
 ignored. The file is migrated first (see above). A missing/non-integer
-`schemaVersion` or one greater than the current one (6) is an
-**error** (nothing changes). Everything else becomes a **warning**, shown in a
+`schemaVersion` or one greater than the current one (7) is an
+**error** (nothing changes). So is a `mixer.returns` that cannot be placed
+(plan 29): not a list, more than 8, a malformed entry, a missing or
+duplicate id (or the id `master`), an unknown kind, a slot outside 0..7 or
+used twice, an empty name. A return owns sends, lanes and mappings, so
+guessing would move them onto the wrong one. Everything else becomes a
+**warning**, shown in a
 notice banner after the load (all of them in the console):
 
 - wrong type → default; out of range → clamped (catalog ranges, protocol.rs
@@ -496,8 +522,15 @@ notice banner after the load (all of them in the console):
   `loadPatch` and the patch library): unknown module kinds, bad idx, unknown
   params, dangling cables dropped; params clamped;
 - mixer params: unknown names and params on the wrong channel (`rev_*` not
-  on Reverb, `delay_*` not on Delay, the `setMix` rule) dropped; sidechain
-  keys whose track/row does not exist dropped;
+  on a Reverb return, `delay_*` not on a Delay return, the `setMix` rule)
+  dropped; sidechain keys whose track/row does not exist dropped; a return
+  name over 24 characters cut;
+- an **orphan send** (plan 29): a track's `send_x` / `send_x_pre` on a slot
+  no return holds is reset to its default (Off, post), with a warning when
+  it was not already there; a lane or MIDI mapping on one is dropped. So a
+  later return on that slot starts with no stale send;
+- a Master row lane or MIDI mapping whose `channel` names no return (and is
+  not `master`) is dropped;
 - a row/SamplePlayer using a sample not in `samples`, or a sample with a bad
   file path (anything but `samples/<one name>`) → cleared/dropped;
 - an audio clip: a sample not in `samples` → `null` (the clip is kept);

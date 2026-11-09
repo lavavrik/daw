@@ -1,17 +1,19 @@
 // What an automation lane's header calls its target (plan 10), pure and
 // unit-tested (autoLabels.test.ts). Mixer params by what the strip says
 // ("Fader", "Pan", "EQ Low cut", "Reverb send"), Master row lanes prefixed
-// by their channel ("Master · Ceiling", "Delay · Feedback"), rack params by
+// by their channel: the master or the return's name ("Master · Ceiling",
+// "Delay · Feedback"), rack params by
 // the module's title as the rack shows it ("Filter · Cutoff"; "Osc 2 ·
 // Tune" when the rack has more than one) and the knob's label.
 import { moduleDef } from '../../audio/catalog';
 import { MIX_PARAMS } from '../../audio/mixerCatalog';
 import type { MixParamDef } from '../../audio/mixerCatalog';
-import { isMasterChannel } from '../../state/automation';
 import type { AutoOwner } from '../../state/automation';
-import type { AutoTarget, MasterChannel, RackModule } from '../../state/project.svelte';
+import { findReturn } from '../../state/returns';
+import type { AutoTarget, MasterChannel, Project, RackModule } from '../../state/project.svelte';
 
-const CHANNEL: Record<MasterChannel, string> = { master: 'Master', reverb: 'Reverb', delay: 'Delay' };
+/** A Master row channel as a lane or picker names it: "Master", or the return's name. */
+export const channelName = (p: Project, ch: MasterChannel): string => (ch === 'master' ? 'Master' : (findReturn(p, ch)?.name ?? '?'));
 
 /** A mixer param as a lane names it. */
 export function mixLabel(def: MixParamDef): string {
@@ -37,14 +39,14 @@ export function moduleTitles(modules: readonly Pick<RackModule, 'idx' | 'kind'>[
   return out;
 }
 
-/** The header text of `owner`'s lane on `target`. */
-export function targetLabel(owner: AutoOwner, target: AutoTarget): string {
+/** The header text of `owner`'s lane on `target` (in `p`: a return's lanes are prefixed by its name). */
+export function targetLabel(p: Project, owner: AutoOwner, target: AutoTarget): string {
   if (target.kind === 'mix') {
     const def = MIX_PARAMS.find((d) => d.name === target.param);
     const label = def ? mixLabel(def) : target.param;
-    return isMasterChannel(owner) ? `${CHANNEL[owner]} · ${label}` : label;
+    return typeof owner === 'string' ? `${channelName(p, owner)} · ${label}` : label;
   }
-  if (isMasterChannel(owner) || owner.kind !== 'synth') return target.param;
+  if (typeof owner === 'string' || owner.kind !== 'synth') return target.param;
   const m = owner.modules.find((x) => x.idx === target.module);
   const def = m ? moduleDef(m.kind).params.find((d) => d.name === target.param) : undefined;
   return `${moduleTitles(owner.modules).get(target.module) ?? '?'} · ${def?.label ?? target.param}`;

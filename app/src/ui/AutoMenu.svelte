@@ -71,7 +71,7 @@
       flashHint('No free automation lane: a project has at most 64');
       return;
     }
-    if (isMasterChannel(r.owner)) {
+    if (isMasterChannel(proj, r.owner)) {
       laneView.master = true;
       setOpen(MASTER_ROW, true);
     } else setOpen(r.owner, true);

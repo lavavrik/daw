@@ -12,14 +12,15 @@
 //   pointCommands    the engine commands that turn one lane's points into
 //                    another set: removals first (see there).
 //   bend             a curved segment's shape (plan 16): f(x) = x^(2^(-3c)).
-import { AUTO_KIND, MAX_AUTO_LANES, MIX_RETURN0, MIX_MASTER, Op, autoPoint, packAutoParam } from '../audio/protocol';
+import { AUTO_KIND, MAX_AUTO_LANES, Op, autoPoint, packAutoParam } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
-import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
+import type { MixParamDef } from '../audio/mixerCatalog';
 import { fromPos, toPos } from '../ui/rack/knobMath';
 import type { CurveDef } from '../ui/rack/knobMath';
-import { accepts } from './mixer-actions';
+import { accepts, resolveChannel } from './mixer-actions';
+import type { ResolvedChannel } from './mixer-actions';
 import type { AutoTarget, AutomationLane, MasterChannel, Project, Track } from './project.svelte';
 
 /** Freehand drawing is thinned to within this much of the knob travel (addendum §3.4: ½ %). */
@@ -28,7 +29,11 @@ export const DRAW_TOLERANCE = 0.005;
 /** A param definition a lane can target (mixer or rack catalog entry). */
 export type AutoDef = MixParamDef | ParamDef;
 
-/** Whose lane: a track (its strip, or its rack) or a Master row channel. */
+/**
+ * Whose lane: a track (its strip, or its rack) or a Master row channel (a
+ * return id or 'master': a string, so `typeof owner === 'string'` tells the
+ * two apart).
+ */
 export type AutoOwner = Track | MasterChannel;
 
 /**
@@ -49,11 +54,12 @@ export const tupleCurve = (t: PointTuple): number => t[3] ?? 0;
  */
 export const bend = (x: number, c: number): number => (c === 0 ? x : x ** (2 ** (-3 * c)));
 
-/** The engine mixer channel of a Master row channel. */
-export const MASTER_CHANNEL_INDEX: Record<MasterChannel, number> = { reverb: MIX_RETURN0, delay: MIX_RETURN0 + 1, master: MIX_MASTER };
-const MASTER_KIND: Record<MasterChannel, MixTarget> = { reverb: 'return', delay: 'return', master: 'master' };
-
-export const isMasterChannel = (x: unknown): x is MasterChannel => x === 'reverb' || x === 'delay' || x === 'master';
+/**
+ * Is `x` a Master row channel of `p`: 'master', or the id of one of its
+ * returns? (A track id, an unknown id or a Track object is not.)
+ */
+export const isMasterChannel = (p: Project, x: unknown): x is MasterChannel =>
+  x === 'master' || (typeof x === 'string' && p.mixer.returns.some((r) => r.id === x));
 
 /** Number of points with tick <= t (points sorted by tick). */
 function upperBound(points: readonly { tick: number }[], t: number): number {
@@ -148,24 +154,26 @@ export function thin<S extends { tick: number; value: number }>(samples: readonl
   return samples.filter((_, k) => keep[k] === 1);
 }
 
-/** The mixer kind and channel index of an owner. */
-function mixChannel(owner: AutoOwner): { kind: MixTarget; index: number } {
-  return isMasterChannel(owner) ? { kind: MASTER_KIND[owner], index: MASTER_CHANNEL_INDEX[owner] } : { kind: 'track', index: owner.slot };
+/** The mixer channel of an owner in `p` (null: a return that is not there). */
+function mixChannel(p: Project, owner: AutoOwner): Omit<ResolvedChannel, 'ch'> | null {
+  if (typeof owner !== 'string') return { kind: 'track', index: owner.slot };
+  return resolveChannel(p, owner);
 }
 
 /**
- * The catalog def `target` refers to on `owner`, or null when the owner
- * cannot have that lane: an unknown param, an integer (choice, flag) one, a
- * mixer param the channel does not take (engine MixParam::accepts), or a
- * rack target off a synth track or on a module it does not have.
+ * The catalog def `target` refers to on `owner` (in `p`), or null when the
+ * owner cannot have that lane: an unknown param, an integer (choice, flag)
+ * one, a mixer param the channel does not take (mixer-actions accepts: on a
+ * return, its kind's effect only), a return that is not in `p`, or a rack
+ * target off a synth track or on a module it does not have.
  */
-export function targetDef(owner: AutoOwner, target: AutoTarget): AutoDef | null {
+export function targetDef(p: Project, owner: AutoOwner, target: AutoTarget): AutoDef | null {
   if (target.kind === 'mix') {
     const def = MIX_PARAMS.find((d) => d.name === target.param);
-    const ch = mixChannel(owner);
-    return def && !def.integer && accepts(def, ch.kind, ch.index) ? def : null;
+    const ch = mixChannel(p, owner);
+    return def && ch && !def.integer && accepts(def, ch.kind, ch.index, ch.retKind) ? def : null;
   }
-  if (isMasterChannel(owner) || owner.kind !== 'synth') return null;
+  if (typeof owner === 'string' || owner.kind !== 'synth') return null;
   const m = owner.modules.find((x) => x.idx === target.module);
   const def = m && rackAutomatable(m.kind) ? moduleDef(m.kind).params.find((d) => d.name === target.param) : undefined;
   return def && !def.integer ? def : null;
@@ -184,11 +192,12 @@ function rackAutomatable(kind: number): boolean {
  * the on/off switches, the delay division, ping-pong, wave, mode, voices;
  * and none of a Scope's.
  */
-export function automatableParams(owner: AutoOwner): { target: AutoTarget; def: AutoDef }[] {
+export function automatableParams(p: Project, owner: AutoOwner): { target: AutoTarget; def: AutoDef }[] {
   const out: { target: AutoTarget; def: AutoDef }[] = [];
-  const ch = mixChannel(owner);
-  for (const def of MIX_PARAMS) if (!def.integer && accepts(def, ch.kind, ch.index)) out.push({ target: { kind: 'mix', param: def.name }, def });
-  if (!isMasterChannel(owner) && owner.kind === 'synth') {
+  const ch = mixChannel(p, owner);
+  if (!ch) return out;
+  for (const def of MIX_PARAMS) if (!def.integer && accepts(def, ch.kind, ch.index, ch.retKind)) out.push({ target: { kind: 'mix', param: def.name }, def });
+  if (typeof owner !== 'string' && owner.kind === 'synth') {
     for (const m of [...owner.modules].sort((a, b) => a.idx - b.idx)) {
       if (!rackAutomatable(m.kind)) continue;
       for (const def of moduleDef(m.kind).params) if (!def.integer) out.push({ target: { kind: 'rack', module: m.idx, param: def.name }, def });
@@ -233,9 +242,9 @@ export function laneSet(
   return [Op.AUTO_LANE_SET, lane, AUTO_KIND.RACK, channel, packAutoParam(target.module, param)];
 }
 
-/** AUTO_LANE_SET for a lane of `owner` on `target` (which must be valid for it: targetDef). */
-export function laneSetCommand(lane: number, owner: AutoOwner, target: AutoTarget): [number, number, number, number, number] {
-  if (target.kind === 'mix') return laneSet(lane, mixChannel(owner).index, target, null);
+/** AUTO_LANE_SET for a lane of `owner` on `target` (which must be valid for it in `p`: targetDef). */
+export function laneSetCommand(p: Project, lane: number, owner: AutoOwner, target: AutoTarget): [number, number, number, number, number] {
+  if (target.kind === 'mix') return laneSet(lane, mixChannel(p, owner)!.index, target, null);
   const t = owner as Track;
   const m = t.kind === 'synth' ? t.modules.find((x) => x.idx === target.module) : undefined;
   return laneSet(lane, t.slot, target, m!.kind);

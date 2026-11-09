@@ -17,8 +17,8 @@
 //      replay-order builder shared with undo, export and the audio restart)
 //      gives the commands -- tracks (patterns, steps/notes, current pattern,
 //      rows with their samples, rack, clips; Audio tracks and their clips)
-//      -> MIX_SET by name ->
-//      MIX_SET_KEY -> automation lanes (each AUTO_LANE_SET, its points,
+//      -> MIX_SET by name (strips; RETURN_KIND per return slot, then the
+//      returns'; the master) -> MIX_SET_KEY -> automation lanes (each AUTO_LANE_SET, its points,
 //      AUTO_LANE_ENABLE) -> tempo, metronome, mode, loop and the live input
 //      track (RESET_ALL put the transport back to 124 BPM / Pattern / loop
 //      off / metronome off / no input track, so these are always sent) --
@@ -45,6 +45,7 @@ import type { CommandSink } from '../state/actions';
 import { markBusy, markIdle } from '../state/idle';
 import { DEFAULT_LOOP_END, newChannel, newMixer } from '../state/project.svelte';
 import type { ChannelState, Peaks, Project, SampleFile, Track } from '../state/project.svelte';
+import { newReturn } from '../state/returns';
 import { peaksFor } from '../audio/peaks';
 import { sampleFile } from '../state/sampleFiles';
 import { fitsBudget, overBudgetText, sampleFloats } from '../state/sampleBudget';
@@ -438,8 +439,8 @@ export function projectState(p: Project, proj: ProjectJson) {
     setParams(ch, s.params);
     ch.key = s.key ? { trackId: bySlot.get(s.key.track)!.id, row: s.key.row } : null;
   }
-  setParams(p.mixer.reverb, proj.mixer.reverb);
-  setParams(p.mixer.delay, proj.mixer.delay);
+  p.mixer.returns = proj.mixer.returns.map((rj) => newReturn(rj.id, rj.kind, rj.name, rj.slot));
+  for (const [i, rj] of proj.mixer.returns.entries()) setParams(p.mixer.returns[i], rj.params);
   setParams(p.mixer.master, proj.mixer.master);
   const master = lanesState(proj.mixer.automation);
   p.mixer.automation = proj.mixer.automation.map((mj, i) => ({ channel: mj.channel, lane: master[i] }));

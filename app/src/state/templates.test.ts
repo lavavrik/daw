@@ -193,7 +193,8 @@ describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template)
     expect(p('Drums', 'fader')).toBe(t.drums.fader);
     for (const part of [t.bass, t.chords, ...(t.pad ? [t.pad] : [])]) expect(p(part.track, 'fader')).toBe(part.fader);
     for (const [ch, id] of [['reverb', t.reverb], ['delay', t.delay], ['master', t.master]] as const) {
-      for (const [k, v] of Object.entries(presetById(id)!.params)) expect(json.mixer[ch][k], `${ch} ${k}`).toBe(v);
+      const ps = ch === 'master' ? json.mixer.master : json.mixer.returns.find((r) => r.id === ch)!.params;
+      for (const [k, v] of Object.entries(presetById(id)!.params)) expect(ps[k], `${ch} ${k}`).toBe(v);
     }
   });
 

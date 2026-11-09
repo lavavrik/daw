@@ -53,8 +53,12 @@ describe('project schema', () => {
     const strip = json.mixer.tracks.find((t) => t.slot === synth.slot)!;
     expect(strip.params.comp_on).toBe(1);
     expect(strip.key).toEqual({ track: drums.slot, row: 0 });
-    expect(json.mixer.reverb.rev_size).toBe(0.8);
-    expect(json.mixer.reverb.delay_time).toBeUndefined();
+    expect(json.mixer.returns.map(({ id, kind, name, slot }) => ({ id, kind, name, slot }))).toEqual([
+      { id: 'reverb', kind: 'reverb', name: 'Reverb', slot: 0 },
+      { id: 'delay', kind: 'delay', name: 'Delay', slot: 1 },
+    ]);
+    expect(json.mixer.returns[0].params.rev_size).toBe(0.8);
+    expect(json.mixer.returns[0].params.delay_time).toBeUndefined();
     expect(json.mixer.master.limiter_ceiling).toBe(-1);
     expect(json.selection).toEqual({ track: drums.slot, synth: synth.slot });
 
@@ -105,13 +109,63 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 7 };
+    const json = { ...serialize(new Project()), schemaVersion: 8 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
-    expect('error' in r && r.error).toMatch(/schema 7; this one reads up to 6/);
+    expect('error' in r && r.error).toMatch(/schema 8; this one reads up to 7/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
+  });
+
+  it('refuses a bad returns list with a readable error', async () => {
+    const base = roundJson(serialize(new Project())) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const ret = (slot: number, o: Record<string, unknown> = {}) => ({ id: `r${slot}`, kind: 'reverb', name: `Reverb ${slot}`, slot, params: {}, ...o });
+    const refused = (returns: unknown[], re: RegExp) => {
+      const r = validate({ ...base, mixer: { ...base.mixer, returns } });
+      expect('error' in r, JSON.stringify(returns)).toBe(true);
+      expect('error' in r && r.error).toMatch(re);
+    };
+    refused(Array.from({ length: 9 }, (_, i) => ret(i % 8, { id: `x${i}` })), /9 returns.*at most 8/);
+    refused([ret(0), ret(1, { id: 'r0' })], /id "r0".*twice/);
+    refused([ret(2), ret(2, { id: 'other' })], /slot 2.*twice/);
+    refused([ret(8)], /slot 8.*0\.\.7/);
+    refused([ret(0, { name: '   ' })], /name/i);
+    refused([ret(0, { name: 7 })], /name/i);
+    refused([ret(0, { kind: 'chorus' })], /kind "chorus"/);
+    refused([ret(0, { id: '' })], /id/);
+    refused([ret(0, { id: 'master' })], /"master"/);
+    refused(['junk'], /malformed/);
+    expect(validate({ ...base, mixer: { ...base.mixer, returns: 'junk' } })).toMatchObject({ error: expect.stringMatching(/returns/) });
+
+    // Up to 8, any slots, any order (creation order), names trimmed; zero is fine too.
+    const eight = [7, 0, 1, 2, 3, 4, 5, 6].map((s) => ret(s, { kind: s % 2 ? 'delay' : 'reverb', name: `  R ${s} ` }));
+    const r = ok(validate({ ...base, mixer: { ...base.mixer, returns: eight } }));
+    expect(r.warnings).toEqual([]);
+    expect(r.project.mixer.returns.map((x) => [x.slot, x.kind, x.name])).toEqual(eight.map((x) => [x.slot, x.kind, x.name.trim()]));
+    expect(ok(validate({ ...base, mixer: { ...base.mixer, returns: [] } })).project.mixer.returns).toEqual([]);
+    // Too long: cut to 24 characters, with a warning.
+    const long = ok(validate({ ...base, mixer: { ...base.mixer, returns: [ret(0, { name: 'x'.repeat(30) })] } }));
+    expect(long.project.mixer.returns[0].name).toBe('x'.repeat(24));
+    expect(long.warnings.join('\n')).toMatch(/24/);
+    // Params follow the return's kind: a delay param on a Reverb return is dropped.
+    const kinds = ok(validate({ ...base, mixer: { ...base.mixer, returns: [ret(5, { params: { rev_size: 0.2, delay_time: 3, fader: -6 } })] } }));
+    expect(kinds.project.mixer.returns[0].params).toEqual({ rev_size: 0.2, fader: -6 });
+    expect(kinds.warnings.join('\n')).toMatch(/delay_time/);
+  });
+
+  it('a lane or MIDI map naming a missing return is dropped with a readable warning', async () => {
+    const { p } = await buildFixture();
+    learnMidi(p, 10, 'delay', { kind: 'mix', param: 'delay_feedback' });
+    const json = roundJson(serialize(p)) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+    json.mixer.automation.push({ channel: 'delay', lane: 40, enabled: true, target: { mix: 'delay_feedback' }, points: [] });
+    json.mixer.returns = json.mixer.returns.filter((x: { id: string }) => x.id !== 'delay');
+    const r = ok(validate(json));
+    expect(r.project.mixer.automation.map((l) => l.channel)).toEqual([]);
+    expect(r.project.midiMap.filter((m) => 'channel' in m)).toEqual([]);
+    const w = r.warnings.join('\n');
+    expect(w).toMatch(/Master row: dropped an automation lane of channel "delay" \(no such return\)/);
+    expect(w).toMatch(/MIDI CC 10: no return "delay"/);
   });
 
   it('ignores unknown fields', async () => {
@@ -135,7 +189,7 @@ describe('project schema', () => {
     json.mixer.tracks[0].params.fader = 40;
     json.mixer.tracks[0].params.wobble = 1;
     json.mixer.tracks[0].params.rev_size = 0.5; // reverb param on a track strip
-    json.mixer.delay.rev_size = 0.5; // reverb param on the delay return
+    json.mixer.returns[1].params.rev_size = 0.5; // reverb param on the delay return
     json.mixer.tracks[1].key = { track: 31, row: null }; // no such track
     json.samples.push({ id: 5, name: 'x', type: 'audio/wav', file: '../../etc/passwd' });
     json.loop = { on: true, start: 500, end: 100 };
@@ -156,7 +210,7 @@ describe('project schema', () => {
     expect(p.mixer.tracks[0].params.fader).toBe(6);
     expect(p.mixer.tracks[0].params.wobble).toBeUndefined();
     expect(p.mixer.tracks[0].params.rev_size).toBeUndefined();
-    expect(p.mixer.delay.rev_size).toBeUndefined();
+    expect(p.mixer.returns[1].params.rev_size).toBeUndefined();
     expect(p.mixer.tracks[1].key).toBeNull();
     expect(p.samples).toHaveLength(3);
     expect(p.loop).toEqual({ on: false, start: 0, end: 4 * 3840 });

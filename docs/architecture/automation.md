@@ -299,7 +299,7 @@ changes nothing and sends nothing.
 
 | Action | Sends | Refused when |
 |---|---|---|
-| `addLane(p, sink, owner, target)` (owner: a track id, or `'reverb'` / `'delay'` / `'master'`) | `AUTO_LANE_SET` on the lowest free engine lane | the target is not automatable there, already has a lane on that owner, or 64 lanes exist |
+| `addLane(p, sink, owner, target)` (owner: a track id, a return id or `'master'`) | `AUTO_LANE_SET` on the lowest free engine lane | the target is not automatable there, already has a lane on that owner, or 64 lanes exist |
 | `removeLane` | `AUTO_LANE_CLEAR` | no such lane |
 | `setLaneEnabled` | `AUTO_LANE_ENABLE` | no such lane, or no change |
 | `addPoint(p, sink, laneId, {tick, value, hold?})` | one `AUTO_POINT_SET` | 512 points, a tick already used, NaN; the tick is rounded and kept in the song, the value clamped |

@@ -577,11 +577,11 @@
         {:else if m === 'Edit'}
           <button
             class="it" data-testid="menu-undo" use:inertItem={p.loading ? LOADING : undoLabels.undo ? null : 'Nothing to undo'}
-            title={undoLabels.undo ? undefined : 'Nothing to undo'} onclick={() => edit(onUndo)}
+            title={undoLabels.undo ? '' : 'Nothing to undo'} onclick={() => edit(onUndo)}
           ><Icon icon={ArrowCounterClockwise} /><span class="l">{undoLabels.undo ? `Undo ${undoLabels.undo}` : 'Undo'}</span><kbd>{kbd('Mod+Z')}</kbd></button>
           <button
             class="it" data-testid="menu-redo" use:inertItem={p.loading ? LOADING : undoLabels.redo ? null : 'Nothing to redo'}
-            title={undoLabels.redo ? undefined : 'Nothing to redo'} onclick={() => edit(onRedo)}
+            title={undoLabels.redo ? '' : 'Nothing to redo'} onclick={() => edit(onRedo)}
           ><Icon icon={ArrowClockwise} /><span class="l">{undoLabels.redo ? `Redo ${undoLabels.redo}` : 'Redo'}</span><kbd>{kbd('Shift+Mod+Z')}</kbd></button>
         {:else if m === 'Add'}
           {#each ADD_ITEMS as a (a.kind)}
@@ -607,7 +607,7 @@
             />
             <p class="note">Enter to save, Esc to go back</p>
           {:else}
-            <p class="sec" title={ptrack ? undefined : NO_PATTERNS}>{ptrack && cur ? `${ptrack.name} · ${cur.name}` : 'No pattern track selected'}</p>
+            <p class="sec" title={ptrack ? '' : NO_PATTERNS}>{ptrack && cur ? `${ptrack.name} · ${cur.name}` : 'No pattern track selected'}</p>
             <button class="it" data-testid="menu-pattern-new" use:inertItem={fullWhy} title={fullWhy ?? 'New empty pattern'} onclick={() => patternCmd((t) => newPattern(p, engine, t))}>
               <Icon icon={Plus} /><span class="l">New</span>
             </button>
@@ -645,7 +645,7 @@
           <hr />
           {#each TABS as t (t.tab)}
             {@const why = tabWhy(t.tab)}
-            <button class="it" data-testid={`menu-view-${t.tab}`} use:inertItem={why} title={why ?? undefined} onclick={() => view(() => onTab(t.tab))}>
+            <button class="it" data-testid={`menu-view-${t.tab}`} use:inertItem={why} title={why ?? ''} onclick={() => view(() => onTab(t.tab))}>
               <Icon icon={t.icon} /><span class="l">{t.label}</span><kbd>{kbd(t.keys)}</kbd>
             </button>
           {/each}
@@ -665,9 +665,10 @@
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
             Keys play: <b>{keysTrack?.name ?? '(no track)'}</b>
           </p>
-          <div role="radiogroup" aria-label="Note names">
-            <button class="it" role="radio" aria-checked={noteNames.style === 'letters'} data-testid="menu-notenames-letters" title="C D E" onclick={() => setNoteNames('letters')}><span class="l">Note names: C D E</span>{#if noteNames.style === 'letters'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
-            <button class="it" role="radio" aria-checked={noteNames.style === 'solfege'} data-testid="menu-notenames-solfege" title="Do Re Mi" onclick={() => setNoteNames('solfege')}><span class="l">Note names: Do Re Mi</span>{#if noteNames.style === 'solfege'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
+          <!-- Two pressed-state buttons (the menu is plain buttons, no ARIA menu / radio roles). -->
+          <div role="group" aria-label="Note names">
+            <button class="it" aria-pressed={noteNames.style === 'letters'} data-testid="menu-notenames-letters" title="C D E" onclick={() => setNoteNames('letters')}><span class="l">Note names: C D E</span>{#if noteNames.style === 'letters'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
+            <button class="it" aria-pressed={noteNames.style === 'solfege'} data-testid="menu-notenames-solfege" title="Do Re Mi" onclick={() => setNoteNames('solfege')}><span class="l">Note names: Do Re Mi</span>{#if noteNames.style === 'solfege'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
           </div>
           <hr />
           <button class="it" data-testid="menu-midi" onclick={openMidi}><Icon icon={Plugs} /><span class="l">MIDI…</span></button>

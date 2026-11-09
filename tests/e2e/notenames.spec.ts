@@ -51,7 +51,7 @@ test('solfège: piano roll, Acid, reload, and back to letters', async ({ page })
 
   // Options ▸ Keyboard switches back.
   await page.getByTestId('menu-options').click();
-  await expect(page.getByTestId('menu-notenames-solfege')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('menu-notenames-solfege')).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('menu-notenames-letters').click();
   await expect(page.getByTestId('acid-key-0')).toHaveText('C');
   await expect(page.getByTestId('acid-key-1')).toHaveText('C#');

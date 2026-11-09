@@ -11,9 +11,22 @@
   // `title` back, so code and tests reading `title` keep working. An authored
   // `data-tip` is never overwritten or removed (it wins over `title`).
   //
+  // The layer's text is written at claim time (while it is still hidden), so
+  // `aria-describedby` never points at the previous tip's words during the
+  // delay. The layer is a `popover="manual"`: shown with showPopover(), it
+  // sits in the top layer, above modal <dialog>s (Settings, the shortcuts
+  // sheet), which no z-index can beat.
+  //
+  // While shown, a timer (GUARD_MS, not every frame: getBoundingClientRect
+  // forces layout) checks that the target is still there and re-places the
+  // tip; a resize or an attribute change re-places it at once.
+  //
   // Known limits: (1) a reactive `title` that becomes absent mid-hover gives
   // no attribute mutation (removing an absent attribute is not observable),
-  // so release restores the last title; the next render fixes it. (2) Any
+  // so release would put the old title back until the next render. Components
+  // whose title comes and goes while hovered use '' instead of undefined
+  // (MenuBar's undo / redo and View items): '' is a real mutation, the tip
+  // hides, and release restores an empty title (no native tooltip). (2) Any
   // scroll event, including programmatic ones (playhead follow), hides the tip.
   import { onMount } from 'svelte';
   import { createTipTiming, placeTip } from './tooltip';
@@ -21,6 +34,8 @@
   let el: HTMLDivElement;
   const ID = 'tooltip-layer';
   const SEL = '[title],[data-tip]';
+  /** How often a shown tip re-checks its target (ms). */
+  const GUARD_MS = 120;
 
   onMount(() => {
     const timing = createTipTiming();
@@ -32,7 +47,7 @@
     let prevDescribed: string | null = null;
     let showing = false;
     let timer = 0;
-    let raf = 0;
+    let guardTimer = 0;
     // Element whose tip the user dismissed (click, Esc, scroll): no re-show until the pointer leaves it.
     let dismissed: HTMLElement | null = null;
     let watch: MutationObserver | null = null;
@@ -50,37 +65,41 @@
       movedTitle = true;
     }
 
+    const isOpen = () => el.matches(':popover-open');
+    function open() { if (!isOpen()) el.showPopover(); }
+    function close() { if (isOpen()) el.hidePopover(); }
+
     function paint() {
       if (!target) return;
       const text = textOf(target);
       if (!text) { release(); return; }
       const r = target.getBoundingClientRect();
       const key = `${text}|${r.left}|${r.top}|${r.width}|${r.height}|${innerWidth}|${innerHeight}`;
-      if (key === lastKey && !el.hidden) return;
+      if (key === lastKey && isOpen()) return;
       lastKey = key;
       if (el.textContent !== text) el.textContent = text;
-      el.hidden = false;
+      open();
       const p = placeTip(r, { width: el.offsetWidth, height: el.offsetHeight }, { width: innerWidth, height: innerHeight });
       el.style.transform = `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)`;
     }
 
     /** While shown: the target going away or hidden (a menu closing, a cell
-     *  re-rendered) hides the tip. One cheap check per frame. */
+     *  re-rendered) hides the tip; a moved target moves it. Every GUARD_MS. */
     function guard() {
       if (!showing || !target) return;
       if (!target.isConnected || target.getClientRects().length === 0) { release(); return; }
       paint();
-      raf = requestAnimationFrame(guard);
     }
 
     function release() {
       clearTimeout(timer);
-      cancelAnimationFrame(raf);
+      clearInterval(guardTimer);
       watch?.disconnect();
       watch = null;
       if (showing) timing.hidden(performance.now());
       showing = false;
-      el.hidden = true;
+      close();
+      el.textContent = '';
       lastKey = '';
       if (target) {
         if (!authoredTip) {
@@ -109,17 +128,24 @@
       target = t;
       viaFocus = byFocus;
       absorb(t);
+      // The text first (the layer still hidden), then the reference to it.
+      el.textContent = textOf(t);
       prevDescribed = t.getAttribute('aria-describedby');
       t.setAttribute('aria-describedby', ID);
       // Live changes to the text (title re-set by the framework, or data-tip).
-      watch = new MutationObserver(() => { if (target) { absorb(target); if (showing) paint(); } });
+      watch = new MutationObserver(() => {
+        if (!target) return;
+        absorb(target);
+        if (showing) paint();
+        else el.textContent = textOf(target);
+      });
       watch.observe(t, { attributes: true, attributeFilter: ['title', 'data-tip'] });
       const reveal = () => {
         if (!target || !target.isConnected) { release(); return; }
         showing = true;
         timing.shown();
         paint();
-        raf = requestAnimationFrame(guard);
+        guardTimer = window.setInterval(guard, GUARD_MS);
       };
       const delay = timing.delayFor(performance.now());
       if (delay === 0) reveal();
@@ -148,6 +174,7 @@
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') hide(); }; // never swallowed
     const hide = () => { dismissed = target; release(); };
+    const onResize = () => { if (showing) guard(); };
 
     document.addEventListener('pointerover', onOver);
     document.addEventListener('pointerout', onOut);
@@ -157,6 +184,7 @@
     document.addEventListener('keydown', onKey, true);
     document.addEventListener('scroll', hide, true);
     window.addEventListener('blur', hide);
+    window.addEventListener('resize', onResize);
     return () => {
       release();
       document.removeEventListener('pointerover', onOver);
@@ -167,21 +195,24 @@
       document.removeEventListener('keydown', onKey, true);
       document.removeEventListener('scroll', hide, true);
       window.removeEventListener('blur', hide);
+      window.removeEventListener('resize', onResize);
     };
   });
 </script>
 
-<div bind:this={el} id={ID} class="tooltip" role="tooltip" hidden></div>
+<div bind:this={el} id={ID} class="tooltip" role="tooltip" popover="manual"></div>
 
 <style>
-  /* Above everything, including menus and the loading veil (z 50). It never
-     takes the pointer, so it cannot cause pointerout flicker. */
+  /* In the top layer while shown (popover), so above everything, modal
+     dialogs included. It never takes the pointer, so it cannot cause
+     pointerout flicker. The UA popover style centres it (inset 0, margin
+     auto): pinned to the top-left here, placed by transform. */
   .tooltip {
-    position: fixed; left: 0; top: 0; z-index: 1000; pointer-events: none;
+    position: fixed; inset: 0 auto auto 0; margin: 0; z-index: 1000; pointer-events: none;
+    width: max-content; height: auto; overflow: visible;
     max-width: 320px; padding: 5px 8px; box-sizing: border-box;
     background: var(--lcd); color: var(--text); border: 1px solid var(--line);
     border-radius: var(--r-sm); box-shadow: var(--lift);
     font: var(--fs-body)/1.35 var(--font-ui); overflow-wrap: anywhere;
   }
-  .tooltip[hidden] { display: none; }
 </style>

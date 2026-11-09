@@ -94,3 +94,37 @@ test('the top-bar hint line still reads a hovered (claimed) title', async ({ pag
   await expect(hint).toHaveText('Loop the loop range while playing the song');
   await expect(tip(page)).toBeVisible();
 });
+
+test('during the show delay, aria-describedby already names the new text (never the last tip)', async ({ page }) => {
+  await fixture(page);
+  await page.locator('#b1').hover();
+  await expect(tip(page)).toBeVisible();
+  await page.mouse.move(10, 10);
+  await expect(tip(page)).toBeHidden();
+  await page.waitForTimeout(700); // past the quick-switch window: the next tip waits 250 ms
+  await page.locator('#b2').hover();
+  // Still inside the delay: hidden, but the described-by text is #b2's.
+  const desc = await page.evaluate(() => {
+    const b = document.getElementById('b2')!;
+    const layer = document.getElementById(b.getAttribute('aria-describedby')!)!;
+    return { text: layer.textContent, open: layer.matches(':popover-open') };
+  });
+  expect(desc).toEqual({ text: 'Second tip', open: false });
+  await expect(tip(page)).toHaveText('Second tip');
+});
+
+test('the tip shows above a modal dialog (top layer)', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => {
+    const d = document.createElement('dialog');
+    d.id = 'dlg';
+    d.innerHTML = '<button id="d1" title="In the dialog">Dialog button</button>';
+    document.body.appendChild(d);
+    d.showModal();
+  });
+  await page.locator('#d1').hover();
+  await expect(tip(page)).toBeVisible();
+  await expect(tip(page)).toHaveText('In the dialog');
+  // Opened after the dialog, so it is above it in the top layer.
+  expect(await page.evaluate(() => document.getElementById('tooltip-layer')!.matches(':popover-open'))).toBe(true);
+});

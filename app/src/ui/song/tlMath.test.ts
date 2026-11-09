@@ -4,6 +4,7 @@ import {
   clipLaneAt, followPage, lanePolyline, pointBox, pointHit, segmentHit, curveDrag, CURVE_PX, posToY, repeatTicks, resizeLeft, resizeRight, rowAt, rowLayout, rowsHeight, seekTick, snap, snapCeil,
   snapFloor, tickToX, xToTick, yToPos, zoomAt, audioEdges, audioMarks, dropTarget, fileTicks, drumPreview, notePreview, periodStarts,
   RULER_H, RULER_BAR_H, RULER_TIME_H, TIME_LABEL_MIN_PX, clockLabel, posReadout, tickSeconds, timeLabelStep, timeLabels,
+  dropGap, gapIndex, gapY, trackBlocks,
 } from './tlMath';
 import { mixParam } from '../../audio/mixerCatalog';
 import { moduleDef } from '../../audio/catalog';
@@ -591,5 +592,42 @@ describe('clip previews (plan 20)', () => {
     expect(periodStarts(BAR, 3 * BAR, BEAT, BAR, 7000, 9000)).toEqual([2 * BAR - BEAT]);
     expect(periodStarts(BAR, 3 * BAR, 0, BAR, 0, BAR)).toEqual([]); // the range ends where the clip starts
     expect(periodStarts(0, BAR, 0, 0, 0, Infinity)).toEqual([]);
+  });
+});
+
+describe('track reorder geometry (plan 22 Task 4)', () => {
+  // a (open: two lanes, the second 60 px), b (closed), c (open, no lane yet: one empty row), then the Master row.
+  const rows = rowLayout([tr('a', ['l1', 'l2']), tr('b'), tr('c')], new Set(['a', 'c']), [], (id) => (id === 'l2' ? 60 : AUTO_H));
+  const blocks = trackBlocks(rows);
+
+  it('a block is the track header and its lane rows; the Master row is no block', () => {
+    expect(blocks).toEqual([
+      { trackId: 'a', top: 0, bottom: LANE_H + AUTO_H + 60 },
+      { trackId: 'b', top: LANE_H + AUTO_H + 60, bottom: 2 * LANE_H + AUTO_H + 60 },
+      { trackId: 'c', top: 2 * LANE_H + AUTO_H + 60, bottom: 3 * LANE_H + 2 * AUTO_H + 60 },
+    ]);
+    expect(trackBlocks([])).toEqual([]);
+  });
+
+  it('dropGap: how many blocks have their middle above y', () => {
+    const [a, b, c] = blocks;
+    expect(dropGap(blocks, -50)).toBe(0);
+    expect(dropGap(blocks, (a.top + a.bottom) / 2 - 1)).toBe(0);
+    expect(dropGap(blocks, (a.top + a.bottom) / 2 + 1)).toBe(1);
+    expect(dropGap(blocks, (b.top + b.bottom) / 2 + 1)).toBe(2);
+    expect(dropGap(blocks, (c.top + c.bottom) / 2 + 1)).toBe(3);
+    expect(dropGap(blocks, 1e6)).toBe(3); // over the Master row and beyond: after the last track
+  });
+
+  it('gapY: the top of the block under the gap, the last bottom after the last', () => {
+    expect([0, 1, 2, 3].map((g) => gapY(blocks, g))).toEqual([0, blocks[1].top, blocks[2].top, blocks[2].bottom]);
+    expect(gapY([], 0)).toBe(0);
+  });
+
+  it('gapIndex: where the dragged track lands (its own two gaps are no move)', () => {
+    // Track 2 of 3 (index 1): gaps 1 and 2 are its own edges.
+    expect([0, 1, 2, 3].map((g) => gapIndex(1, g))).toEqual([0, 1, 1, 2]);
+    expect(gapIndex(2, 0)).toBe(0); // the third track above the first
+    expect(gapIndex(0, 3)).toBe(2); // the first under the last
   });
 });

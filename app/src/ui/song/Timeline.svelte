@@ -195,6 +195,8 @@
   let lanesEl = $state<HTMLDivElement | null>(null);
   /** The vertical scroll container (AutoLane draws only the lanes in its view). */
   let scrollEl = $state<HTMLDivElement | null>(null);
+  /** The sticky footer's height: the bottom band a track-reorder drag auto-scrolls under (TrackHeaders TRACK ORDER). */
+  let footH = $state(0);
   let canvas = $state<HTMLCanvasElement | null>(null);
   /** Transparent canvas over the lanes: the playhead only (drawPlayhead). */
   let ovCanvas = $state<HTMLCanvasElement | null>(null);
@@ -1374,7 +1376,7 @@
           onlostpointercapture={cancel}
         ></canvas>
       </div>
-      <TrackHeaders {p} {engine} rows={layout} />
+      <TrackHeaders {p} {engine} rows={layout} scroll={{ el: scrollEl, top: RULER_H, bottom: footH }} />
       <!-- Focusable so the timeline keys (KEYBOARD FOCUS RULE) reach it. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
@@ -1463,7 +1465,7 @@
         <span>{tracksFull ? FULL_TITLE : 'Drop audio files here for a new audio track'}</span>
       </div>
     </div>
-    <div class="foot">
+    <div class="foot" bind:clientHeight={footH}>
       <!-- One "+ Add track" list (its items are disabled at MAX_TRACKS, with the reason); a sample dropped on it makes a Sampler track. -->
       <AddTrackMenu {p} {engine} onhint={flashHint} />
       <!-- Mouse users without a wheel / trackpad: a plain scrollbar for time. -->

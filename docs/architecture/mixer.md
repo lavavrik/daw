@@ -56,6 +56,10 @@ Mirrored in `app/src/audio/protocol.ts`. Wire commands: `MIX_SET ch id value`,
 rejected (`appliesTo`). A removed track's strip resets, but its 2 ms fade-out
 still reaches the master.
 
+The strips' order on screen is the track order (`project.tracks`), not the
+channel number: reordering the song's tracks (arrangement.md "Track order")
+reorders the strips and changes no channel.
+
 ## Key encoding
 
 `MIX_SET_KEY` value (`keyCode` in protocol.ts):

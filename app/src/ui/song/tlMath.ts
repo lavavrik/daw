@@ -124,6 +124,46 @@ export function rowLayout(
 /** Total height of the rows (px). */
 export const rowsHeight = (rows: readonly Row[]) => (rows.length ? rows[rows.length - 1].y + rows[rows.length - 1].h : 0);
 
+// ---- track reorder (plan 22 Task 4; TrackHeaders "TRACK ORDER") ---------------
+
+/** A track's block in the layout map: its clip row and its open lane rows, which move together. */
+export interface TrackBlock {
+  trackId: string;
+  top: number;
+  bottom: number;
+}
+
+/** Every track's block, in track order (the Master row and its lanes are none). */
+export function trackBlocks(rows: readonly Row[]): TrackBlock[] {
+  const out: TrackBlock[] = [];
+  for (const r of rows) {
+    if (r.kind === 'clips') out.push({ trackId: r.trackId, top: r.y, bottom: r.y + r.h });
+    else if (r.kind === 'lane' && out.at(-1)?.trackId === r.trackId) out.at(-1)!.bottom = r.y + r.h;
+  }
+  return out;
+}
+
+/**
+ * The gap a reorder drag at content y points at: 0 (above the first track)
+ * .. blocks.length (under the last), i.e. how many blocks have their middle
+ * above y. Over the Master row or past it: after the last track.
+ */
+export function dropGap(blocks: readonly TrackBlock[], y: number): number {
+  let g = 0;
+  while (g < blocks.length && (blocks[g].top + blocks[g].bottom) / 2 < y) g++;
+  return g;
+}
+
+/** Content y of gap `gap`'s drop line: the top of the block under it, or the last block's bottom. */
+export const gapY = (blocks: readonly TrackBlock[], gap: number) =>
+  gap < blocks.length ? blocks[gap].top : (blocks.at(-1)?.bottom ?? 0);
+
+/**
+ * The index the track at `from` lands on when dropped into gap `gap` (its
+ * index once moved: moveTrack's `to`). Its own two gaps give `from` (no move).
+ */
+export const gapIndex = (from: number, gap: number) => (gap > from ? gap - 1 : gap);
+
 /** The row under content y, or null (above the first row or below the last). */
 export function rowAt<R extends Row>(rows: readonly R[], y: number): R | null {
   let lo = 0;

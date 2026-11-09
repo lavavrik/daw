@@ -337,6 +337,36 @@ export function selectTrack(p: Project, sink: CommandSink, trackId: string) {
   syncPatternFocus(p, sink);
 }
 
+/**
+ * Reorder the song's tracks (plan 22 Task 4): the track at index `from` of
+ * `p.tracks` goes to index `to` (indices of the list before and after the
+ * move, like Array splice-out then splice-in). One undo entry, "Move track".
+ *
+ * The order of `p.tracks` IS the song's track order (timeline rows, headers,
+ * mixer strips, the saved file), and nothing else is keyed by it: the engine
+ * addresses a track by `slot`, the UI by `id` (lane heights, the open lanes,
+ * the selection, clip focus, MIDI mappings, the recorder), and the colour is
+ * stored on the track. So a move is a pure permutation here: no engine
+ * command, and markEdited marks it (there is no command to do that). Undo
+ * puts the order back through diffApply's step 2 (`p.tracks = order`), which
+ * sends nothing for unchanged tracks either.
+ *
+ * `opts.coalesce`: quick keyboard moves merge into one entry (TrackHeaders:
+ * an idle-aware sweep key, like the rack's Alt+arrow nudges). False (no
+ * write) for a move to the same place or an index out of range.
+ */
+export function moveTrack(p: Project, from: number, to: number, opts?: { coalesce?: string }): boolean {
+  const n = p.tracks.length;
+  const ok = (i: number) => Number.isInteger(i) && i >= 0 && i < n;
+  if (!ok(from) || !ok(to) || from === to) return false;
+  return edit(p, 'Move track', () => {
+    const [t] = p.tracks.splice(from, 1);
+    p.tracks.splice(to, 0, t);
+    markEdited(p); // no engine command, so mark it here
+    return true;
+  }, opts);
+}
+
 export function removeTrack(p: Project, sink: CommandSink, trackId: string) {
   return edit(p, 'Remove track', () => {
     const i = p.tracks.findIndex((t) => t.id === trackId);

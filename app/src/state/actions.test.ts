@@ -3,9 +3,12 @@ import { Op } from '../audio/protocol';
 import { Project, currentPattern } from './project.svelte';
 import type { DrumPattern } from './project.svelte';
 import {
-  addDrumTrack, addRow, liveInputTrack, play, previewTempo, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
+  addDrumTrack, addRow, liveInputTrack, moveTrack, play, previewTempo, removeTrack, selectTrack, setRowSample, setStep, setStepCount, setSwing,
   setTempo, stop, togglePlay, toggleStep,
 } from './actions';
+import { createHistory } from '../history/history';
+import { diffApply } from '../history/diffApply';
+import { serialize } from '../project/serialize';
 import { addSynthTrack } from './rack-actions';
 import { newPattern, selectPattern } from './pattern-actions';
 
@@ -194,5 +197,68 @@ describe('live input track (plan 15: drum rows from the MIDI keyboard)', () => {
     p.tracks.push({ kind: 'audio', id: 'a', slot: 5, name: 'Vox', color: '#fff', clips: [], automation: [] } as never);
     p.selectedTrackId = 'a';
     expect(liveInputTrack(p)?.id).toBe(s.id);
+  });
+});
+
+describe('moveTrack (plan 22 Task 4: reorder the song tracks)', () => {
+  /** Three tracks (drum, synth, drum) with an undo history whose undo/redo run diffApply. */
+  function rig() {
+    const p = new Project();
+    const { sink, sent } = fake();
+    p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    const a = addDrumTrack(p, sink, 'A')!;
+    const b = addSynthTrack(p, sink, 'B')!;
+    const c = addDrumTrack(p, sink, 'C')!;
+    sent.length = 0;
+    const order = () => p.tracks.map((t) => t.name);
+    return { p, sink, sent, a, b, c, order };
+  }
+
+  it('permutes p.tracks only: no engine command, slots / ids / colours kept, marked edited', () => {
+    const { p, sink, sent, a, b, c, order } = rig();
+    const before = p.tracks.map((t) => [t.id, t.slot, t.color]);
+    const v = p.version;
+    p.dirty = false;
+    expect(moveTrack(p, 2, 0)).toBe(true);
+    expect(order()).toEqual(['C', 'A', 'B']);
+    expect(sent).toEqual([]);
+    expect(p.dirty).toBe(true);
+    expect(p.version).toBeGreaterThan(v);
+    expect(new Set(p.tracks.map((t) => [t.id, t.slot, t.color].join()))).toEqual(new Set(before.map((x) => x.join())));
+    expect(p.tracks.map((t) => t.id)).toEqual([c.id, a.id, b.id]);
+    expect(moveTrack(p, 0, 2)).toBe(true); // down to the end
+    expect(order()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('refuses a move to the same place or out of range: no write, not dirty', () => {
+    const { p, sink, order } = rig();
+    p.dirty = false;
+    const v = p.version;
+    for (const [from, to] of [[1, 1], [-1, 0], [0, 3], [3, 0], [0.5, 1], [NaN, 0]]) expect(moveTrack(p, from, to)).toBe(false);
+    expect(order()).toEqual(['A', 'B', 'C']);
+    expect(p.dirty).toBe(false);
+    expect(p.version).toBe(v);
+    expect(p.history!.labels.undo).not.toBe('Move track');
+  });
+
+  it('is one undo entry; undo / redo restore the order without any engine command', () => {
+    const { p, sink, sent, order } = rig();
+    moveTrack(p, 2, 0);
+    expect(p.history!.labels.undo).toBe('Move track');
+    expect(p.history!.undo()).toBe(true);
+    expect(order()).toEqual(['A', 'B', 'C']);
+    expect(p.history!.redo()).toBe(true);
+    expect(order()).toEqual(['C', 'A', 'B']);
+    expect(sent).toEqual([]); // no slot changed: the engine never hears of it
+  });
+
+  it('keeps the selection and the live input (both by id / slot)', () => {
+    const { p, sink, sent, b } = rig();
+    selectTrack(p, sink, b.id);
+    sent.length = 0;
+    moveTrack(p, 1, 2);
+    expect(p.selectedTrackId).toBe(b.id);
+    expect(liveInputTrack(p)?.id).toBe(b.id);
+    expect(sent).toEqual([]);
   });
 });

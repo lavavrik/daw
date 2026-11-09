@@ -43,12 +43,37 @@
   //
   // VOLUME SLIDER: TrackVol.svelte (`track-vol-<slot>`, track rows only),
   // the track's mixer fader; it follows the fader's automation lane.
-  import { onDestroy } from 'svelte';
+  //
+  // TRACK ORDER (plan 22 Task 4; docs/architecture/arrangement.md "Track
+  // order"). The order of p.tracks is the song's track order, and moving a
+  // track is actions.moveTrack (one undo entry, no engine command). Three ways:
+  //   - drag a track header vertically (from anywhere on it but the volume
+  //     slider: the press only becomes a drag past DRAG_PX of vertical
+  //     travel, so a click on the name, M / S / A or × still works, and the
+  //     click that ends a real drag is swallowed). The track's block (its
+  //     header and its open lane rows: tlMath.trackBlocks) dims in place, a
+  //     ghost of the header follows the pointer, and an --accent line marks
+  //     the gap it will drop into (tlMath.dropGap; none on its own two gaps,
+  //     which are no move). The rows move on the drop (one write). Escape,
+  //     Cmd/Ctrl+Z (registerDragCancel), a lost pointer or unmounting cancel
+  //     it. Near the top / bottom edge of the timeline's scroller (under the
+  //     sticky ruler, above the sticky footer: `scroll` from Timeline) the
+  //     view scrolls, faster the deeper in, like the rack's module drag;
+  //   - Alt+Up / Alt+Down on the focused header button (the rack's nudge
+  //     chord) moves it one place; quick presses are one undo entry
+  //     (sweepKey `trackmove:<id>`, 1 s idle), and focus stays on it;
+  //   - the header's context menu (right-click, or the context-menu key):
+  //     "Move up" / "Move down" (`track-menu-up` / `-down`).
+  // Each move says "Moved <name> to position n of N" in the visually hidden
+  // live region (`track-order-status`). Lane heights, the open lanes, the
+  // selection etc. are keyed by track / lane id, so they travel with it.
+  import { onDestroy, tick, untrack } from 'svelte';
   import { registerDragCancel } from '../../history/gestures';
   import type { CommandSink } from '../../state/actions';
   import type { Project, Track } from '../../state/project.svelte';
   import { removeTrackText } from '../../state/confirmText';
-  import { removeTrack, selectTrack } from '../../state/actions';
+  import { moveTrack, removeTrack, selectTrack } from '../../state/actions';
+  import { createSweepKeys } from '../../history/sweep';
   import { toggleMute, toggleSolo } from '../../state/mixer-actions';
   import TrackVol from './TrackVol.svelte';
   import { mixParam } from '../../audio/mixerCatalog';
@@ -63,10 +88,16 @@
   import { targetLabel } from './autoLabels';
   import AutoPicker from './AutoPicker.svelte';
   import { laneHeight, laneView, setLaneHeight, setOpen } from './laneView.svelte';
-  import { AUTO_H, LANE_MAX_H, LANE_MIN_H, MASTER_GREY, MASTER_ROW } from './tlMath';
+  import { AUTO_H, LANE_H, LANE_MAX_H, LANE_MIN_H, MASTER_GREY, MASTER_ROW, dropGap, gapIndex, gapY, rowsHeight, trackBlocks } from './tlMath';
   import type { Row } from './tlMath';
 
-  let { p, engine, rows }: { p: Project; engine: CommandSink; rows: readonly Row[] } = $props();
+  let { p, engine, rows, scroll = null }: {
+    p: Project;
+    engine: CommandSink;
+    rows: readonly Row[];
+    /** The timeline's vertical scroller and its sticky top / bottom bands (px): where a reorder drag auto-scrolls. */
+    scroll?: { el: HTMLElement | null; top: number; bottom: number } | null;
+  } = $props();
 
   const full = $derived(laneCount(p) >= MAX_AUTO_LANES);
   const FULL = `${MAX_AUTO_LANES} lanes is the maximum: remove one to add another`;
@@ -142,6 +173,236 @@
       setLaneHeight(laneId, laneHeight(laneId) + (e.key === 'ArrowDown' ? step : -step));
     }
   }
+
+  // ---- track order (see TRACK ORDER at the top) ----------------------------------
+  /** Vertical travel (px) before a press on a header becomes a reorder drag. */
+  const DRAG_PX = 4;
+  /** Auto-scroll zone (px) at the scroller's top / bottom edge, and the most it scrolls per frame. */
+  const EDGE = 30;
+  const EDGE_STEP = 14;
+
+  let headsEl = $state<HTMLDivElement | null>(null);
+  const blocks = $derived(trackBlocks(rows));
+  const sweepKey = createSweepKeys();
+
+  /** The live region's text (cleared, then set a tick later, so the same news twice is still read out). */
+  let orderStatus = $state('');
+  function announce(text: string) {
+    orderStatus = '';
+    void tick().then(() => (orderStatus = text));
+  }
+
+  /** Move track `id` to index `to`: one write, the news, and focus kept on its header button when asked. */
+  function moveTo(id: string, to: number, o: { coalesce?: string; refocus?: boolean } = {}) {
+    const from = p.tracks.findIndex((t) => t.id === id);
+    const t = p.tracks[from];
+    if (!t || !moveTrack(p, from, to, { coalesce: o.coalesce })) return;
+    announce(`Moved ${t.name} to position ${to + 1} of ${p.tracks.length}`);
+    if (!o.refocus) return;
+    // The keyed rows were re-ordered in the DOM, which can drop the focus: put it back.
+    const slot = t.slot;
+    void tick().then(() => {
+      const b = headsEl?.querySelector<HTMLElement>(`[data-testid="track-${slot}"]`);
+      b?.focus({ preventScroll: true });
+      b?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  /** Alt+Up / Alt+Down on a header button: one place (nothing at either end). */
+  function orderKey(e: KeyboardEvent, t: Track) {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (reorder) return;
+    const to = p.tracks.indexOf(t) + (e.key === 'ArrowUp' ? -1 : 1);
+    if (to >= 0 && to < p.tracks.length) moveTo(t.id, to, { coalesce: sweepKey(`trackmove:${t.id}`), refocus: true });
+  }
+
+  /**
+   * The drag in progress (shown: `reorder`), and the press that may become
+   * one (`press`, plain: no render needs it). `gap`: the drop gap, null on
+   * the track's own gaps (no move); `y`: the pointer's content y; `grab`:
+   * where the header was taken, from its top.
+   */
+  let reorder = $state<{ id: string; gap: number | null; y: number; grab: number } | null>(null);
+  let press: { id: string; y0: number; clientY: number; pointerId: number; end: () => void } | null = null;
+  let edgeRaf = 0;
+
+  const dragged = $derived(reorder ? (p.tracks.find((t) => t.id === reorder!.id) ?? null) : null);
+  /** Content y of the drop line, or null (no move there). */
+  const lineY = $derived(reorder?.gap != null ? gapY(blocks, reorder.gap) : null);
+
+  /** Pointer client y -> content y of the header column. */
+  const contentY = (clientY: number) => clientY - (headsEl?.getBoundingClientRect().top ?? 0);
+
+  /** Follow the pointer: the ghost and the drop gap. */
+  function follow(clientY: number) {
+    const d = reorder;
+    if (!d) return;
+    const from = p.tracks.findIndex((t) => t.id === d.id);
+    const y = contentY(clientY);
+    const gap = dropGap(blocks, y);
+    d.y = y;
+    d.gap = from >= 0 && gapIndex(from, gap) !== from ? gap : null;
+  }
+
+  // Edge auto-scroll (the rack's recipe): while the pointer is within EDGE px
+  // of the scroller's visible rows (or past them), scroll toward that edge
+  // each frame, faster the deeper in; the drop gap follows the scroll.
+  function edgeScroll() {
+    edgeRaf = 0;
+    const el = scroll?.el;
+    if (!reorder || !press || !el) return;
+    const r = el.getBoundingClientRect();
+    const top = r.top + scroll!.top;
+    const bottom = r.bottom - scroll!.bottom;
+    const y = press.clientY;
+    const speed = (depth: number) => Math.ceil(EDGE_STEP * Math.min(1, depth / EDGE));
+    const dy = y < top + EDGE ? -speed(top + EDGE - y) : y > bottom - EDGE ? speed(y - bottom + EDGE) : 0;
+    if (!dy) return;
+    const before = el.scrollTop;
+    el.scrollBy(0, dy);
+    if (el.scrollTop === before) return; // at the end
+    follow(y);
+    edgeRaf = requestAnimationFrame(edgeScroll);
+  }
+
+  function orderDown(e: PointerEvent, t: Track) {
+    press?.end(); // a press whose release was lost
+    if (e.button !== 0 || reorder) return;
+    // The volume slider drags itself; macOS Ctrl+click is a right click (the menu).
+    if ((e.target as HTMLElement).closest('input') || (IS_MAC && e.ctrlKey)) return;
+    const el = e.currentTarget as HTMLElement;
+    const move = (ev: PointerEvent) => {
+      if (!press || ev.pointerId !== press.pointerId) return;
+      press.clientY = ev.clientY;
+      if (!reorder) {
+        if (Math.abs(ev.clientY - press.y0) < DRAG_PX) return;
+        const head = blocks.find((b) => b.trackId === press!.id);
+        reorder = { id: press.id, gap: null, y: contentY(ev.clientY), grab: head ? contentY(press.y0) - head.top : LANE_H / 2 };
+        if (el.isConnected) el.setPointerCapture(press.pointerId);
+        window.addEventListener('keydown', esc, true);
+      }
+      follow(ev.clientY);
+      if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeScroll);
+    };
+    const up = (ev: PointerEvent) => {
+      if (!press || ev.pointerId !== press.pointerId) return;
+      const d = reorder;
+      if (d) follow(ev.clientY);
+      end();
+      if (!d) return; // a click: the button under it handles it
+      swallowClick();
+      const from = p.tracks.findIndex((x) => x.id === d.id);
+      if (from >= 0 && d.gap !== null) moveTo(d.id, gapIndex(from, d.gap));
+    };
+    const cancel = (ev: PointerEvent) => {
+      if (press && ev.pointerId === press.pointerId) end();
+    };
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== 'Escape') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      end();
+    };
+    /** Stop listening and drop the drag (nothing was written). */
+    function end() {
+      if (edgeRaf) cancelAnimationFrame(edgeRaf);
+      edgeRaf = 0;
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', cancel, true);
+      window.removeEventListener('keydown', esc, true);
+      if (press && el.hasPointerCapture(press.pointerId)) el.releasePointerCapture(press.pointerId);
+      press = null;
+      reorder = null;
+    }
+    press = { id: t.id, y0: e.clientY, clientY: e.clientY, pointerId: e.pointerId, end };
+    // Window, capture phase: the moves reach us wherever the pointer goes, before any widget under it.
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', cancel, true);
+  }
+  /** The click a real drag's release makes on the button under it is no click. */
+  function swallowClick() {
+    const stop = (ev: Event) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+    window.addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', stop, true), 0); // no click came
+  }
+  /** Escape's twin for Cmd/Ctrl+Z or redo mid-drag (history/gestures.ts). */
+  function orderCancel(): boolean {
+    if (!reorder) return false;
+    press?.end();
+    return true;
+  }
+  const unregisterOrder = registerDragCancel(orderCancel);
+  onDestroy(() => {
+    press?.end();
+    unregisterOrder();
+  });
+
+  // The header's context menu: "Move up" / "Move down".
+  const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  let menu = $state<{ x: number; y: number; id: string; from: HTMLElement | null } | null>(null);
+  let menuEl = $state<HTMLDivElement | null>(null);
+  const menuTrack = $derived(menu ? (p.tracks.find((t) => t.id === menu!.id) ?? null) : null);
+  const menuAt = $derived(menuTrack ? p.tracks.indexOf(menuTrack) : -1);
+  function orderMenu(e: MouseEvent, t: Track) {
+    if (e.defaultPrevented) return; // the volume slider opened its own menu
+    e.preventDefault();
+    press?.end();
+    const main = (e.currentTarget as HTMLElement).querySelector<HTMLElement>(`[data-testid="track-${t.slot}"]`);
+    // A keyboard-made contextmenu event has no pointer position: open it under the name.
+    const kbd = e.clientX === 0 && e.clientY === 0;
+    const r = main?.getBoundingClientRect();
+    menu = { x: kbd ? (r?.left ?? 0) : e.clientX, y: kbd ? (r?.bottom ?? 0) : e.clientY, id: t.id, from: main };
+  }
+  function closeMenu() {
+    const from = menu?.from;
+    menu = null;
+    from?.focus({ preventScroll: true });
+  }
+  function menuMove(d: -1 | 1) {
+    const t = menuTrack;
+    closeMenu();
+    if (t) moveTo(t.id, p.tracks.indexOf(t) + d, { refocus: true });
+  }
+  function menuKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMenu();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      const items = [...(menuEl?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+      const i = items.indexOf(document.activeElement as HTMLButtonElement);
+      items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+    }
+  }
+  // Keep the menu inside the window; focus its first item; an outside press closes it.
+  $effect(() => {
+    const m = menu;
+    const me = menuEl;
+    if (!m || !me) return;
+    const r = me.getBoundingClientRect();
+    const x = Math.max(4, Math.min(m.x, window.innerWidth - r.width - 4));
+    const y = Math.max(4, Math.min(m.y, window.innerHeight - r.height - 4));
+    if (x !== m.x || y !== m.y) menu = { ...m, x, y };
+  });
+  $effect(() => {
+    if (!menu) return;
+    const me = menuEl;
+    untrack(() => me?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus());
+    const onDown = (e: PointerEvent) => {
+      if (me && !me.contains(e.target as Node)) menu = null;
+    };
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+  });
 </script>
 
 {#snippet addPicker(trackId: string)}
@@ -149,7 +410,7 @@
   {#if full}<span class="cap" data-testid="auto-full" title={FULL}>{MAX_AUTO_LANES} max</span>{/if}
 {/snippet}
 
-<div class="heads">
+<div class="heads" class:ordering={!!reorder} bind:this={headsEl}>
   {#each rows as r, i (r.kind + r.trackId + (r.laneId ?? ''))}
     {#if r.kind === 'clips'}
       {@const t = trackById.get(r.trackId)!}
@@ -157,14 +418,26 @@
       {@const muted = flagOn(t, 'mute')}
       {@const soloed = flagOn(t, 'solo')}
       {@const open = laneView.open.has(t.id)}
-      <div class="row" class:sel class:muted style:--c={t.color} style:height="{r.h}px">
+      <!-- The drag's keyboard twin is Alt+arrows on the header button (TRACK ORDER). -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="row"
+        class:sel
+        class:muted
+        class:lifted={reorder?.id === t.id}
+        style:--c={t.color}
+        style:height="{r.h}px"
+        onpointerdown={(e) => orderDown(e, t)}
+        oncontextmenu={(e) => orderMenu(e, t)}
+      >
         <span class="bar" aria-hidden="true"></span>
         <div class="body">
           <button
             class="main"
             data-testid={`track-${t.slot}`}
             aria-pressed={sel}
-            title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below."
+            title="{t.name} — {t.kind === 'drum' ? 'drum track' : t.kind === 'audio' ? 'audio track' : `synth track (${t.patchName})`}. Click to edit it below; drag (or Alt+↑/↓) to reorder."
+            onkeydown={(e) => orderKey(e, t)}
             onclick={() => {
               selectTrack(p, engine, t.id);
               p.mixerOpen = false; // show this track's editor, not the mixer
@@ -226,7 +499,7 @@
       {@const info = r.laneId ? laneInfo.get(r.laneId) : undefined}
       {@const key = ownerKey(r.trackId)}
       {@const color = r.trackId === MASTER_ROW ? MASTER_GREY : (trackById.get(r.trackId)?.color ?? MASTER_GREY)}
-      <div class="row lane" class:compact={r.h < 40} style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
+      <div class="row lane" class:compact={r.h < 40} class:lifted={reorder?.id === r.trackId} style:--c={color} style:height="{r.h}px" data-testid={info ? `auto-head-${key}-${info.k}` : `auto-head-${key}-new`}>
         {#if info}
           {@const label = targetLabel(info.owner, info.lane.target)}
           <div class="lrow">
@@ -275,7 +548,38 @@
     {/if}
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet</p>{/if}
+  {#if reorder && dragged}
+    <!-- The header being dragged follows the pointer; the line is where it drops (TRACK ORDER). -->
+    <div
+      class="ghost"
+      data-testid="track-drag-ghost"
+      aria-hidden="true"
+      style:--c={dragged.color}
+      style:top="{Math.max(0, Math.min(reorder.y - reorder.grab, rowsHeight(rows) - LANE_H))}px"
+      style:height="{LANE_H}px"
+    ><span class="bar"></span><b class="name">{dragged.name}</b></div>
+    {#if lineY !== null}<div class="drop-line" data-testid="track-drop-line" aria-hidden="true" style:top="{lineY}px"></div>{/if}
+  {/if}
+  <p class="sr-only" data-testid="track-order-status" aria-live="polite">{orderStatus}</p>
 </div>
+
+{#if menu && menuTrack}
+  <div
+    class="menu"
+    bind:this={menuEl}
+    data-testid="track-menu"
+    role="menu"
+    tabindex="-1"
+    style:left="{menu.x}px"
+    style:top="{menu.y}px"
+    onkeydown={menuKey}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <div class="menu-ttl">{menuTrack.name}</div>
+    <button role="menuitem" data-testid="track-menu-up" disabled={menuAt <= 0} title="Alt+↑ on the track name" onclick={() => menuMove(-1)}>Move up</button>
+    <button role="menuitem" data-testid="track-menu-down" disabled={menuAt >= p.tracks.length - 1} title="Alt+↓ on the track name" onclick={() => menuMove(1)}>Move down</button>
+  </div>
+{/if}
 
 {#if asking}
   {@const a = asking}
@@ -295,7 +599,7 @@
 
 <style>
   /* Tokens only (theme.css); --c is the row's track colour (data). */
-  .heads { display: flex; flex-direction: column; background: var(--panel); }
+  .heads { position: relative; display: flex; flex-direction: column; background: var(--panel); }
   .row { box-sizing: border-box; display: flex; align-items: stretch; gap: 4px; padding-right: 2px; border-bottom: 1px solid var(--grid); border-right: 1px solid var(--line); background: var(--panel); }
   .row:hover, .row:focus-within { background: color-mix(in srgb, var(--panel), var(--text) 4%); }
   .row.sel { background: color-mix(in srgb, var(--panel), var(--text) 10%); }
@@ -341,4 +645,21 @@
   .cap { font-size: 9px; color: var(--rec); white-space: nowrap; }
   .pat { font-size: 9px; color: var(--accent); white-space: nowrap; }
   .empty { color: var(--text-2); margin: 0; padding: 6px 8px; }
+  /* TRACK ORDER: a header press must not select its text (it may become a drag). */
+  .row:not(.lane):not(.master) { user-select: none; -webkit-user-select: none; }
+  .heads.ordering, .heads.ordering * { cursor: grabbing; }
+  /* The dragged block stays in place, dimmed; the ghost (the header) follows the pointer. */
+  .row.lifted { opacity: 0.35; }
+  .ghost { position: absolute; left: 0; right: 0; z-index: 1; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding-right: 8px; border: 1px solid var(--accent); border-radius: var(--r-sm); background: color-mix(in srgb, var(--panel), var(--text) 10%); box-shadow: var(--lift); opacity: 0.92; pointer-events: none; overflow: hidden; }
+  .ghost .bar { align-self: stretch; }
+  .ghost .name { color: var(--text); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The drop line: 2 px of --accent across the column, centred on the gap, with a dot at its start. */
+  .drop-line { position: absolute; left: 0; right: 0; z-index: 1; height: 2px; margin-top: -1px; background: var(--accent); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent); pointer-events: none; }
+  .drop-line::before { content: ''; position: absolute; left: 0; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
+  .menu { position: fixed; z-index: 50; min-width: 130px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+  .menu button { font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
+  .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }
+  .menu button:disabled { color: var(--text-2); opacity: 0.5; cursor: not-allowed; }
 </style>

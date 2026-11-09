@@ -293,6 +293,38 @@ waveform, repeats, hatch), `TrackHeaders.svelte` (LOOK), `TrackVol.svelte`
   …)"), and an edit overrides the lane (`autoBus.touch`). The Master row
   has no slider.
 
+## Track order (plan 22 Task 4)
+The order of `project.tracks` is the song's track order: the timeline rows
+and their headers, the mixer strips (`MixerView` renders `p.tracks` keyed by
+`t.id`, so the strips reorder with it) and the saved file. Nothing else is
+keyed by a track's index: the engine addresses a track by `slot`, the UI by
+`id` (the selection, the open lanes and lane heights in `laneView`, clip
+focus, MIDI mappings, the recorder, the pattern focus by slot), and the
+colour is stored on the track. So reordering is a permutation of
+`p.tracks` only:
+
+- `state/actions.ts moveTrack(p, from, to)`: one `edit` ("Move track"),
+  no engine command (`markEdited` marks it dirty and bumps the version, so
+  the autosave writes it), colours unchanged. Undo / redo restore the order
+  through `diffApply`'s step 2 (`p.tracks = order`), which sends nothing for
+  tracks whose content did not change. The timeline's drag-time lane indices
+  (`Timeline.svelte` clip moves between lanes) are derived from the current
+  order each time, so they follow it.
+- UI (`ui/song/TrackHeaders.svelte`, TRACK ORDER): drag a header vertically
+  (a press becomes a drag after 4 px, so clicks on the name and M / S / A /
+  × still work; the volume slider never starts one). The track's block (its
+  header and open lane rows, `tlMath.trackBlocks`) dims in place, a ghost of
+  the header follows the pointer, and an `--accent` line marks the drop gap
+  (`tlMath.dropGap`: how many blocks have their middle above the pointer;
+  none on the track's own two gaps). The rows move on the drop; Escape,
+  Cmd/Ctrl+Z or a lost pointer cancel. Near the top / bottom of the
+  timeline's scroller (below the sticky ruler, above the sticky footer:
+  Timeline passes `scroll`) the view scrolls, like the rack's module drag.
+  Alt+Up / Alt+Down on the focused header button move it one place (the
+  rack's nudge chord; quick presses coalesce into one undo entry, 1 s idle),
+  and the header's context menu has Move up / Move down. Each move is
+  announced in a polite live region: "Moved <name> to position n of N".
+
 ## Limits
 | What | Limit |
 |---|---|

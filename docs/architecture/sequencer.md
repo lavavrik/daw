@@ -168,6 +168,53 @@ The pure maths is in `ui/stepGrid.ts` and the writes are in
 `state/actions.ts`, so the velocity lane (Task 2) shares the clamp, the
 writes and the gesture's begin, commit and cancel.
 
+#### Velocity lane (plan 23 Task 2)
+`ui/VelocityLane.svelte`, mounted by `StepGrid.svelte` under the rows and
+above the footer: one row's steps as bars, drawn by dragging (FL's graph
+editor).
+- **Placement**: a 64 px strip. Its columns use the cells' own flex recipe
+  (groups of 4, 12 px apart, 3 px between steps, `flex: 1 1 0` with a 7 px
+  floor, groups at most 156 px) behind a label column as wide as a row's
+  controls, so each bar sits exactly under its cell at 16, 32 and 64 steps
+  and scrolls with the grid (e2e: within 1 px). The two CSS copies must stay
+  in step. The label column says "VELOCITY" with the row's colour chip and
+  name. At 1280×720 the grid with 8 rows and the lane fits the bottom panel
+  without scrolling (e2e), so the lane keeps 64 px there.
+- **Which row**: the row whose name or a cell was last clicked or focused
+  (`laneRowId` in StepGrid, a row id, so it follows deletes and inserts);
+  until then, or once that row is deleted, the first row with a lit step,
+  else row 0 (`laneRowIndex`). View state: not saved, not an edit.
+- **Bars**: lit steps only, `vel / 127` of the slot in the row colour with
+  `--gloss` (`stepCellStyle`, as the cells); an accent (>= 110) gets a cap
+  in the ring colour above it. A dashed guide at 110 is labelled "accent".
+  Off steps are empty slots and can't be drawn. Each lit column's
+  `data-tip` is "Step n · velocity v".
+- **Draw**: press and drag; every lit step the pointer passes over takes
+  the velocity at the pointer's y (top 127, bottom 1: `laneVel`). Each
+  pointer sample (coalesced events included) is joined to the previous one
+  by a segment, and every column the segment crosses is set, with the y at
+  its centre (`laneStroke`), so a fast stroke skips no step. Shift: a
+  straight ramp from the stroke's start to the pointer; steps the stroke
+  touched outside the ramp go back to their values from before it. A
+  "vel 96" chip floats above the last drawn bar.
+- **Undo**: the stroke runs in the App's pointer gesture through
+  `stepVelocityGesture`, so it is one "Step velocity" entry. Esc (window
+  capture listener), a lost capture and Cmd/Ctrl+Z mid-stroke
+  (`registerDragCancel`) put every touched step back and leave no entry.
+- **Double-click** a lit bar: back to 100. The column is found from the
+  pointer's x (the presses captured the pointer, so the event's target is
+  the bar area). The double-click's two presses draw first, so it makes
+  two entries: the second press's draw-and-reset, and the first press's
+  draw; undo twice to get back the value from before.
+- **Toggle**: "Velocity" (Phosphor `ChartBar`, `aria-pressed`) in the grid
+  footer shows or hides the lane. The pref is `daw.velLane` in localStorage
+  (`ui/uiPrefs.svelte.ts`), shown by default. Hidden, the lane is not
+  rendered, so the rows get the space back.
+- **a11y**: the lane is `role="group"`, labelled "Velocity, <row name>".
+  The bars are pointer-only; the keyboard path is the cell keys above
+  (Shift+↑ / ↓ on a focused lit cell), which re-level the lane's bars live
+  and also pick that row for the lane.
+
 ### Deleting a row (plan 21 task 7)
 Engine rows are **slot-indexed** (`DrumTrack::rows[MAX_ROWS]`, and every
 pattern's `steps[row][step]`), so deleting a row in the middle means every

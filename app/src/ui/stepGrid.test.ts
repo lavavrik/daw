@@ -3,7 +3,7 @@ import { ACCENT_MIN_VEL } from '../state/acidSteps';
 import { TRACK_COLORS } from './theme';
 import {
   STEP_VEL_MAX, STEP_VEL_MIN, VEL_DRAG_PX, VEL_WHEEL_IDLE_MS, VEL_WHEEL_PX, clampStepVel, dragVel, rowColor, stepCellStyle, velChip,
-  velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
+  velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep, laneBarTip, laneLabel, laneRowIndex, laneStroke, laneVel,
 } from './stepGrid';
 
 describe('stepCellStyle', () => {
@@ -142,5 +142,62 @@ describe('step velocity editing (plan 23)', () => {
     expect(velChip(96)).toBe('vel 96');
     expect(velTip(96)).toBe('Velocity 96 — wheel or Shift-drag to change');
     expect(velStatus(96)).toBe('Velocity 96');
+  });
+});
+
+describe('velocity lane (plan 23 Task 2)', () => {
+  it('laneVel: the top edge is 127, the bottom 1, linear between, clamped outside', () => {
+    expect(laneVel(100, 100, 58)).toBe(127);
+    expect(laneVel(158, 100, 58)).toBe(1);
+    expect(laneVel(129, 100, 58)).toBe(64); // the middle
+    expect(laneVel(40, 100, 58)).toBe(127); // above the lane
+    expect(laneVel(400, 100, 58)).toBe(1); // below it: never off
+    // The accent line (110 / 127 of the height from the bottom) reads ~110.
+    expect(laneVel(158 - 58 * (110 / 127), 100, 58)).toBe(110);
+    expect(laneVel(5, 0, 0)).toBe(127); // no height: no division by zero
+  });
+
+  const cols = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ left: i * 20 + (i >= 4 ? 10 : 0), right: i * 20 + 17 + (i >= 4 ? 10 : 0) }));
+
+  it('laneStroke: a press hits the column under it; a gap hits nothing', () => {
+    expect(laneStroke(cols, { x: 25, y: 7 }, { x: 25, y: 7 })).toEqual([{ step: 1, y: 7 }]);
+    expect(laneStroke(cols, { x: 18.5, y: 7 }, { x: 18.5, y: 7 })).toEqual([]); // between 0 and 1
+    expect(laneStroke(cols, { x: 25, y: 7 }, { x: 25, y: 30 })).toEqual([{ step: 1, y: 30 }]); // vertical: the latest y
+  });
+
+  it('laneStroke: a fast segment sets every column it crosses, y interpolated at each centre', () => {
+    // Column centres: 8.5, 28.5, 48.5, 68.5, 98.5, ...
+    const hit = laneStroke(cols, { x: 8.5, y: 0 }, { x: 98.5, y: 90 });
+    expect(hit.map((h) => h.step)).toEqual([0, 1, 2, 3, 4]); // nothing skipped, the group gap included
+    expect(hit.map((h) => h.y)).toEqual([0, 20, 40, 60, 90]);
+    // Right to left is the same set, in column order.
+    expect(laneStroke(cols, { x: 98.5, y: 90 }, { x: 8.5, y: 0 }).map((h) => [h.step, h.y])).toEqual([[0, 0], [1, 20], [2, 40], [3, 60], [4, 90]]);
+  });
+
+  it('laneStroke: a segment that only clips a column takes the y at its own nearer end', () => {
+    // From x 15 (in column 0, right of its centre) to x 22 (column 1, left of its centre).
+    expect(laneStroke(cols, { x: 15, y: 10 }, { x: 22, y: 24 })).toEqual([{ step: 0, y: 10 }, { step: 1, y: 24 }]);
+  });
+
+  it('laneRowIndex: the picked row by id, else the first row with a lit step, else row 0', () => {
+    const ids = ['a', 'b', 'c'];
+    const off = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+    expect(laneRowIndex(ids, null, off, 4)).toBe(0);
+    const lit = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 90, 0, 0]];
+    expect(laneRowIndex(ids, null, lit, 4)).toBe(2);
+    expect(laneRowIndex(ids, 'b', lit, 4)).toBe(1); // picked wins
+    // The picked row moved (a row above it was deleted): still found by id.
+    expect(laneRowIndex(['b', 'c'], 'b', lit.slice(1), 4)).toBe(0);
+    // The picked row is gone: back to the default.
+    expect(laneRowIndex(['a', 'c'], 'b', [lit[0], lit[2]], 4)).toBe(1);
+    // Steps past the pattern's length do not count.
+    expect(laneRowIndex(ids, null, [[0, 0, 0, 0, 100], [0, 0, 0, 0], [0, 0, 0, 0]], 4)).toBe(0);
+    expect(laneRowIndex(['a', 'b'], null, [[0, 0, 0, 0, 100], [0, 0, 0, 7]], 4)).toBe(1);
+    expect(laneRowIndex([], 'a', [], 16)).toBe(-1);
+  });
+
+  it('bar tooltip and lane label', () => {
+    expect(laneBarTip(0, 96)).toBe('Step 1 · velocity 96');
+    expect(laneLabel('Clap')).toBe('Velocity, Clap');
   });
 });

@@ -141,3 +141,64 @@ export const velChip = (v: number) => `vel ${v}`;
 export const velTip = (v: number) => `Velocity ${v} — wheel or Shift-drag to change`;
 /** What the live region says after a keyboard change. */
 export const velStatus = (v: number) => `Velocity ${v}`;
+
+// ---- Velocity lane (plan 23 Task 2; docs/architecture/sequencer.md "Velocity lane")
+// One row's lit steps as bars under the grid, drawn by dragging. The lane
+// lays its columns out with the same CSS as the cells, so a column's x range
+// is read from the DOM (getBoundingClientRect) and passed in here.
+
+/** A lane column's horizontal extent in client px. */
+export interface LaneCol {
+  left: number;
+  right: number;
+}
+
+/**
+ * The velocity at pointer `y` over a bar area from `top`, `height` px tall:
+ * the top edge is 127, the bottom edge 1 (linear between), clamped outside.
+ */
+export function laneVel(y: number, top: number, height: number): number {
+  if (!(height > 0)) return STEP_VEL_MAX;
+  return clampStepVel(STEP_VEL_MIN + (1 - (y - top) / height) * (STEP_VEL_MAX - STEP_VEL_MIN));
+}
+
+/**
+ * The columns a pointer segment `a` -> `b` crosses, each with the segment's
+ * y at that column: the y at the column's centre, or at the segment's end
+ * nearer to it when the segment only clips the column. Pointer samples come
+ * far apart in a fast stroke, so the segment, not its end points, decides
+ * which steps it set: no column it passed over is skipped. A segment with
+ * no width (a press, a vertical move) hits the column it is in, if any (a
+ * point in the gap between columns hits none).
+ */
+export function laneStroke(cols: readonly LaneCol[], a: { x: number; y: number }, b: { x: number; y: number }): { step: number; y: number }[] {
+  const lo = Math.min(a.x, b.x);
+  const hi = Math.max(a.x, b.x);
+  const out: { step: number; y: number }[] = [];
+  cols.forEach((c, step) => {
+    if (c.right < lo || c.left > hi) return;
+    const x = Math.min(hi, Math.max(lo, (c.left + c.right) / 2));
+    const y = hi === lo ? b.y : a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y);
+    out.push({ step, y });
+  });
+  return out;
+}
+
+/**
+ * The lane's row: the row picked last (`chosen`, a row id: the row whose
+ * name or a cell was last clicked or focused), while it exists; else the
+ * first row with a lit step in the pattern's `stepCount` steps; else row 0.
+ * -1 when there are no rows. By id, so it follows deletes and inserts.
+ */
+export function laneRowIndex(rowIds: readonly string[], chosen: string | null, steps: readonly (readonly number[])[], stepCount: number): number {
+  if (rowIds.length === 0) return -1;
+  const r = chosen === null ? -1 : rowIds.indexOf(chosen);
+  if (r >= 0) return r;
+  const lit = rowIds.findIndex((_, i) => steps[i]?.slice(0, stepCount).some((v) => v > 0));
+  return lit >= 0 ? lit : 0;
+}
+
+/** A lane bar's tooltip (data-tip); `step` is 0-based, the text 1-based like the cells. */
+export const laneBarTip = (step: number, v: number) => `Step ${step + 1} · velocity ${v}`;
+/** The lane's accessible name. */
+export const laneLabel = (rowName: string) => `Velocity, ${rowName}`;

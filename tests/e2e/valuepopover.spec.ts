@@ -275,8 +275,8 @@ test('step grid: row gain "1.5", row pan "L25" (−0.25), swing "60" (60 %)', as
   const swing = page.getByTestId('swing');
 
   await gain.click({ button: 'right' });
-  await expect(page.getByTestId('value-input')).toHaveValue('1');
-  await expect(page.getByTestId('value-popover')).toContainText('0 … 2');
+  await expect(page.getByTestId('value-input')).toHaveValue('1.00'); // as the row shows it
+  await expect(page.getByTestId('value-popover')).toContainText('0.00 … 2.00');
   await expect(page.getByTestId('auto-ctl-menu')).toHaveCount(0); // no menu items
   await page.keyboard.type('1.5');
   await page.keyboard.press('Enter');

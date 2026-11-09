@@ -429,6 +429,42 @@ test('Clip tab edits gain and fades', async ({ page }) => {
   await page.keyboard.press('Space');
 });
 
+test('Clip tab gain: the precise value card (plan 24): "-3" is −3.0 dB, "-inf" silence, one undo each', async ({ page }) => {
+  await start(page);
+  const slot = await dropBelow(page, 'tone', 2);
+  await page.getByTestId(`clip-${slot}-0`).click({ position: { x: 20, y: 8 } });
+  await page.getByTestId('mixer-tab').click();
+  await page.keyboard.press('Alt+6');
+  await expect(page.getByTestId('cliptab-panel')).toBeVisible();
+  const c0 = async () => (await audioTracks(page))[0].clips[0];
+  const gain = page.getByTestId('cliptab-gain');
+  const text = page.getByTestId('cliptab-gain-text');
+  const pop = page.getByTestId('value-popover');
+  await expect(text).toHaveText('0.0 dB');
+  await gain.click({ button: 'right' });
+  await expect(pop).toContainText('−∞ … +12.0 dB');
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await expect(page.getByTestId('value-input')).toHaveValue('0.0');
+  await page.keyboard.type('-3');
+  await page.keyboard.press('Enter');
+  await expect(pop).toHaveCount(0);
+  await expect.poll(async () => (await c0()).gain).toBe(-3);
+  await expect(text).toHaveText('−3.0 dB');
+  await expect(gain).toBeFocused();
+  // The keyboard opens it too; "-inf" is silence (the minimum).
+  await page.keyboard.press('Shift+F10');
+  await expect(page.getByTestId('value-input')).toHaveValue('-3.0');
+  await page.keyboard.type('-inf');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await c0()).gain).toBe(-60);
+  await expect(text).toHaveText('−∞ dB');
+  // One undo entry each.
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).gain).toBe(-3);
+  await page.keyboard.press(undoKey);
+  await expect.poll(async () => (await c0()).gain).toBe(0);
+});
+
 test('Clip tab number field: scrub, steppers, click types; one undo each', async ({ page }) => {
   test.setTimeout(30_000);
   await start(page);

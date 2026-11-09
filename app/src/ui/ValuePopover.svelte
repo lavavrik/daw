@@ -7,12 +7,12 @@
   //     ("-6.0" dB, "220" ms, "C4" for a note param; knobMath entryParts),
   //     the Set button (Enter does the same) and a quiet Reset (to the default);
   //   - the range hint "min … max";
-  //   - then, when the control has any, its menu items (AutoMenu inline:
-  //     Automate / Show automation, MIDI learn / Forget MIDI).
+  //   - then, when the control has any, its menu items (AutoMenu.svelte's
+  //     list: Automate / Show automation, MIDI learn / Forget MIDI).
   //
   // API (for any control, not only Knob):
   //
-  //   openValuePopover({ x, y, label, def, value, apply, from, auto })
+  //   openValuePopover({ x, y, label, def, value, apply, from, auto, format })
   //     x, y    where to open (the pointer; for the keyboard, a corner of the
   //             control). The card is kept inside the window.
   //     label   the control's name: the title and the field's accessible name.
@@ -50,7 +50,13 @@
   //   closeValuePopover(from?)  closes it (only when it belongs to `from`,
   //             if given: a control that unmounts calls this).
   //
-  // One popover for the whole app (App renders it, like AutoMenu): opening
+  //   For a native control (a range input: StepGrid's, ClipPanel's):
+  //   popoverHandlers(() => req) gives { oncontextmenu, onkeydown } to spread
+  //   on it (the right-click at the pointer; ContextMenu / Shift+F10 under
+  //   the control; other keys pass), with `req` the request minus x, y and
+  //   from; `use:popoverOwner` closes a card the node opened when it unmounts.
+  //
+  // One popover for the whole app (App.svelte renders it once): opening
   // another replaces it, so only one is ever open.
   //
   // Behaviour: the field opens focused with its text selected. Text that
@@ -75,7 +81,7 @@
   // shortcuts already leave Cmd+Z to the text (input/shortcuts.ts isTyping).
   // A wheel on the card stops there too.
   //
-  // Layering: fixed, z-index 60 (AutoMenu's). Not in the top layer: the
+  // Layering: fixed, z-index 60 (the app's menus' layer). Not in the top layer: the
   // global tooltip (Tooltip.svelte) is, so the tips of Set, Reset and the
   // items show above the card. A press (the right-click) or focus moving
   // into the card releases the control's own tip, so it never covers the field.
@@ -107,6 +113,31 @@
   export function closeValuePopover(from?: HTMLElement | null) {
     if (active && (from === undefined || active.from === from)) active = null;
   }
+
+  /** A request for a native control: no position, no `from` (the event's control gives both). */
+  export type NativeReq = Omit<ValuePopoverReq, 'x' | 'y' | 'from'>;
+  /**
+   * The handlers that open the card from a native control (header): its
+   * contextmenu event (at the pointer; a keyboard-made one, at 0,0, under the
+   * control) and its ContextMenu / Shift+F10 key (under the control). `make`
+   * runs per opening, so the request reads the control's current state.
+   */
+  export function popoverHandlers(make: () => NativeReq) {
+    const open = (e: MouseEvent | KeyboardEvent) => {
+      const kbd = e instanceof KeyboardEvent;
+      if (kbd && e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
+      e.preventDefault(); // no native menu (nor, after the key, a contextmenu event)
+      const el = e.currentTarget as HTMLElement;
+      const r = el.getBoundingClientRect();
+      const at = kbd || (e.clientX === 0 && e.clientY === 0) ? null : e;
+      openValuePopover({ ...make(), x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, from: el });
+    };
+    return { oncontextmenu: open, onkeydown: open };
+  }
+  /** Svelte action: a card opened from this node closes when it unmounts (its apply would edit what is gone). */
+  export function popoverOwner(node: HTMLElement) {
+    return { destroy: () => closeValuePopover(node) };
+  }
 </script>
 
 <script lang="ts">
@@ -117,7 +148,7 @@
   import type { AutoBus } from './autoBus';
   import { entryParts, formatValue, parseValue } from './rack/knobMath';
 
-  // The menu items' context (AutoMenu inline needs the project, the engine and the bus).
+  // The menu items' context (AutoMenu's list needs the project, the engine and the bus).
   let { p, engine, bus }: { p: Project; engine: CommandSink; bus: AutoBus } = $props();
 
   let el = $state<HTMLDivElement | null>(null);

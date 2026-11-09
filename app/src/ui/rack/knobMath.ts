@@ -440,7 +440,8 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
  * point), a note name ("C4"), pan ("L50"), an integer, or the minimum's
  * label ("−∞", "Off", "off"). parseValue reads the text back with the
  * readout as `shown` (a bare "2" next to "kHz" is 2 kHz; next to a label,
- * the maximum's unit) and accepts the text and unit typed together.
+ * no suffix, so the param's base unit) and accepts the text and unit typed
+ * together.
  */
 export function entryParts(d: KnobDef, v: number): { text: string; unit: string } {
   const s = formatValue(d, v).replace(/−/g, '-');

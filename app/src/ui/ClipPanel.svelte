@@ -6,6 +6,10 @@
   //             length (seconds) and channels; "missing sample" when gone
   //   Gain      a fader in dB, −∞ (−60) .. +12; one drag = one undo entry
   //             (a pointer gesture, history/gestures.ts). Double-click: 0 dB.
+  //             Right-click, the ContextMenu key or Shift+F10: the precise
+  //             value card (plan 24, ui/ValuePopover.svelte; GAIN_DEF below):
+  //             "-3" is −3.0 dB, "-inf" silence, snapped to the slider's
+  //             0.1 dB; one undo entry (setAudioClip). No menu items.
   //   Fade in / Fade out
   //             beats, typed exactly (Enter or leaving the field commits;
   //             Escape puts the shown value back). setAudioClip shortens a
@@ -60,6 +64,8 @@
   import NumberField from './NumberField.svelte';
   import { THEME } from './theme';
   import { rangeFill } from './rangeFill';
+  import { popoverHandlers, popoverOwner, type NativeReq } from './ValuePopover.svelte';
+  import type { KnobDef } from './rack/knobMath';
 
   let { p, engine, clock = null, track }: {
     p: Project;
@@ -268,6 +274,20 @@
   }
   const chText = (n: number) => (n === 1 ? 'mono' : n === 2 ? 'stereo' : `${n} channels`);
 
+  /** The gain as the precise card reads it: dB, the minimum is "−∞" (silence). */
+  const GAIN_DEF: KnobDef = {
+    label: 'Clip gain', min: CLIP_GAIN_MIN_DB, max: CLIP_GAIN_MAX_DB, default: 0, unit: 'dB', minLabel: '-inf',
+    curve: 'lin', integer: false, choices: [],
+  };
+  /** The card's request for the clip on screen: its live gain; Set snaps to the slider's 0.1 dB. */
+  function gainReq(): NativeReq {
+    const cl = clip!;
+    const value = () => cl.gain;
+    return {
+      label: 'Clip gain', def: GAIN_DEF, value,
+      apply: (v) => { const g = Math.round(v * 10) / 10; if (g !== value()) setAudioClip(p, engine, cl.id, { gain: g }); },
+    };
+  }
   function setGain(e: Event) {
     if (!clip) return;
     setAudioClip(p, engine, clip.id, { gain: (e.currentTarget as HTMLInputElement).valueAsNumber });
@@ -330,9 +350,10 @@
           type="range" id={gainId} data-testid="cliptab-gain" aria-label="Clip gain (dB)" aria-valuetext={gainText(c.gain)}
           min={CLIP_GAIN_MIN_DB} max={CLIP_GAIN_MAX_DB} step="0.1" value={c.gain}
           style:--fill={rangeFill((c.gain - CLIP_GAIN_MIN_DB) / (CLIP_GAIN_MAX_DB - CLIP_GAIN_MIN_DB)).fill}
-          title="Clip gain: −∞ to +12 dB (double-click: 0 dB)"
+          title="Clip gain: −∞ to +12 dB (double-click: 0 dB, right-click: exact value)"
           oninput={setGain}
           ondblclick={() => setAudioClip(p, engine, c.id, { gain: 0 })}
+          use:popoverOwner {...popoverHandlers(gainReq)}
         />
         <output for={gainId} data-testid="cliptab-gain-text">{gainText(c.gain)}</output>
       </label>

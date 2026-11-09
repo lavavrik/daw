@@ -499,21 +499,38 @@ Callers call `openValuePopover`; opening another replaces the open one.
   layer. The global tooltip is in the top layer, so tips for Set, Reset and
   the items show above the card. A press or focus moving into the card
   releases the control's own tip, so that tip never covers the field.
-- **Who uses it.** Every control that sets a parameter value (plan 24
-  "all sliders"; view controls such as the timeline zoom, and choice
-  params, are not sliders):
+- **Who uses it.** Every control that sets a parameter value (plan 24,
+  "all sliders"):
   - every `Knob` variant (knob, slider, mech, vfader): the rack, the mixer
     strips' knobs and the top bar's Master. The knob's own
     click-the-readout typed entry stays;
-  - the mixer `Fader` and the song `TrackVol` (Task 2): the catalog's
-    `fader` def, so the field is in dB ("-6", "-inf" = silence) and Reset
-    is 0 dB. Their right-click menu (Automate, MIDI learn) is the card's
-    lower half now (the floating menu, `openAutoMenu`, is gone);
-  - the step grid's native ranges (Task 2): row gain (a plain multiplier,
-    0..2), row pan (L/C/R, shown in the grid's own "L 25" through the
-    request's `format`) and Swing (percent). `StepGrid.svelte` builds
-    their `KnobDef`s and snaps the value to the slider's 0.01 step, so the
-    card never sets what the slider can't show. They have no items.
-  - A caller with no catalog param builds a `KnobDef`: label, min, max,
-    default, `integer`, unit, `curve: 'lin'`, `choices: []`, plus `name:
-    'pan'` for an L/C/R readout. A unitless 0..1 def reads as a percent.
+  - the mixer `Fader` and the song `TrackVol`: the catalog's `fader` def,
+    so the field is in dB ("-6", "-inf" = silence) and Reset is 0 dB. Their
+    right-click menu (Automate, MIDI learn) is the card's lower half (the
+    floating menu, `openAutoMenu`, is gone);
+  - the step grid's native ranges: row gain (a plain multiplier, 0..2,
+    shown with two decimals like the row, "1.50"), row pan (L/C/R, the
+    grid's own "L 25") and Swing (percent). Both texts come through the
+    request's `format`. `StepGrid.svelte` builds their `KnobDef`s and snaps
+    the value to the slider's 0.01 step, so the card never sets what the
+    slider can't show. They have no items;
+  - the Clip tab's gain (`cliptab-gain`, `ClipPanel.svelte`): dB, −∞ (−60)
+    .. +12, snapped to the slider's 0.1 dB. No items.
+
+  Native ranges spread `popoverHandlers(() => req)` (right-click and
+  ContextMenu / Shift+F10, one request per slider) and `use:popoverOwner`
+  (the card closes when the slider unmounts).
+
+  A caller with no catalog param builds a `KnobDef`: label, min, max,
+  default, `integer`, unit, `curve: 'lin'`, `choices: []`, plus `name:
+  'pan'` for an L/C/R readout or `minLabel` for a labelled minimum. A
+  unitless 0..1 def reads as a percent.
+
+  Not covered, on purpose:
+  - the timeline zoom (and the waveform zoom): view controls, not values;
+  - choice / segmented params: not sliders;
+  - the pitch and mod wheels (`Wheels.svelte`): live performance controls
+    that mirror the hardware, and the pitch wheel springs back to centre.
+
+  The Clip tab's fade and trim handles have exact `NumberField`s beside
+  them.

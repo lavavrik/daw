@@ -23,7 +23,8 @@
   // Precise value (plan 24, ui/ValuePopover.svelte): right-click, the
   // ContextMenu key or Shift+F10 on a row's gain or pan or on Swing opens the
   // popover with a KnobDef built from the slider's range (GAIN_DEF, PAN_DEF,
-  // SWING_DEF below): gain as the plain multiplier it shows ("1.25"), pan as
+  // SWING_DEF below): gain as the plain multiplier it shows ("1.25", two decimals like the
+  // row's readout), pan as
   // L/C/R in the grid's own spaced form (panText "L 25"; "L25" or -1..1
   // also read), swing in percent ("60"). The value is snapped to
   // the slider's 0.01 step (1 % for swing), so the popover never sets what
@@ -64,7 +65,7 @@
   import { deferSampleLoad } from '../state/sampleLoads';
   import { importSample } from '../state/sampleImport';
   import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
-  import type { DrumTrack, Project } from '../state/project.svelte';
+  import type { DrumRow, DrumTrack, Project } from '../state/project.svelte';
   import { fineRequestFor } from '../audio/fineSamples';
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
@@ -72,7 +73,7 @@
     dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
   } from './stepGrid';
   import { rangeFill, rangeFillBipolar } from './rangeFill';
-  import { closeValuePopover, openValuePopover } from './ValuePopover.svelte';
+  import { popoverHandlers, popoverOwner, type NativeReq } from './ValuePopover.svelte';
   import type { KnobDef } from './rack/knobMath';
 
   let { p, engine, clock, track, onerror }: {
@@ -387,31 +388,16 @@
   const GAIN_DEF: KnobDef = { ...lin, label: 'Gain', min: 0, max: 2, default: 1 };
   const PAN_DEF: KnobDef = { ...lin, label: 'Pan', name: 'pan', min: -1, max: 1, default: 0 };
   const SWING_DEF: KnobDef = { ...lin, label: 'Swing', min: 0, max: 1, default: 0 };
-  /** The sliders' 0.01 step (swing's 1 %). */
+  /** The sliders' 0.01 step (swing's 1 %): the card never sets what the slider can't show. */
   const snap = (v: number) => Math.round(v * 100) / 100;
-  /**
-   * The popover for a slider: on its contextmenu event (at the pointer; a
-   * keyboard-made one, at 0,0, at the slider) or its ContextMenu / Shift+F10
-   * key (at the slider). Other keys pass.
-   */
-  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, get: () => number, set: (v: number) => void, format?: (v: number) => string) {
-    const kbd = e instanceof KeyboardEvent;
-    if (kbd && e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
-    e.preventDefault(); // no native menu (nor, after the key, a contextmenu event)
-    const el = e.currentTarget as HTMLInputElement;
-    const r = el.getBoundingClientRect();
-    const at = kbd || (e.clientX === 0 && e.clientY === 0) ? null : e;
-    openValuePopover({
-      x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, label, def, from: el,
-      value: get, // live: the card follows an undo
-      format, // pan: the grid's own "L 25"
-      apply: (v) => { const s = snap(v); if (s !== get()) set(s); },
-    });
+  /** A card request for a slider: the live value, and its action applied to the snapped value. */
+  function sliderReq(label: string, def: KnobDef, value: () => number, set: (v: number) => void, format?: (v: number) => string): NativeReq {
+    return { label, def, value, format, apply: (v) => { const s = snap(v); if (s !== value()) set(s); } };
   }
-  /** A popover opened from this slider closes with it (a deleted row, another track): its apply would edit what is gone. */
-  function popoverOwner(node: HTMLElement) {
-    return { destroy: () => closeValuePopover(node) };
-  }
+  // One request per slider, for both its right-click and its keys (popoverHandlers).
+  const gainReq = (row: DrumRow) => sliderReq(`${row.name} gain`, GAIN_DEF, () => row.gain, (v) => setRowGain(p, engine, track.id, row.id, v), (v) => v.toFixed(2));
+  const panReq = (row: DrumRow) => sliderReq(`${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v), panText);
+  const swingReq = () => sliderReq('Swing', SWING_DEF, () => pat.swing, (v) => setSwing(p, engine, track.id, v));
 
   // ---- delete row -----------------------------------------------------
   let gridEl: HTMLDivElement;
@@ -477,9 +463,7 @@
         <input
           type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill={gain.fill}
           aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
-          use:popoverOwner
-          oncontextmenu={(e) => precise(e, `${row.name} gain`, GAIN_DEF, () => row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
-          onkeydown={(e) => precise(e, `${row.name} gain`, GAIN_DEF, () => row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
+          use:popoverOwner {...popoverHandlers(() => gainReq(row))}
         />
         <span class="val mono">{row.gain.toFixed(2)}</span>
       </label>
@@ -488,9 +472,7 @@
           type="range" min="-1" max="1" step="0.01" value={row.pan}
           style:--fill={pan.fill} style:--fill-pos={pan.pos}
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
-          use:popoverOwner
-          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v), panText)}
-          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v), panText)}
+          use:popoverOwner {...popoverHandlers(() => panReq(row))}
         />
         <span class="val mono">{panText(row.pan)}</span>
       </label>
@@ -571,9 +553,7 @@
         class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
         style:--fill={rangeFill(pat.swing).fill}
         data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
-        use:popoverOwner
-        oncontextmenu={(e) => precise(e, 'Swing', SWING_DEF, () => pat.swing, (v) => setSwing(p, engine, track.id, v))}
-        onkeydown={(e) => precise(e, 'Swing', SWING_DEF, () => pat.swing, (v) => setSwing(p, engine, track.id, v))}
+        use:popoverOwner {...popoverHandlers(swingReq)}
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>

@@ -492,3 +492,26 @@ test('clicking a note clip selects its track (as an audio clip does)', async ({ 
   await expect.poll(sel).toBe(ids[1]);
   await expect(clip(page, 1, 0)).toHaveAttribute('data-selected', 'true');
 });
+
+test('add-track list: ↓ on the button opens it; Space presses the focused item, never the song; letters stay in the list', async ({ page }) => {
+  await start(page);
+  const n = () => page.evaluate(() => (window as any).__daw.project.tracks.length);
+  const before = await n();
+  await page.getByTestId('add-track').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('add-track-menu')).toBeVisible();
+  await expect(page.getByTestId('add-drum-track')).toBeFocused();
+  // R would arm recording, Z would move the octave: both stay in the list.
+  await page.keyboard.press('KeyR');
+  await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
+  await page.keyboard.press('Space');
+  await expect.poll(n).toBe(before + 1);
+  expect(await page.evaluate(() => (window as any).__daw.project.playing)).toBe(false);
+  // ↑ opens it on the last item; Enter presses it.
+  await page.getByTestId('add-track').focus();
+  await page.keyboard.press('ArrowUp');
+  await expect(page.getByTestId('tl-master-toggle')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('add-track-menu')).toBeHidden();
+  await expect(page.getByTestId('add-track')).toBeFocused();
+});

@@ -15,7 +15,12 @@
   // plain buttons, no role=menu): opening focuses the first enabled item,
   // Up / Down / Home / End move, Escape closes and gives the focus back to
   // the button (and is stopped: only the topmost layer closes), a click
-  // outside closes. The list is position: fixed above the button, so the
+  // outside closes. ↓ / ↑ on the closed button open the list on its first /
+  // last item (like a menu-bar button). Every other key typed in the list
+  // stays there (like MenuBar's keepKey): Space / Enter press the focused
+  // item natively and never also start the song, letters never play notes
+  // or arm recording; only Escape and Cmd / Ctrl chords (⌘S, ⌘Z) still
+  // reach the global shortcuts on window. The list is position: fixed above the button, so the
   // song pane's overflow never clips it.
   //
   // Dropping a sample (a Finder file or a library sample) on the button makes
@@ -60,12 +65,22 @@
 
   const buttons = () => [...(list?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
 
-  function show() {
+  function show(focus: 'first' | 'last' = 'first') {
     if (!btn) return;
     const r = btn.getBoundingClientRect();
     at = { left: r.left, bottom: window.innerHeight - r.top + 4 };
     open = true;
-    queueMicrotask(() => buttons()[0]?.focus());
+    queueMicrotask(() => {
+      const bs = buttons();
+      bs[focus === 'first' ? 0 : bs.length - 1]?.focus();
+    });
+  }
+  /** ↓ / ↑ on the button open the list on its first / last item (or move there when open). */
+  function btnKey(e: KeyboardEvent) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    e.stopPropagation();
+    show(e.key === 'ArrowDown' ? 'first' : 'last');
   }
   function close(refocus: boolean) {
     open = false;
@@ -77,6 +92,8 @@
   }
 
   function listKey(e: KeyboardEvent) {
+    // Keys stay in the list (see the header); Escape is handled below.
+    if (e.key !== 'Escape' && !e.metaKey && !e.ctrlKey) e.stopPropagation();
     const bs = buttons();
     const i = bs.indexOf(document.activeElement as HTMLButtonElement);
     const go = (k: number) => {
@@ -149,6 +166,7 @@
   aria-haspopup="true"
   title="Add a track or the Master row. Drop a sample here for a Sampler track"
   onclick={() => (open ? close(false) : show())}
+  onkeydown={btnKey}
   ondragover={dragOver}
   ondragleave={() => (over = false)}
   ondrop={drop}

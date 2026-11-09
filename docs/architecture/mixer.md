@@ -248,7 +248,7 @@ faceplates"):
   while it is on (M `--sig-cv`, S `--track-7`, ∿ `--play`). Test ids,
   `aria-pressed` and titles are unchanged;
 - every knob is a compact mech dial (`Knob variant="mech" size="sm"`, 46
-  px), two per row: EQ, Comp, the returns' effects, the two sends (side by
+  px in a 56 px cell: two cells fill the strip's 112 px inside exactly), two per row: EQ, Comp, the returns' effects, the two sends (side by
   side, each with its pre/post `.mech-btn` and a small LED under it), pan,
   the master's limiter ceiling beside its GR chip. The Delay's 12-way time
   division stays a skinned select; a ≤ 6-choice param would be LED buttons;
@@ -263,8 +263,13 @@ faceplates"):
 (`max-height: 100%`), and everything above the fader (`.upper`: M/S/∿,
 the sections, sends, pan) shrinks and scrolls inside the strip (no
 scrollbar: it would eat the two-knob rows' width; wheel or focus scroll
-it), so the fader, scale, meter and readout always stay in view. At
-1280×720 a track strip's pan sits below the sends, scrolled.
+it), so the fader, scale, meter and readout always stay in view. With no
+scrollbar the cue is a 14 px fade (a `mask-image`) at the edge that has
+more past it (`fade-top` / `fade-bot`, re-checked on scroll and on any size
+change). At 1280×720 a track strip's pan sits below the sends, scrolled.
+- **Section headers** (EQ, Comp, the return's effect): one leading glyph,
+  the section's icon (brighter while open), or the ▸ / ▾ triangle when it
+  has none; never both.
 
 ## Engine reset
 

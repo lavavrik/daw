@@ -123,6 +123,37 @@
   }));
 
   // ---- ∿: show this strip in the mixer analyser ----------------------------
+  // Scroll cue for the controls above the fader (.upper, no scrollbar): a
+  // fade at the edge that has more content past it, so a short mixer shows
+  // there is more to scroll to. Re-checked on scroll and on any size change
+  // (a section opening, the window resizing).
+  let upperEl = $state<HTMLElement | null>(null);
+  let moreAbove = $state(false);
+  let moreBelow = $state(false);
+  function cue() {
+    const u = upperEl;
+    if (!u) return;
+    moreAbove = u.scrollTop > 1;
+    moreBelow = u.scrollTop + u.clientHeight < u.scrollHeight - 1;
+  }
+  $effect(() => {
+    const u = upperEl;
+    if (!u) return;
+    const ro = new ResizeObserver(cue);
+    ro.observe(u);
+    for (const c of u.children) ro.observe(c);
+    const mo = new MutationObserver(() => {
+      for (const c of u.children) ro.observe(c);
+      cue();
+    });
+    mo.observe(u, { childList: true });
+    cue();
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  });
+
   let analysed = $state(false);
   $effect(() => {
     if (kind === 'master') return;
@@ -188,7 +219,7 @@
   </button>
 
   <!-- Everything above the fader: scrolls inside the strip when the mixer is too short for it, so the fader stays in view. -->
-  <div class="upper">
+  <div class="upper" bind:this={upperEl} onscroll={cue} class:fade-top={moreAbove} class:fade-bot={moreBelow} data-testid="strip-upper">
   <!-- LED push-buttons: the LED (decoration) glows in the button's colour (--c on its column) while it is on. -->
   <div class="ms">
     {#if kind !== 'master'}
@@ -303,6 +334,10 @@
      meter and the readout stay in view. No scrollbar: a classic one would
      take ~11 px of the 112 px the two-knob rows need. */
   .upper { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden auto; scrollbar-width: none; }
+  /* The scroll cue: 14 px fades where more content is (the script's cue()). */
+  .upper.fade-top { mask-image: linear-gradient(to bottom, transparent, black 14px); }
+  .upper.fade-bot { mask-image: linear-gradient(to top, transparent, black 14px); }
+  .upper.fade-top.fade-bot { mask-image: linear-gradient(to bottom, transparent, black 14px, black calc(100% - 14px), transparent); }
   .fm, .readout { flex: none; }
   .strip.sel { outline: 2px solid var(--c); outline-offset: -1px; }
   .screw { z-index: 1; }

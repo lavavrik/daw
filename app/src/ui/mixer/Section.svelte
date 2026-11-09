@@ -8,7 +8,8 @@
 
   let { title, icon, on = null, ontoggle, summary, children, testid, name }: {
     title: string;
-    /** Phosphor glyph shown before the title (the title text stays). */
+    /** Phosphor glyph shown before the title (the title text stays), in
+     *  place of the ▸ / ▾ triangle; --text (not --text-2) while open. */
     icon?: Component<any>;
     /** On/off state, or null for sections without a switch. */
     on?: boolean | null;
@@ -33,7 +34,9 @@
       title={`${open ? 'Hide' : 'Show'} ${title} settings`}
       data-testid={`${testid}-expand`}
       onclick={() => (open = !open)}
-    ><span class="tri">{open ? '▾' : '▸'}</span>{#if icon}<Icon {icon} size={12} />{/if}{title}</button>
+    ><!-- One leading glyph: the section's icon when it has one (brighter while
+         open), else the ▸ / ▾ triangle. Never both (two glyphs read as two
+         disclosures); aria-expanded carries the state either way. -->{#if icon}<span class="ico"><Icon {icon} size={12} /></span>{:else}<span class="tri">{open ? '▾' : '▸'}</span>{/if}{title}</button>
     {#if on !== null}
       <button
         type="button"
@@ -57,6 +60,8 @@
   .exp { flex: 1; display: flex; align-items: center; gap: 3px; border: 0; background: transparent; color: var(--text); font: 600 var(--fs-lbl) var(--font-ui); letter-spacing: .06em; text-transform: uppercase; padding: 2px 2px; cursor: pointer; text-align: left; border-radius: var(--r-sm); }
   .exp:hover { background: color-mix(in srgb, var(--raised) 50%, transparent); }
   .tri { width: 9px; color: var(--text-2); font-size: 9px; }
+  .ico { display: inline-flex; color: var(--text-2); }
+  .open .ico { color: var(--text); } /* not --accent: too faint as an icon on the strip (ui-theme.md) */
   .on { font: 600 var(--fs-lbl) var(--font-ui); border: 0; background: var(--raised); color: var(--text); border-radius: var(--r-sm); padding: 1px 6px; cursor: pointer; min-width: 28px; box-shadow: var(--raised-shadow); }
   .on.lit { background: var(--accent) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
   .exp:focus-visible, .on:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

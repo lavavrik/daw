@@ -407,3 +407,39 @@ test('a choice select keeps focus after a keyboard pick, releases it after a poi
   await expect(sel).toHaveValue('2');
   await expect(sel).not.toBeFocused();
 });
+
+test('strip knobs fit their 56 px cells; a strip whose upper controls scroll shows a fade cue', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await startAudio(page);
+  await addTrack(page, 'synth');
+  await openMixer(page);
+  const s = strip(page, 1);
+  await s.getByTestId('eq-expand').click();
+  await s.getByTestId('comp-expand').click();
+  // Every compact dial fits inside the strip's 112 px content box, two per row.
+  const fit = await s.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    const left = r.left + parseFloat(cs.paddingLeft);
+    const right = r.right - parseFloat(cs.paddingRight);
+    return [...el.querySelectorAll<HTMLElement>('.knob.mech')].map((k) => {
+      const b = k.getBoundingClientRect();
+      return { w: Math.round(b.width), inside: b.left >= left - 0.5 && b.right <= right + 0.5 };
+    });
+  });
+  expect(fit.length).toBeGreaterThan(4);
+  for (const k of fit) {
+    expect(k.w).toBeLessThanOrEqual(56);
+    expect(k.inside).toBe(true);
+  }
+  // At 720 the expanded EQ + Comp do not fit above the fader: the upper part scrolls, cued by a fade.
+  const upper = s.getByTestId('strip-upper');
+  const overflow = await upper.evaluate((u) => u.scrollHeight > u.clientHeight);
+  expect(overflow).toBe(true);
+  await expect(upper).toHaveClass(/fade-bot/);
+  await expect(upper).not.toHaveClass(/fade-top/);
+  await upper.evaluate((u) => { u.scrollTop = u.scrollHeight; });
+  await expect(upper).toHaveClass(/fade-top/);
+  await expect(upper).not.toHaveClass(/fade-bot/);
+  expect(await upper.evaluate((u) => getComputedStyle(u).maskImage)).toContain('linear-gradient');
+});

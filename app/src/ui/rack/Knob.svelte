@@ -492,6 +492,7 @@
   <div
     class={slider ? 'slider' : vfader ? 'vfader' : mech ? 'knob mech' : 'knob'}
     class:dragging
+    class:sm={mech && size === 'sm'}
     role="slider"
     tabindex="0"
     aria-label={name}
@@ -670,6 +671,8 @@
   .mech .readout.auto, .vfader .readout.auto { color: var(--c); }
   /* Mech dial: --dial (from `size`) square; the cell is 12 px wider for the label. */
   .knob.mech { width: calc(var(--dial) + 12px); gap: 3px; }
+  /* The compact dial's cell: 56 px, so two fit a mixer strip's 112 px inside (Strip.svelte) with no clipping. */
+  .knob.mech.sm { width: calc(var(--dial) + 10px); }
   .mdial { position: relative; width: var(--dial); height: var(--dial); flex: none; }
   .mdial svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
   .mdial .ticks { fill: none; stroke: var(--mech-tick); stroke-width: 2.4; stroke-linecap: round; }

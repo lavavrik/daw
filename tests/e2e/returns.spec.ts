@@ -125,8 +125,11 @@ test('sends section folds: closed by default, a mini bar opens it, knobs wear th
   const s = strip(page, 0);
   await expect(s.getByTestId('sends-expand')).toHaveAttribute('aria-expanded', 'false');
   await expect(s.getByTestId('knob-send_a')).toHaveCount(0);
+  await expect(s.getByTestId('send-bar-0')).toBeVisible();
   await s.getByTestId('send-bar-0').click();
   await expect(s.getByTestId('sends-expand')).toHaveAttribute('aria-expanded', 'true');
+  // Open = the knob grid only: the mini bars are the closed state.
+  await expect(s.locator('[data-testid^="send-bar-"]')).toHaveCount(0);
   await expect(s.getByTestId('knob-send_a')).toBeVisible();
   await expect(s.getByTestId('knob-send_a')).toContainText('Reverb');
   await expect(s.getByTestId('knob-send_b')).toContainText('Delay');
@@ -138,6 +141,7 @@ test('sends section folds: closed by default, a mini bar opens it, knobs wear th
   // The section closes again from its header.
   await s.getByTestId('sends-expand').click();
   await expect(s.getByTestId('knob-send_a')).toHaveCount(0);
+  await expect(s.getByTestId('send-bar-0')).toBeVisible();
 });
 
 test('with no returns the Sends section is not rendered', async ({ page }) => {

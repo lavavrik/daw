@@ -22,7 +22,7 @@ type DawWindow = {
       sampleRate: number;
     } | null;
     Op: Record<string, number>;
-    project: { arenaFloats: number; mode: string; tracks: { id: string; slot: number; patchName?: string; kind: string; rows?: { id: string }[]; clips?: unknown[] }[] };
+    project: { arenaFloats: number; mode: string; mixer: { returns: unknown[] }; tracks: { id: string; slot: number; patchName?: string; kind: string; rows?: { id: string }[]; clips?: unknown[] }[] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     actions: Record<string, (...args: any[]) => any>;
   };
@@ -285,9 +285,9 @@ test('spec 6 mix stays under the browser CPU budget', async ({ page }) => {
 });
 
 /**
- * Plan 29: the same mix with 8 busy returns (slots 0..3 Reverb, 4..7 Delay;
- * slots 0 and 1 are the default Reverb and Delay) and every track at -12 dB
- * on all 8 sends. Same budgets as spec 6.
+ * Plan 29: the same mix with 8 busy returns (4 Reverb + 4 Delay: the default
+ * Reverb and Delay plus 3 + 3 added) and every track at -12 dB on all 8
+ * sends. Same budgets as spec 6.
  */
 test('spec 6 mix with 8 returns stays under the browser CPU budget', async ({ page }) => {
   test.setTimeout(60_000);
@@ -298,6 +298,7 @@ test('spec 6 mix with 8 returns stays under the browser CPU budget', async ({ pa
     // Default layout has Reverb (slot 0) and Delay (slot 1); add 3 + 3 for 4 + 4.
     const kinds = ['reverb', 'reverb', 'reverb', 'delay', 'delay', 'delay'];
     for (const k of kinds) if (!a.addReturn(k)) return false;
+    if (project.mixer.returns.length !== 8) return false;
     for (const t of project.tracks) {
       for (const s of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) a.setMix(t.id, `send_${s}`, -12);
     }

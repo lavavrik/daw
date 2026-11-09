@@ -69,7 +69,7 @@ Return channel `32 + k` is slot `k`. Each slot has a **kind**: Off, Reverb or
 Delay, set with `OP_RETURN_KIND` (`a` = slot 0..7, `b` = kind 0..2;
 `Mixer::set_return_kind`). A new project and `OP_RESET_ALL` give slot 0 =
 Reverb, slot 1 = Delay and slots 2..7 Off. A slot owns both a Reverb and a
-Delay (about 1.25 MiB at 48 kHz, ~10 MiB for all eight, allocated in
+Delay (about 1.6 MiB at 48 kHz: ~1 MiB Delay + ~0.6 MiB Reverb; ~13 MiB for all eight, allocated in
 `Mixer::new`); only the one matching the kind runs.
 
 - **Params.** A return takes both the `rev_*` and the `delay_*` groups, whatever
@@ -638,18 +638,22 @@ Plan 29 (up to 8 returns), native, release, dev Mac:
 | Scenario | Native (share of real time) |
 |---|---|
 | Spec 6, Pattern mode, 2 returns (default layout) | 9.4–9.5% |
-| Spec 6 with 8 busy returns (slots 0..3 Reverb, 4..7 Delay, every track at −12 dB on all 8 sends): `spec6_mix_with_8_returns_renders_under_budget` | 10.0% |
+| Spec 6 with 8 busy returns (4 Reverb + 4 Delay, every track at −12 dB on all 8 sends): `spec6_mix_with_8_returns_renders_under_budget` | 10.0% |
 | Same as the 2-return mix plus 6 never-fed slots (`idle_returns_cost_nothing`, median of 5) | 9.25% vs 9.38%, ×0.986 (cap ×1.03) |
 | Retyping all 8 busy returns in one block (Reverb ↔ Delay), worst single block across the switch (`retyping_all_returns_fits_in_a_block`) | 0.72–0.81 ms against a 2.67 ms block (steady-state worst 0.54–0.65 ms) |
 
-Plan 29, browser (`spec 6 mix with 8 returns`: the spec 6 Song-mode mix, slots
-0..3 Reverb and 4..7 Delay, every track at -12 dB on all 8 sends; audio-thread
+The 2-return row (9.4–9.5%) reads higher than the older rows above (8.1–8.6%)
+only because of machine/day drift, not a regression: a base-vs-head measurement
+in the same session read 8.6% (before plan 29) against 8.6–8.7% (head).
+
+Plan 29, browser (`spec 6 mix with 8 returns`: the spec 6 Song-mode mix, 4 Reverb
++ 4 Delay returns, every track at -12 dB on all 8 sends; audio-thread
 CPU, mean over 10 s, dev Mac, serial Playwright project):
 
 | Scenario | Browser (audio-thread CPU) | Blocks |
 |---|---|---|
 | Spec 6, Song mode, 2 returns (same runs) | 6.3–7.4% (max 8.8%) | 100% |
-| Spec 6, Song mode, 8 busy returns | 6.2% (max 7.4%) in the isolated serial runs; 9.2–13.7% (max 16.7%) in full `npm run test:e2e` runs | 100% |
+| Spec 6, Song mode, 8 busy returns | 6.2% (max 7.4%) in the isolated serial runs; 9.2–16.0% (max 18.8%) in full `npm run test:e2e` runs | 100% |
 
 The run-to-run drift (machine load from other work) is larger than the cost of
 the extra returns; the budget (< 0.6, no new dropouts, blocks >= 95%) holds.

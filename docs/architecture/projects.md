@@ -266,7 +266,9 @@ identical on every run. Its comments hold each sound's recipe and its
 measured peak / length / spectral centroid; it shares its building blocks
 with `make-starter-kit.mjs` (`scripts/lib/synth.mjs`). Every sound is
 normalised to a -1 dBFS peak, like the starter kit, so loading a kit over a
-track keeps its balance (the row gains the user set mean the same thing). `state/kits.test.ts` pins the output hashes (`node scripts/make-kits.mjs
+track keeps its balance (the row gains the user set mean the same thing).
+Kicks, claps and snares fade in over 1.5 ms (their first sample is 0).
+`state/kits.test.ts` pins the output hashes (`node scripts/make-kits.mjs
 --hashes`), checks the files on disk are that output, every kit has all
 eight roles and the kits stay under the 3 MB budget (about 0.9 MB).
 
@@ -295,8 +297,10 @@ file's sample id is remembered once its load succeeded (keyed
 kit load or kit track reuses it while the project keeps its bytes and its
 deferred load never failed. Auditioning kits therefore costs no new sample
 ids (the session has `MAX_SAMPLES`) and no new sample memory. The table is
-per session: a new `p.generation` starts an empty one (ids start over); an
-audio restart keeps ids, so it keeps the table.
+per session: a new `p.generation` starts an empty one (ids start over), and
+an id is remembered only while the session that imported it is still the
+current one (a deferred load settling after a replace is not); an audio
+restart keeps ids, so it keeps the table.
 
 Failures are reported **once per load**, naming the kit and every sound that
 didn't load ("Garage kit: 2 sounds didn't load — Clap: HTTP 404; Rim: …"),
@@ -333,6 +337,7 @@ counts as failed.
 (`loadDefaultKit`) is still landing, the kit load waits for it before
 committing (`kitSamples.ts trackDefaultKitLoad` / `defaultKitLoad`), so the
 starter samples are part of the "before" and one undo restores them.
+
 ## Validation (`validate`)
 
 Never throws, never lets an out-of-range value through. Unknown fields are

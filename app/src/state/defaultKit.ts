@@ -165,7 +165,8 @@ async function fillDefaultKit(p: Project, engine: ImportEngine & CommandSink, tr
       continue;
     }
     const attach = (id: number) => {
-      rememberKitSample(p, STARTER_KIT_ID, j.kit.file, id); // a starter-kit load reuses it (kitSamples.ts)
+      // A starter-kit load reuses it (kitSamples.ts); only in the session that imported it.
+      if (p.generation === gen) rememberKitSample(p, STARTER_KIT_ID, j.kit.file, id);
       if (attachKitSample(p, engine, trackId, j.rowId, id) && p.version !== v0) deps.landedAfterEdit?.();
     };
     if (r.deferred) deferSampleAssign(r.id, j.kit.name, attach);

@@ -21,6 +21,7 @@ import { installSampleLoads } from './sampleLoads';
 import { markBusy, markIdle } from './idle';
 import { HostErr } from '../audio/protocol';
 import { loadDefaultKit } from './defaultKit';
+import { knownKitSample } from './kitSamples';
 import { sampleFile } from './sampleFiles';
 
 const ROLES = [...KIT_ROLES];
@@ -272,6 +273,49 @@ describe('kit samples are reused within a session (review round 1 #2)', () => {
     expect(fetched).toEqual([]);
     expect(p.nextSampleId).toBe(n);
     expect(rows(p).map((r) => r.sampleId)).toEqual(kick.rows.map((r) => r.sampleId));
+  });
+});
+
+describe('a deferred sound settling after the session changed is not remembered (final review #2)', () => {
+  it('kit load: its id never enters the new session\'s table', async () => {
+    const { p, engine, t } = await fresh({ sampleCode: (id) => (id === 2 ? Err.DEFERRED : Err.OK) });
+    const uninstall = installSampleLoads(p, engine);
+    try {
+      const { d, fetched } = deps();
+      const loading = loadKitOntoTrack(p, engine, t.id, 'garage', d);
+      await new Promise((r) => setTimeout(r, 20));
+      p.generation++; // a load replaced the session (still loading: no markIdle yet)
+      engine.onSampleLoaded!(2, Err.OK); // the parked load settles OK anyway
+      expect(await loading).toBe(false);
+      expect(knownKitSample(p, 'garage', 'closed-hat.wav')).toBeNull();
+      expect(knownKitSample(p, 'garage', 'kick.wav')).toBeNull();
+      fetched.length = 0;
+      await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+      expect(fetched).toHaveLength(8); // nothing reused from the old session
+    } finally {
+      uninstall();
+    }
+  });
+
+  it('default kit: same', async () => {
+    const p = new Project();
+    const engine = {
+      sampleRate: 48000, context: fakeDecoder, send(op: number) { commandEdits(p, op); return true; },
+      loadSample: async (id: number) => (id === 0 ? Err.DEFERRED : Err.OK),
+      onSampleLoaded: undefined as ((id: number, code: number) => void) | undefined,
+    };
+    const t = addDefaultDrumTrack(p, engine)!;
+    const uninstall = installSampleLoads(p, engine);
+    try {
+      const kitDeps: KitDeps = { fetchFile: async (file) => new File([fakeAudio(60)], file, { type: 'audio/wav' }), onError: () => {} };
+      await loadDefaultKit(p, engine, t.id, kitDeps); // the kick (id 0) waits for Stop
+      expect(knownKitSample(p, 'starter', 'clap.wav')).toBe(1);
+      p.generation++;
+      engine.onSampleLoaded!(0, Err.OK);
+      expect(knownKitSample(p, 'starter', 'kick-punch.wav')).toBeNull();
+    } finally {
+      uninstall();
+    }
   });
 });
 

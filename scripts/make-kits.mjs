@@ -39,7 +39,10 @@
 // level-normalised third-octave spectra against the starter kit's sound for
 // the same role is over 3 dB for every Drum Machine role (kick 3.7, clap
 // 7.8, closed hat 4.7, open hat 4.8, snare 11.5, rim 11.9, shaker 7.1, perc
-// 7.8), and Deep's kick is 3.8 dB from the starter's kick-deep.
+// 7.8), and Deep's kick is 3.8 dB from the starter's kick-deep. Dusty's
+// hats keep their own sound against Deep's noise-led ones (final review:
+// closed 4.8, open 4.0 dB) while everything under 300 Hz is 74 dB down.
+// Claps and snares fade in over 1.5 ms like the kicks (first sample 0).
 
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -232,6 +235,9 @@ function drum({ seconds, f, bend, tau, decay, over = null, tick = 0, seed }) {
  * random level (-30 to -16 dB under the peak) and polarity. `outHp`
  * high-passes the whole result (two stages): for hats and shakers, whose
  * coarse quantisation would otherwise spread its error down into the lows.
+ * 700 Hz (final review): everything under 300 Hz stays 74 dB or more down,
+ * while the crush grit between 700 Hz and 2 kHz is kept; it is what tells
+ * Dusty's hats from Deep's noise-led ones (2 kHz made them near twins).
  */
 function dust(x, { lp, hold, bits, hissDb, crackle, outHp = 0, seed }) {
   const n = makeNoise(seed);
@@ -265,6 +271,17 @@ function dust(x, { lp, hold, bits, hissDb, crackle, outHp = 0, seed }) {
     const y = held + hp2.process(hp1.process(grit));
     x[i] = out1 ? out2.process(out1.process(y)) : y;
   }
+  return x;
+}
+
+/**
+ * Fade the first `seconds` in linearly (1.5 ms): the sound starts from 0,
+ * never with a step. Kicks do it inside kick(); claps and snares get it
+ * here, after any lo-fi pass (renderKits), so even Dusty's start at 0.
+ */
+function fadeIn(x, seconds = 0.0015) {
+  const n = Math.round(seconds * SR);
+  for (let i = 0; i < Math.min(n, x.length); i++) x[i] *= i / n;
   return x;
 }
 
@@ -353,27 +370,30 @@ export const KIT_SOUNDS = {
     Kick: () => dust(kick({ seconds: 0.55, f0: 150, f1: 52, tau: 0.03, decay: 0.24, drive: 3, click: 0.3, seed: 400 }), { lp: 5000, hold: 4, bits: 8, hissDb: 38, crackle: 6, seed: 401 }),
     // 4 bursts 11 ms apart, BP 1.25 kHz, 0.13 s tail; 16 kHz / 6 bit. -1.0 dB / 0.42 s / 6.3 kHz (2.5 kHz)
     Clap: () => dust(clap({ seconds: 0.42, bursts: 4, spacing: 0.011, burstDecay: 0.005, tail: 0.13, tailLevel: 0.7, bp: 1250, q: 1.3, hp: 500, seed: 410 }), { lp: 7000, hold: 3, bits: 6, hissDb: 34, crackle: 8, seed: 411 }),
-    // Squares ×1.8, LP 9 kHz, 35 ms; 24 kHz / 6 bit, then HP 2 kHz. -1.0 dB / 0.12 s / 10.1 kHz (8.9 kHz)
-    'Closed hat': () => dust(hat({ seconds: 0.12, decay: 0.035, scale: 1.8, noise: 0.5, bp: 8500, bpQ: 0.7, hp: 5000, lp: 9000, seed: 420 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 2000, seed: 421 }),
-    // Same, 0.22 s decay. -1.0 dB / 0.45 s / 10.1 kHz (8.8 kHz)
-    'Open hat': () => dust(hat({ seconds: 0.45, decay: 0.22, scale: 1.8, noise: 0.5, bp: 8500, bpQ: 0.7, hp: 5000, lp: 9000, seed: 430 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 2000, seed: 431 }),
+    // Squares ×1.8, LP 9 kHz, 35 ms; 24 kHz / 6 bit, then HP 700 Hz. -1.0 dB / 0.12 s / 9.9 kHz (8.8 kHz)
+    'Closed hat': () => dust(hat({ seconds: 0.12, decay: 0.035, scale: 1.8, noise: 0.5, bp: 8500, bpQ: 0.7, hp: 5000, lp: 9000, seed: 420 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 700, seed: 421 }),
+    // Same, 0.22 s decay. -1.0 dB / 0.45 s / 10.0 kHz (8.7 kHz)
+    'Open hat': () => dust(hat({ seconds: 0.45, decay: 0.22, scale: 1.8, noise: 0.5, bp: 8500, bpQ: 0.7, hp: 5000, lp: 9000, seed: 430 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 700, seed: 431 }),
     // 180 + 310 Hz heads, wires HP 1.2 kHz (0.18 s); 16 kHz / 6 bit. -1.0 dB / 0.34 s / 8.1 kHz (4.6 kHz)
     Snare: () => dust(snare({ seconds: 0.34, tones: [[180, 0.6], [310, 0.4]], toneDecay: 0.06, noiseHp: 1200, noiseLp: 9000, noiseDecay: 0.18, toneLevel: 0.7, noiseLevel: 0.9, seed: 440 }), { lp: 8000, hold: 3, bits: 6, hissDb: 34, crackle: 8, seed: 441 }),
     // 1.6 kHz + 450 Hz, 12 ms; 16 kHz / 7 bit. -1.0 dB / 0.10 s / 5.2 kHz (1.6 kHz)
     Rim: () => dust(ping({ seconds: 0.1, partials: [[1600, 0.6], [450, 0.4]], decay: 0.012, tick: 0.6, tickBp: 2000, seed: 450 }), { lp: 7000, hold: 3, bits: 7, hissDb: 34, crackle: 8, seed: 451 }),
-    // HP 5 kHz, 20 ms attack, 50 ms; 24 kHz / 6 bit, then HP 2 kHz. -1.0 dB / 0.18 s / 10.3 kHz (9.1 kHz)
-    Shaker: () => dust(shaker({ seconds: 0.18, strokes: [[0, 1]], attack: 0.02, decay: 0.05, hp: 5000, bp: 7000, seed: 460 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 2000, seed: 461 }),
+    // HP 5 kHz, 20 ms attack, 50 ms; 24 kHz / 6 bit, then HP 700 Hz. -1.0 dB / 0.18 s / 10.1 kHz (9.0 kHz)
+    Shaker: () => dust(shaker({ seconds: 0.18, strokes: [[0, 1]], attack: 0.02, decay: 0.05, hp: 5000, bp: 7000, seed: 460 }), { lp: 9000, hold: 2, bits: 6, hissDb: 30, crackle: 10, outHp: 700, seed: 461 }),
     // Bongo: 420 Hz from ×1.25, slap ×2.1, 60 ms; 12 kHz / 7 bit. -1.0 dB / 0.25 s / 3.4 kHz (489 Hz)
     Perc: () => dust(drum({ seconds: 0.25, f: 420, bend: 1.25, tau: 0.012, decay: 0.06, over: [2.1, 0.3, 0.02], tick: 0.2, seed: 470 }), { lp: 6000, hold: 4, bits: 7, hissDb: 36, crackle: 6, seed: 471 }),
   },
 };
+
+/** Roles whose sounds get fadeIn (kicks ramp in kick() itself). */
+const ONSET_FADE = new Set(['Clap', 'Snare']);
 
 /** Every kit file as `{ path: "<kit>/<file>", bytes }`, in a fixed order. */
 export function renderKits() {
   const out = [];
   for (const [kit, sounds] of Object.entries(KIT_SOUNDS)) {
     for (const [role, file] of Object.entries(ROLE_FILES)) {
-      out.push({ path: `${kit}/${file}`, bytes: wav16(finish(fadeTail(sounds[role]()))) });
+      out.push({ path: `${kit}/${file}`, bytes: wav16(finish(fadeTail(ONSET_FADE.has(role) ? fadeIn(sounds[role]()) : sounds[role]()))) });
     }
   }
   return out;

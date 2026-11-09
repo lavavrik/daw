@@ -97,7 +97,10 @@ async function importKit(
   const deferred: Promise<void>[] = [];
   const loaded = (s: KitSound, id: number) => {
     ids.set(s.role, id);
-    rememberKitSample(p, kit.id, s.file, id);
+    // Only for the session that imported it: a deferred load settling after
+    // a replace must not land in the new session's table (its id may be
+    // another sample there).
+    if (p.generation === gen) rememberKitSample(p, kit.id, s.file, id);
   };
   for (const [i, s] of todo.entries()) {
     const got = await orEnded(p, gen, files[i]);

@@ -117,7 +117,8 @@
     const r = Math.round(gr * 10) / 10;
     if (r === shownGr) return r > 0;
     shownGr = r;
-    grEl.textContent = r > 0 ? `−${r.toFixed(1)} dB` : '0.0 dB';
+    // Capped at 99.9 so the chip's fixed width (8ch, CSS below) always fits: a value never resizes the strip.
+    grEl.textContent = r > 0 ? `−${Math.min(99.9, r).toFixed(1)} dB` : '0.0 dB';
     grEl.dataset.grDb = r.toFixed(1);
     return r > 0;
   }));
@@ -246,7 +247,7 @@
     <Section title="Comp" icon={ArrowsInLineVertical} {name} testid="comp" on={val('comp_on') === 1} ontoggle={() => set('comp_on', val('comp_on') ? 0 : 1)}>
       {#snippet summary()}
         <span class="sc" data-testid="sc-label" title={`Sidechain (key) source: ${scLabel === 'none' ? 'none — the compressor listens to this track itself' : scLabel}`}>SC: {scLabel}</span>
-        <span class="gr" class:dim={val('comp_on') !== 1} title="Compressor gain reduction">GR <span bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span></span>
+        <span class="gr" class:dim={val('comp_on') !== 1} title="Compressor gain reduction">GR <span class="grn" bind:this={grEl} data-testid="gr" data-gr-db="0.0">0.0 dB</span></span>
       {/snippet}
       <label class="scpick">
         <span>Sidechain</span>
@@ -360,6 +361,8 @@
   .sc { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .gr { display: block; color: var(--text-2); font: var(--fs-lbl) var(--font-mono); }
   .gr.dim { opacity: 0.5; }
+  /* GR readouts: fixed width for the widest text ("−99.9 dB", 8ch) so a changing value never resizes the strip. */
+  .grn, .grv { display: inline-block; min-width: 8ch; text-align: center; font-variant-numeric: tabular-nums; box-sizing: content-box; }
   .scpick { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 1px; width: 100%; font-size: var(--fs-lbl); color: var(--text-2); }
   .scpick select { width: 100%; }
   /* A row under an engraved divider (--mech-divider). */

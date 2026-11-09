@@ -445,3 +445,25 @@ test('strip knobs fit their 56 px cells; a strip whose upper controls scroll sho
   await expect(upper).not.toHaveClass(/fade-bot/);
   expect(await upper.evaluate((u) => getComputedStyle(u).maskImage)).toContain('linear-gradient');
 });
+
+test('a GR readout changing value keeps its size, so nothing beside it moves (fixed-width chip)', async ({ page }) => {
+  await startAudio(page);
+  await openMixer(page);
+  const master = page.getByTestId('strip-master');
+  const gr = master.getByTestId('gr');
+  await expect(gr).toBeVisible();
+  const seen: { chip: number; knob: number }[] = [];
+  // The engine writes this text every frame; force the narrowest and widest forms.
+  for (const text of ['0.0 dB', '−0.1 dB', '−12.4 dB', '−99.9 dB', '0.0 dB']) {
+    seen.push(await gr.evaluate((el, t) => {
+      el.textContent = t;
+      const strip = el.closest('[data-testid="strip-master"]')!;
+      const knob = strip.querySelector('[data-testid="knob-limiter_ceiling"]')!;
+      return { chip: el.getBoundingClientRect().width, knob: knob.getBoundingClientRect().left };
+    }, text));
+  }
+  for (const s of seen) {
+    expect(Math.abs(s.chip - seen[0].chip)).toBeLessThan(0.5);
+    expect(Math.abs(s.knob - seen[0].knob)).toBeLessThan(0.5);
+  }
+});

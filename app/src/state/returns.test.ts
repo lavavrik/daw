@@ -94,6 +94,33 @@ describe('return actions', () => {
     expect(addReturn(p, sink, 'reverb', 'Hall')!.name).toBe('Hall');
   });
 
+  it('add validates a given name like rename: trimmed, 1..24, else no edit', () => {
+    const { p, sink } = rig();
+    const before = serialize(p);
+    expect(addReturn(p, sink, 'reverb', '   ')).toBeNull();
+    expect(addReturn(p, sink, 'reverb', '')).toBeNull();
+    expect(addReturn(p, sink, 'reverb', 'x'.repeat(25))).toBeNull();
+    expect(serialize(p)).toEqual(before);
+    expect(p.history!.canUndo).toBe(false);
+    expect(addReturn(p, sink, 'reverb', '  Hall  ')!.name).toBe('Hall');
+    expect(addReturn(p, sink, 'delay', 'x'.repeat(24))).not.toBeNull();
+  });
+
+  it('add resets a stray non-default send to the new slot (defensive), with a MIX_SET', () => {
+    const { p, sink, sent } = rig();
+    const a = addDrumTrack(p, sink)!;
+    const ch = p.mixer.channels[a.id];
+    const send = mixParam(sendParam(2)), pre = mixParam(sendPreParam(2));
+    ch.params[send.id] = -6; // bypasses the guards: slot 2 has no return
+    ch.params[pre.id] = 1;
+    sent.length = 0;
+    expect(addReturn(p, sink, 'reverb')!.slot).toBe(2);
+    expect(ch.params[send.id]).toBe(send.default);
+    expect(ch.params[pre.id]).toBe(pre.default);
+    expect(sent).toContainEqual([Op.MIX_SET, a.slot, send.id, send.default, 0]);
+    expect(sent).toContainEqual([Op.MIX_SET, a.slot, pre.id, pre.default, 0]);
+  });
+
   it('add refuses at 8', () => {
     const { p, sink } = rig();
     for (let i = 2; i < 8; i++) expect(addReturn(p, sink, 'reverb')).not.toBeNull();

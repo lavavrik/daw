@@ -92,7 +92,8 @@ export function nextReturnName(p: Project, kind: ReturnKind): string {
 
 /**
  * Add a return of `kind` on the lowest free slot: one edit "Add return".
- * Null (no edit) when all MAX_RETURNS slots are taken. The name defaults to
+ * Null (no edit) when all MAX_RETURNS slots are taken or a given `name` is
+ * empty / over RETURN_NAME_MAX after trimming. The name defaults to
  * nextReturnName; the id is a UUID. The engine gets RETURN_KIND slot 0, then
  * RETURN_KIND slot kind: a deleted return's slot is already Off, but the
  * explicit Off makes the add correct whatever the engine still holds (it
@@ -102,10 +103,27 @@ export function nextReturnName(p: Project, kind: ReturnKind): string {
 export function addReturn(p: Project, sink: CommandSink, kind: ReturnKind, name?: string): ReturnState | null {
   const slot = freeSlot(p);
   if (slot === null) return null;
+  // Same rule as renameReturn: trimmed, 1..RETURN_NAME_MAX. A bad name is refused, not clamped.
+  const given = name?.trim();
+  if (given !== undefined && (given.length < 1 || given.length > RETURN_NAME_MAX)) return null;
   return edit(p, 'Add return', () => {
-    p.mixer.returns.push(newReturn(crypto.randomUUID(), kind, name ?? nextReturnName(p, kind), slot));
+    p.mixer.returns.push(newReturn(crypto.randomUUID(), kind, given ?? nextReturnName(p, kind), slot));
     sink.send(Op.RETURN_KIND, slot, KIND_CODE.off);
     sink.send(Op.RETURN_KIND, slot, KIND_CODE[kind]);
+    // Defensive: no track may arrive with a send to this slot already set
+    // (delete and the loader reset orphans), but if one did, the new return
+    // would start loud. Reset it to the default, like deleteReturn does (the
+    // same inline path: mixer-actions imports this module, not the reverse).
+    for (const t of p.tracks) {
+      const ch = p.mixer.channels[t.id];
+      if (!ch) continue;
+      for (const pname of [sendParam(slot), sendPreParam(slot)]) {
+        const def = mixParam(pname);
+        if (ch.params[def.id] === def.default) continue;
+        ch.params[def.id] = def.default;
+        sink.send(Op.MIX_SET, t.slot, def.id, def.default);
+      }
+    }
     return p.mixer.returns[p.mixer.returns.length - 1]; // the reactive proxy
   });
 }

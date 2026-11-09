@@ -6,10 +6,17 @@
 // a return preset: its EQ and its effect; a master preset: its EQ and the
 // limiter). Whole sections, so presets are absolute: applying one after
 // another never leaves a knob of the first one behind. A preset never holds
-// fader, pan, mute or solo (the mix balance is the user's), and never the
-// sidechain key (Flat leaves a key in place; with the comp off it does
-// nothing). Every value is inside the mixer_catalog.json range
-// (mixerPresets.test.ts checks every one).
+// fader, pan, mute or solo (the mix balance is the user's). Every value is
+// inside the mixer_catalog.json range (mixerPresets.test.ts checks every
+// one).
+//
+// A KEYED track strip (a sidechain key: Duck to kick, or a key picked by
+// hand) is a comp the user set up on purpose, so applyPreset treats it
+// specially (plan 27 Task 1 review, ruling 1):
+//   - a track preset other than Flat leaves the comp section alone (the duck
+//     survives) and applies only its EQ and sends;
+//   - Flat clears the key and turns the comp off, in the same edit: Flat
+//     means a clean strip.
 //
 // Why each value: docs/architecture/mixer.md "Strip presets" (the table).
 // The EQ the values talk to (engine/src/dsp/eq.rs): HP 12 dB/oct (20 Hz =
@@ -17,7 +24,7 @@
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
 import { edit } from './edits';
-import { setMix } from './mixer-actions';
+import { setMix, setSidechain } from './mixer-actions';
 import type { MixChannelTarget } from './mixer-actions';
 import type { Project } from './project.svelte';
 
@@ -56,11 +63,11 @@ export const MIX_PRESETS: readonly MixPreset[] = [
     eq_on: 1, eq_hp: 30, eq_low: 3, eq_mid_freq: 400, eq_mid_gain: -3, eq_mid_q: 1.2, eq_high: 1.5,
     comp_on: 1, comp_threshold: -14, comp_ratio: 4, comp_attack: 10, comp_release: 80, comp_makeup: 3,
   }),
-  track('bass-tidy', 'Bass tidy', 'Sub rumble and mud cut, top fizz tamed, an even level; dry', {
-    eq_on: 1, eq_hp: 35, eq_low: 0, eq_mid_freq: 250, eq_mid_gain: -3, eq_mid_q: 1, eq_high: -3,
+  track('bass-tidy', 'Bass tidy', 'Sub rumble and mud cut, the very top softened, an even level; dry', {
+    eq_on: 1, eq_hp: 30, eq_low: 0, eq_mid_freq: 250, eq_mid_gain: -3, eq_mid_q: 1, eq_high: -3,
     comp_on: 1, comp_threshold: -20, comp_ratio: 4, comp_attack: 15, comp_release: 120, comp_makeup: 3,
   }),
-  track('hats-air', 'Hats air', 'Everything under 300 Hz out, harshness down, air up; a touch of room', {
+  track('hats-air', 'Hats air', 'For a hats or percussion track: everything under 300 Hz out (removes the kick on a full-kit strip), harshness down, air up; a touch of room', {
     eq_on: 1, eq_hp: 300, eq_low: 0, eq_mid_freq: 3500, eq_mid_gain: -2, eq_mid_q: 1.5, eq_high: 3,
     send_a: -22,
   }),
@@ -74,8 +81,8 @@ export const MIX_PRESETS: readonly MixPreset[] = [
     comp_on: 1, comp_threshold: -18, comp_ratio: 3, comp_attack: 5, comp_release: 100, comp_makeup: 2,
     send_a: -14, send_b: -16,
   }),
-  track('lead-presence', 'Lead presence', 'Low end out, 3 kHz forward, a little air, steady level, some space', {
-    eq_on: 1, eq_hp: 120, eq_low: 0, eq_mid_freq: 3000, eq_mid_gain: 3, eq_mid_q: 0.9, eq_high: 1.5,
+  track('lead-presence', 'Lead presence', 'Low end out, 3 kHz a little forward, a little air, steady level, some space', {
+    eq_on: 1, eq_hp: 120, eq_low: 0, eq_mid_freq: 3000, eq_mid_gain: 2, eq_mid_q: 1.2, eq_high: 1.5,
     comp_on: 1, comp_threshold: -18, comp_ratio: 3, comp_attack: 8, comp_release: 150, comp_makeup: 2,
     send_a: -16, send_b: -18,
   }),
@@ -97,7 +104,7 @@ export const MIX_PRESETS: readonly MixPreset[] = [
     params: { ...DELAY_BASE, eq_on: 1, eq_hp: 300, delay_time: division('1/8'), delay_feedback: 0.35, delay_ping_pong: 1, delay_high_cut: 6000 } },
   { id: 'delay-dub', name: '3/16 dub', kind: 'delay', blurb: 'Dotted-eighth echo, long and dark, in the middle',
     params: { ...DELAY_BASE, eq_on: 1, eq_hp: 400, eq_mid_freq: 800, eq_mid_gain: 2, delay_time: division('3/16'), delay_feedback: 0.55, delay_ping_pong: 0, delay_high_cut: 2500 } },
-  { id: 'delay-slap', name: '1/4 slap', kind: 'delay', blurb: 'One quarter-note repeat, barely a second',
+  { id: 'delay-slap', name: '1/4 slap', kind: 'delay', blurb: 'A single soft repeat one beat (a quarter note) later, then gone',
     params: { ...DELAY_BASE, eq_on: 1, eq_hp: 250, delay_time: division('1/4'), delay_feedback: 0.15, delay_ping_pong: 0, delay_high_cut: 5000 } },
 
   // ---- the master -----------------------------------------------------------
@@ -125,7 +132,9 @@ export function presetKindOf(p: Project, channel: MixChannelTarget): PresetKind 
 /**
  * Apply preset `presetId` to `channel` (a track id, 'reverb', 'delay' or
  * 'master'): every param of the preset through setMix (state + MIX_SET), in
- * catalog order, as ONE undo entry "Preset: <name>". False, with nothing
+ * catalog order, as ONE undo entry "Preset: <name>". On a keyed track strip
+ * (header): Flat also clears the key; any other track preset skips the comp
+ * section. False, with nothing
  * changed or sent, for an unknown preset or channel, or a preset of another
  * strip kind (a track preset on a return).
  *
@@ -137,10 +146,14 @@ export function presetKindOf(p: Project, channel: MixChannelTarget): PresetKind 
 export function applyPreset(p: Project, sink: CommandSink, channel: MixChannelTarget, presetId: string): boolean {
   const preset = presetById(presetId);
   if (!preset || presetKindOf(p, channel) !== preset.kind) return false;
+  const keyed = preset.kind === 'track' && !!p.mixer.channels[channel]?.key;
+  const flat = preset.id === 'flat';
   return edit(p, `Preset: ${preset.name}`, () => {
+    if (keyed && flat) setSidechain(p, sink, channel, null);
     for (const d of MIX_PARAMS) {
       const v = preset.params[d.name];
-      if (v !== undefined) setMix(p, sink, channel, d.name, v);
+      if (v === undefined || (keyed && !flat && d.group === 'comp')) continue;
+      setMix(p, sink, channel, d.name, v);
     }
     return true;
   });

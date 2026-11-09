@@ -7,6 +7,7 @@ import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
 import type { CommandSink } from './actions';
 import { edit } from './edits';
+import { flashHint } from './banners.svelte';
 import { rowHasRole } from './kits';
 import type { ChannelState, Project, SidechainKey } from './project.svelte';
 
@@ -226,4 +227,53 @@ export function duckToKick(p: Project, sink: CommandSink, trackId: string): Duck
     for (const [name, v] of Object.entries(DUCK_TO_KICK)) setMix(p, sink, trackId, name, v);
     return { ok: true } as const;
   });
+}
+
+/** Does this channel's comp hold exactly Duck to kick's settings? */
+export function hasDuckComp(ch: ChannelState): boolean {
+  return Object.entries(DUCK_TO_KICK).every(([name, v]) => ch.params[mixParam(name).id] === v);
+}
+
+/**
+ * Before a drum row or a track is deleted: the channels whose sidechain key
+ * that deletion clears (keyed to `trackId`, to its row `row` when given),
+ * each with what is going ("kick" when the key was a Kick row). Hand the
+ * result to unduckLostKeys after the deletion (state/actions.ts
+ * removeDrumRow, removeTrack).
+ */
+export function keysLostBy(p: Project, trackId: string, row?: number): { channelId: string; what: string }[] {
+  const src = p.tracks.find((t) => t.id === trackId);
+  const lost: { channelId: string; what: string }[] = [];
+  for (const [channelId, ch] of Object.entries(p.mixer.channels)) {
+    const k = ch.key;
+    if (!k || k.trackId !== trackId || channelId === trackId) continue;
+    if (row !== undefined && k.row !== row) continue;
+    const rowName = src?.kind === 'drum' && k.row !== null ? src.rows[k.row]?.name : undefined;
+    lost.push({ channelId, what: rowName !== undefined && rowHasRole(rowName, 'Kick') ? 'kick' : (rowName ?? src?.name ?? 'key') });
+  }
+  return lost;
+}
+
+/**
+ * Duck to kick without its kick (plan 27 Task 1 review, ruling 6): when a
+ * deletion clears a strip's key, a comp still set to DUCK_TO_KICK (−30 dB,
+ * 8:1, 1 ms) would now listen to the strip itself and squash it by
+ * 15-20 dB. So, in the deleting edit, each such strip's comp is switched off
+ * (comp_on 0 only: the other comp values stay, so turning it back on and
+ * re-keying restores the duck), and the status line says so: "Duck to kick
+ * removed from Bass (kick deleted)". A strip whose comp the user changed
+ * since is left alone: its settings are their own.
+ */
+export function unduckLostKeys(p: Project, sink: CommandSink, lost: { channelId: string; what: string }[]) {
+  const names: string[] = [];
+  const whats = new Set<string>();
+  for (const { channelId, what } of lost) {
+    const ch = p.mixer.channels[channelId];
+    const t = p.tracks.find((x) => x.id === channelId);
+    if (!ch || !t || ch.key || !hasDuckComp(ch)) continue;
+    setMix(p, sink, channelId, 'comp_on', 0);
+    names.push(t.name);
+    whats.add(what);
+  }
+  if (names.length) flashHint(`Duck to kick removed from ${names.join(', ')} (${[...whats].join(', ')} deleted)`);
 }

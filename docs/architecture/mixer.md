@@ -283,6 +283,8 @@ right end of its header, `strip-presets`). It opens a floating card
 content) listing the strip kind's presets (`preset-<id>`), and on a track
 strip **Duck to kick** (`preset-duck`). Code: `app/src/state/mixerPresets.ts`
 (tables, `applyPreset`), `app/src/state/mixer-actions.ts` (`duckToKick`).
+In the card, ↑ / ↓ move between the items (wrapping), Home / End jump to the
+first / last, and Esc closes it and puts the focus back on the button.
 
 **Rules.**
 - A preset holds absolute values for **whole sections** of its strip kind:
@@ -293,8 +295,15 @@ strip **Duck to kick** (`preset-duck`). Code: `app/src/state/mixerPresets.ts`
   Applying one after another never leaves a knob of the first one behind;
   anything a preset does not list is the catalog default.
 - A preset never holds fader, pan, mute or solo (the balance is the user's),
-  nor the sidechain key. **Flat** keeps a key; with the comp off, it does
-  nothing.
+  nor the sidechain key.
+- **A keyed track strip** (a sidechain key: Duck to kick, or one picked by
+  hand) holds a comp the user set up on purpose:
+  - a track preset other than Flat leaves its **comp section alone**, so the
+    duck survives, and applies only the preset's EQ and sends;
+  - **Flat** clears the key and turns the comp off, in the same edit: Flat
+    means a clean strip.
+
+  Both are still one undo entry.
 - Every value is inside its `mixer_catalog.json` range, and the strip takes it
   (`accepts`). `mixerPresets.test.ts` checks every preset.
 - One apply is **one undo entry**, "Preset: <name>". The params are set in
@@ -316,12 +325,12 @@ Blank cells are the defaults: EQ and comp off, sends at −60 dB (off), post-fad
 | Preset | EQ: HP · low · mid (freq, gain, Q) · high | Comp: thr · ratio · att · rel · makeup | Sends (reverb · delay) | Why |
 |---|---|---|---|---|
 | Kick punch | 30 Hz · +3 · 400 Hz −3 Q 1.2 · +1.5 | −14 dB · 4 · 10 ms · 80 ms · +3 | — | The HP clears sub-rumble below the fundamental, which only eats headroom. The 100 Hz shelf adds weight, and the 400 Hz cut removes the cardboard "box". The 10 ms attack lets the click through before the comp clamps, so the kick hits harder. The 80 ms release recovers well before the next 16th. The kick stays dry: reverb on the kick smears the low end. On a drum bus the +1.5 dB shelf also lifts the hats. |
-| Bass tidy | 35 Hz · 0 · 250 Hz −3 Q 1 · −3 | −20 dB · 4 · 15 ms · 120 ms · +3 | — | The 35 Hz HP removes the inaudible sub-sub. The 250 Hz cut takes out the mud where bass and kick body pile up. The −3 dB shelf at 8 kHz tames fizz that fights the hats. The 4:1 comp evens out the note levels so the low end sits at one level; the 15 ms attack keeps the pluck. Dry, so the low end stays mono-solid. |
-| Hats air | 300 Hz · 0 · 3.5 kHz −2 Q 1.5 · +3 | off | −22 · — | Everything under 300 Hz in a hat is bleed or thump that clouds the kick. The 3.5 kHz dip tames the harsh "tss", and the 8 kHz shelf adds air. No comp, because squashing hats flattens the groove's dynamics. A touch of room puts them in the same space as the rest. |
+| Bass tidy | 30 Hz · 0 · 250 Hz −3 Q 1 · −3 | −20 dB · 4 · 15 ms · 120 ms · +3 | — | The 30 Hz HP removes the inaudible sub-sub, and costs only about 1 dB at E1 (41 Hz), so a deep-house line keeps its low notes. The 250 Hz cut takes out the mud where bass and kick body pile up. The −3 dB shelf at 8 kHz only softens the very top (string noise and the highest harmonics; about −0.5 dB at 4 kHz), so the 1–4 kHz bite that lets the bass read on small speakers stays. The 4:1 comp evens out the note levels so the low end sits at one level; the 15 ms attack keeps the pluck. Dry, so the low end stays mono-solid. |
+| Hats air | 300 Hz · 0 · 3.5 kHz −2 Q 1.5 · +3 | off | −22 · — | **For a hats or percussion track.** A drum track is one strip for its whole kit, so on a full-kit strip this HP removes the kick (the blurb says so). Everything under 300 Hz in a hat is bleed or thump that clouds the kick. The 3.5 kHz dip tames the harsh "tss", and the 8 kHz shelf adds air. No comp, because squashing hats flattens the groove's dynamics. A touch of room puts them in the same space as the rest. |
 | Pad wash | 180 Hz · 0 · 500 Hz −3 Q 0.8 · −2 | −24 dB · 2 · 30 ms · 300 ms · +2 | −8 · −24 | The pad leaves the kick and bass range below 180 Hz, which is the most important house mix move. A wide 500 Hz dip de-muds it, and a softer top keeps it behind. A gentle, slow 2:1 comp levels the chords without pumping. The pump comes from Duck to kick on top. It is washed well into the reverb, with a little delay. |
 | Stab space | 150 Hz · 0 · 2.5 kHz +2 Q 1 · 0 | −18 dB · 3 · 5 ms · 100 ms · +2 | −14 · −16 | The stab's low end is out, and 2.5 kHz brings presence so it cuts through in short hits. A fast comp gives a consistent bite. Reverb plus a clear echo is the classic dub-chord space. |
-| Lead presence | 120 Hz · 0 · 3 kHz +3 Q 0.9 · +1.5 | −18 dB · 3 · 8 ms · 150 ms · +2 | −16 · −18 | The low end is cleared, and a broad lift at 3 kHz (where the ear is most sensitive) brings the line forward with some air. A 3:1 comp holds it at one level. It has a bit of space, less than the pad, so it stays upfront. |
-| Flat | (defaults) | (defaults: off) | (defaults: off) | Back to a clean strip: EQ, comp and sends at their catalog defaults, as spec §3 says. |
+| Lead presence | 120 Hz · 0 · 3 kHz +2 Q 1.2 · +1.5 | −18 dB · 3 · 8 ms · 150 ms · +2 | −16 · −18 | The low end is cleared, and a moderate lift at 3 kHz (where the ear is most sensitive) brings the line forward with some air. It is kept to +2 dB at Q 1.2 (about an octave): with the air shelf on top, more is fatiguing on a bright saw or supersaw lead. A 3:1 comp holds it at one level. It has a bit of space, less than the pad, so it stays upfront. |
+| Flat | (defaults) | (defaults: off) | (defaults: off) | Back to a clean strip: EQ, comp and sends at their catalog defaults, as spec §3 says. On a keyed strip it also clears the key. |
 
 ### Return presets
 
@@ -336,7 +345,7 @@ an echo is mud, and the classic move is an HP at 200 to 400 Hz.
 | Dark | HP 200 Hz, high −6 dB | size 0.7 · decay 2.8 s · damping 0.85 · predelay 20 ms | Heavy damping plus a shelved-off top. A deep-house space that stays behind the mix and never fizzes. |
 | 1/8 ping-pong | HP 300 Hz | 1/8 · feedback 0.35 · ping-pong on · high cut 6 kHz | Eighths bouncing left and right, with three or four audible repeats. It widens stabs and hats without washing them out. |
 | 3/16 dub | HP 400 Hz, mid 800 Hz +2 Q 0.7 | 3/16 (a dotted eighth) · feedback 0.55 · ping-pong off · high cut 2.5 kHz | The dub-techno echo: a long, darkening tail in the centre, thinned and pushed into the mids, as a tape echo would be. The dotted eighth plays against the four-on-the-floor. |
-| 1/4 slap | HP 250 Hz | 1/4 · feedback 0.15 · ping-pong off · high cut 5 kHz | About one repeat a beat later. It adds depth to a lead or vocal without a cloud. |
+| 1/4 slap | HP 250 Hz | 1/4 · feedback 0.15 · ping-pong off · high cut 5 kHz | A single soft repeat one beat (a quarter note) later, then gone: about 0.5 s at 120 to 128 bpm, and at feedback 0.15 the second repeat is already 16 dB down. Not a short rockabilly slap (60 to 120 ms); the name is spec-fixed. It adds depth to a lead or vocal without a cloud. |
 
 ### Master presets
 
@@ -373,6 +382,16 @@ happens when:
 - the Kick row would be a ninth distinct drum-row key (`MAX_KEYS`,
   `rowKeyAllowed`). A Kick row another strip already keys is shared, so a
   second duck is always allowed.
+
+**Losing the Kick.** Deleting the Kick row (`removeDrumRow`) or its drum
+track (`removeTrack`) clears every key on it. A strip whose comp still holds
+Duck to kick's exact values would then listen to itself at −30 dB and 8:1,
+and squash itself by 15 to 20 dB. So, in the same edit (one undo entry, and
+undo brings the duck back), each such strip's comp is switched off. Only
+`comp_on` changes: the other values stay, so re-keying and switching it on
+restores the duck. The top bar says "Duck to kick removed from Bass (kick
+deleted)" (`mixer-actions.ts` `keysLostBy` / `unduckLostKeys`). A strip whose
+comp the user retuned since, or keyed by hand, keeps its settings.
 
 The menu offers Duck to kick on every track strip except the Kick's own drum
 track.

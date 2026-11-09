@@ -81,7 +81,7 @@ test('Bass tidy changes the low cut and the comp; one Cmd+Z restores them', asyn
   await expect(card.getByTestId('preset-duck')).toBeVisible();
   await card.getByTestId('preset-bass-tidy').click();
   await expect(card).toBeHidden();
-  await expect.poll(() => param(page, 1, 'eq_hp')).toBe(35);
+  await expect.poll(() => param(page, 1, 'eq_hp')).toBe(30);
   expect(await param(page, 1, 'comp_on')).toBe(1);
   await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'true');
   await expect(s.getByTestId('eq-on')).toHaveAttribute('aria-pressed', 'true');
@@ -109,6 +109,16 @@ test('Duck to kick on a synth track keys its comp from "Drums · Kick"; the drum
   const card = await openPresets(page, 0);
   await expect(card.getByTestId('preset-kick-punch')).toBeVisible();
   await expect(card.getByTestId('preset-duck')).toHaveCount(0);
+  // Arrow keys, Home and End move between the items.
+  await expect(card.getByTestId('preset-kick-punch')).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(card.getByTestId('preset-flat')).toBeFocused();
+  await page.keyboard.press('ArrowDown'); // wraps
+  await expect(card.getByTestId('preset-kick-punch')).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(card.getByTestId('preset-flat')).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(card.getByTestId('preset-kick-punch')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(card).toBeHidden();
   await expect(strip(page, 0).getByTestId('strip-presets')).toBeFocused();
@@ -138,7 +148,6 @@ test('kick plus a held bass: with Duck to kick the bass level dips on every kick
   await expect(strip(page, 1).getByTestId('sc-label')).toHaveText('SC: Drums · Kick');
   await page.waitForTimeout(300);
   const pump = await meterRange(page, 'strip-1', 2_000);
-  console.log(`DUCK TO KICK pump: steady ${(steady.max - steady.min).toFixed(1)} dB, ducked ${(pump.max - pump.min).toFixed(1)} dB over ${pump.n} frames`);
   expect(pump.n).toBeGreaterThan(30);
   expect(pump.max - pump.min).toBeGreaterThanOrEqual(6);
   await page.keyboard.up('KeyA');
@@ -165,4 +174,64 @@ test('the Hall preset on the Reverb return sets a decay over 3 s; the returns an
   const vw = page.viewportSize()!.width;
   expect(box.x + box.width).toBeLessThanOrEqual(vw);
   await page.screenshot({ path: 'test-results/mixpresets-menu.png' });
+});
+
+test('a track preset on a ducked strip keeps the duck; Flat removes it', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  await openMixer(page);
+  const s = strip(page, 1);
+  await (await openPresets(page, 1)).getByTestId('preset-duck').click();
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: Drums · Kick');
+
+  // Bass tidy: its EQ lands, the duck's key and comp stay.
+  await (await openPresets(page, 1)).getByTestId('preset-bass-tidy').click();
+  await expect.poll(() => param(page, 1, 'eq_hp')).toBe(30);
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: Drums · Kick');
+  expect(await param(page, 1, 'comp_threshold')).toBe(-30);
+  expect(await param(page, 1, 'comp_ratio')).toBe(8);
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'true');
+
+  // Flat: a clean strip, key cleared and comp off, in one undo entry.
+  await (await openPresets(page, 1)).getByTestId('preset-flat').click();
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: none');
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'false');
+  expect(await param(page, 1, 'eq_hp')).toBe(20);
+  await expect.poll(() => daw(page, (d) => d.history?.labels.undo ?? null)).toBe('Preset: Flat');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: Drums · Kick');
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('Duck to kick with no drum track says why in the status line and changes nothing', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  await daw(page, (d) => d.actions.removeTrack(d.project.tracks.find((t: Any) => t.kind === 'drum').id));
+  await openMixer(page);
+  await expect(strip(page, 0)).toHaveCount(0);
+  const s = strip(page, 1);
+  const undo = await daw(page, (d) => d.history?.labels.undo ?? null);
+  await (await openPresets(page, 1)).getByTestId('preset-duck').click();
+  await expect(page.getByTestId('hint-line')).toHaveText('Duck to kick: no Kick row in any drum track');
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: none');
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'false');
+  expect(await daw(page, (d) => d.history?.labels.undo ?? null)).toBe(undo);
+});
+
+test('deleting the Kick row takes Duck to kick off the strip and says so', async ({ page }) => {
+  await start(page);
+  await addTrack(page, 'synth');
+  await openMixer(page);
+  const s = strip(page, 1);
+  await (await openPresets(page, 1)).getByTestId('preset-duck').click();
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'true');
+  // The drums' step grid (a track header click shows its editor), then the Kick row's delete button.
+  await page.getByTestId('track-0').click();
+  await page.getByTestId('row-0').hover();
+  await page.getByTestId('row-delete-0').click();
+  await expect(page.getByTestId('hint-line')).toHaveText('Duck to kick removed from Synth (kick deleted)');
+  await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Clap');
+  await openMixer(page);
+  await expect(s.getByTestId('sc-label')).toHaveText('SC: none');
+  await expect(s.getByTestId('comp-on')).toHaveAttribute('aria-pressed', 'false');
 });

@@ -104,13 +104,14 @@
     const r = duckToKick(p, engine, target);
     if (!r.ok) flashHint(r.reason);
   }
-  /** ArrowUp / ArrowDown move between the menu's items (wrapping), as AutoMenu's list. */
+  /** ArrowUp / ArrowDown move between the menu's items (wrapping), as AutoMenu's list; Home / End jump to the first / last. */
   function menuArrows(e: KeyboardEvent) {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
     e.preventDefault();
     const all = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('button')];
     const i = all.indexOf(document.activeElement as HTMLElement);
-    all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length;
+    all[to]?.focus();
   }
 
   // ---- sidechain -----------------------------------------------------------

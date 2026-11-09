@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
-import { addDrumTrack, removeTrack } from './actions';
+import { addDrumTrack, removeDrumRow, removeTrack } from './actions';
+import { banners } from './banners.svelte';
 import { addSynthTrack } from './rack-actions';
 import { DUCK_TO_KICK, duckToKick, kickKey, keyLabel, rowKeyAllowed, setMix, setSidechain, toggleMute, toggleSolo } from './mixer-actions';
 import { KIT_ROLES } from './kits';
@@ -349,5 +350,65 @@ describe('Duck to kick', () => {
     const s = addSynthTrack(p, sink)!;
     expect(duckToKick(p, sink, s.id).ok).toBe(true);
     expect(p.mixer.channels[s.id].params[P('comp_threshold')]).toBe(-30);
+  });
+
+  describe('when the Kick goes away', () => {
+    function ducked() {
+      const p = new Project();
+      const { sink, sent } = fake();
+      const d = addDrumTrack(p, sink, 'Drums', [...KIT_ROLES])!;
+      const bass = addSynthTrack(p, sink)!;
+      bass.name = 'Bass';
+      const pad = addSynthTrack(p, sink)!;
+      pad.name = 'Pad';
+      expect(duckToKick(p, sink, bass.id).ok).toBe(true);
+      expect(duckToKick(p, sink, pad.id).ok).toBe(true);
+      p.history = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+      banners.hint = null;
+      return { p, sink, sent, d, bass, pad };
+    }
+
+    it('deleting the Kick row turns off every strip comp still set to Duck to kick, in the same entry, and says so', () => {
+      const { p, sink, sent, d, bass, pad } = ducked();
+      // The pad's comp was retuned by hand: its own settings, left alone.
+      setMix(p, sink, pad.id, 'comp_ratio', 4);
+      sent.length = 0;
+      expect(removeDrumRow(p, sink, d.id, d.rows[0].id)).toBe(true);
+      expect(p.mixer.channels[bass.id].key).toBeNull();
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(0);
+      expect(p.mixer.channels[bass.id].params[P('comp_threshold')]).toBe(-30); // only switched off
+      expect(sent).toContainEqual([Op.MIX_SET, bass.slot, P('comp_on'), 0, 0]);
+      expect(p.mixer.channels[pad.id].key).toBeNull();
+      expect(p.mixer.channels[pad.id].params[P('comp_on')]).toBe(1);
+      expect(banners.hint).toBe('Duck to kick removed from Bass (kick deleted)');
+      expect(p.history!.labels.undo).toBe('Delete row');
+      p.history!.undo(); // one step back: the row, the key and the duck
+      expect(d.rows[0].name).toBe('Kick');
+      expect(p.mixer.channels[bass.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect(p.mixer.channels[bass.id].params[P('comp_on')]).toBe(1);
+    });
+
+    it('deleting the Kick\'s drum track does the same for every ducked strip', () => {
+      const { p, sink, d, bass, pad } = ducked();
+      removeTrack(p, sink, d.id);
+      for (const t of [bass, pad]) {
+        expect(p.mixer.channels[t.id].key).toBeNull();
+        expect(p.mixer.channels[t.id].params[P('comp_on')]).toBe(0);
+      }
+      expect(banners.hint).toBe('Duck to kick removed from Bass, Pad (kick deleted)');
+      expect(p.history!.labels.undo).toBe('Remove track');
+    });
+
+    it('deleting another row, or a strip keyed by hand, changes no comp and says nothing', () => {
+      const { p, sink, d, bass } = ducked();
+      const s = addSynthTrack(p, sink)!;
+      setSidechain(p, sink, s.id, { trackId: d.id, row: 1 });
+      setMix(p, sink, s.id, 'comp_on', 1);
+      removeDrumRow(p, sink, d.id, d.rows[1].id); // the Clap
+      expect(p.mixer.channels[s.id].key).toBeNull();
+      expect(p.mixer.channels[s.id].params[P('comp_on')]).toBe(1);
+      expect(p.mixer.channels[bass.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect(banners.hint).toBeNull();
+    });
   });
 });

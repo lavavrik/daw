@@ -5,7 +5,8 @@ import type { MixTarget } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
 import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
-import { accepts, setMix } from './mixer-actions';
+import { DUCK_TO_KICK, accepts, duckToKick, setMix } from './mixer-actions';
+import { KIT_ROLES } from './kits';
 import { MIX_PRESETS, applyPreset, presetById, presetsFor } from './mixerPresets';
 import type { PresetKind } from './mixerPresets';
 import { createHistory } from '../history/history';
@@ -147,4 +148,47 @@ describe('applyPreset', () => {
     applyPreset(p, sink, s.id, 'flat');
     expect([...p.mixer.channels[s.id].params]).toEqual(MIX_PARAMS.map((d) => d.default));
   });
+
+  describe('on a keyed strip (Duck to kick)', () => {
+    function ducked() {
+      const p = new Project();
+      const { sink, sent } = fake();
+      const d = addDrumTrack(p, sink, 'Drums', [...KIT_ROLES])!;
+      const s = addSynthTrack(p, sink)!;
+      expect(duckToKick(p, sink, s.id).ok).toBe(true);
+      const h = withHistory(p, sink);
+      return { p, sink, sent, d, s, h };
+    }
+    const compOf = (p: Project, id: string) =>
+      Object.fromEntries(Object.keys(DUCK_TO_KICK).map((n) => [n, p.mixer.channels[id].params[P(n)]]));
+
+    it('a track preset keeps the key and the comp (the duck survives), and applies its EQ and sends', () => {
+      const { p, sink, sent, d, s, h } = ducked();
+      sent.length = 0;
+      expect(applyPreset(p, sink, s.id, 'pad-wash')).toBe(true);
+      expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect(compOf(p, s.id)).toEqual(DUCK_TO_KICK);
+      const pad = presetById('pad-wash')!;
+      for (const n of ['eq_on', 'eq_hp', 'eq_mid_gain', 'send_a', 'send_b']) expect(p.mixer.channels[s.id].params[P(n)], n).toBe(pad.params[n]);
+      expect(sent.some((c) => c[0] === Op.MIX_SET && mixParamGroup(c[2]) === 'comp')).toBe(false);
+      expect(sent.some((c) => c[0] === Op.MIX_SET_KEY)).toBe(false);
+      expect(h.labels.undo).toBe('Preset: Pad wash');
+    });
+
+    it('Flat clears the key and turns the comp off, one undo entry', () => {
+      const { p, sink, sent, d, s, h } = ducked();
+      const before = { key: p.mixer.channels[s.id].key, params: [...p.mixer.channels[s.id].params] };
+      sent.length = 0;
+      expect(applyPreset(p, sink, s.id, 'flat')).toBe(true);
+      expect(p.mixer.channels[s.id].key).toBeNull();
+      expect(p.mixer.channels[s.id].params[P('comp_on')]).toBe(0);
+      expect(sent).toContainEqual([Op.MIX_SET_KEY, s.slot, -1, 0, 0]);
+      expect(h.labels.undo).toBe('Preset: Flat');
+      h.undo();
+      expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 0 });
+      expect([...p.mixer.channels[s.id].params]).toEqual(before.params);
+    });
+  });
 });
+
+const mixParamGroup = (id: number) => MIX_PARAMS.find((d) => d.id === id)?.group;

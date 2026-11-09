@@ -63,6 +63,7 @@ use daw_engine::automation::AutoFrame;
 use daw_engine::protocol::*;
 use daw_engine::mixer::catalog::{
     P_COMP_ON, P_COMP_RATIO, P_COMP_THRESHOLD, P_EQ_HIGH, P_EQ_HP, P_EQ_LOW, P_EQ_MID_GAIN, P_EQ_ON, P_FADER, P_SEND_A, P_SEND_B,
+    send_id,
 };
 use daw_engine::mixer::StereoBufs;
 use daw_engine::Engine;
@@ -394,6 +395,114 @@ fn spec6_mix_renders_under_budget() {
     assert!(peak > 0.0 && peak.is_finite(), "must sound (peak {peak})");
     assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
     assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+/// [`spec6`] with all 8 return slots busy: slots 0..3 Reverb, 4..7 Delay,
+/// and every track at -12 dB on all 8 sends (the plan-29 worst case).
+fn spec6_8_returns() -> Engine {
+    let mut e = spec6(false);
+    for slot in 0..8usize {
+        let kind = if slot < 4 { 1.0 } else { 2.0 };
+        assert_eq!(e.command(OP_RETURN_KIND, slot as f64, kind, 0., 0.), OK);
+    }
+    for ch in 0..TRACKS + DRUMS {
+        for slot in 0..8usize {
+            assert_eq!(e.command(OP_MIX_SET, ch as f64, send_id(slot) as f64, -12., 0.), OK);
+        }
+    }
+    e
+}
+
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn spec6_mix_with_8_returns_renders_under_budget() {
+    let mut e = spec6_8_returns();
+    let (ratio, peak, _, gr) = run(&mut e);
+    println!(
+        "perf (spec 6, 8 returns): the spec 6 mix with 4 Reverb + 4 Delay returns, every track at -12 dB on all 8 sends: {:.1}% of real time",
+        ratio * 100.0
+    );
+    assert!(peak > 0.0 && peak.is_finite(), "must sound (peak {peak})");
+    assert!(gr > 1.0, "the sidechain ducks (gr {gr} dB)");
+    for slot in 0..8 {
+        let m = e.meters()[(daw_engine::MIX_RETURN0 + slot) * daw_engine::MIX_METER_STRIDE];
+        assert!(m > 0.0 && m.is_finite(), "return {slot} sounds (meter {m})");
+    }
+    assert!(ratio < 0.40, "over budget: {:.1}% of real time", ratio * 100.0);
+}
+
+/// Slots 2..7 set to Reverb/Delay but never fed must cost nothing (they
+/// sleep after one block): the run is within 3% of the 2-return mix, as a
+/// median of 5 (alternating, so drift hits both alike).
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn idle_returns_cost_nothing() {
+    let two = || spec6(false);
+    let eight_idle = || {
+        let mut e = spec6(false);
+        for slot in 2..8usize {
+            let kind = if slot % 2 == 0 { 1.0 } else { 2.0 };
+            assert_eq!(e.command(OP_RETURN_KIND, slot as f64, kind, 0., 0.), OK);
+        }
+        e
+    };
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    for _ in 0..5 {
+        a.push(run(&mut two()).0);
+        b.push(run(&mut eight_idle()).0);
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(|x, y| x.total_cmp(y));
+        v[v.len() / 2]
+    };
+    let (ma, mb) = (median(&mut a), median(&mut b));
+    println!(
+        "perf (idle returns): 2 returns {:.2}% vs + 6 idle slots {:.2}% of real time (x{:.3})",
+        ma * 100.0,
+        mb * 100.0,
+        mb / ma
+    );
+    assert!(mb <= ma * 1.03, "idle returns cost {:.1}% more", (mb / ma - 1.0) * 100.0);
+}
+
+/// Mass retype while playing: all 8 busy returns swap Reverb <-> Delay in
+/// one block. `reset_dsp` clears each old ring (about 1 MiB Delay, 0.6 MiB
+/// Reverb) at fade end on the audio thread; the worst single block across
+/// the switch must still fit in the block's real-time duration.
+#[test]
+#[ignore = "perf: run in release with --ignored --nocapture"]
+fn retyping_all_returns_fits_in_a_block() {
+    let mut e = spec6_8_returns();
+    let (mut l, mut r) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    for _ in 0..2000 {
+        e.process(&mut l, &mut r); // warm up; the tails are ringing
+    }
+    let budget = BLOCK as f64 / SR as f64;
+    let mut quiet_max = 0.0f64;
+    for _ in 0..800 {
+        let t = Instant::now();
+        e.process(&mut l, &mut r);
+        quiet_max = quiet_max.max(t.elapsed().as_secs_f64());
+    }
+    let mut worst = 0.0f64;
+    for round in 0..4 {
+        for slot in 0..8usize {
+            let reverb = (slot < 4) == (round % 2 == 1);
+            assert_eq!(e.command(OP_RETURN_KIND, slot as f64, if reverb { 1.0 } else { 2.0 }, 0., 0.), OK);
+        }
+        for _ in 0..200 {
+            let t = Instant::now();
+            e.process(&mut l, &mut r);
+            worst = worst.max(t.elapsed().as_secs_f64());
+        }
+    }
+    println!(
+        "perf (retype x8): worst block across the switch {:.3} ms (steady-state worst {:.3} ms), block budget {:.3} ms",
+        worst * 1e3,
+        quiet_max * 1e3,
+        budget * 1e3
+    );
+    assert!(worst < budget, "worst block {:.3} ms exceeds the {:.3} ms block", worst * 1e3, budget * 1e3);
 }
 
 #[test]

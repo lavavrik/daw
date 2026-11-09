@@ -1014,11 +1014,86 @@ fn return_off_fades_without_click() {
     }
 }
 
+/// A sounding Reverb slot 0: a sine held on track 0, heard only through the
+/// slot (pre-fader send), rendered for 0.5 s so the tail is dense.
+fn ringing_slot0(e: &mut Engine) {
+    return_kind(e, 0, ReturnKind::Reverb);
+    sine_patch(e, 0, 0.8);
+    mix(e, 0, P_FADER, -60.0);
+    mix(e, 0, send_id(0) as u32, 0.0);
+    mix(e, 0, send_pre_id(0) as u32, 1.0);
+    hold(e, 0, 57.0);
+    let (l, _) = render(e, 24000);
+    assert!(peak(&l[12000..]) > 0.1, "the slot rings: {}", peak(&l[12000..]));
+}
+
+#[test]
+fn double_kind_change_mid_fade() {
+    // Reverb -> Delay, then (one block, 2.7 ms, later: still inside the
+    // 5 ms fade) -> Off. Whatever the second change does to the first fade,
+    // the master never steps, ends at exact zero, and the kind is Off.
+    let mut e = Engine::new(SR);
+    ringing_slot0(&mut e);
+    let mut l = vec![0.0f32; 0];
+    let (mut bl, mut br) = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    e.process(&mut bl, &mut br);
+    let before = bl[BLOCK - 1];
+    l.push(before);
+    return_kind(&mut e, 0, ReturnKind::Delay);
+    e.process(&mut bl, &mut br);
+    l.extend_from_slice(&bl);
+    return_kind(&mut e, 0, ReturnKind::Off);
+    let n = l.len();
+    let mut r_all = Vec::new();
+    for _ in 0..8 {
+        e.process(&mut bl, &mut br);
+        l.extend_from_slice(&bl);
+        r_all.extend_from_slice(&br);
+    }
+    assert!(max_step(&l) <= 0.05, "step {} at {}", max_step(&l), l.windows(2).position(|w| (w[1] - w[0]).abs() > 0.05).unwrap_or(0));
+    // 5 ms + one block (+ the limiter latency) after the second change.
+    let zero = n + 240 + BLOCK + e.latency();
+    assert!(l[zero..].iter().all(|&x| x == 0.0), "not silent {} samples after the second change", zero - n);
+    assert_eq!(e.mixer().return_kind(0), ReturnKind::Off);
+    let tail = &r_all[240 + BLOCK + e.latency()..];
+    assert!(tail.iter().all(|&x| x == 0.0), "right channel not silent");
+}
+
+#[test]
+fn new_kind_starts_clean() {
+    // A drum hit rings the Reverb on slot 0; the slot is retyped to Delay
+    // with nothing new sent. After the 5 ms fade nothing of the reverb's
+    // ring may leak into the delay: the output is exactly zero.
+    let mut e = Engine::new(SR);
+    return_kind(&mut e, 0, ReturnKind::Reverb);
+    impulse_into(&mut e, 0);
+    ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+    let (l, _) = render(&mut e, 9600);
+    assert!(peak(&l[4800..]) > 1e-3, "the reverb tail rings: {}", peak(&l[4800..]));
+    return_kind(&mut e, 0, ReturnKind::Delay);
+    let (l, r) = render(&mut e, 90000); // up to just before the next bar's hit
+    let zero = 240 + BLOCK + e.latency();
+    assert!(l[zero..].iter().chain(&r[zero..]).all(|&x| x == 0.0), "reverb tail leaked into the delay: {}", peak(&l[zero..]));
+    assert_eq!(e.mixer().return_kind(0), ReturnKind::Delay);
+    // The next bar's hit (96000) now feeds the Delay, so the slot is sounding
+    // when it goes back to Reverb: the switch fades, and the Reverb that
+    // starts must not replay the tail it was holding before. (Its ring was
+    // cleared when the first fade ended; with nothing else sent, the output
+    // after this second fade is exactly zero until the delay's echo is
+    // faded away with it.)
+    render(&mut e, 6000);
+    return_kind(&mut e, 0, ReturnKind::Reverb);
+    let (l, r) = render(&mut e, 20000); // the hit's echo (24000 later) is not reached
+    assert!(l[zero..].iter().chain(&r[zero..]).all(|&x| x == 0.0), "the old reverb tail came back: {}", peak(&l[zero..]));
+    assert_eq!(e.mixer().return_kind(0), ReturnKind::Reverb);
+}
+
 #[test]
 fn sleeping_return_wakes_bit_exact() {
     // A burst into the Reverb (short decay) and the Delay (no feedback),
     // a long gap in which both tails reach exact zero and the slots sleep
-    // (a return param and the tempo move meanwhile), then another burst.
+    // (a return param, a return mute and the tempo move meanwhile), then
+    // another burst.
     // The sleeping mixer renders bit for bit what a never-sleeping one does.
     let run = |sleep: bool| {
         let mut e = Engine::new(SR);
@@ -1045,6 +1120,7 @@ fn sleeping_return_wakes_bit_exact() {
         // ones do (the reverb's read lengths settle within ~1.2 s), then
         // sleep again.
         mix(&mut e, MIX_RETURN0, P_REV_SIZE, 0.2);
+        mix(&mut e, MIX_RETURN0 + 1, P_MUTE, 1.0);
         ok(e.command(OP_SET_TEMPO, 97.0, 0.0, 0.0, 0.0));
         let woke = e.mixer().awake_slots();
         let (l2, r2) = render(&mut e, BLOCK);
@@ -1055,6 +1131,9 @@ fn sleeping_return_wakes_bit_exact() {
         l.extend(l2);
         r.extend(r2);
         slept &= e.mixer().awake_slots() == 0;
+        // The delay is unmuted just as the second burst arrives: the wake
+        // from the send and the gate's ramp up coincide.
+        mix(&mut e, MIX_RETURN0 + 1, P_MUTE, 0.0);
         ok(e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0));
         let (l2, r2) = render(&mut e, 4800);
         l.extend(l2);

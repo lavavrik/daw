@@ -1,6 +1,6 @@
 # Mixer
 
-Per-track strips, two send returns and a limited master. Code:
+Per-track strips, up to eight send returns (each a Reverb or a Delay) and a limited master. Code:
 `engine/src/mixer/` (the DSP, once per block), `engine/src/dsp/` (EQ,
 compressor, reverb, delay, limiter), `engine/mixer_catalog.json` (the golden
 parameter table), `app/src/state/mixer-actions.ts`, `app/src/ui/mixer/`.
@@ -22,10 +22,11 @@ release notes only, so effect tails, compressor and limiter state survive them.
    |         |   (own track | other track | one drum row)            |
    |         +-- Key::None = its own input                           |
    |                                                                 |
-   +--- Send A / Send B tap post-fader (after pan + gate) -----+     |
+   +--- Send A..H tap post-fader (after pan + gate) ---------+     |
         or, with the "pre" flag, after EQ + comp (pre-fader)   |     |
         (the gate is applied to sends too, see Mute/solo)      v     |
-                                          Reverb (100% wet) / Delay  |
+                       return slot 0..7: Reverb or Delay (100% wet)  |
+                       (Off slots and sleeping slots do nothing)     |
                                             -> EQ -> fader -> pan -> mute
                                             -> master bus  <---------+
                                                                      |
@@ -48,9 +49,11 @@ below 120 bpm, 1/2 below 60 bpm) is clamped to 2 s; the Delay strip then shows
 
 ## Channel numbering
 
-`MIX_CHANNELS = 35`: 0..31 are the track slots (the engine's slot, shared by
-drum and synth tracks), `MIX_RETURN0 = 32` (return slots 32..39), `MIX_MASTER = 40`.
-Mirrored in `app/src/audio/protocol.ts`. Wire commands: `MIX_SET ch id value`,
+`MIX_CHANNELS = 41`: 0..31 are the track slots (the engine's slot, shared by
+drum and synth tracks), `MIX_RETURN0 = 32` (return slots 32..39, `MAX_RETURNS =
+8`), `MIX_MASTER = 40`. A track's sends are the params `send_a`..`send_h`
+(`send_id(slot)`, with `send_pre_id(slot)` for the pre flag), one per return
+slot. Mirrored in `app/src/audio/protocol.ts`. Wire commands: `MIX_SET ch id value`,
 `MIX_SET_KEY ch key`, `MIX_RESET ch`. Parameter ids are the index into
 `mixer_catalog.json`; a param sent to a channel kind that does not take it is
 rejected (`appliesTo`). A removed track's strip resets, but its 2 ms fade-out
@@ -59,6 +62,37 @@ still reaches the master.
 The strips' order on screen is the track order (`project.tracks`), not the
 channel number: reordering the song's tracks (arrangement.md "Track order")
 reorders the strips and changes no channel.
+
+## Return slots (plan 29)
+
+Return channel `32 + k` is slot `k`. Each slot has a **kind**: Off, Reverb or
+Delay, set with `OP_RETURN_KIND` (`a` = slot 0..7, `b` = kind 0..2;
+`Mixer::set_return_kind`). A new project and `OP_RESET_ALL` give slot 0 =
+Reverb, slot 1 = Delay and slots 2..7 Off. A slot owns both a Reverb and a
+Delay (about 1.25 MiB at 48 kHz, ~10 MiB for all eight, allocated in
+`Mixer::new`); only the one matching the kind runs.
+
+- **Params.** A return takes both the `rev_*` and the `delay_*` groups, whatever
+  its kind; `MIX_SET` pushes them to that slot's effects only. `RETURN_KIND`
+  resets the slot's params to their defaults (like `MIX_RESET`, and the engine
+  moves the automation lanes' bases the same way), so a client sends a return's
+  `MIX_SET`s *after* its `RETURN_KIND`.
+- **Changing the kind of a sounding slot** fades the old effect's output over
+  5 ms (the strip keeps its old gains meanwhile, so a muted return cannot leak).
+  When the fade ends both effects are reset (`reset_dsp`) and the new kind starts
+  clean: no tail of the old effect, and none of the new effect's earlier life.
+  A second change inside the fade just retargets the new kind. A silent slot
+  switches at once. Off (deleting a return) fades like any other change.
+- **Sleeping.** A slot is idle when it is Off, or when its send bus, its rings
+  and its filter states are exactly zero and nothing is moving (no glide, no
+  fader/mute/EQ ramp). An idle slot skips its DSP, EQ and mix-out. It wakes at
+  the start of the next block that has a non-zero send, a param/tempo/fader move,
+  and renders bit for bit what a never-sleeping slot would (pinned by
+  `sleeping_return_wakes_bit_exact`, which also moves `rev_size` and a return
+  mute during the gap). Tails decay to exact zero (the effects flush denormals),
+  so a fed slot sleeps about 15 s (Reverb, decay 2.2 s) to 19 s (Delay, feedback
+  0.35) after the last send; a never-fed slot sleeps after one block, and six
+  never-fed slots cost nothing measurable (`idle_returns_cost_nothing`).
 
 ## Key encoding
 
@@ -449,8 +483,9 @@ non-edit variant. Preset ids:
 
 `OP_RESET_ALL` calls `Mixer::reset_all`: every strip is rebuilt in place
 (params, keys, EQ/compressor state, insert crossfades, tails, holds), the
-defaults are applied *at once* (no 5 ms glides), then the reverb and delay
-returns are reset (their tails zeroed, jumping to the default settings), the
+defaults are applied *at once* (no 5 ms glides), then the return layout is
+back to the default (Reverb, Delay, six Off) and every slot's Reverb and Delay
+are reset (their tails zeroed, jumping to the default settings), the
 limiter is cleared (delay line, windows, envelope, positions) and the legacy
 master gain is back at `MASTER_GAIN` (0.8) without a ramp. The result renders
 bit for bit like a new mixer (`reset_all_clears_mixer_tails_and_master`). The
@@ -539,6 +574,21 @@ Measured on the dev Mac (Apple M5 Pro; native in release, browser on the dev ser
 | Spec 6, Song mode | 8.4–8.5% | 14.6% (no Audio tracks, one-off probe) |
 | Spec 6, Song mode + 4 Audio tracks | 8.5–8.6% | 10.1–15.0% (max 16.7%) |
 | Same + 64 automation lanes (32 applying, plan 10) | 8.2% (8.1% without the lanes, same run); 9.1% in the plan 10 Task 5 run (9.0% without) | 6.0–8.4% (max 9.0%). In one run, 7.3% without the lanes; in the full `npm run test:e2e` run, 6.0% while the two scenarios without lanes read 16–18%, so the run-to-run drift is larger than the lanes' cost |
+
+Plan 29 (up to 8 returns), native, release, dev Mac:
+
+| Scenario | Native (share of real time) |
+|---|---|
+| Spec 6, Pattern mode, 2 returns (default layout) | 9.4–9.5% |
+| Spec 6 with 8 busy returns (slots 0..3 Reverb, 4..7 Delay, every track at −12 dB on all 8 sends): `spec6_mix_with_8_returns_renders_under_budget` | 10.0% |
+| Same as the 2-return mix plus 6 never-fed slots (`idle_returns_cost_nothing`, median of 5) | 9.25% vs 9.38%, ×0.986 (cap ×1.03) |
+| Retyping all 8 busy returns in one block (Reverb ↔ Delay), worst single block across the switch (`retyping_all_returns_fits_in_a_block`) | 0.72–0.81 ms against a 2.67 ms block (steady-state worst 0.54–0.65 ms) |
+
+The retype figure covers the `reset_dsp` memset of the old rings (about 1 MiB per
+Delay, 0.6 MiB per Reverb) at fade end, on the audio thread: it fits in a block
+with room to spare, so the clear is not sliced over several blocks.
+`return_kind_does_not_allocate` (`tests/no_alloc.rs`) retypes, deletes and
+re-adds slots 2..7 while playing with the allocation counter armed.
 
 Audio clips cost almost nothing: a voice reads frames from the arena and
 scales them by its envelope, with no interpolation or time-stretch. The

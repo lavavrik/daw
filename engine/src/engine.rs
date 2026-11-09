@@ -361,6 +361,17 @@ impl Engine {
         }
     }
 
+    /// Move every automation lane of mixer `channel` to its param's default
+    /// base, as `MIX_RESET` and a `RETURN_KIND` change do (the lanes keep
+    /// their enabled state; only the value they restore to changes).
+    fn reset_lane_bases(&mut self, channel: usize) {
+        for p in crate::mixer::catalog::PARAMS.iter().filter(|p| p.accepts(channel)) {
+            if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: p.id as u8 }) {
+                self.automation.set_base(lane, p.default);
+            }
+        }
+    }
+
     /// `OP_RESET_ALL` (see "Engine reset" in the module docs).
     fn reset_all(&mut self) -> Result<(), i32> {
         if self.transport.playing {
@@ -1046,11 +1057,7 @@ impl Engine {
                 self.mixer.set_key(channel, key)?;
             }
             Command::MixReset { channel } => {
-                for p in crate::mixer::catalog::PARAMS.iter().filter(|p| p.accepts(channel)) {
-                    if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: p.id as u8 }) {
-                        self.automation.set_base(lane, p.default);
-                    }
-                }
+                self.reset_lane_bases(channel);
                 self.mixer.reset_channel(channel)
             }
             // A new kind resets the slot's params like MIX_RESET (the lanes'
@@ -1058,11 +1065,7 @@ impl Engine {
             Command::ReturnKind { slot, kind } => {
                 if self.mixer.return_kind(slot) != kind {
                     let channel = crate::MIX_RETURN0 + slot;
-                    for p in crate::mixer::catalog::PARAMS.iter().filter(|p| p.accepts(channel)) {
-                        if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: p.id as u8 }) {
-                            self.automation.set_base(lane, p.default);
-                        }
-                    }
+                    self.reset_lane_bases(channel);
                     self.mixer.set_return_kind(slot, kind);
                 }
             }

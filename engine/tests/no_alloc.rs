@@ -581,6 +581,79 @@ fn mixer_commands_do_not_allocate() {
     assert!(e.meters().iter().all(|x| x.is_finite()));
 }
 
+/// `OP_RETURN_KIND` (plan 29) allocates nothing: slots 2..7 are added,
+/// retyped (Reverb <-> Delay, including mid-fade) and deleted (Off) while a
+/// held synth note feeds all 8 sends, so the 5 ms fades, the sleeping and
+/// the `reset_dsp` memsets at fade end all run with the counter ARMED.
+#[test]
+fn return_kind_does_not_allocate() {
+    use daw_engine::mixer::catalog::{send_id, P_FADER};
+    const MIDI_IN: f64 = 0.0;
+    const OSC: f64 = 1.0;
+    const ADSR: f64 = 4.0;
+    const VCA: f64 = 5.0;
+    const OUT: f64 = 8.0;
+    let mut e = Engine::new(48000.0);
+    let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+    let ok = |code: i32| assert_eq!(code, OK);
+
+    arm();
+
+    ok(e.command(OP_ADD_SYNTH_TRACK, 0., 0., 0., 0.));
+    for (m, kind) in [MIDI_IN, OSC, ADSR, VCA, OUT].iter().enumerate() {
+        ok(e.command(OP_RACK_ADD_MODULE, 0., m as f64, *kind, 0.));
+    }
+    for ((fm, fp), (tm, tp)) in [((0, 0), (1, 0)), ((0, 1), (2, 0)), ((1, 0), (3, 0)), ((2, 0), (3, 1)), ((3, 0), (4, 0))] {
+        ok(e.command(OP_RACK_CONNECT, 0., pk(fm, fp), pk(tm, tp), 0.));
+    }
+    ok(e.command(OP_SET_INPUT_TRACK, 0., 0., 0., 0.));
+    ok(e.command(OP_MIX_SET, 0., P_FADER as f64, -6., 0.));
+    for slot in 0..8 {
+        ok(e.command(OP_MIX_SET, 0., send_id(slot) as f64, -6., 0.));
+    }
+    ok(e.command(OP_NOTE_ON, 48., 100., 0., 0.));
+    ok(e.command(OP_PLAY, 0., 0., 0., 0.));
+    let mut peak = 0.0f64;
+    let mut run = |e: &mut Engine, n: usize| {
+        for _ in 0..n {
+            e.process(&mut l, &mut r);
+            peak = peak.max(e.telemetry()[5]);
+        }
+    };
+    run(&mut e, 50);
+    // Add slots 2..7 (Reverb on even slots, Delay on odd), let them ring.
+    for slot in 2..8 {
+        ok(e.command(OP_RETURN_KIND, slot as f64, if slot % 2 == 0 { 1. } else { 2. }, 0., 0.));
+    }
+    run(&mut e, 100);
+    // Retype all of them (the fade starts, then ends in `reset_dsp`), and
+    // once more mid-fade (one block in, i.e. inside the 5 ms).
+    for slot in 2..8 {
+        ok(e.command(OP_RETURN_KIND, slot as f64, if slot % 2 == 0 { 2. } else { 1. }, 0., 0.));
+    }
+    run(&mut e, 1);
+    for slot in 2..8 {
+        ok(e.command(OP_RETURN_KIND, slot as f64, if slot % 2 == 0 { 1. } else { 2. }, 0., 0.));
+    }
+    run(&mut e, 100);
+    // Delete them (Off) while they ring, and re-add one on a silent slot.
+    for slot in 2..8 {
+        ok(e.command(OP_RETURN_KIND, slot as f64, 0., 0., 0.));
+    }
+    run(&mut e, 100);
+    ok(e.command(OP_RETURN_KIND, 5., 1., 0., 0.));
+    ok(e.command(OP_NOTE_OFF, 48., 0., 0., 0.));
+    run(&mut e, 400);
+    // Slots 0 and 1 too, then back to the default layout.
+    ok(e.command(OP_RETURN_KIND, 0., 2., 0., 0.));
+    ok(e.command(OP_RETURN_KIND, 1., 1., 0., 0.));
+    run(&mut e, 100);
+
+    assert_eq!(disarm(), 0, "RETURN_KIND allocated");
+    assert!(peak > 0.0 && peak.is_finite(), "must have sounded (peak {peak})");
+    assert!(l.iter().chain(r.iter()).all(|x| x.is_finite()));
+}
+
 /// `OP_RESET_ALL` (project load) on a busy engine allocates nothing: tracks,
 /// racks with pooled effects and a Sample Player, a grown sample arena (the
 /// reset only frees its extra chunk), the mixer and the output fade. A

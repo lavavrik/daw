@@ -24,7 +24,8 @@
   // ContextMenu key or Shift+F10 on a row's gain or pan or on Swing opens the
   // popover with a KnobDef built from the slider's range (GAIN_DEF, PAN_DEF,
   // SWING_DEF below): gain as the plain multiplier it shows ("1.25"), pan as
-  // L/C/R ("L25", or -1..1), swing in percent ("60"). The value is snapped to
+  // L/C/R in the grid's own spaced form (panText "L 25"; "L25" or -1..1
+  // also read), swing in percent ("60"). The value is snapped to
   // the slider's 0.01 step (1 % for swing), so the popover never sets what
   // the slider can't show. Set is the slider's own action: one undo entry,
   // labelled as a drag is. No menu items (no automation, no learn).
@@ -393,7 +394,7 @@
    * keyboard-made one, at 0,0, at the slider) or its ContextMenu / Shift+F10
    * key (at the slider). Other keys pass.
    */
-  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, get: () => number, set: (v: number) => void) {
+  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, get: () => number, set: (v: number) => void, format?: (v: number) => string) {
     const kbd = e instanceof KeyboardEvent;
     if (kbd && e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
     e.preventDefault(); // no native menu (nor, after the key, a contextmenu event)
@@ -402,7 +403,8 @@
     const at = kbd || (e.clientX === 0 && e.clientY === 0) ? null : e;
     openValuePopover({
       x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, label, def, from: el,
-      get value() { return get(); }, // live: the card follows an undo
+      value: get, // live: the card follows an undo
+      format, // pan: the grid's own "L 25"
       apply: (v) => { const s = snap(v); if (s !== get()) set(s); },
     });
   }
@@ -487,8 +489,8 @@
           style:--fill={pan.fill} style:--fill-pos={pan.pos}
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
           use:popoverOwner
-          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
-          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
+          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v), panText)}
+          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v), panText)}
         />
         <span class="val mono">{panText(row.pan)}</span>
       </label>

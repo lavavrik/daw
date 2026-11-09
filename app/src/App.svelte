@@ -62,7 +62,6 @@
   import { analyserBus } from './ui/vis/analyserBus';
   import { createVisHooks } from './ui/vis/visHooks';
   import { visWake } from './ui/vis/visWake';
-  import AutoMenu from './ui/AutoMenu.svelte';
   import ValuePopover from './ui/ValuePopover.svelte';
   import { cancelLearn, createCcRouter, learning } from './ui/midiLearn.svelte';
   import { laneView } from './ui/song/laneView.svelte';
@@ -1017,7 +1016,6 @@
         </div>
       </div>
     </div>
-    <AutoMenu p={project} {engine} bus={autoBus} />
     <ValuePopover p={project} {engine} bus={autoBus} />
   {/if}
 </div>

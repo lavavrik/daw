@@ -558,11 +558,10 @@ lanes with `pickAutomation(page, owner, 'Filter', 'Cutoff')`
     engine tick is behind the heard one) belongs to the new pass: the heard
     wrap does not end it, and its point is checked only after that wrap.
 - **"Automate".** Right-click a continuous knob or fader (or press the
-  ContextMenu key / Shift+F10 on the focused control: the menu opens at the
-  control, its item focused; Escape gives focus back): the in-app menu
-  (`ui/AutoMenu.svelte`, one for the app; on a knob, a fader or a track's
-  volume slider its items are the lower half of the precise-entry card,
-  `ui/ValuePopover.svelte`, plan 24, whose field has the focus instead) offers **Automate** (no lane yet:
+  ContextMenu key / Shift+F10 on the focused control: the card opens at the
+  control, its value field focused; Escape gives focus back): the
+  precise-entry card (`ui/ValuePopover.svelte`, plan 24) lists the
+  control's menu items (`ui/AutoMenu.svelte`) under its value part. It offers **Automate** (no lane yet:
   `addLane`, one undo entry) or **Show automation**. Either opens the
   owner's lanes (the track's A; the Master row for the returns and the
   master) and scrolls the lane into view (AutoLane's `data-lane`). At 64

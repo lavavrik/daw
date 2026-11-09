@@ -103,7 +103,7 @@
   // the menu open) and before the window's listeners, so its
   // stopPropagation keeps the App's Esc-ends-MIDI-learn (and a drag's
   // window-level Esc cancel) from also acting: one Esc closes only the
-  // topmost layer, the menu. The AutoMenu and a press-to-drag can't be open
+  // topmost layer, the menu. The value popover and a press-to-drag can't be open
   // together with a menu: opening either is a press outside the other.
   //
   // NEW / OPEN ask inline in the File menu (no confirm()) when something

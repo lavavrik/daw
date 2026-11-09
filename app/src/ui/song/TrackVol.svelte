@@ -106,7 +106,7 @@
     const r = el?.getBoundingClientRect();
     openValuePopover({
       x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: `${track.name} volume`, def: mixParam('fader'),
-      get value() { return db; }, // live: the card follows an undo, a CC, a lane
+      value: () => db, // live: the card follows an undo, a CC, a lane
       apply: setVol, from: el, auto: bus ? { owner: track.id, target: FADER } : null,
     });
   }

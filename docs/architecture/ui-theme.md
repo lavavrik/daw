@@ -245,13 +245,12 @@ of these class names keeps its own box when it sets its own padding and font.
 - The bottom panel's tabs are 20 px (`padding: 2px 9px` on a 2 px `--work`
   tray), not the board's 30 px: the header must stay one row under 40 px at
   1280 px beside the pattern transport (`layout.spec.ts`).
-- Menus come in two looks: a light one like the open select (`AutoMenu`,
-  the floating right-click Automate / MIDI learn menu: `--text`, dark text;
-  every control now shows its items inside the precise-entry card instead,
-  below) and a
-  `--panel` card with the lift for popovers with their own controls (the
-  Rack's add-module menu, the piano roll's Examples, `InlineConfirm`). Both
-  use `--r-menu` / `--r-md` and `--lift`.
+- Popovers with their own controls are a `--panel` card with the lift (the
+  Rack's add-module menu, the piano roll's Examples, `InlineConfirm`, the
+  precise-entry card below, whose lower half is the Automate / MIDI learn
+  items, `AutoMenu`). They use `--r-menu` / `--r-md` and `--lift`. (A
+  light, select-like floating AutoMenu existed until plan 24 folded it into
+  the card.)
 - The rack and the mixer strips are mechanical faceplates (plan 21 Task
   10, above), reversing plan 20 §3's "sliders instead of dials" there only.
   Every mixer strip knob (EQ, Comp, the returns' effects, sends, pan, the
@@ -433,7 +432,7 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
 Plan 24: right-click a slider-like control (or press the ContextMenu key or
 Shift+F10 on it) for a small card that sets an exact value.
 `ui/ValuePopover.svelte` is the card, and its header documents the API.
-There is one card for the app, rendered by `App.svelte` next to `AutoMenu`.
+There is one card for the app, rendered by `App.svelte`.
 Callers call `openValuePopover`; opening another replaces the open one.
 
 - **Anatomy.** A `--panel` card with `--lift`, `--r-lg` (12 px) and 12 px
@@ -445,9 +444,9 @@ Callers call `openValuePopover`; opening another replaces the open one.
   - a quiet **Reset** to the default (`.btn.quiet`, `value-reset`);
   - the dim mono range hint "min … max".
 
-  Under a `--line` rule come the control's AutoMenu items: `AutoMenu` with
-  `inline`, which keeps `auto-ctl-menu`, `auto-ctl-automate`,
-  `auto-ctl-midi` and the arrow keys. With no items, the value part shows
+  Under a `--line` rule come the control's menu items: `AutoMenu`, which
+  renders only that list (`auto-ctl-menu`, `auto-ctl-automate`,
+  `auto-ctl-midi`) with its arrow keys. With no items, the value part shows
   alone.
 - **Text.** `knobMath.entryParts(def, v)` splits the readout into the field
   text and the suffix, with an ASCII minus so the text is easy to edit. The
@@ -455,9 +454,10 @@ Callers call `openValuePopover`; opening another replaces the open one.
   ("0.7", never "0" + ".7"), and the minimum's label ("−∞", "Off", "off")
   shows as it reads, with no suffix.
   `parseValue(def, text, readout)` reads the text back:
-  - a bare number is in the unit shown, so "2" next to kHz is 2 kHz; next
-    to the minimum's label, in the unit the maximum shows (the EQ high-pass
-    at "Off": "1" is 1 kHz);
+  - a bare number is in the unit shown as the field's suffix, so "1.5" next
+    to kHz is 1.5 kHz. With no suffix shown (the minimum's label), it is in
+    the param's base unit (Hz, s, dB…): the EQ high-pass at "Off" reads
+    "100" as 100 Hz. An explicit unit ("100 Hz", "1.5k") always wins;
   - it accepts "1.2k", "-6 dB", "C3", "50%", "L25", and the minimum's label
     in any case, alone or with a unit the param shows ("-inf dB", "Off kHz",
     "off s"), so retyping what is shown always works;
@@ -470,7 +470,8 @@ Callers call `openValuePopover`; opening another replaces the open one.
   - Set or Enter calls the caller's `apply` once, only when the value
     changed. Knob passes its `change`, so the edit is one undo entry with
     the knob's usual label. A field left as it shows changes nothing.
-  - The value is read live (callers pass a getter): until the user types,
+  - The value is read live (the request's `value` is a function,
+    `() => number`, so the type asks for it): until the user types,
     the field follows an undo, a MIDI CC or a lane, and Set / Reset compare
     with the value of the moment.
   - Text that doesn't parse gets a `--rec` outline and "Not a value"
@@ -494,7 +495,7 @@ Callers call `openValuePopover`; opening another replaces the open one.
   edge it flips to the pointer's other side, and it is clamped 8 px inside
   the window, again whenever its size changes (a ResizeObserver: the error
   line). The keyboard opens it under the control.
-- **Layering.** `position: fixed`, z-index 60 (AutoMenu's), not the top
+- **Layering.** `position: fixed`, z-index 60, not the top
   layer. The global tooltip is in the top layer, so tips for Set, Reset and
   the items show above the card. A press or focus moving into the card
   releases the control's own tip, so that tip never covers the field.
@@ -507,10 +508,10 @@ Callers call `openValuePopover`; opening another replaces the open one.
   - the mixer `Fader` and the song `TrackVol` (Task 2): the catalog's
     `fader` def, so the field is in dB ("-6", "-inf" = silence) and Reset
     is 0 dB. Their right-click menu (Automate, MIDI learn) is the card's
-    lower half now; nothing opens the floating AutoMenu any more, though
-    `openAutoMenu` is kept for other callers;
+    lower half now (the floating menu, `openAutoMenu`, is gone);
   - the step grid's native ranges (Task 2): row gain (a plain multiplier,
-    0..2), row pan (L/C/R) and Swing (percent). `StepGrid.svelte` builds
+    0..2), row pan (L/C/R, shown in the grid's own "L 25" through the
+    request's `format`) and Swing (percent). `StepGrid.svelte` builds
     their `KnobDef`s and snaps the value to the slider's 0.01 step, so the
     card never sets what the slider can't show. They have no items.
   - A caller with no catalog param builds a `KnobDef`: label, min, max,

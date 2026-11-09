@@ -124,15 +124,16 @@ module the FX pool dropped. Slots become the new track ids in
 
 ## UI (`ui/midiLearn.svelte.ts`, AutoMenu, Knob, Fader)
 
-- **The menu.** Right-click (or the ContextMenu key / Shift+F10) on a knob
-  or fader opens `AutoMenu.svelte` (its items inside the precise-entry
-  card, `ValuePopover.svelte`, plan 24, on knobs, faders and the track
-  volume sliders): "Automate" / "Show automation" when
+- **The menu.** Right-click (or the ContextMenu key / Shift+F10) on a knob,
+  a fader or a track's volume slider opens the precise-entry card
+  (`ValuePopover.svelte`, plan 24), whose lower half is `AutoMenu.svelte`'s
+  items: "Automate" / "Show automation" when
   `bus.canAutomate` (continuous params), then "MIDI learn", or "Forget MIDI
   (CC 74)" when the control has a CC, when `bus.canLearn` (continuous and
-  integer: `canLearn` = `mappingDef` + `learnableDef`). The menu opens when
-  either kind of item exists, so an integer knob (octave) opens it for learn
-  only (a knob or fader always opens the card; its items part is there when one exists). ArrowUp / ArrowDown move between the items, Escape closes it.
+  integer: `canLearn` = `mappingDef` + `learnableDef`). The items part is
+  there when either kind of item exists, so an integer knob (octave) lists
+  learn only (the card itself always opens). ArrowUp / ArrowDown move
+  between the items, Escape closes the card.
   Controls without an `auto` identity (the scope's knobs) offer neither.
 - **Learn mode.** `startLearn(owner, target, label)` sets the one learn
   target (a second "MIDI learn" replaces it), shows the hint "Move a knob on

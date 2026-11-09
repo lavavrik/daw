@@ -501,15 +501,26 @@ describe('the popover field round-trips on every catalog param (review T1 #1, #5
     expect(parseValue(mixParam('send_a'), 'off db')).toBe(mixParam('send_a').min);
     expect(parseValue(hp, 'Off dB')).toBeNull(); // not a unit this param shows
   });
-  it('a bare number beside a minimum\'s label is in the unit the maximum shows', () => {
-    const hp = mixParam('eq_hp'); // 20 (Off) .. 1000 Hz, the maximum reads "1 kHz"
-    expect(formatValue(hp, hp.max)).toBe('1 kHz');
-    expect(parseValue(hp, '1', 'Off')).toBe(1000); // kHz
-    expect(parseValue(hp, '0.5', 'Off')).toBe(500);
-    expect(parseValue(hp, '200 Hz', 'Off')).toBe(200); // an explicit unit wins
-    expect(parseValue(glide, '0.5', 'off')).toBe(0.5); // the maximum reads "2 s"
-    // Off the label, the readout's own unit as before.
+  it('a bare number is in the unit shown (the field\'s suffix); with none shown, the base unit; an explicit unit wins', () => {
+    const hp = mixParam('eq_hp'); // 20 (Off) .. 1000 Hz
+    // At "Off" no unit is shown: the base unit, Hz.
+    expect(parseValue(hp, '100', 'Off')).toBe(100);
+    expect(parseValue(hp, '100')).toBe(100);
+    expect(parseValue(glide, '0.5', 'off')).toBe(0.5); // s
+    expect(parseValue(mixParam('fader'), '-12', '−∞')).toBe(-12); // dB
+    // "1.2 kHz" shown: a bare "1.5" is 1.5 kHz; with Hz shown, Hz.
+    expect(parseValue(cutoff, '1.5', '1.2 kHz')).toBe(1500);
     expect(parseValue(hp, '200', formatValue(hp, 120))).toBe(200);
+    // Explicit units win over what is shown.
+    expect(parseValue(cutoff, '100 Hz', '1.2 kHz')).toBe(100);
+    expect(parseValue(hp, '0.5k', 'Off')).toBe(500);
+    expect(parseValue(cutoff, '1.5k', '300 Hz')).toBe(1500);
+  });
+  it('pan reads "L25" and "L 25" (the step grid shows the spaced form)', () => {
+    const pan: KnobDef = { label: 'Pan', name: 'pan', min: -1, max: 1, default: 0, integer: false, unit: '', curve: 'lin', choices: [] };
+    for (const t of ['L25', 'L 25', 'l 25', 'L25%']) expect(parseValue(pan, t), t).toBe(-0.25);
+    expect(parseValue(pan, 'R 100')).toBe(1);
+    expect(parseValue(pan, 'C')).toBe(0);
   });
 });
 

@@ -364,12 +364,12 @@ function isMinLabel(d: KnobDef, labels: string[], t: string): boolean {
  *        ("-inf dB", "Off kHz", "off s"): retyping what is shown always works
  *   -1..1 amounts (unitless, bipolar): "-0.5" or "-50%"
  *   note "E4", "c#3", "Db4", "Mi4", "sol3" (or the MIDI number) for a note param (root)
- * A bare number is read in the unit the readout currently shows (`shown`):
- * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
- * When the readout is the minimum's label ("Off", "off", "−∞"), it has no
- * unit, so a bare number is read in the unit the param shows at its
- * maximum: the EQ's high-pass at "Off" (max "1 kHz") reads "1" as 1 kHz,
- * glide at "off" (max "2 s") reads "0.5" as 0.5 s.
+ * A bare number is read in the unit the readout currently shows (`shown`;
+ * the popover's field suffix): with "1.2 kHz" on screen, "1.5" means
+ * 1.5 kHz; with "12 ms", "30" means 30 ms. With no unit shown (the
+ * minimum's label "Off" / "off" / "−∞", or no `shown`), it is in the
+ * param's base unit (Hz, s, dB…): the EQ's high-pass at "Off" reads "100"
+ * as 100 Hz. An explicit unit ("100 Hz", "1.5k", "30 ms") always wins.
  */
 export function parseValue(d: KnobDef, text: string, shown = ''): number | null {
   const t = normText(text);
@@ -398,10 +398,8 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
   if (!m) return null;
   const n = Number(m[1]);
   const suf = m[2];
-  // The unit a bare number is in: the readout's, or the maximum's when the
-  // readout is the minimum's label (header).
-  let sh = normText(shown);
-  if (isMinLabel(d, labels, sh)) sh = normText(formatValue(d, d.max));
+  // The unit a bare number is in: the readout's (a label has none: the base unit).
+  const sh = normText(shown);
   switch (d.unit) {
     case 'Hz':
       if (suf === 'k' || suf === 'khz') return done(n * 1000);

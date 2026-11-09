@@ -24,12 +24,12 @@
   //             accepts ("1.2k", "-6 dB", "C3", "50%", "L25", "-inf"), the
   //             range hint. The parsed value is clamped to [min, max] and an
   //             integer def rounds.
-  //     value   the current value (the control's own, un-automated base).
-  //             Pass a getter (`get value() { return value; }`): it is read
-  //             live, so while the card is open and nothing is typed yet the
-  //             field follows the control (an undo, a MIDI CC, a lane), and
-  //             Set / Reset compare against the value of the moment. A plain
-  //             number works too (a snapshot).
+  //     value   a getter for the current value (the control's own,
+  //             un-automated base): `value: () => value`. A function, not a
+  //             number, so the type itself asks for a live read: while the
+  //             card is open and nothing is typed yet, the field follows the
+  //             control (an undo, a MIDI CC, a lane), and Set / Reset compare
+  //             against the value of the moment, not the one it opened on.
   //     apply   called at most once, with the new value, when it differs from
   //             the live `value`: Set / Enter with a new value, or Reset off
   //             the default. The caller's normal edit path (Knob: bus.touch, then
@@ -42,6 +42,10 @@
   //     auto    optional { owner, target }: the lower half lists that
   //             target's AutoMenu items (menuItems decides which; none, none
   //             shown). Omit it (or null) for a control with no menu.
+  //     format  optional (v) => text: the field's text and the range hint
+  //             when the control's own readout differs from knobMath's
+  //             (the step grid's pan reads "L 25", formatValue "L25"). The
+  //             whole text, no suffix; parseValue (def) must read it back.
   //
   //   closeValuePopover(from?)  closes it (only when it belongs to `from`,
   //             if given: a control that unmounts calls this).
@@ -84,10 +88,13 @@
     y: number;
     label: string;
     def: KnobDef;
-    value: number;
+    /** The live value (header): read again whenever it matters. */
+    value: () => number;
     apply: (v: number) => void;
     from: HTMLElement | null;
     auto?: { owner: MixChannelTarget; target: AutoTarget } | null;
+    /** The control's own readout text, when it differs from formatValue (header). */
+    format?: (v: number) => string;
   }
 
   // Raw: the request is the caller's own objects (a catalog def, its auto
@@ -128,7 +135,7 @@
   /** The user typed in the field: it stops following the value. */
   let typed = false;
   /** The control's value, read live (the caller's getter). */
-  const live = $derived(req ? req.value : 0);
+  const live = $derived(req ? req.value() : 0);
   /** Placed after measuring (header: kept inside the window). */
   let left = $state(0);
   let top = $state(0);
@@ -137,15 +144,17 @@
     const m = menuItems(bus, req.auto.owner, req.auto.target);
     return m.automate || m.midi;
   });
-  const range = $derived(req ? `${formatValue(req.def, req.def.min)} … ${formatValue(req.def, req.def.max)}` : '');
+  /** The control's readout of `v`: its own format, else knobMath's. */
+  const fmt = (r: ValuePopoverReq, v: number) => (r.format ? r.format(v) : formatValue(r.def, v));
+  const range = $derived(req ? `${fmt(req, req.def.min)} … ${fmt(req, req.def.max)}` : '');
 
   /** Margin kept from the window's edges (px). */
   const EDGE = 8;
 
   /** The field's text, suffix and readout from value `v`. */
   function show(r: ValuePopoverReq, v: number) {
-    readout = formatValue(r.def, v);
-    ({ text: opened, unit } = entryParts(r.def, v));
+    readout = fmt(r, v);
+    ({ text: opened, unit } = r.format ? { text: readout, unit: '' } : entryParts(r.def, v));
     draft = opened;
   }
 
@@ -156,7 +165,7 @@
     if (!r) return;
     untrack(() => {
       typed = false;
-      show(r, r.value);
+      show(r, r.value());
       bad = false;
       left = r.x;
       top = r.y;
@@ -175,7 +184,7 @@
     const v = live;
     untrack(() => {
       const r = req;
-      if (!r || typed || formatValue(r.def, v) === readout) return;
+      if (!r || typed || fmt(r, v) === readout) return;
       const all = !!input && document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length;
       show(r, v);
       if (all) void tick().then(() => input?.select());
@@ -227,14 +236,14 @@
       input?.focus();
       return;
     }
-    if (v !== r.value) r.apply(v); // the live value
+    if (v !== r.value()) r.apply(v); // the live value
     close(true);
   }
 
   function reset() {
     const r = active;
     if (!r) return;
-    if (r.def.default !== r.value) r.apply(r.def.default);
+    if (r.def.default !== r.value()) r.apply(r.def.default);
     close(true);
   }
 
@@ -330,7 +339,7 @@
         {#if unit}<span class="unit mono" aria-hidden="true">{unit}</span>{/if}
       </span>
       <button class="btn primary" data-testid="value-set" onclick={set}>Set</button>
-      <button class="btn quiet" data-testid="value-reset" title={`Back to the default, ${formatValue(req.def, req.def.default)}`} onclick={reset}>Reset</button>
+      <button class="btn quiet" data-testid="value-reset" title={`Back to the default, ${fmt(req, req.def.default)}`} onclick={reset}>Reset</button>
     </div>
     {#if bad}
       {#key badN}
@@ -340,7 +349,7 @@
     <div class="range mono" id="value-popover-range">{range}</div>
     {#if req.auto && hasItems}
       <div class="items">
-        <AutoMenu {p} {engine} {bus} inline={{ owner: req.auto.owner, target: req.auto.target, label: req.label }} onclose={() => close(true)} />
+        <AutoMenu {p} {engine} {bus} control={{ owner: req.auto.owner, target: req.auto.target, label: req.label }} onclose={() => close(true)} />
       </div>
     {/if}
   </div>

@@ -287,9 +287,14 @@ test('step grid: row gain "1.5", row pan "L25" (−0.25), swing "60" (60 %)', as
   await enter(page, pan, 'L25');
   await expect.poll(async () => (await row0(page)).pan).toBe(-0.25);
   await expect(row.locator('.pan .val')).toHaveText('L 25');
-  // Reset: back to centre.
+  // The field shows the grid's own form ("L 25"), and reads it back; Reset: back to centre.
   await pan.click({ button: 'right' });
-  await expect(page.getByTestId('value-input')).toHaveValue('L25');
+  await expect(page.getByTestId('value-input')).toHaveValue('L 25');
+  await expect(page.getByTestId('value-popover')).toContainText('L 100 … R 100');
+  await page.keyboard.type('R 40');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await row0(page)).pan).toBe(0.4);
+  await pan.click({ button: 'right' });
   await page.getByTestId('value-reset').click();
   await expect.poll(async () => (await row0(page)).pan).toBe(0);
 

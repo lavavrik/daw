@@ -251,7 +251,7 @@
     const r = knobEl?.getBoundingClientRect();
     openValuePopover({
       x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def,
-      get value() { return value; }, // live: the card follows an undo, a CC, a lane
+      value: () => value, // live: the card follows an undo, a CC, a lane
       apply: change, from: knobEl, auto: bus && auto ? auto : null,
     });
   }

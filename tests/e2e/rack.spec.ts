@@ -565,10 +565,16 @@ test('a refused nudge flashes the module red and is announced again each time', 
   await loadBrass(page);
   const rects = await panelRects(page);
   expect(Math.abs(rects[1].top - rects[0].top)).toBeLessThan(1);
-  // Module 1 touches module 0 in the flow (its footprint ends where 1 starts): Alt+Left is refused.
+  // Module 1 sits one grid unit after module 0 (the minimum gap): Alt+Left is refused.
   await page.getByTestId('module-header-1').focus();
   await page.keyboard.press('Alt+ArrowLeft');
   await expect(page.getByTestId('rack-bump-outline')).toBeVisible();
+  // The focused panel is raised over the cables (z 5); the flash must draw above it, not under its face.
+  const z = await page.evaluate(() => ({
+    bump: Number(getComputedStyle(document.querySelector('[data-testid="rack-bump-outline"]')!).zIndex),
+    panel: Number(getComputedStyle(document.querySelector('[data-testid="module-header-1"]')!.closest('[data-testid^="module-panel"], .panel')!).zIndex) || 0,
+  }));
+  expect(z.bump).toBeGreaterThan(z.panel);
   await expect(page.getByTestId('jack-status')).toHaveText(NO_ROOM);
   // The second refusal clears the region first, then says it again (a polite region re-announces only a change).
   const seen = page.evaluate(() => new Promise<string[]>((resolve) => {

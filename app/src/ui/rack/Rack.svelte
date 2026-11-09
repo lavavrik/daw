@@ -1400,7 +1400,7 @@
      An empty band (a row a move emptied) is outlined like the rest: a free spot. */
   .band { position: absolute; left: 0; right: 6px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--text-2) 20%, transparent); border-radius: var(--r-sm); }
   /* A refused nudge: the module's outline flashes red (above the panel, under the cables). */
-  .outline.bump { z-index: 3; background: none; animation: bump 400ms ease-out forwards; }
+  .outline.bump { z-index: 6; background: none; /* above a raised panel (z 5): the focused panel is the one that bumps */ animation: bump 400ms ease-out forwards; }
   @keyframes bump { from { opacity: 1; } to { opacity: 0; } }
   .newrow { left: 6px; right: 6px; padding: 4px 8px; border: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-lbl); }
   /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */

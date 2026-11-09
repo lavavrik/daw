@@ -188,18 +188,58 @@ test('drag module to a new row', async ({ page }) => {
   await expect.poll(() => anyPos(page)).toBe(false); // flow again
 });
 
-test('drop pushes neighbour', async ({ page }) => {
+// ---- Plan 22 Task 3: free-spot-only placement --------------------------------
+
+const NO_ROOM = 'No free spot there — the module stays';
+
+test('a small drag moves only that module: no other module jumps; the grid shows while dragging', async ({ page }) => {
+  // The owner's case: the last module of the first row (Out, in their rack) a bit to the right.
   await loadBrass(page);
-  const rects = await panelRects(page);
-  // B: the first panel of the second flow row; A: module 0 (first row).
-  const top0 = rects[0].top;
-  const b = Number(Object.entries(rects).filter(([, r]) => r.top > top0 + 2).sort((x, y) => x[1].top - y[1].top || x[1].left - y[1].left)[0][0]);
-  await dragHeader(page, 0, rects[b].left - rects[0].left, rects[b].top - rects[0].top);
-  const pos = await positions(page);
-  const wA = Math.ceil(rects[0].width / 10);
-  expect(pos[0]!.row).toBe(pos[b]!.row);
-  expect(pos[b]!.x).toBeGreaterThanOrEqual(pos[0]!.x + wA);
+  const before = await panelRects(page);
+  const row0 = Object.entries(before).filter(([, r]) => Math.abs(r.top - before[0].top) < 1).sort((a, b) => a[1].left - b[1].left);
+  const last = Number(row0[row0.length - 1][0]);
+  const a = await headerGrip(page, last);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 15, a.y, { steps: 3 });
+  await page.mouse.move(a.x + 30, a.y, { steps: 3 });
+  // The grid (ticks + row bands) shows during the drag; the outline fits.
+  await expect(page.getByTestId('rack-grid')).toBeVisible();
+  await expect(page.getByTestId('rack-grid').locator('.band')).toHaveCount(new Set(Object.values(before).map((r) => Math.round(r.top))).size);
+  await expect(page.getByTestId('rack-drop-outline')).not.toHaveAttribute('data-refused', 'true');
+  await page.mouse.up();
+  await expect(page.getByTestId('rack-grid')).toHaveCount(0);
+  await expect.poll(() => undoLabel(page)).toBe('Move module');
+  // The first drag pinned every module exactly where it was drawn: none moved but the dragged one (3 grid units).
+  await expect.poll(async () => (await panelRects(page))[last].left).toBeCloseTo(before[last].left + 30, 0);
+  const after = await panelRects(page);
+  for (const [k, r] of Object.entries(before)) {
+    if (Number(k) === last) continue;
+    expect(Math.abs(after[Number(k)].left - r.left), `module ${k} left`).toBeLessThanOrEqual(1);
+    expect(Math.abs(after[Number(k)].top - r.top), `module ${k} top`).toBeLessThanOrEqual(1);
+  }
+  expect(Object.values(await positions(page)).every((q) => q !== null)).toBe(true);
   await expect.poll(async () => { const e = await plugError(page); return e.n > 0 && e.worst <= 3; }).toBe(true);
+});
+
+test('a drop onto another module is refused: red outline, nothing moves, nothing written', async ({ page }) => {
+  await loadBrass(page);
+  const before = await panelRects(page);
+  const was = await undoLabel(page);
+  expect(Math.abs(before[1].top - before[0].top)).toBeLessThan(1); // 0 and 1 share the first row
+  // Module 0's left onto module 1's left: deep inside 1 (no free spot within the snap reach).
+  const a = await headerGrip(page, 0);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + (before[1].left - before[0].left), a.y, { steps: 6 });
+  await expect(page.getByTestId('rack-drop-outline')).toHaveAttribute('data-refused', 'true');
+  await expect(page.getByTestId('rack-drop-refusal')).toHaveText(NO_ROOM);
+  await page.mouse.up();
+  await expect(page.getByTestId('flash-hint')).toHaveText(NO_ROOM);
+  expect(await anyPos(page)).toBe(false); // not even pinned
+  expect(await undoLabel(page)).toBe(was);
+  const after = await panelRects(page);
+  for (const [k, r] of Object.entries(before)) expect(Math.abs(after[Number(k)].left - r.left) + Math.abs(after[Number(k)].top - r.top), `module ${k}`).toBeLessThanOrEqual(1);
 });
 
 test('click on header is not an edit', async ({ page }) => {
@@ -316,25 +356,25 @@ test('x stays within 0..1000', async ({ page }) => {
   await page.keyboard.press('Alt+ArrowRight');
   expect(await positions(page)).toEqual(pos);
 
-  // Module 7 into the VCA's row, right up against it: a nudge would push it to 1001.
+  // Module 7 into the VCA's row, right up against it: a nudge right would overlap it.
   const w7 = Math.ceil(rects[7].width / 10);
   await dragToGridX(page, 7, 1000 - w7, 6);
   pos = await positions(page);
   expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 });
   await page.getByTestId('module-header-7').focus();
   await page.keyboard.press('Alt+ArrowRight');
-  expect(await positions(page)).toEqual(pos); // refused, nothing written
-  await expect(page.getByTestId('jack-status')).toHaveText('Too far right — move left or Tidy'); // and says why
+  expect(await positions(page)).toEqual(pos); // refused, nothing written (the VCA is not pushed)
+  await expect(page.getByTestId('jack-status')).toHaveText(NO_ROOM); // and says why
 
-  // A drop that would push the VCA past 1000 is refused too (red outline + hint, no write).
+  // A drop onto the VCA is refused too (red outline + hint, no write).
   a = await headerGrip(page, 7);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
   await page.mouse.move(a.x + 50, a.y, { steps: 4 });
   await expect(page.getByTestId('rack-drop-outline')).toHaveAttribute('data-refused', 'true');
-  await expect(page.getByTestId('rack-drop-refusal')).toHaveText('Too far right — move left or Tidy');
+  await expect(page.getByTestId('rack-drop-refusal')).toHaveText(NO_ROOM);
   await page.mouse.up();
-  await expect(page.getByTestId('flash-hint')).toHaveText('Too far right — move left or Tidy');
+  await expect(page.getByTestId('flash-hint')).toHaveText(NO_ROOM);
   expect(await positions(page)).toEqual(pos);
 });
 
@@ -366,33 +406,35 @@ test('a panel past x 1000 does not block other moves', async ({ page }) => {
   await expect.poll(async () => (await panelRects(page))[10].left).toBeCloseTo(r[10].left, 0);
 });
 
-test('drop onto the left neighbour\'s right half does not swap', async ({ page }) => {
+test('a near miss snaps to the free spot beside a neighbour; Alt+Left into it does nothing', async ({ page }) => {
   await loadBrass(page);
   const rects = await panelRects(page);
-  expect(Math.abs(rects[1].top - rects[0].top)).toBeLessThan(2); // 0 and 1 share the first row
-  const x0 = Math.round((rects[0].left - 6) / 10);
-  const w0 = Math.ceil(rects[0].width / 10);
-  // Pin with B (1) moved 8 units right, then B dragged with its left edge 3/4
-  // into A (0): it snaps to A's right edge, A stays.
-  await dragHeader(page, 1, 80, 0);
-  expect((await positions(page))[1]!.x).toBeGreaterThan(x0 + w0);
-  const moved = await panelRects(page);
-  await dragHeader(page, 1, moved[0].left + 0.75 * moved[0].width - moved[1].left, 0);
+  expect(Math.abs(rects[2].top - rects[1].top)).toBeLessThan(1); // 1 and 2 share the first row, 2 last
+  const x1 = (rects[1].left - 6) / 10;
+  const end1 = x1 + Math.ceil(rects[1].width / 10); // module 1's right edge (grid units)
+  // Pin with 2 moved 6 units right (free space), then 2 dropped 1 unit into 1: it snaps to 1's right edge.
+  await dragHeader(page, 2, 60, 0);
+  const x2 = (await positions(page))[2]!.x;
+  expect(x2).toBe((rects[2].left - 6) / 10 + 6);
+  await dragToGridX(page, 2, end1 - 1);
   let pos = await positions(page);
-  expect(pos[0]).toEqual({ row: 0, x: x0 });
-  expect(pos[1]).toEqual({ row: 0, x: x0 + w0 });
-  // Alt+Left into the touching neighbour: no change, nothing written.
-  await page.getByTestId('module-header-1').focus();
+  expect(pos[2]).toEqual({ row: 0, x: end1 });
+  expect(pos[1]).toEqual({ row: 0, x: x1 }); // module 1 never moves
+  // Alt+Left into the touching neighbour: nothing written, the live region says why.
+  await page.getByTestId('module-header-2').focus();
   await page.keyboard.press('Alt+ArrowLeft');
   expect(await positions(page)).toEqual(pos);
-  // In A's LEFT half A would be pushed: its new place is outlined during the drag.
-  const a = await headerGrip(page, 1);
+  await expect(page.getByTestId('jack-status')).toHaveText(NO_ROOM);
+  // Alt+Right into free space moves it.
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(async () => (await positions(page))[2]).toEqual({ row: 0, x: end1 + 1 });
   pos = await positions(page);
-  const now = await panelRects(page);
+  // A deep overlap (5 units into 1) is refused; Esc mid-drag writes nothing either.
+  const a = await headerGrip(page, 2);
   await page.mouse.move(a.x, a.y);
   await page.mouse.down();
-  await page.mouse.move(a.x + now[0].left + 0.2 * now[0].width - now[1].left, a.y, { steps: 5 });
-  await expect(page.getByTestId('rack-push-outline-0')).toBeVisible();
+  await page.mouse.move(a.x - 60, a.y, { steps: 5 });
+  await expect(page.getByTestId('rack-drop-outline')).toHaveAttribute('data-refused', 'true');
   await page.keyboard.press('Escape');
   await page.mouse.up();
   expect(await positions(page)).toEqual(pos);

@@ -6,37 +6,66 @@ the audio thread renders in small sub-blocks. Code: `engine/src/rack/mod.rs` (gr
 `engine/src/rack/modules/*.rs` (the DSP); the generated module list is
 `engine/catalog.json`.
 
-## Layout (plan 18)
+## Layout (plan 18; plan 22 placement rule)
 
 The Instrument tab's rack (`app/src/ui/rack/Rack.svelte`) has two layouts.
-Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3.
+Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3;
+the placement rule is plan 22's "Rack placement" (it supersedes plan 18's
+push rule).
 
-- **Flow** (no module has a `pos`: house patches, older projects). This is
-  plan 13's wrapping rail, unchanged. `.content` is a wrapping flex container
-  the width of the rail (`flex-wrap: wrap; width: 100%`), with 14 px between
-  rows, and each row is as tall as its tallest panel. Panels go by `idx`,
-  left to right, then down.
-- **Positioned** (any module has a `pos: {row, x}`, `x` in 10 px grid units).
+**The grid.** Everything sits on one grid: columns of 10 px (`GRID`) from
+the content padding (6 px), and rows. A panel's `x` and width are in grid
+units (its width rounded up). The pure layout is
+`app/src/ui/rack/rackLayout.ts` (tests: `rackLayout.test.ts`).
+
+- **Flow** (no module has a `pos`: house patches, older projects, after
+  Tidy). `flowRack` places the panels by `idx`, left to right, each taking
+  `ceil((width + 8 px) / 10)` units, and wraps when the next one would pass
+  the rail's inner width (a panel wider than the rail gets a row of its
+  own). It is on the same grid as a positioned rack, so the first drag pins
+  every module exactly where it is drawn. (Plan 22 root cause: the flow
+  used to be CSS flex with 8 px gaps, and the first drag re-derived
+  positions from the on-screen rects by rounding to the grid. Each panel
+  moved by up to 5 px, and a rounded overlap was then pushed right, so the
+  whole row jumped.) Until every panel has been measured, `.content`'s CSS
+  flex-wrap flow shows instead (one frame, before the first paint in
+  practice).
+- **Positioned** (any module has a `pos: {row, x}`). `layoutRack` draws the
+  saved positions; modules without a `pos` go at the end of the bottom row,
+  and empty rows are compacted.
+- Both are drawn the same way:
   - The panels are absolutely positioned inside `.content` at
     `left = 6 + x·10`. The top of a row is the sum of the heights of the rows
     above it plus 14 px gaps.
   - A row is as tall as its tallest panel, measured from the DOM.
   - Every panel gets `min-height` = its row's height (`box-sizing:
-    border-box`), so a row's jacks line up at the bottom as in flow. Panels
-    keep `width: max-content`: far to the right, shrink-to-fit would squeeze
+    border-box`), so a row's jacks line up at the bottom. Panels keep
+    `width: max-content`: far to the right, shrink-to-fit would squeeze
     them.
   - `.content` gets an explicit width (at least 100 %) and height, so the
     rail scrolls both ways.
-  - The pure layout is in `app/src/ui/rack/rackLayout.ts`:
-    - `layoutRack` resolves overlap left to right in each row, so a panel
-      that grows pushes its neighbours instead of covering them;
-    - `moveTo` places a module and pushes what it overlaps right
-      (cascading). When the module's left edge lands inside a panel P, in
-      P's right half (x ≥ P.x + P.w/2) it first snaps to P's right edge (P
-      stays: no swap, no gap); in P's left half P is pushed right of it.
-      So Alt+Left on a panel touching its left neighbour changes nothing;
-    - modules without a `pos` go at the end of the bottom row;
-    - empty rows are compacted.
+
+**Placement rule (plan 22).** Only the module you move ever moves.
+
+- `fits(placed, idx, row, x)` says whether the module fits at (row, x)
+  without overlapping another module of that row. Touching is fine, and a
+  new row below the last always fits.
+- `moveTo` moves only that module, and returns null when it doesn't fit
+  there. The caller then writes nothing and the module stays. There is no
+  push and no swap.
+- Overlap already in the saved data (an older project saved under the push
+  rule with different widths, a panel that got wider) is resolved by
+  `layoutRack`, deterministically: left to right in each row, each panel
+  starts at the previous one's right edge. A layout without overlap is
+  drawn exactly as saved (`saved_layout_without_overlap_is_drawn_as_saved`).
+  Every move saves the whole drawn layout (`toPositions`), so the
+  resolution happens once and the next move writes it into the data.
+  Drawing never pushes anything that the saved data doesn't already
+  overlap. Plan 22 Task 2 makes a panel's width independent of its values,
+  so a knob turn can't create an overlap.
+- Rows below a row that empties move up one row index (compaction). Row
+  heights follow their tallest panel, so a row's top can change when a tall
+  panel leaves or joins a row above it. Columns never change.
 
 **Measuring.** `measure()` reads every panel's `offsetWidth` and natural
 height (a transform doesn't change them) into `dims`. The layout is derived
@@ -72,31 +101,49 @@ handle. A press on its × is not a drag.
   - the target row is the row band under the pointer (bands come from the
     panel rects at the press), and below the last band a dashed "new row"
     band shows;
-  - x is `round((pointer − grab offset − 6) / 10)`;
-  - a dashed outline shows `moveTo`'s placement of the module, and fainter
-    outlines (`rack-push-outline-<idx>`) show where the panels it pushes
-    would go.
-- On release, with more than 3 px of travel and a changed placement, there
-  is one `setRackLayout(…, 'Move module')`. It runs inside the pointer
-  gesture, so it makes one undo entry.
+  - x is `round((pointer − grab offset − 6) / 10)`, then the nearest x
+    within 2 units (20 px) where the module fits (`nearestFit`, ties to the
+    left). A near miss beside a neighbour snaps against it instead of
+    turning red;
+  - a dashed outline (`rack-drop-outline`) shows where the module would
+    land. Where it doesn't fit, the outline stays at the pointer's x and
+    turns red, with "No free spot there — the module stays" under it
+    (`rack-drop-refusal`, `data-refused`);
+  - the grid is drawn faintly behind the panels (`rack-grid`). It has
+    column lines every 10 px, stronger every 50 px, starting at the content
+    padding, and each row band outlined. Colours are `--text-2` mixes. It
+    is hidden otherwise.
+- On release, with more than 3 px of travel and a changed placement that
+  fits, there is one `setRackLayout(…, 'Move module')`. It runs inside the
+  pointer gesture, so it makes one undo entry. A refused drop writes
+  nothing, and the panel goes back. The status line (`flashHint`) and the
+  live region say why.
 - **Bounds.** The saved `pos` must stay within row 0..31 and x 0..1000
   (`patches.ts` drops a rack's whole layout otherwise). A drop's x is
   clamped to 1000. `inBounds(result, base)` holds only the panels whose x
   the move changes to x ≤ 1000, so a panel already drawn past 1000 (pushed
   by a grown neighbour, or a module added at the end of the bottom row)
   doesn't block other moves. `toPositions` saves such a panel at 1000, and
-  `layoutRack` pushes it back to where it was drawn. A refused move (a push
-  past 1000, a 33rd row) writes nothing: the outline turns red with the
-  reason under it ("Too far right — move left or Tidy"), and the status
-  line (`flashHint`) and the live region say it too.
-- In a flow rack the base is `pinFromRects` of the on-screen rects: the
-  first drag pins every module and moves this one in that same entry. Flow
-  keeps rendering until the drop.
+  `layoutRack` draws it back where it was (the overlap resolution above). A
+  move out of bounds writes nothing, and is refused like a move that
+  doesn't fit ("Too far right — move left or Tidy"). Without pushes this is
+  a safety net: a drop's x is clamped, and a 33rd row can't be made from 32
+  modules.
+- In a flow rack the base is the drawn flow (`flowRack`): the first drag
+  pins every module where it is and moves this one, in the same entry.
 - Esc, Cmd/Ctrl+Z or redo mid-drag cancel it through `registerDragCancel`,
   and nothing is written.
 
-**Keyboard.** Alt+arrows on a focused header move the module by 1 grid unit
-or 1 row, with the same push rules.
+**Keyboard.** Alt+arrows on a focused header move the module by 1 grid unit,
+or 1 row at the same x. A nudge moves only if the module fits there:
+
+- A nudge into a neighbour, or Up/Down into a row where that x is taken,
+  does nothing. There is no snapping to another x: a nudge goes exactly one
+  step or nowhere.
+- The live region says "No free spot there — the module stays". There is
+  no status-line flash: bumping into a neighbour is routine.
+- Down from the bottom row makes a new row (a module alone in the bottom
+  row stays).
 
 - Quick nudges are one entry: the coalesce key is
   `sweepKey('rackmove:<trackId>')` (`history/sweep.ts`), and it steps after
@@ -111,11 +158,18 @@ disabled when the rack already flows.
 **Tests.** The e2e tests are in `tests/e2e/rack.spec.ts`:
 
 - `cables follow wrapped rows`;
-- the plan 18 drag tests: new row, push, click, Tidy, undo mid drag,
-  keyboard (and its announcement), wide rack, own spot, x within 0..1000
-  (refusal hint), a panel past 1000 not blocking others, the right-half
-  snap (no swap; pushed-panel outline), equal row heights (no ratchet),
-  edge auto-scroll.
+- the plan 18 drag tests: new row, click, Tidy, undo mid drag, keyboard
+  (and its announcement), wide rack, own spot, x within 0..1000, a panel
+  past 1000 not blocking others, equal row heights (no ratchet), edge
+  auto-scroll;
+- the plan 22 placement tests:
+  - a small drag of the first row's last module moves only it, and every
+    other module stays within 1 px, with the grid shown during the drag;
+  - a drop onto another module is refused (red outline, hint, nothing
+    written);
+  - a near miss snaps against the neighbour, and Alt+Left into it does
+    nothing;
+  - a nudge or drop into the VCA at x 1000 is refused.
 
 ### Look and param controls (plan 20 redesign; plan 21 mechanical faceplates)
 
@@ -157,8 +211,9 @@ no hex literals (`noHexColors.test.ts`).
   positioned layout re-measures as before (`rackLayout`); tests that drop a
   module into another row scroll that row into view first (`rack.spec.ts`
   `dragToGridX`). The card has no negative margins: Chrome sizes them
-  differently for a flex item (flow) and a `width: max-content` panel
-  (positioned), and the two widths must agree for `moveTo`'s snapping.
+  differently for a flex item (the CSS flow shown before the first measure)
+  and a `width: max-content` panel (drawn), and the two widths must agree,
+  or the grid layout would differ from what was measured.
 
 - **Stable widths (plan 22).** No param value may change a module's
   width: that would shift every module to its right (a decimal appearing

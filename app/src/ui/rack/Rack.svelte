@@ -26,19 +26,21 @@
   // The Instrument tab: a VCV-Rack-style rail of module panels, with cables
   // drawn on an SVG layer above them.
   //
-  // Layout (docs/architecture/modular.md "Layout (plan 18)"): `.rail` is the
+  // Layout (docs/architecture/modular.md "Layout"): `.rail` is the
   // scroller; `.content` (position: relative) holds the panels AND the cable
-  // <svg>, so cables scroll with the panels. Two modes:
-  //   - flow (no module has a `pos`; plan 13): `.content` is a wrapping flex
-  //     container the rail's width: panels by idx, left to right, wrapping
-  //     into rows as tall as their tallest panel (align-items: stretch),
-  //     rows 14 px apart;
-  //   - positioned (any `pos`): `placed` = rackLayout.ts layoutRack(modules,
-  //     measured widths); each panel is absolute at left = PAD + x·GRID, top =
-  //     the sum of the rows above (each as tall as its tallest panel) + 14 px
-  //     gaps, min-height = its row's height (jacks line up as in flow);
-  //     `.content` gets an explicit width (>= 100 %) and height, so the rail
-  //     scrolls both ways.
+  // <svg>, so cables scroll with the panels. `placed` (rackLayout.ts) is the
+  // drawn layout on the GRID-px grid, in one of two modes:
+  //   - flow (no module has a `pos`): flowRack(idxs, measured widths, the
+  //     rail's width in grid units): panels by idx, left to right, wrapping.
+  //     It is on the same grid as a positioned rack, so the first drag pins
+  //     exactly what is drawn (plan 22: no module jumps). Until every panel
+  //     has been measured, `.content`'s CSS flex-wrap flow shows instead;
+  //   - positioned (any `pos`): layoutRack(modules, measured widths).
+  // Either way each panel is absolute at left = PAD + x·GRID, top = the sum
+  // of the rows above (each as tall as its tallest panel) + 14 px gaps,
+  // min-height = its row's height (a row's jacks line up at the bottom), and
+  // `.content` gets an explicit width (>= 100 %) and height, so the rail
+  // scrolls both ways.
   // Measuring: measure() reads every panel's offsetWidth and NATURAL height
   // (offsetHeight minus its stretch spacer, so the row min-height never feeds
   // back) into `dims` (what the layout is derived from; a change re-measures
@@ -53,18 +55,21 @@
   // the panel follows the pointer by a translate and the cables re-measure
   // every frame. The target row is the row band under the pointer (below the
   // last: a new row, a dashed band shows), x = the panel's left snapped to
-  // GRID, and `landing` = moveTo of the base layout (the drawn one, or in a
-  // flow rack pinFromRects of the panels on screen; flow keeps rendering
-  // until the drop) draws the dashed outline, plus fainter outlines where
-  // the panels it pushes would go. Within 30 px of the rail's edge (or past
-  // it) the rail auto-scrolls (edgeScroll). Release after > 3 px with a
+  // GRID, then to the nearest free x within SNAP units (nearestFit), and
+  // `landing` = moveTo of the drawn layout draws the dashed outline. Nothing
+  // else ever moves (plan 22): a spot where the module doesn't fit turns the
+  // outline red and the drop writes nothing (the panel goes back). While
+  // dragging, the grid (10 px ticks, every 50 px stronger) and the row bands
+  // are drawn faintly behind the panels. Within 30 px of the rail's edge (or
+  // past it) the rail auto-scrolls (edgeScroll). Release after > 3 px with a
   // changed placement: ONE setRackLayout('Move module') inside the pointer
-  // gesture (one undo entry, pins included). A move that would take a panel
-  // it moves out of the saved bounds is refused: red outline with the reason,
-  // then the status line (flashHint) and the live region. Esc / Cmd+Z / redo
-  // mid-drag cancel (registerDragCancel). Alt+arrows on a focused header
-  // nudge (coalesced, history/sweep.ts) and announce where the module went;
-  // Tidy drops every pos.
+  // gesture (one undo entry; in a flow rack it pins every module where it is
+  // drawn). A move out of the saved bounds (a 33rd row) is refused the same
+  // way, with the reason; a refused drop also goes to the status line
+  // (flashHint) and the live region. Esc / Cmd+Z / redo mid-drag cancel
+  // (registerDragCancel). Alt+arrows on a focused header nudge into free
+  // spots only (coalesced, history/sweep.ts) and announce where the module
+  // went; Tidy drops every pos.
   //
   // Cables: the SVG has `pointer-events: none` everywhere, so it never steals
   // clicks from knobs. Cables are grabbed by their INPUT jack instead (VCV
@@ -117,7 +122,7 @@
   import type { Pt } from './cables';
   import ModulePanel from './ModulePanel.svelte';
   import VoiceLeds from './VoiceLeds.svelte';
-  import { GRID, MAX_ROW, MAX_X, inBounds, layoutRack, moveTo, pinFromRects, toPositions } from './rackLayout';
+  import { GRID, MAX_ROW, MAX_X, flowRack, inBounds, layoutRack, moveTo, nearestFit, toPositions } from './rackLayout';
   import type { Placed } from './rackLayout';
 
   let { p, engine, track, onpianoroll }: {
@@ -196,6 +201,9 @@
       };
     }
     pos = next;
+    // The flow layout wraps at the rail's inner width (not `.content`'s: that
+    // grows to fit a panel wider than the rail, and would feed back).
+    if (rail) cols = Math.max(1, Math.floor((rail.clientWidth - 2 * PAD) / GRID));
     // client* = the panels' box only. Not scroll*: that would include the
     // cable SVG itself (sized from this) and grow on every measure.
     size = { w: content.clientWidth, h: content.clientHeight };
@@ -290,8 +298,17 @@
     void tick().then(remeasure);
   }
   const widths = $derived(new Map([...dims].map(([i, d]) => [i, d.w])));
-  /** The positioned layout (rackLayout.ts), or null: no module has a `pos`, today's flex-wrap flow. */
-  const placed = $derived(layoutRack(modules, widths));
+  /** The rail's inner width in grid units: where the flow layout wraps (measure()). */
+  let cols = $state(0);
+  /** The saved layout as drawn (rackLayout.ts layoutRack), or null: no module has a `pos` (flow). */
+  const positioned = $derived(layoutRack(modules, widths));
+  /**
+   * The drawn layout: the positioned one, or the flow on the same grid
+   * (flowRack); null only before the first measure (CSS flex flow shows).
+   * Drags and nudges apply to this, so a flow rack's first move pins exactly
+   * what is on screen.
+   */
+  const placed = $derived(positioned ?? (cols > 0 ? flowRack(modules.map((m) => m.idx), widths, cols) : null));
   /**
    * Positioned: each panel's left/top in `.content` px, its row's height (the
    * panel's min-height, so a row's jacks line up as in flow), and
@@ -330,16 +347,12 @@
       return { idx, left: r.left - r0.left, top: r.top - r0.top, width: r.width, height: r.height };
     });
   }
-  /** The layout a move applies to: the drawn one, or in a flow rack the pins of what is on screen (first drag pins). */
-  function moveBase(): Placed[] {
-    return placed ?? pinFromRects(panelRects(), PAD);
-  }
   const samePlacement = (a: readonly Placed[], b: readonly Placed[]) =>
     a.length === b.length && a.every((q) => b.some((o) => o.idx === q.idx && o.row === q.row && o.x === q.x));
 
   type ModDrag = {
     idx: number;
-    /** The layout the drop applies to (moveBase() at the press). */
+    /** The layout the drop applies to (the drawn `placed` at the press). */
     base: Placed[];
     /** Each base row's band (`.content` px; the row's panels as they are drawn at the press). */
     bands: { top: number; bottom: number }[];
@@ -353,23 +366,25 @@
     /** The dragged panel's size (px). */
     w: number;
     h: number;
-    /** Every panel's size at the press (px): the outlines of the panels a drop would push. */
-    sizes: Map<number, { w: number; h: number }>;
   };
   let mdrag = $state<ModDrag | null>(null);
   /** Past the 3 px click slop: the outline shows and a release moves. */
   const travelled = $derived(!!mdrag && Math.hypot(mdrag.client.x - mdrag.start.x, mdrag.client.y - mdrag.start.y) > 3);
+  /** A drop's outline snaps to a free x at most this many grid units (px / GRID) from the pointer's. */
+  const SNAP = 2;
+  /** Why a move into another module's spot is not made (drop outline, status line, live region). */
+  const NO_ROOM = 'No free spot there — the module stays';
   /**
    * Where the module would land: the row band under the pointer (below the
-   * last one: a new row), x = the panel's left on the grid; moveTo pushes the
-   * overlapped panels right. `top` is the band's (or the new row's) top.
-   * x is clamped to MAX_X; `ok` is false when the result moves a panel out
-   * of the saved bounds (a push past x 1000, a 33rd row; inBounds with the
-   * base, so a panel already drawn past 1000 that this drop leaves alone
-   * blocks nothing): the outline turns red with `refusal` in it and the
-   * release writes nothing (patches.ts would drop the whole layout on load).
-   * `pushed`: the panels the drop would push right, outlined fainter at
-   * their resulting x (no surprise jumps on release).
+   * last one: a new row), x = the panel's left on the grid (clamped to
+   * 0..MAX_X), moved to the nearest x within SNAP units where the module
+   * fits (rackLayout.ts nearestFit). `top` is the band's (or the new row's)
+   * top. `result` is moveTo of the base: only this module moves, or null
+   * when it doesn't fit anywhere near (the outline stays at the pointer's x,
+   * red, with `refusal`). `ok` is also false for a result out of the saved
+   * bounds (a 33rd row; inBounds with the base, so a panel already drawn
+   * past 1000 blocks nothing): the release writes nothing (patches.ts would
+   * drop the whole layout on load).
    */
   const landing = $derived.by(() => {
     const d = mdrag;
@@ -379,16 +394,12 @@
     const found = d.bands.findIndex((b) => d.at.y < b.bottom + ROW_GAP / 2);
     const row = found < 0 ? d.bands.length : found;
     const top = row < d.bands.length ? d.bands[row].top : newTop;
-    const x = Math.min(MAX_X, Math.max(0, Math.round((d.at.x - d.grab.x - PAD) / GRID)));
-    const result = moveTo(d.base, d.idx, row, x);
-    const me = result.find((q) => q.idx === d.idx)!;
-    // A panel other than the mover changes x only by a push (rows only renumber).
-    const baseX = new Map(d.base.map((q) => [q.idx, q.x]));
-    const pushed = result
-      .filter((q) => q.idx !== d.idx && q.x !== baseX.get(q.idx))
-      .map((q) => ({ idx: q.idx, left: PAD + q.x * GRID, top, w: d.sizes.get(q.idx)?.w ?? q.w * GRID, h: d.sizes.get(q.idx)?.h ?? d.h }));
-    const ok = inBounds(result, d.base);
-    return { result, ok, refusal: ok ? '' : refusalText(result), pushed, newTop, left: PAD + me.x * GRID, top };
+    const want = Math.min(MAX_X, Math.max(0, Math.round((d.at.x - d.grab.x - PAD) / GRID)));
+    const x = nearestFit(d.base, d.idx, row, want, SNAP);
+    const result = x === null ? null : moveTo(d.base, d.idx, row, x);
+    const ok = !!result && inBounds(result, d.base);
+    const refusal = !result ? NO_ROOM : ok ? '' : refusalText(result);
+    return { result, ok, refusal, newTop, left: PAD + (x ?? want) * GRID, top };
   });
   /** Why a move out of the saved bounds is not made (drop outline, status line, live region). */
   const refusalText = (result: readonly Placed[]) =>
@@ -428,14 +439,14 @@
   function headerDown(e: PointerEvent, idx: number) {
     if (drag?.kbd) drag = null; // a press cancels a keyboard pick
     if (e.button !== 0 || !content || drag || mdrag) return;
+    const base = placed;
     const rects = panelRects();
     const me = rects.find((r) => r.idx === idx);
-    if (!me) return; // before the capture below: nothing may be left holding the pointer
+    if (!me || !base) return; // before the capture below: nothing may be left holding the pointer
     e.preventDefault(); // no text selection
     const el = e.currentTarget as HTMLElement;
     el.focus({ preventScroll: true }); // Alt+arrows go on from here
     el.setPointerCapture(e.pointerId);
-    const base = moveBase();
     const bands: { top: number; bottom: number }[] = [];
     for (const q of base) {
       const r = rects.find((x) => x.idx === q.idx);
@@ -445,8 +456,7 @@
     }
     const at = local(e);
     const client = { x: e.clientX, y: e.clientY };
-    const sizes = new Map(rects.map((r) => [r.idx, { w: r.width, h: r.height }]));
-    mdrag = { idx, base, bands, start: client, client, at0: at, at, grab: { x: at.x - me.left, y: at.y - me.top }, w: me.width, h: me.height, sizes };
+    mdrag = { idx, base, bands, start: client, client, at0: at, at, grab: { x: at.x - me.left, y: at.y - me.top }, w: me.width, h: me.height };
     rackStatus = '';
 
     // Only the client point here: measure() (one rAF) derives `at` from it.
@@ -472,8 +482,9 @@
       return l;
     };
     // The one write of the drag (inside its pointer gesture: one undo entry,
-    // "Move module"; in a flow rack it pins every module too). A click, a
-    // drop on the module's own spot, or one out of bounds writes nothing.
+    // "Move module"; in a flow rack it pins every module too, where drawn). A
+    // click, a drop on the module's own spot, or a refused one (no free spot,
+    // out of bounds: the panel just goes back) writes nothing.
     const up = (ev: PointerEvent) => {
       // The landing at the release point itself (the last move's frame may not have run).
       if (mdrag && content) {
@@ -482,7 +493,7 @@
       }
       const l = cleanup();
       if (l && !l.ok) return refuse(l.refusal);
-      if (l && !samePlacement(l.result, base) && setRackLayout(p, track.id, toPositions(l.result), 'Move module')) edited.add(track.id);
+      if (l?.result && !samePlacement(l.result, base) && setRackLayout(p, track.id, toPositions(l.result), 'Move module')) edited.add(track.id);
     };
     const cancel = () => void cleanup();
     const esc = (ev: KeyboardEvent) => {
@@ -512,10 +523,14 @@
   }
 
   // Keyboard: Alt+arrows on a focused header move the module one grid unit /
-  // one row (same push rules). Quick nudges are one undo entry: coalesce key
+  // one row at the same x, only if it fits there (moveTo; no snapping: a
+  // nudge goes exactly one step or nowhere). A nudge into another module (or
+  // Up/Down into a row where that x is taken) does nothing, and the live
+  // region says so (no status-line flash: bumping into a neighbour is
+  // routine). Quick nudges are one undo entry: coalesce key
   // sweepKey(`rackmove:<trackId>`), which steps after 1 s idle. The live
   // region says where it went ("Moved VCA to row 2, position 31": row
-  // 1-based, position in grid units); a refused move says why (refuse()).
+  // 1-based, position in grid units); a move out of bounds says why (refuse()).
   const NUDGE: Record<string, [dRow: number, dx: number]> = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] };
   function headerKey(e: KeyboardEvent, idx: number) {
     const d = NUDGE[e.key];
@@ -523,12 +538,16 @@
     if (!d || e.target !== e.currentTarget || !e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
     e.preventDefault(); // Alt+Left is the browser's Back on Windows / Linux
     e.stopPropagation();
-    if (mdrag || !content) return;
-    const base = moveBase();
+    if (mdrag || !content || !placed) return;
+    const base = placed;
     const me = base.find((q) => q.idx === idx);
-    if (!me || me.row + d[0] < 0) return;
-    const result = moveTo(base, idx, me.row + d[0], Math.min(MAX_X, Math.max(0, me.x + d[1])));
-    if (samePlacement(result, base)) return; // e.g. Alt+Left into a touching neighbour (moveTo snaps back)
+    if (!me) return;
+    const row = me.row + d[0];
+    const x = Math.min(MAX_X, Math.max(0, me.x + d[1]));
+    if (row < 0 || (row === me.row && x === me.x)) return; // at an edge
+    const result = moveTo(base, idx, row, x);
+    if (!result) return void (rackStatus = NO_ROOM);
+    if (samePlacement(result, base)) return; // Alt+Down on a module alone in the bottom row
     if (!inBounds(result, base)) return refuse(refusalText(result));
     if (!setRackLayout(p, track.id, toPositions(result), 'Move module', sweepKey(`rackmove:${track.id}`))) return;
     edited.add(track.id);
@@ -1052,8 +1071,8 @@
     {/if}
     <!-- Voice activity (plan 12): the first MIDI In's voices, lit by level, ringed while the gate is held. -->
     <VoiceLeds {track} />
-    <button class="btn" data-testid="rack-tidy" disabled={!placed}
-      title={placed ? 'Remove every module position: back to the wrapping layout' : 'The rack already wraps (drag a module header to place it)'}
+    <button class="btn" data-testid="rack-tidy" disabled={!positioned}
+      title={positioned ? 'Remove every module position: back to the wrapping layout' : 'The rack already wraps (drag a module header to place it)'}
       onclick={tidy}><Icon icon={SquaresFour} /> Tidy</button>
     <button class="btn" data-testid="patch-save" disabled={!lib.writable} title={saveTitle} onclick={openSave}><Icon icon={FloppyDisk} /> Save patch</button>
     <div class="addwrap">
@@ -1137,6 +1156,14 @@
       class="content" bind:this={content}
       style:width={geometry ? `max(100%, ${geometry.w}px)` : undefined} style:height={geometry ? `${geometry.h}px` : undefined}
     >
+      {#if mdrag && landing}
+        <!-- The grid while dragging (plan 22), behind the panels (first in .content): 10 px column ticks, every 50 px stronger, from PAD; the row bands. -->
+        <div class="grid" data-testid="rack-grid" aria-hidden="true">
+          {#each mdrag.bands as b, i (i)}
+            <div class="band" style:top={`${b.top}px`} style:height={`${b.bottom - b.top}px`}></div>
+          {/each}
+        </div>
+      {/if}
       {#each modules as m (m.idx)}
         <ModulePanel
           module={m}
@@ -1167,10 +1194,6 @@
       {/each}
       {#if mdrag && landing}
         <div class="newrow" data-testid="rack-new-row" style:top={`${landing.newTop}px`} style:height={`${mdrag.h}px`}><span>new row</span></div>
-        {#each landing.pushed as q (q.idx)}
-          <div class="outline pushed" data-testid={`rack-push-outline-${q.idx}`}
-            style:left={`${q.left}px`} style:top={`${q.top}px`} style:width={`${q.w}px`} style:height={`${q.h}px`}></div>
-        {/each}
         <div class="outline" class:refused={!landing.ok} data-testid="rack-drop-outline" data-refused={!landing.ok || undefined}
           style:left={`${landing.left}px`} style:top={`${landing.top}px`} style:width={`${mdrag.w}px`} style:height={`${mdrag.h}px`}
         >{#if landing.refusal}<span data-testid="rack-drop-refusal">{landing.refusal}</span>{/if}</div>
@@ -1240,8 +1263,16 @@
   .outline.refused { border-color: var(--rec); background: color-mix(in srgb, var(--rec) 8%, transparent); }
   /* Just under the red outline, above the lifted panel (which mostly covers the outline itself). */
   .outline.refused span { position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 4px; padding: 3px 8px; border-radius: var(--r-sm); background: var(--rec); color: var(--on-color); font: 600 var(--fs-lbl) var(--font-ui); white-space: nowrap; }
-  /* A panel the drop would push: where it would end up. */
-  .outline.pushed { border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent); background: none; }
+  /* The grid while dragging: faint column ticks every 10 px (GRID), stronger every 50, starting at the
+     content padding (PAD, 6 px) like the panels' x; each row band outlined. Under the panels (DOM order). */
+  .grid {
+    position: absolute; top: 0; right: 0; bottom: 0; left: 6px; pointer-events: none;
+    background-image:
+      repeating-linear-gradient(to right, color-mix(in srgb, var(--text-2) 22%, transparent) 0 1px, transparent 1px 50px),
+      repeating-linear-gradient(to right, color-mix(in srgb, var(--text-2) 9%, transparent) 0 1px, transparent 1px 10px);
+  }
+  /* A row band: `top`/`height` in `.content` px (the grid's top is `.content`'s), from PAD to PAD before the right edge. */
+  .band { position: absolute; left: 0; right: 6px; box-sizing: border-box; border: 1px solid color-mix(in srgb, var(--text-2) 20%, transparent); border-radius: var(--r-sm); }
   .newrow { left: 6px; right: 6px; padding: 4px 8px; border: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-lbl); }
   /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */
   .cables { position: absolute; z-index: 4; left: 0; top: 0; overflow: visible; pointer-events: none; }

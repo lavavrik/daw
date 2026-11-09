@@ -564,7 +564,7 @@ fn fx_chain_track_renders_under_budget() {
 #[ignore = "perf: run in release with --ignored --nocapture"]
 fn house_patches_render_under_budget() {
     let patches = common::house_patches();
-    assert_eq!(patches.len(), 12, "the whole House set");
+    assert_eq!(patches.len(), 21, "the whole House set (plan 28: 19 house + 2 transition patches)");
     let mut over = Vec::new();
     for p in &patches {
         let mut e = Engine::new(SR);

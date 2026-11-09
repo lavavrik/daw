@@ -111,17 +111,28 @@ Design notes: [docs/architecture/modular.md](docs/architecture/modular.md).
     Bass is the default for a new track).
   - *House · Leads & Stabs*: **Sax** (breathy alto-like mono hook lead with
     delayed vibrato, velocity brightness and legato glide), **Brass Stab**
-    (bright disco-house hit that blooms), **Arp Pluck** (short, bright, for
-    1/16 arps).
+    (bright disco-house hit that blooms), **Supersaw Lead** (eleven detuned
+    saws and a chorus: the big lead), **Hoover** (rave hoover: detuned saws
+    and PWM, each note swooping up an octave into pitch, band-passed;
+    overlapping notes slide).
+  - *House · Plucks*: **Arp Pluck** (short, bright, for 1/16 arps), **Soft
+    Pluck** (mellow, rounded), **Bright Pluck** (glassy, resonant snap).
   - *House · Keys*: **Tine Keys** (FM electric piano for deep-house chords;
     play harder for more bell), **Piano Stab** (the classic house piano
     chord stab), **Garage Organ** (percussive UK-garage organ with a wah
-    bounce).
+    bounce), **90s Organ** (the early-90s organ-bass stab: brighter and
+    shorter than Garage Organ; play it low), **FM Bell** (struck,
+    inharmonic, long ring).
   - *House · Bass*: **Organ Bass** (hollow 90s organ bass), **Reese Bass**
     (detuned, phasing Reese), **Acid Line** (squelchy; velocity is the
     accent, overlapping notes slide), **Sub Bass** (clean deep-house sub).
   - *House · Pads*: **Strings** (string-machine section with a slow swell),
-    **Warm Pad** (a pad that moves, with a 2-bar filter sweep).
+    **Warm Pad** (a pad that moves, with a 2-bar filter sweep), **Formant
+    Pad** (a vowel pad: its formants glide over 2 bars).
+  - *House · FX*: **Noise Sweep** (pink noise through a resonant filter:
+    automate its cutoff for risers and downlifters) and **Impact** (a sub
+    drop and a noise crack; give it a long reverb send). The Transition
+    tracks use these.
   Built-in names can't be used for **Save patch**. Tip: the **mod wheel**
   (a MIDI keyboard's) opens the Sax (brighter, "pushed") and the Reese (up
   to four octaves of filter), and rides the Acid Line's cutoff.
@@ -215,7 +226,10 @@ The **Piano roll** tab edits the synth track's current pattern.
   **Clear** (asks first).
 - **Examples ▾:** a short phrase for every house patch (the ones its demo
   renders played): stabs and keys on a Cm9 → Fm9 → Abmaj7 → Gm7 loop, pad
-  chords, an arp, basslines, an acid line and a Sax hook. The example for
+  chords, an arp, basslines, an acid line and a Sax hook; the newer patches'
+  phrases are in A minor (Am9 → Fmaj9 → Dm9 → Em7): a supersaw hook, a
+  hoover riff with slides, pluck chords and a 1/16 riff, organ-bass stabs,
+  a bell melody and vowel-pad chords. The FX patches have none. The example for
   the track's patch is listed first. Click one to add it as a new pattern of
   this track; **+ track** adds a new synth track with that patch and the
   example instead. Either is one undo step. Notes only: the renders' mod-wheel

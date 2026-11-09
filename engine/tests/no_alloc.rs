@@ -980,6 +980,12 @@ fn house_patches_do_not_allocate() {
         for c in &p.cmds {
             ok(e.command(c[0] as u32, c[1], c[2], c[3], c[4]), &p.name);
         }
+        // The load was queued behind the sounding note's declick fade: one
+        // block applies it. A note sent before then would reach the old
+        // rack and be lost with it, so "audible" below would measure the
+        // previous patch's tail (plan 28: Formant Pad after Warm Pad, both
+        // slow swells, read 0.006 that way).
+        render(&mut e, 1);
         ok(e.command(OP_NOTE_OFF, 67., 0., 0., 0.), "held note off");
         let mut peak = 0.0f32;
         for notes in p.phrase.steps() {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { moduleDef, paramIndex, portIndex } from '../audio/catalog';
 import { Op } from '../audio/protocol';
-import { HOUSE_GROUPS, HOUSE_PHRASES } from './housePatches';
+import { HOUSE_GROUPS, HOUSE_PHRASES, TRANSITION_PATCHES } from './housePatches';
 import { BUILTIN_GROUPS, BUILTIN_PATCHES, isBuiltinName, STARTER_PATCHES, trackPatch, validatePatch } from './patches';
 import { Project } from './project.svelte';
 import { addSynthTrack, loadPatch } from './rack-actions';
@@ -14,23 +14,35 @@ describe('built-in patches', () => {
     expect(BUILTIN_GROUPS[0].label).toBe('Starter');
     expect(BUILTIN_GROUPS[0].patches).toBe(STARTER_PATCHES);
     expect(BUILTIN_GROUPS.map((g) => g.label)).toEqual([
-      'Starter', 'Sampler', 'House · Leads & Stabs', 'House · Keys', 'House · Bass', 'House · Pads',
+      'Starter', 'Sampler', 'House · Leads & Stabs', 'House · Plucks', 'House · Keys', 'House · Bass', 'House · Pads', 'House · FX',
     ]);
     expect(BUILTIN_PATCHES).toEqual(BUILTIN_GROUPS.flatMap((g) => g.patches));
     expect(BUILTIN_GROUPS.slice(2)).toEqual(HOUSE_GROUPS);
   });
   it('the House set has the Sax first, and every house patch a phrase', () => {
     expect(HOUSE_GROUPS[0].patches[0]?.name).toBe('Sax');
-    for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead|arp)$/);
+    for (const p of HOUSE_GROUPS.flatMap((g) => g.patches)) expect(HOUSE_PHRASES[p.name], p.name).toMatch(/^(chord4|chord5|bass|lead|arp|fx)$/);
   });
-  it('the House set has its 12 patches in their groups', () => {
+  it('the House set has its 21 patches in their groups (plan 28: 7 more, and the FX group)', () => {
     expect(HOUSE_GROUPS.map((g) => g.patches.map((p) => p.name))).toEqual([
-      ['Sax', 'Brass Stab', 'Arp Pluck'],
-      ['Tine Keys', 'Piano Stab', 'Garage Organ'],
+      ['Sax', 'Brass Stab', 'Supersaw Lead', 'Hoover'],
+      ['Arp Pluck', 'Soft Pluck', 'Bright Pluck'],
+      ['Tine Keys', 'Piano Stab', 'Garage Organ', '90s Organ', 'FM Bell'],
       ['Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass'],
-      ['Strings', 'Warm Pad'],
+      ['Strings', 'Warm Pad', 'Formant Pad'],
+      ['Noise Sweep', 'Impact'],
     ]);
     expect(Object.keys(HOUSE_PHRASES).sort()).toEqual(HOUSE_GROUPS.flatMap((g) => g.patches.map((p) => p.name)).sort());
+  });
+  it('the transition patches are the FX group, phrase fx; Noise Sweep leaves its cutoff to automation', () => {
+    const fx = HOUSE_GROUPS.find((g) => g.label === 'House · FX')!.patches;
+    expect(fx).toEqual([TRANSITION_PATCHES.noiseSweep, TRANSITION_PATCHES.impact]);
+    for (const p of fx) expect(HOUSE_PHRASES[p.name]).toBe('fx');
+    expect(Object.entries(HOUSE_PHRASES).filter(([, v]) => v === 'fx').map(([k]) => k).sort()).toEqual(['Impact', 'Noise Sweep']);
+    // The sweep is the filter's cutoff param itself: nothing patched into its cv.
+    const sweep = TRANSITION_PATCHES.noiseSweep;
+    const filter = sweep.modules.find((m) => m.id === 'filter')!;
+    expect(sweep.cables.some((c) => c.to[0] === filter.idx && c.to[1] === 'cv')).toBe(false);
   });
   it('names unique case-insensitively, no trademarks', () => {
     const names = BUILTIN_PATCHES.map((p) => p.name.trim().toLowerCase());

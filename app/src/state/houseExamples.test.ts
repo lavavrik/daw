@@ -4,10 +4,14 @@ import { HOUSE_GROUPS, HOUSE_PHRASES } from './housePatches';
 import { HOUSE_EXAMPLES, exampleFor } from './houseExamples';
 
 describe('house examples', () => {
-  it('every house patch has exactly one example', () => {
-    const house = HOUSE_GROUPS.flatMap((g) => g.patches.map((x) => x.name));
-    expect(house.sort()).toEqual(Object.keys(HOUSE_PHRASES).sort()); // the 12 house patches
+  it('every house patch has exactly one example (the transition patches none)', () => {
+    const all = HOUSE_GROUPS.flatMap((g) => g.patches.map((x) => x.name));
+    expect(all.sort()).toEqual(Object.keys(HOUSE_PHRASES).sort()); // the 21 house patches
+    const house = all.filter((n) => HOUSE_PHRASES[n] !== 'fx');
+    expect(house).toHaveLength(19);
     expect(HOUSE_EXAMPLES.map((e) => e.patch).sort()).toEqual(house.sort());
+    expect(exampleFor('Noise Sweep')).toBeNull();
+    expect(exampleFor('Impact')).toBeNull();
     for (const name of house) {
       expect(HOUSE_EXAMPLES.filter((e) => e.patch === name)).toHaveLength(1);
       expect(exampleFor(name)?.name).toBe(`${name} example`);
@@ -30,6 +34,21 @@ describe('house examples', () => {
         expect(n.len).toBeGreaterThanOrEqual(1);
         expect(n.start).toBeGreaterThanOrEqual(0);
         expect(n.start + n.len, `${ex.name} ${JSON.stringify(n)}`).toBeLessThanOrEqual(end);
+      }
+    }
+  });
+
+  it('plan 28 examples are in A minor and inside their bars', () => {
+    const NEW = ['Supersaw Lead', 'Hoover', 'Soft Pluck', 'Bright Pluck', '90s Organ', 'FM Bell', 'Formant Pad'];
+    const A_MINOR = new Set([9, 11, 0, 2, 4, 5, 7]); // A B C D E F G
+    for (const name of NEW) {
+      const ex = exampleFor(name)!;
+      expect(ex, name).toBeTruthy();
+      expect(ex.name).toBe(`${name} example`);
+      expect(ex.notes.length, name).toBeGreaterThan(0);
+      for (const n of ex.notes) {
+        expect(A_MINOR.has(n.pitch % 12), `${name}: ${n.pitch} is not in A minor`).toBe(true);
+        expect(n.start + n.len, `${name} ${JSON.stringify(n)}`).toBeLessThanOrEqual(ex.bars * BAR_TICKS);
       }
     }
   });

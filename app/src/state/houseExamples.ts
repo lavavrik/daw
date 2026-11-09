@@ -19,6 +19,14 @@
 //
 // Repeats: the bass renders played their line twice and the Acid line four
 // times; a pattern loops, so it holds the line once.
+//
+// Plan 28's patches (Supersaw Lead, Hoover, the plucks, 90s Organ, FM Bell,
+// Formant Pad) were written for this file, in A minor (A B C D E F G only;
+// houseExamples.test.ts checks every note's pitch class), over the loop
+// Am9 → Fmaj9 → Dm9 → Em7. house_patches.rs plays each roll through its patch
+// (from the fixture) to check the levels match the older rolls. The two
+// transition patches (Noise Sweep, Impact) have no roll: the Transition tracks
+// write their own clip.
 import { HOUSE_GROUPS } from './housePatches';
 
 /** One example: a pattern for `patch` (a built-in house patch's name). */
@@ -113,6 +121,94 @@ const SAX: Notes = ([
   [5, 1, 65, 90], [6, 2, 63, 100], [8.5, 0.9, 60, 80], [9.5, 5, 63, 115],
 ] as const).map(([s, len, n, v]) => note(n, v, s / 2, len / 2));
 
+// ---- plan 28: A minor ------------------------------------------------------
+
+/** The A minor loop: Am9, Fmaj9, Dm9, Em7 (root first, then the voicing). */
+const AM: number[][] = [
+  [57, 60, 64, 67, 71],
+  [53, 57, 60, 64, 67],
+  [50, 53, 57, 60, 64],
+  [52, 55, 59, 62, 67],
+];
+
+/** One bar per AM chord: each hit (beat in bar, len, vel) plays AM[i][1..]. */
+function amHits(hits: [beat: number, len: number, vel: number][]): Notes {
+  const out: Notes = [];
+  AM.forEach((c, i) => {
+    for (const [b, len, v] of hits) for (const n of c.slice(1)) out.push(note(n, v, 4 * i + b, len));
+  });
+  return out;
+}
+
+/**
+ * Supersaw hook: a top line in eighths, each note harmonised a third and a
+ * sixth below inside A minor (block chords, the way a supersaw lead is
+ * played in house). (start beat, len, top pitch, vel).
+ */
+const SUPERSAW: Notes = (() => {
+  const line: [number, number, number, number][] = [
+    [0, 1.5, 76, 110], [1.5, 0.5, 74, 90], [2, 1, 72, 100], [3, 1, 71, 95],
+    [4, 1.5, 72, 110], [5.5, 0.5, 71, 90], [6, 2, 69, 100],
+    [8, 1.5, 74, 110], [9.5, 0.5, 72, 90], [10, 1, 71, 100], [11, 1, 69, 95],
+    [12, 1.5, 71, 110], [13.5, 0.5, 72, 90], [14, 1.5, 74, 105], [15.5, 0.45, 76, 115],
+  ];
+  /** The A natural minor scale degree `steps` below `pitch` (pitch must be in key). */
+  const below = (pitch: number, steps: number) => {
+    const key = [0, 2, 3, 5, 7, 8, 10]; // from A
+    let d = key.indexOf((pitch - 57 + 120) % 12);
+    let oct = Math.floor((pitch - 57) / 12);
+    d -= steps;
+    while (d < 0) { d += 7; oct -= 1; }
+    return 57 + 12 * oct + key[d];
+  };
+  return line.flatMap(([b, len, n, v]) => [n, below(n, 2), below(n, 5)].map((x) => note(x, v, b, len)));
+})();
+
+/** Hoover riff (start beat, len, pitch, vel): notes that overlap the next slide into it (mono, legato glide). */
+const HOOVER: Notes = ([
+  [0, 1.6, 57, 110], [1.5, 0.5, 60, 100], [2, 1.1, 59, 100], [3, 1, 55, 95],
+  [4, 1.6, 57, 115], [5.5, 0.6, 64, 105], [6, 1, 62, 100], [7, 0.9, 60, 95],
+] as const).map(([b, len, n, v]) => note(n, v, b, len));
+
+/** Soft Pluck: off-beat eighth chords with a pushed last hit. */
+const SOFT_PLUCKS = amHits([[0.5, 0.4, 95], [1.5, 0.4, 85], [2, 0.4, 100], [3, 0.4, 85], [3.5, 0.4, 110]]);
+
+/** Bright Pluck: a 1/16 riff over each chord (root and voicing), accents on the beat. */
+const BRIGHT_PLUCKS: Notes = Array.from({ length: 64 }, (_, k) => {
+  const i = Math.floor(k / 16);
+  const j = k % 16;
+  if ([3, 7, 11, 14].includes(j)) return null; // rests: a riff, not a wall
+  const pitch = AM[i][[1, 2, 3, 4, 3, 2, 1, 2][j % 8]] + (j >= 8 ? 12 : 0);
+  return note(pitch, j % 4 === 0 ? 115 : 85, k * S, 0.8 * S);
+}).filter((n): n is Notes[number] => n !== null);
+
+/**
+ * 90s Organ: the organ-bass stab rhythm (low root + fifth + octave, plus the
+ * chord's third), syncopated across each bar.
+ */
+const ORGAN_STABS: Notes = AM.flatMap((c, i) => {
+  const root = c[0] - 12;
+  const voicing = [root, root + 7, root + 12, c[1]];
+  const hits: [number, number, number][] = [[0, 0.4, 115], [0.75, 0.25, 90], [1.5, 0.4, 105], [2.5, 0.25, 90], [3, 0.4, 110]];
+  return hits.flatMap(([b, len, v]) => voicing.map((n) => note(n, v, 4 * i + b, len)));
+});
+
+/**
+ * FM Bell: a bell melody high up, each note with the chord tone a third
+ * below (in A minor), the bells left ringing. (start beat, len, top pitch, below, vel).
+ */
+const BELLS: Notes = ([
+  [0, 1.5, 76, 72, 100], [1.5, 1, 79, 76, 85], [2.5, 1.5, 72, 69, 95],
+  [4, 2, 77, 72, 100], [6, 2, 72, 69, 85],
+  [8, 1.5, 74, 69, 100], [9.5, 1, 77, 74, 85], [10.5, 1.5, 81, 77, 105],
+  [12, 1, 79, 74, 95], [13, 1, 76, 71, 85], [14, 2, 71, 67, 100],
+] as const).flatMap(([b, len, n, m, v]) => [note(n, v, b, len), note(m, v - 10, b, len)]);
+
+/** Formant Pad: two bars per chord, legato, the whole voicing an octave down plus the root two down. */
+const VOWELS: Notes = AM.flatMap((c, i) =>
+  [...c.map((n) => n - 12), c[0] - 24].map((n) => note(n, 100, 8 * i, 8 - 0.04)),
+);
+
 /** Bars and notes per patch name. */
 const DATA: Record<string, { bars: number; notes: Notes }> = {
   'Brass Stab': { bars: 4, notes: STABS },
@@ -127,6 +223,13 @@ const DATA: Record<string, { bars: number; notes: Notes }> = {
   'Reese Bass': { bars: 4, notes: REESE },
   'Acid Line': { bars: 1, notes: ACID },
   Sax: { bars: 2, notes: SAX },
+  'Supersaw Lead': { bars: 4, notes: SUPERSAW },
+  Hoover: { bars: 2, notes: HOOVER },
+  'Soft Pluck': { bars: 4, notes: SOFT_PLUCKS },
+  'Bright Pluck': { bars: 4, notes: BRIGHT_PLUCKS },
+  '90s Organ': { bars: 4, notes: ORGAN_STABS },
+  'FM Bell': { bars: 4, notes: BELLS },
+  'Formant Pad': { bars: 8, notes: VOWELS },
 };
 
 /** Every example, in patch-menu order (HOUSE_GROUPS). Each gets its own copy of the notes. */

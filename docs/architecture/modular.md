@@ -510,7 +510,8 @@ set has its own rule instead of retuning them.
 
 ## House patches
 
-Twelve built-in patches in `app/src/state/housePatches.ts`, grouped in the
+Twenty-one built-in patches in `app/src/state/housePatches.ts` (plan 11's
+twelve, plan 28's seven and two transition patches), grouped in the
 patch menu after the starters (`BUILTIN_GROUPS` in `patches.ts`; the group
 is not part of a `Patch`, so saved files don't carry it). Each has a purpose
 comment and a comment per module.
@@ -519,19 +520,61 @@ comment and a comment per module.
 |---|---|---|---|---|
 | Leads & Stabs | Sax | mono | lead | Breathy alto-like hook lead |
 | Leads & Stabs | Brass Stab | poly | chord4 | Disco-house hit; Formant + filter bloom |
-| Leads & Stabs | Arp Pluck | poly | arp | Short bright 1/16 pluck |
+| Leads & Stabs | Supersaw Lead | poly | chord4 | 4 + 4 + 3 detuned saws, LP12 lift, chorus (plan 28) |
+| Leads & Stabs | Hoover | mono | lead | Detuned saws + PWM, an octave pitch swoop per note, band-pass, chorus (plan 28) |
+| Plucks | Arp Pluck | poly | arp | Short bright 1/16 pluck |
+| Plucks | Soft Pluck | poly | chord4 | Saw + triangle, gentle LP24 envelope (plan 28) |
+| Plucks | Bright Pluck | poly | chord4 | Saws + square, resonant LP24 thrown open 5 oct (plan 28) |
 | Keys | Tine Keys | poly | chord4 | FM e-piano; velocity rings the bell |
 | Keys | Piano Stab | poly | chord4 | Classic house piano stab |
 | Keys | Garage Organ | poly | chord4 | Percussive UKG organ, Formant wah |
+| Keys | 90s Organ | poly | chord4 | Organ-bass stab: Garage Organ's recipe, brighter and shorter (plan 28) |
+| Keys | FM Bell | poly | chord4 | Prime sine + inharmonic FM pair (2.76 : 1), long ring (plan 28) |
 | Bass | Organ Bass | mono | bass | Hollow 90s organ bass |
 | Bass | Reese Bass | mono | bass | Detuned Reese; mod wheel opens it |
 | Bass | Acid Line | mono | bass | Velocity accent, legato slide |
 | Bass | Sub Bass | mono | bass | Clean sub, a little saturation |
 | Pads | Strings | poly | chord5 | String-machine swell + chorus |
 | Pads | Warm Pad | poly | chord5 | 2-bar LFO-swept pad + chorus |
+| Pads | Formant Pad | poly | chord5 | Vowel pad: a 2-bar LFO sweeps the Formant ±0.8 oct (plan 28) |
+| FX | Noise Sweep | mono | fx | Pink noise → resonant LP24; automate `cutoff` (Transition tracks) |
+| FX | Impact | mono | fx | Sub drop (3× → 1×) + noise crack; reverb via the send (Transition tracks) |
 
 Phrases (`HOUSE_PHRASES`): chord4 = C4 E4 G4 B4, chord5 = C3 G3 C4 E4 B4,
-bass = C2 then C3, lead = C4, arp = C4 E4 G4 B4 as 1/16 at 124 BPM, one bar.
+bass = C2 then C3, lead = C4, arp = C4 E4 G4 B4 as 1/16 at 124 BPM, one bar,
+fx = C4 (the transition patches: left out of the shared level, clip and
+release loops and measured by their own tests).
+
+**Example rolls** (`houseExamples.ts`): every house patch except the two FX
+ones has one. Plan 28's are in A minor (Am9 → Fmaj9 → Dm9 → Em7; the unit
+test checks every pitch class). The fixture carries each roll (`example
+<bars>`, `note <pitch> <vel> <start> <len>`), and `house_patches.rs` plays it
+at 124 BPM: a plan-28 patch's roll RMS must sit within 3 dB of the older
+twelve rolls' median (−18.0 dBFS; they span −19.7 … −15.4).
+
+**Plan 28 tuning tools.** Several of the new patches end in a per-voice
+Saturator: it rounds each note's onset peak, so a plucky or resonant patch
+reaches the house loudness under the 0.9 peak (as Arp Pluck does). Pitch
+swoops (Hoover, Impact) are a pitch envelope on the Osc's **linear** FM
+input: `f × (1 + 5 × fm × in)`, so with `fm` 0.1 an input of −1 halves the
+frequency and with `fm` 0.4 an input of +1 triples it; an Attenuator
+(amount −1) inverts the envelope for an upward swoop. (MIDI In `pitch` must
+feed every Osc directly, so a swoop can't be mixed into `pitch`.)
+`house_patch_numbers` (an ignored test) prints every patch's loudness,
+roll RMS, peak, centroid and envelope.
+
+**Transition patches** (used by Add track ▸ Transition, plan 28 Task 3):
+- *Noise Sweep*: MIDI In (mono) → nothing pitched; Noise (pink) → Filter
+  LP24 (idx 2, reso 0.55, `cutoff` 1 kHz, cv unpatched, so a lane on
+  `cutoff` *is* the sweep, in Hz) → VCA (ADSR: 10 ms, sustain 1, release
+  0.4 s) → Out 0.5. Pink keeps the loudness within −16.9 … −15.3 dBFS from a
+  150 Hz to a 16 kHz cutoff, so the riser's rise in level is its level lane.
+  A sweep of about 200 Hz ↔ 12 kHz reads 245 Hz → 4.5 kHz centroid.
+- *Impact*: MIDI In (mono) → Osc sine two octaves under the note, `fm` 0.4,
+  its FM fed by a drop ADSR (decay 0.5 s): 3× → 1× (C4 lands on C2) → VCA
+  (decay 1.5 s, release 1.5 s); Noise (white) → LP12 5 kHz → VCA (0.2 s
+  burst); Mixer → Saturator → Out 0.35. Noise VCA idx 7 (the tests mute it
+  to track the sub). The long tail is the track's reverb send.
 
 **Rules** (checked for every built-in by `patches.test.ts`): one MIDI In and
 one Out; MIDI In `pitch` feeds every Osc and `gate` every ADSR; at most 24

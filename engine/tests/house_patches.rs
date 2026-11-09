@@ -28,7 +28,7 @@
 
 mod common;
 
-use common::{house_patches, HousePatch, Phrase};
+use common::{house_patches, Example, HousePatch, Phrase};
 use daw_engine::engine::Engine;
 use daw_engine::protocol::{
     OK, OP_MOD_WHEEL, OP_NOTE_OFF, OP_NOTE_ON, OP_PLAY, OP_RACK_ADD_MODULE, OP_RACK_CONNECT, OP_RACK_DISCONNECT, OP_RACK_REMOVE_MODULE,
@@ -215,6 +215,38 @@ fn play_arp(e: &mut Engine, phrase: Phrase, tr: i32, vel: u8) -> Render {
     }
     ev.sort_by(|a, b| a.0.total_cmp(&b.0));
     run(e, &ev, phrase.steps().len() as f32 * step + 1.0)
+}
+
+/// Seconds per tick at the default 124 BPM (960 PPQ): example rolls are
+/// played at the tempo they were written for.
+const TICK_124: f32 = 60.0 / 124.0 / 960.0;
+
+/// An example roll's length (s) at 124 BPM.
+fn roll_secs(ex: &Example) -> f32 {
+    (ex.bars * 4 * 960) as f32 * TICK_124
+}
+
+/// Play an example roll once from 0 at 124 BPM (each note's On and Off at
+/// its ticks; an Off sorts before an On at the same instant, as the
+/// sequencer sends them), then `tail` s more.
+fn play_example(e: &mut Engine, ex: &Example, tail: f32) -> Render {
+    let mut ev: Vec<(f32, u8, Ev)> = Vec::new();
+    for n in &ex.notes {
+        ev.push((n.start as f32 * TICK_124, 1, Ev::On(n.pitch, n.vel)));
+        ev.push(((n.start + n.len) as f32 * TICK_124, 0, Ev::Off(n.pitch)));
+    }
+    ev.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let ev: Vec<(f32, Ev)> = ev.into_iter().map(|x| (x.0, x.2)).collect();
+    run(e, &ev, roll_secs(ex) + tail)
+}
+
+/// A patch's example-roll level (plan 28 *levels match on the example
+/// roll*): the RMS (dBFS, pre-limiter at the default master gain) of the
+/// roll's own span, played once at vel as written, and the render's peak.
+fn example_level(p: &HousePatch) -> Option<(f32, f32)> {
+    let ex = p.example.as_ref()?;
+    let r = play_example(&mut load_cmds(&p.cmds), ex, 0.5);
+    Some((db(rms(r.span(0.0, roll_secs(ex)))), r.peak))
 }
 
 /// A `RACK_SET_PARAM` on slot 0 by catalog param name (for A/B renders, e.g.
@@ -499,9 +531,9 @@ const PEAK_LIMIT: f32 = 0.9;
 #[test]
 fn house_patches_sit_at_similar_levels() {
     let all = house_patches();
-    assert_eq!(all.len(), 12, "the whole House set");
+    assert_eq!(all.len(), 21, "the whole House set (plan 11's 12, plan 28's 7 + 2 transition patches)");
     let mut failed = Vec::new();
-    for p in &all {
+    for p in all.iter().filter(|p| p.phrase != Phrase::Fx) {
         let mut e = load_cmds(&p.cmds);
         let r = play_phrase(&mut e, p.phrase, 100, p.phrase.step().unwrap_or(1.5), 0.5);
         let m = momentary_db(&r);
@@ -513,34 +545,44 @@ fn house_patches_sit_at_similar_levels() {
     assert!(failed.is_empty(), "outside {LOUDNESS_DB} ± {LOUDNESS_TOL} dBFS: {failed:?}");
 }
 
-#[test]
-fn house_patches_do_not_clip() {
-    // starter_patches.rs's sets per voice type.
+/// A patch's worst pre-limiter peak at velocity 127 over the chords or notes
+/// its phrase stands for (starter_patches.rs's sets per voice type), held
+/// and released; an arp patch plays its arp phrase at four octaves instead.
+/// None for a transition patch (measured by its own tests).
+fn worst_peak(p: &HousePatch) -> Option<f32> {
     let chords4: [&[u8]; 4] = [&[48, 52, 55, 59], &[60, 64, 67, 71], &[36, 48, 55, 60], &[57, 60, 64, 69]];
     let chords5: [&[u8]; 3] = [&[48, 52, 55, 59, 62], &[36, 48, 55, 60, 64], &[57, 60, 64, 67, 72]];
     let notes: [&[u8]; 4] = [&[36], &[48], &[60], &[72]];
-    let mut failed = Vec::new();
-    for p in &house_patches() {
-        let (set, hold): (&[&[u8]], f32) = match p.phrase {
-            Phrase::Chord4 => (&chords4, 1.0),
-            Phrase::Chord5 => (&chords5, 2.0),
-            Phrase::Bass | Phrase::Lead => (&notes, 1.0),
-            // The arp phrase itself, transposed −2…+1 octaves (C2…C5 roots).
-            Phrase::Arp => (&[], 0.0),
-        };
-        let arp = (p.phrase == Phrase::Arp).then(|| {
-            [-24i32, -12, 0, 12]
-                .iter()
-                .map(|&tr| peak_pre_limiter(&play_arp(&mut load_cmds(&p.cmds), p.phrase, tr, 127)))
-                .fold(0.0f32, f32::max)
-        });
-        let worst = set
+    let (set, hold): (&[&[u8]], f32) = match p.phrase {
+        Phrase::Chord4 => (&chords4, 1.0),
+        Phrase::Chord5 => (&chords5, 2.0),
+        Phrase::Bass | Phrase::Lead => (&notes, 1.0),
+        // The arp phrase itself, transposed −2…+1 octaves (C2…C5 roots).
+        Phrase::Arp => (&[], 0.0),
+        Phrase::Fx => return None,
+    };
+    let arp = (p.phrase == Phrase::Arp).then(|| {
+        [-24i32, -12, 0, 12]
             .iter()
+            .map(|&tr| peak_pre_limiter(&play_arp(&mut load_cmds(&p.cmds), p.phrase, tr, 127)))
+            .fold(0.0f32, f32::max)
+    });
+    Some(
+        set.iter()
             .map(|c| {
                 let mut e = load_cmds(&p.cmds);
                 peak_pre_limiter(&play(&mut e, c, 127, hold, 1.0))
             })
-            .fold(arp.unwrap_or(0.0), f32::max);
+            .fold(arp.unwrap_or(0.0), f32::max),
+    )
+}
+
+#[test]
+fn house_patches_do_not_clip() {
+    let mut failed = Vec::new();
+    for p in &house_patches() {
+        // Transition patches: noise_sweep_* and impact_* below.
+        let Some(worst) = worst_peak(p) else { continue };
         eprintln!("{}: pre-limiter peak {worst:.3} at vel 127", p.name);
         assert!(worst > 0.05, "{} is (nearly) silent: {worst}", p.name);
         if worst >= PEAK_LIMIT {
@@ -553,7 +595,8 @@ fn house_patches_do_not_clip() {
 #[test]
 fn house_patches_release_to_silence() {
     let mut failed = Vec::new();
-    for p in &house_patches() {
+    // Transition patches have their own release checks (noise_sweep_*, impact_*).
+    for p in house_patches().iter().filter(|p| p.phrase != Phrase::Fx) {
         let rel = longest_release(p);
         let mut e = load_cmds(&p.cmds);
         let hold = p.phrase.step().unwrap_or(1.0);
@@ -835,12 +878,16 @@ const CHORD5: [u8; 5] = [48, 55, 60, 64, 71];
 fn house_set_is_complete() {
     assert_eq!(patch("Arp Pluck").phrase, Phrase::Arp, "Arp Pluck is levelled as it is played: a 1/16 arp");
     let names: Vec<String> = house_patches().into_iter().map(|p| p.name).collect();
-    assert_eq!(names.len(), 12, "{names:?}");
-    for n in [
-        "Sax", "Brass Stab", "Arp Pluck", "Tine Keys", "Piano Stab", "Garage Organ", "Organ Bass", "Reese Bass", "Acid Line",
-        "Sub Bass", "Strings", "Warm Pad",
-    ] {
+    assert_eq!(names.len(), 21, "{names:?}");
+    for n in PLAN11_SET.iter().chain(&PLAN28_SET).chain(&["Noise Sweep", "Impact"]) {
         assert!(names.iter().any(|x| x == n), "{n} missing from {names:?}");
+    }
+    // Plan 28: the new patches have example rolls; the transition patches
+    // have none and are phrase `fx` (outside the shared level loops).
+    for p in house_patches() {
+        let fx = p.name == "Noise Sweep" || p.name == "Impact";
+        assert_eq!(p.phrase == Phrase::Fx, fx, "{}: phrase {:?}", p.name, p.phrase);
+        assert_eq!(p.example.is_none(), fx, "{}: example roll", p.name);
     }
 }
 
@@ -1388,5 +1435,405 @@ fn scopes_never_change_the_sound() {
         let first = plain.m.iter().zip(&scoped.m).position(|(a, b)| a.to_bits() != b.to_bits());
         assert_eq!(first, None, "{name}: the scopes changed the sound at sample {first:?}");
         assert_eq!(plain.bits, scoped.bits, "{name}: raw L/R differ");
+    }
+}
+
+// ---- plan 28: seven more house patches and two transition patches ------------
+//
+// Spec `2026-11-19-builtin-content.md` §4. The new patches go through the
+// shared level / clip / release tests above like the rest; here are their
+// example-roll levels (against the older rolls), one character check each,
+// and the two transition patches (Noise Sweep, Impact), which skip the
+// shared loops (phrase `fx`) and are measured on their own.
+
+/// The House set before plan 28: their example rolls set the level reference.
+const PLAN11_SET: [&str; 12] = [
+    "Sax", "Brass Stab", "Arp Pluck", "Tine Keys", "Piano Stab", "Garage Organ", "Organ Bass", "Reese Bass", "Acid Line",
+    "Sub Bass", "Strings", "Warm Pad",
+];
+/// Plan 28's new house patches (each has an example roll).
+const PLAN28_SET: [&str; 7] = ["Supersaw Lead", "Hoover", "Soft Pluck", "Bright Pluck", "90s Organ", "FM Bell", "Formant Pad"];
+/// How far a new patch's example-roll RMS may sit from the older rolls' median (dB).
+const EXAMPLE_TOL: f32 = 3.0;
+
+#[test]
+fn new_examples_match_the_older_levels() {
+    // Each roll played once at 124 BPM, as written (its own velocities); the
+    // RMS over the roll's span. The older rolls' spread: −19.7 (Brass Stab)
+    // to −15.4 dBFS (Reese Bass), median ≈ −18.0.
+    let all = house_patches();
+    let level = |name: &str| example_level(all.iter().find(|p| p.name == name).unwrap()).unwrap_or_else(|| panic!("{name} has no example roll"));
+    let mut old: Vec<f32> = PLAN11_SET.iter().map(|n| level(n).0).collect();
+    old.sort_by(f32::total_cmp);
+    let median = 0.5 * (old[5] + old[6]);
+    eprintln!("older example rolls: {old:?} dBFS, median {median:.1}");
+    let mut failed = Vec::new();
+    for n in PLAN28_SET {
+        let (rms_db, peak) = level(n);
+        eprintln!("{n} example: RMS {rms_db:.1} dBFS ({:+.1} dB re median), peak {peak:.2}", rms_db - median);
+        if (rms_db - median).abs() > EXAMPLE_TOL {
+            failed.push(format!("{n} {rms_db:.1}"));
+        }
+    }
+    assert!(failed.is_empty(), "example RMS outside {median:.1} ± {EXAMPLE_TOL} dB: {failed:?}");
+}
+
+/// Power-weighted RMS spread (cents) of the spectrum within ±60 cents of
+/// harmonic `k` of `f0`, from a Welch spectrum of 32768-point Hann frames
+/// (1.5 Hz bins at 48 kHz) between `a` and `b` s. A single clean partial
+/// reads ~3 ct (the window's main lobe); detuned copies and chorus widen it.
+fn spread_cents(r: &Render, f0: f32, k: u32, a: f32, b: f32) -> f32 {
+    let n = 32768;
+    let p = welch(r, a, b, n);
+    let fk = k as f32 * f0;
+    let (mut w, mut m1, mut m2) = (0.0f64, 0.0f64, 0.0f64);
+    for (i, pw) in p.iter().enumerate() {
+        let f = i as f32 * SR / n as f32;
+        if f <= 0.0 {
+            continue;
+        }
+        let c = cents(f, fk) as f64;
+        if c.abs() <= 60.0 {
+            w += pw;
+            m1 += pw * c;
+            m2 += pw * c * c;
+        }
+    }
+    let mean = m1 / w;
+    (m2 / w - mean * mean).sqrt() as f32
+}
+
+#[test]
+fn supersaw_lead_is_wide() {
+    // C4 held 2.5 s, vel 100; spread around harmonics 4–6 (1.0–1.6 kHz,
+    // where 60 ct is ~37 bins), 0.3–2.5 s. Reference: Strings (four saws
+    // over ±11 ct, chorus) and Brass Stab (three over ±9 ct plus one +7 ct).
+    let spread = |name: &str| {
+        let r = play(&mut load(name), &[60], 100, 2.5, 0.0);
+        (4..=6).map(|k| spread_cents(&r, hz(60), k, 0.3, 2.5)).sum::<f32>() / 3.0
+    };
+    let (saw, strings, brass) = (spread("Supersaw Lead"), spread("Strings"), spread("Brass Stab"));
+    let r = play_phrase(&mut load("Supersaw Lead"), Phrase::Chord4, 100, 1.5, 0.0);
+    eprintln!(
+        "Supersaw Lead: spread around h4–h6 {saw:.1} ct (Strings {strings:.1}, Brass Stab {brass:.1}); chord4 centroid {:.0} Hz",
+        centroid(&r, 0.05, 1.5)
+    );
+    assert!(saw >= 1.5 * strings && saw >= 1.5 * brass, "spread {saw:.1} ct is not 1.5× Strings' {strings:.1} and Brass Stab's {brass:.1}");
+}
+
+#[test]
+fn hoover_swoops_into_the_note() {
+    // C4 held 1 s, vel 100. f0 per 40 ms frame (10 ms hop) over 0.4–1.3 × f0
+    // (the swoop starts an octave down). The first frame (centred 20 ms) is
+    // well below the note; from 0.4 s the mean is on it.
+    let f0 = hz(60);
+    let r = play(&mut load("Hoover"), &[60], 100, 1.0, 0.0);
+    let track = f0_track(&r, 0.0, 1.0, 0.45 * f0, 1.3 * f0);
+    let ct: Vec<(f32, f32)> = track.iter().map(|x| (x.0, cents(x.1, f0))).collect();
+    let at = |t: f32| ct.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).unwrap().1;
+    let settled: Vec<f32> = ct.iter().filter(|x| x.0 >= 0.4).map(|x| x.1).collect();
+    let mean = settled.iter().sum::<f32>() / settled.len() as f32;
+    let arrive = ct.iter().find(|x| x.1 >= -50.0).map(|x| x.0);
+    eprintln!(
+        "Hoover swoop (ct re C4): 20 ms {:.0}, 60 ms {:.0}, 100 ms {:.0}, 150 ms {:.0}, 200 ms {:.0}, 300 ms {:.0}; within 50 ct at {arrive:?} s; 0.4–1 s mean {mean:.1}",
+        at(0.02), at(0.06), at(0.1), at(0.15), at(0.2), at(0.3)
+    );
+    eprintln!("Hoover: centroid C4 0.4–1 s {:.0} Hz", centroid(&r, 0.4, 1.0));
+    assert!(at(0.02) <= -500.0, "starts only {:.0} ct under the note", at(0.02));
+    assert!(mean.abs() <= 15.0, "settles {mean:.1} ct off the note");
+    let arrive = arrive.expect("reaches the note");
+    assert!((0.08..=0.35).contains(&arrive), "within 50 ct after {arrive:.2} s (want 0.08–0.35 s)");
+}
+
+/// The strongest formant region between `lo` and `hi` Hz over `a..b` s: the
+/// centre (Hz) of the third-octave band with the highest mean power density
+/// (centres every 1/24 oct), from a Welch spectrum. Third-octave smoothing
+/// spreads the chord's dense harmonics into a spectral envelope, so the
+/// formant (not one strong harmonic) wins.
+fn formant_peak(r: &Render, a: f32, b: f32, lo: f32, hi: f32) -> f32 {
+    let p = spectrum(r, a, b);
+    let mut best = (lo, f64::MIN);
+    let mut fc = lo;
+    while fc <= hi {
+        let (f1, f2) = (fc * 2f32.powf(-1.0 / 6.0), fc * 2f32.powf(1.0 / 6.0));
+        let band: Vec<f64> = p.iter().enumerate().filter(|(i, _)| (f1..=f2).contains(&(*i as f32 * BIN_HZ))).map(|x| *x.1).collect();
+        let d = band.iter().sum::<f64>() / band.len().max(1) as f64;
+        if d > best.1 {
+            best = (fc, d);
+        }
+        fc *= 2f32.powf(1.0 / 24.0);
+    }
+    best.0
+}
+
+#[test]
+fn formant_pad_vowel_moves() {
+    // As warm_pad_moves: 124 BPM, transport playing so the 2-bar LFO is
+    // locked; chord5 held; 0.5 s windows every 0.25 s over one cycle after
+    // the swell (from 1.2 s). The first formant (strongest third-octave band
+    // over 300–1600 Hz) must move ≥ 0.6 oct, and the centroid with it.
+    let mut e = load("Formant Pad");
+    assert_eq!(e.command(OP_SET_TEMPO, 124.0, 0., 0., 0.), OK);
+    assert_eq!(e.command(OP_PLAY, 0.0, 0., 0., 0.), OK);
+    let cycle = 8.0 * 60.0 / 124.0;
+    let r = play(&mut e, &CHORD5, 100, 1.2 + cycle + 0.5, 0.0);
+    let win: Vec<f32> = (0..(cycle / 0.25) as usize).map(|i| 1.2 + 0.25 * i as f32).collect();
+    let f1: Vec<f32> = win.iter().map(|&t| formant_peak(&r, t, t + 0.5, 300.0, 1600.0)).collect();
+    let cs: Vec<f32> = win.iter().map(|&t| centroid(&r, t, t + 0.5)).collect();
+    let span = |v: &[f32]| (v.iter().cloned().fold(f32::MAX, f32::min), v.iter().cloned().fold(f32::MIN, f32::max));
+    let ((f_lo, f_hi), (c_lo, c_hi)) = (span(&f1), span(&cs));
+    eprintln!("Formant Pad: F1 {f_lo:.0}–{f_hi:.0} Hz ({:.2} oct): {:?}", (f_hi / f_lo).log2(), f1.iter().map(|x| x.round()).collect::<Vec<_>>());
+    eprintln!("Formant Pad: centroid {c_lo:.0}–{c_hi:.0} Hz ({:.2}×)", c_hi / c_lo);
+    assert!((f_hi / f_lo).log2() >= 0.6, "the formant moves only {:.2} oct", (f_hi / f_lo).log2());
+    assert!(c_hi >= 1.15 * c_lo, "centroid varies only {:.1} %", 100.0 * (c_hi / c_lo - 1.0));
+}
+
+/// The share of power (50 Hz–10 kHz) farther than f0/8 from every harmonic
+/// of `f0`, between `a` and `b` s.
+fn inharmonic_share(r: &Render, f0: f32, a: f32, b: f32) -> f32 {
+    let p = spectrum(r, a, b);
+    let (mut all, mut off) = (0.0f64, 0.0f64);
+    for (i, pw) in p.iter().enumerate() {
+        let f = i as f32 * BIN_HZ;
+        if (50.0..=10000.0).contains(&f) {
+            all += pw;
+            if (f - (f / f0).round() * f0).abs() > f0 / 8.0 || f < 0.5 * f0 {
+                off += pw;
+            }
+        }
+    }
+    (off / all) as f32
+}
+
+#[test]
+fn fm_bell_is_inharmonic_and_rings() {
+    // C5 (523 Hz) held 4 s, vel 100. Inharmonic share at the strike (0–0.5 s)
+    // and later (2–3 s, the index has decayed); Tine Keys (harmonic FM) as
+    // the control. Level: 20 ms RMS frames, 20 dB under the peak.
+    let f0 = hz(72);
+    let bell = play(&mut load("FM Bell"), &[72], 100, 4.0, 0.0);
+    let tine = play(&mut load("Tine Keys"), &[72], 100, 4.0, 0.0);
+    let (b0, b2, t0) = (inharmonic_share(&bell, f0, 0.0, 0.5), inharmonic_share(&bell, f0, 2.0, 3.0), inharmonic_share(&tine, f0, 0.0, 0.5));
+    let env = rms_env_db(&bell, 0.02);
+    let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+    let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
+    eprintln!(
+        "FM Bell C5: inharmonic {:.0} % at 0–0.5 s, {:.0} % at 2–3 s (Tine Keys {:.0} %); −20 dB at {t20:?} s; centroid 0–0.5 s {:.0} Hz, 2–3 s {:.0} Hz",
+        100.0 * b0, 100.0 * b2, 100.0 * t0, centroid(&bell, 0.0, 0.5), centroid(&bell, 2.0, 3.0)
+    );
+    assert!(b0 >= 0.25, "only {:.0} % inharmonic at the strike", 100.0 * b0);
+    assert!(t0 <= 0.1, "control: Tine Keys reads {:.0} % inharmonic", 100.0 * t0);
+    assert!(b2 < b0, "the clang does not fade ({:.0} % → {:.0} %)", 100.0 * b0, 100.0 * b2);
+    let t20 = t20.unwrap_or(4.0);
+    assert!(t20 >= 1.5, "falls 20 dB after {t20:.2} s (want a long ring, ≥ 1.5 s)");
+}
+
+#[test]
+fn nineties_organ_is_brighter_and_shorter_than_garage() {
+    // chord4 held 1 s, vel 100: centroid over the stab (0–0.3 s), and the
+    // 20 ms RMS frame at 300 ms re the loudest, against Garage Organ.
+    let measure = |name: &str| {
+        let r = play(&mut load(name), &CHORD4, 100, 1.0, 0.0);
+        let env = rms_env_db(&r, 0.02);
+        let pk = env.iter().cloned().fold(f32::MIN, f32::max);
+        let t20 = env.iter().position(|&v| v <= pk - 20.0).map(|i| i as f32 * 0.02);
+        (centroid(&r, 0.0, 0.3), env[(0.3 / 0.02) as usize] - pk, t20)
+    };
+    let (c90, d90, t90) = measure("90s Organ");
+    let (cg, dg, tg) = measure("Garage Organ");
+    eprintln!("90s Organ: centroid 0–0.3 s {c90:.0} Hz, at 300 ms {d90:.1} dB, −20 dB at {t90:?} s; Garage Organ {cg:.0} Hz, {dg:.1} dB, {tg:?} s");
+    assert!(c90 >= 1.2 * cg, "centroid {c90:.0} Hz is not 1.2 × Garage Organ's {cg:.0}");
+    assert!(d90 <= dg - 6.0, "at 300 ms {d90:.1} dB is not 6 dB shorter than Garage Organ's {dg:.1} dB");
+}
+
+#[test]
+fn plucks_differ_in_brightness() {
+    // chord4 held 1 s, vel 100: centroid of one Hann frame over the first
+    // 150 ms (the pluck), and the time to fall 20 dB under the peak (20 ms
+    // RMS frames) while held: both are plucks (no sustain).
+    let measure = |name: &str| {
+        let r = play(&mut load(name), &CHORD4, 100, 1.0, 0.0);
+        let env = rms_env_db(&r, 0.02);
+        let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+        let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
+        (centroid_short(&r, 0.0, 0.15), centroid(&r, 0.3, 1.0), t20)
+    };
+    let (soft, soft_late, soft_t) = measure("Soft Pluck");
+    let (bright, bright_late, bright_t) = measure("Bright Pluck");
+    eprintln!("Soft Pluck: centroid 0–150 ms {soft:.0} Hz, 0.3–1 s {soft_late:.0} Hz, −20 dB at {soft_t:?} s");
+    eprintln!("Bright Pluck: centroid 0–150 ms {bright:.0} Hz, 0.3–1 s {bright_late:.0} Hz, −20 dB at {bright_t:?} s");
+    assert!(bright >= 2.5 * soft, "Bright Pluck {bright:.0} Hz is not 2.5 × Soft Pluck's {soft:.0}");
+    for (n, t) in [("Soft Pluck", soft_t), ("Bright Pluck", bright_t)] {
+        let t = t.unwrap_or_else(|| panic!("{n} does not fall 20 dB while held"));
+        assert!(t <= 0.6, "{n} falls 20 dB only after {t:.2} s");
+    }
+}
+
+/// Noise Sweep's filter (`housePatches.ts`): the automated cutoff.
+const SWEEP_FILTER: (usize, ModuleKind) = (2, ModuleKind::Filter);
+
+/// Noise Sweep with its cutoff at `hz`, any key held `hold` s (vel 100),
+/// `release` s more.
+fn sweep_at(hz: f32, hold: f32, release: f32) -> Render {
+    let mut e = load("Noise Sweep");
+    set(&mut e, SWEEP_FILTER, "cutoff", hz);
+    play(&mut e, &[60], 100, hold, release)
+}
+
+#[test]
+fn noise_sweep_follows_its_cutoff() {
+    // The cutoff is the whole sweep: its filter's cv is unpatched, so the
+    // knob (or the Riser / Downlifter lane on it) is the cutoff in Hz.
+    let p = patch("Noise Sweep");
+    assert_eq!(kind_at(&p, SWEEP_FILTER.0), Some(SWEEP_FILTER.1), "Noise Sweep's filter moved");
+    let cv = (SWEEP_FILTER.0 * 16 + 1) as f64;
+    assert!(!p.cmds.iter().any(|c| c[0] as u32 == OP_RACK_CONNECT && c[3] == cv), "the filter cv is patched: the cutoff lane would not be the cutoff");
+    // Held 1.5 s at fixed cutoffs: centroid (0.3–1.5 s), loudness, peak.
+    // Pink noise keeps the level nearly flat across the sweep (the
+    // Transition's level lane does the rise); the centroid follows the
+    // cutoff (up to 8 kHz: the centroid's 10 kHz band edge hides a higher one).
+    let mut last = 0.0;
+    let mut loud = f32::MIN;
+    for hz in [150.0, 400.0, 1000.0, 3000.0, 8000.0, 16000.0] {
+        let r = sweep_at(hz, 1.5, 0.0);
+        let (c, m) = (centroid(&r, 0.3, 1.5), momentary_db(&r));
+        eprintln!("Noise Sweep cutoff {hz:>5} Hz: centroid {c:.0} Hz, momentary {m:.1} dBFS, peak {:.2}", r.peak);
+        if hz <= 8000.0 {
+            assert!(c > last * 1.15, "centroid {c:.0} Hz at {hz} Hz does not rise from {last:.0}");
+        }
+        assert!(r.peak < PEAK_LIMIT, "peak {:.2} at {hz} Hz", r.peak);
+        assert!(m <= LOUDNESS_DB + LOUDNESS_TOL, "{m:.1} dBFS at {hz} Hz: louder than the house window");
+        last = c;
+        loud = loud.max(m);
+    }
+    assert!((loud - LOUDNESS_DB).abs() <= LOUDNESS_TOL, "loudest {loud:.1} dBFS: outside the house window");
+}
+
+#[test]
+fn noise_sweep_rises_and_releases() {
+    // A riser's cutoff as Add track ▸ Transition writes it: swept
+    // exponentially 200 Hz → 12 kHz over 4 s (set every block, as an
+    // automation lane does), then released. The last 0.5 s is ≥ 4× brighter
+    // than the first, at a level within 6 dB of it (the riser's rise in
+    // level is its level lane, not the patch); silent 1 s after the release.
+    let mut e = load("Noise Sweep");
+    let cut = spec(ModuleKind::Filter).params.iter().position(|q| q.name == "cutoff").unwrap();
+    let (dur, rel) = (4.0f32, 0.4f32);
+    let r = run_with(&mut e, &[(0.0, Ev::On(57, 100)), (dur, Ev::Off(57))], dur + rel + 1.2, &mut |e, t| {
+        let x = (t as f32 / SR / dur).min(1.0);
+        let hz = 200.0 * 60f32.powf(x);
+        assert_eq!(e.command(OP_RACK_SET_PARAM, 0., SWEEP_FILTER.0 as f64, cut as f64, hz as f64), OK);
+    });
+    let (early, late) = (db(rms(r.span(0.0, 0.5))), db(rms(r.span(3.5, 4.0))));
+    let (c0, c1) = (centroid(&r, 0.0, 0.5), centroid(&r, 3.5, 4.0));
+    let tail = db(rms(r.span(dur + rel + 1.0, dur + rel + 1.1)));
+    eprintln!("Noise Sweep riser: 0–0.5 s {early:.1} dB / {c0:.0} Hz, 3.5–4 s {late:.1} dB / {c1:.0} Hz; peak {:.2}; {tail:.1} dBFS at release + 1 s", r.peak);
+    assert!((late - early).abs() <= 6.0, "the sweep alone moves the level {:+.1} dB", late - early);
+    assert!(c1 >= 4.0 * c0, "the sweep only brightens {:.1}×", c1 / c0);
+    assert!(r.peak < PEAK_LIMIT, "peak {:.2}", r.peak);
+    assert!(tail < -60.0, "{tail:.1} dBFS 1 s after the release");
+}
+
+/// Impact's noise VCA (`housePatches.ts`): muted to measure the sub alone.
+const IMPACT_NOISE_VCA: (usize, ModuleKind) = (7, ModuleKind::Vca);
+
+#[test]
+fn impact_level_and_peak() {
+    // One hit (a 1/8 at 124 BPM, as the Transition clip writes it) at vel
+    // 100: momentary loudness in the house window; at vel 127 on C2–C5
+    // the pre-limiter peak stays under 0.9.
+    let hit = 0.25;
+    let r = play(&mut load("Impact"), &[60], 100, hit, 2.0);
+    let m = momentary_db(&r);
+    let worst = [36u8, 48, 57, 60, 72].iter().map(|&n| play(&mut load("Impact"), &[n], 127, hit, 2.0).peak).fold(0.0, f32::max);
+    eprintln!("Impact: momentary {m:.1} dBFS at vel 100; peak {:.2} (vel 100), {worst:.2} worst at vel 127", r.peak);
+    assert!((m - LOUDNESS_DB).abs() <= LOUDNESS_TOL, "momentary {m:.1} dBFS outside {LOUDNESS_DB} ± {LOUDNESS_TOL}");
+    assert!(worst < PEAK_LIMIT, "pre-limiter peak {worst:.2} at vel 127");
+}
+
+/// Energy (Σ|X|²) at or above `lo` Hz of one Hann frame over `a..b` s,
+/// zero-padded to ≥ 4096 points (for short spans, as [`centroid_short`]).
+fn energy_above(r: &Render, a: f32, b: f32, lo: f32) -> f64 {
+    let (ia, ib) = ((a * SR).round() as usize, (b * SR).round() as usize);
+    let n = ib - ia;
+    let nfft = n.next_power_of_two().max(FFT_N);
+    let w = hann(n);
+    let mut re = vec![0.0f64; nfft];
+    let mut im = vec![0.0f64; nfft];
+    for i in 0..n {
+        re[i] = r.m[ia + i] as f64 * w[i];
+    }
+    fft(&mut re, &mut im);
+    (0..nfft / 2).filter(|&i| i as f32 * SR / nfft as f32 >= lo).map(|i| re[i] * re[i] + im[i] * im[i]).sum()
+}
+
+#[test]
+fn impact_drops_cracks_and_rings() {
+    // C4 hit (0.25 s). Sub drop: noise muted (A/B), f0 over 50–250 Hz; it
+    // starts ≥ an octave above where it lands, and lands on C2 (C4 − 2 oct).
+    let p = patch("Impact");
+    assert_eq!(kind_at(&p, IMPACT_NOISE_VCA.0), Some(IMPACT_NOISE_VCA.1), "Impact's noise VCA moved");
+    let mut e = load("Impact");
+    set(&mut e, IMPACT_NOISE_VCA, "level", 0.0);
+    let sub = play(&mut e, &[60], 100, 0.25, 1.5);
+    let base = hz(36);
+    let track = f0_track(&sub, 0.0, 1.2, 50.0, 250.0);
+    let at = |t: f32| track.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).unwrap().1;
+    eprintln!(
+        "Impact sub f0: 20 ms {:.0} Hz, 100 ms {:.0}, 200 ms {:.0}, 400 ms {:.0}, 800 ms {:.0}, 1.1 s {:.0} (C2 {base:.1})",
+        at(0.02), at(0.1), at(0.2), at(0.4), at(0.8), at(1.1)
+    );
+    assert!(at(0.02) >= 2.0 * base, "starts at {:.0} Hz: not an octave above {base:.0}", at(0.02));
+    assert!(cents(at(1.1), base).abs() <= 30.0, "lands {:.0} ct off C2", cents(at(1.1), base));
+    // Crack: the full patch's energy above 2 kHz, 0–50 ms vs 300–350 ms.
+    let r = play(&mut load("Impact"), &[60], 100, 0.25, 3.0);
+    let crack = 10.0 * (energy_above(&r, 0.0, 0.05, 2000.0) / energy_above(&r, 0.3, 0.35, 2000.0).max(1e-30)).log10();
+    // Ring: the sub carries the hit: 20 dB down (20 ms RMS) only after ≥ 0.5 s.
+    let env = rms_env_db(&r, 0.02);
+    let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+    let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02).expect("decays");
+    let tail = db(rms(r.span(0.25 + 1.5 + 1.0, 0.25 + 1.5 + 1.1)));
+    eprintln!("Impact: >2 kHz 0–50 ms vs 300–350 ms {crack:+.1} dB; −20 dB at {t20:.2} s; {tail:.1} dBFS at release + 1 s; centroid 0–50 ms {:.0} Hz", centroid_short(&r, 0.0, 0.05));
+    assert!(crack >= 20.0, "the crack fades only {crack:.1} dB");
+    assert!(t20 >= 0.5, "falls 20 dB after {t20:.2} s (want the sub to ring ≥ 0.5 s)");
+    assert!(tail < -60.0, "{tail:.1} dBFS 1 s after the release");
+}
+
+/// The numbers to read while tuning a house patch (plan 28): per patch, its
+/// momentary loudness on its phrase, its example roll's RMS and peak, the
+/// worst vel-127 peak, the centroid (whole phrase and first 150 ms) and the
+/// envelope (peak frame, −10 dB rise, −20 dB fall; 20 ms frames). `DUMP=a,b`
+/// limits it to those patches. Not a check:
+/// `cargo test --release -p daw-engine --test house_patches house_patch_numbers -- --ignored --nocapture`
+#[test]
+#[ignore = "a tuning aid, not a check"]
+fn house_patch_numbers() {
+    let only = std::env::var("DUMP").ok();
+    for p in &house_patches() {
+        if let Some(o) = &only {
+            if !o.split(',').any(|x| x == p.name) {
+                continue;
+            }
+        }
+        let lvl = example_level(p);
+        let step = p.phrase.step().unwrap_or(1.5);
+        let r = play_phrase(&mut load_cmds(&p.cmds), p.phrase, 100, step, 0.5);
+        let m = momentary_db(&r);
+        let end = p.phrase.steps().len() as f32 * step;
+        let c = centroid(&r, 0.05, end.min(1.0));
+        let c_on = centroid_short(&r, 0.0, 0.15);
+        let wp = worst_peak(p).unwrap_or(0.0);
+        let env = rms_env_db(&r, 0.02);
+        let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
+        let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
+        let t10 = env.iter().position(|&v| v >= pk - 10.0).map(|i| i as f32 * 0.02);
+        eprintln!(
+            "{:14} {:?} mom {m:.1} | ex {} | pk127 {wp:.2} | centroid {c:.0} Hz (0-150ms {c_on:.0}) | env peak at {:.2}s, -10dB rise {:?}, -20dB at {t20:?}",
+            p.name,
+            p.phrase,
+            lvl.map(|(a, b)| format!("rms {a:.1} pk {b:.2}")).unwrap_or_default(),
+            pk_i as f32 * 0.02,
+            t10
+        );
     }
 }

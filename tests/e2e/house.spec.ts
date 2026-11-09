@@ -9,11 +9,16 @@ import { startApp } from './startApp';
 const BUILTIN_GROUPS = [
   { label: 'Starter', patches: ['Deep Bass', 'Chord Stab', 'Pad', 'Lead', 'Pluck'] },
   { label: 'Sampler', patches: ['Sampler'] }, // plan 15: silent until a sample is dropped
-  { label: 'House · Leads & Stabs', patches: ['Sax', 'Brass Stab', 'Arp Pluck'] },
-  { label: 'House · Keys', patches: ['Tine Keys', 'Piano Stab', 'Garage Organ'] },
+  { label: 'House · Leads & Stabs', patches: ['Sax', 'Brass Stab', 'Supersaw Lead', 'Hoover'] },
+  { label: 'House · Plucks', patches: ['Arp Pluck', 'Soft Pluck', 'Bright Pluck'] },
+  { label: 'House · Keys', patches: ['Tine Keys', 'Piano Stab', 'Garage Organ', '90s Organ', 'FM Bell'] },
   { label: 'House · Bass', patches: ['Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass'] },
-  { label: 'House · Pads', patches: ['Strings', 'Warm Pad'] },
+  { label: 'House · Pads', patches: ['Strings', 'Warm Pad', 'Formant Pad'] },
+  { label: 'House · FX', patches: ['Noise Sweep', 'Impact'] }, // plan 28: the Transition tracks' patches
 ];
+
+/** Plan 28's new house patches (each has an example roll). */
+const PLAN28 = ['Supersaw Lead', 'Hoover', 'Soft Pluck', 'Bright Pluck', '90s Organ', 'FM Bell', 'Formant Pad'];
 
 // Plan 11: the patch menu's groups, the Sax's Formant panel, and Save patch refusing a built-in name. The
 // every-patch-sounds and four-house-tracks cases are timing-sensitive and live
@@ -92,4 +97,68 @@ test('save patch refuses a house name', async ({ page }) => {
       req.onsuccess = req.onerror = req.onblocked = r;
     });
   }, lib);
+});
+
+/** Max master peak (telemetry slot 5, peakL) over `ms`, sampled every 4 ms. */
+function maxPeak(page: Page, ms: number) {
+  return page.evaluate(
+    (ms) =>
+      new Promise<number>((resolve) => {
+        const eng = (window as unknown as DawWindow).__daw!.engine!;
+        let max = 0;
+        const t0 = performance.now();
+        const id = setInterval(() => {
+          max = Math.max(max, eng.telemetry()[5]);
+          if (performance.now() - t0 > ms) {
+            clearInterval(id);
+            resolve(max);
+          }
+        }, 4);
+      }),
+    ms,
+  );
+}
+
+// Plan 28 Task 1: each new patch is picked from the patch menu, its example
+// roll added from the rack ("Add example roll"), and played: it sounds
+// (master peak > 0.02). The roll's pattern is the selected one, so Space
+// plays it.
+test('plan 28: each new house patch loads and its example plays', async ({ page }) => {
+  test.setTimeout(90_000);
+  await startAudio(page);
+  await addSynth(page);
+  for (const name of PLAN28) {
+    await page.getByRole('button', { name: 'Instrument' }).click();
+    await page.getByTestId('patch-select').selectOption(name);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patchName))
+      .toBe(name);
+    await page.getByTestId('rack-example').click();
+    await expect(page.getByTestId('panel-title')).toContainText(`${name} example`);
+    await page.keyboard.press('Space');
+    const peak = await maxPeak(page, 2500);
+    await page.keyboard.press('Space');
+    expect(peak, `${name} example peak`).toBeGreaterThan(0.02);
+    // Let the tail die before the next patch loads.
+    await expect.poll(() => maxPeak(page, 100), { timeout: 8_000, intervals: [50] }).toBeLessThan(1e-3);
+  }
+});
+
+// The two transition patches have no example roll; a held key sounds.
+test('plan 28: the transition patches load and sound', async ({ page }) => {
+  await startAudio(page);
+  await addSynth(page);
+  for (const name of ['Noise Sweep', 'Impact']) {
+    await page.getByTestId('patch-select').selectOption(name);
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as DawWindow).__daw!.project.tracks[1].patchName))
+      .toBe(name);
+    await expect(page.getByTestId('rack-example')).toHaveCount(0);
+    await page.getByTestId('patch-select').blur();
+    await page.keyboard.down('KeyA');
+    const peak = await maxPeak(page, 600);
+    await page.keyboard.up('KeyA');
+    expect(peak, `${name} peak`).toBeGreaterThan(0.02);
+    await expect.poll(() => maxPeak(page, 100), { timeout: 8_000, intervals: [50] }).toBeLessThan(1e-3);
+  }
 });

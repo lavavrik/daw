@@ -7,9 +7,20 @@ export type NoteNameStyle = 'letters' | 'solfege';
 
 const KEY = 'daw.noteNames';
 
+/**
+ * The page's storage. Unit tests run in node, whose own `localStorage` global
+ * is a getter that warns on any touch (even `typeof`) without
+ * --localstorage-file: there only a plain value (a test's vi.stubGlobal) is
+ * used, read off the property descriptor without calling the getter.
+ */
+function storage(): Storage | undefined {
+  if (typeof window !== 'undefined') return window.localStorage;
+  return Object.getOwnPropertyDescriptor(globalThis, 'localStorage')?.value;
+}
+
 function load(): NoteNameStyle {
   try {
-    return localStorage.getItem(KEY) === 'solfege' ? 'solfege' : 'letters';
+    return storage()?.getItem(KEY) === 'solfege' ? 'solfege' : 'letters';
   } catch {
     return 'letters'; // storage blocked: the default
   }
@@ -20,7 +31,7 @@ export const noteNames = $state<{ style: NoteNameStyle }>({ style: load() });
 export function setNoteNames(style: NoteNameStyle) {
   noteNames.style = style;
   try {
-    localStorage.setItem(KEY, style);
+    storage()?.setItem(KEY, style);
   } catch {
     /* not persisted; still applies for this session */
   }

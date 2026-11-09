@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { Op } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { liveInputTrack } from '../state/actions';
+import { addDrumTrack } from '../state/actions';
+import { addSynthTrack } from '../state/rack-actions';
+import { STARTER_PATCHES } from '../state/patches';
 import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
-import { bindingCommands, blankState, loadProject, ProjectLoadError, units } from './load';
+import { bindingCommands, blankState, loadProject, ProjectLoadError, projectState, units } from './load';
 import { addLane, addPoint } from '../state/automation-actions';
 import { projectCommands } from './commands';
 import { createHistory } from '../history/history';
@@ -19,6 +22,10 @@ import { withAppendedMixer, withAppendedParams } from './testdata/appendedParams
 import { learnMidi } from '../state/midiMap';
 import { laneValueAt } from '../state/automation';
 import { mixParam } from '../audio/mixerCatalog';
+import { setMix } from '../state/mixer-actions';
+import { addReturn, deleteReturn } from '../state/returns';
+import { applyPreset } from '../state/mixerPresets';
+import { validate } from './schema';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -465,6 +472,47 @@ describe('loadProject', () => {
     const again = roundJson(serialize(p));
     expect(again.mixer.tracks.find((s: { slot: number }) => s.slot === drums.slot)!.params.send_e).toBe(mixParam('send_e').default);
     expect(await loadProject(new Project(), fakeEngine(), again, filesOf(again, p), fakeDecoder)).toEqual([]);
+  });
+
+  it('a non-default return layout survives save and reload (plan 29 F1)', () => {
+    const src = new Project();
+    const s = nullSink;
+    const drums = addDrumTrack(src, s)!;
+    const synth = addSynthTrack(src, s, 'Pad', STARTER_PATCHES[0])!;
+    deleteReturn(src, s, 'reverb'); // slot 0 is free now
+    const delay2 = addReturn(src, s, 'delay')!; // lands on slot 0
+    const hall = addReturn(src, s, 'reverb', '  Hall  ')!; // slot 2
+    expect([delay2.slot, hall.slot, hall.name]).toEqual([0, 2, 'Hall']);
+    // Hall is the first Reverb in creation order, so pad-wash sends to it.
+    expect(applyPreset(src, s, synth.id, 'pad-wash')).toBe(true);
+    setMix(src, s, hall.id, 'fader', -3); // a return-channel MIX_SET to order
+    setMix(src, s, drums.id, 'send_c', -6);
+    setMix(src, s, drums.id, 'send_c_pre', 1);
+    expect(addLane(src, s, drums.id, { kind: 'mix', param: 'send_c' })).not.toBeNull();
+    expect(addLane(src, s, hall.id, { kind: 'mix', param: 'rev_decay' })).not.toBeNull();
+    expect(learnMidi(src, 20, drums.id, { kind: 'mix', param: 'send_c' })).toBe(true);
+    expect(learnMidi(src, 21, hall.id, { kind: 'mix', param: 'rev_decay' })).toBe(true);
+
+    const first = roundJson(serialize(src));
+    const v = validate(roundJson(first));
+    if ('error' in v) throw new Error(v.error);
+    expect(v.warnings).toEqual([]);
+    const p = new Project();
+    blankState(p);
+    projectState(p, v.project);
+    const second = roundJson(serialize(p));
+    expect(second).toEqual(first);
+    expect(p.mixer.returns.map((r) => [r.slot, r.kind, r.name])).toEqual([[1, 'delay', 'Delay'], [0, 'delay', 'Delay 2'], [2, 'reverb', 'Hall']]);
+
+    // The engine replay: RETURN_KIND for every slot before any return-channel MIX_SET.
+    const cmds = projectCommands(second, new Map(second.samples.map((x) => [x.id, x.id]))).commands;
+    expect(projectCommands(second, new Map(second.samples.map((x) => [x.id, x.id]))).warnings).toEqual([]);
+    const kinds = cmds.filter((c) => c[0] === Op.RETURN_KIND).map((c) => [c[1], c[2]]);
+    expect(kinds).toEqual([[0, 2], [1, 2], [2, 1], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]]);
+    const lastKind = cmds.map((c) => c[0]).lastIndexOf(Op.RETURN_KIND);
+    const returnSets = cmds.map((c, i) => [c, i] as const).filter(([c]) => c[0] === Op.MIX_SET && c[1] >= 32 && c[1] <= 39);
+    expect(returnSets.length).toBeGreaterThan(0);
+    for (const [, i] of returnSets) expect(i).toBeGreaterThan(lastKind);
   });
 
   it('the pattern library survives a save and reopen; a load replaces the old session\'s', async () => {

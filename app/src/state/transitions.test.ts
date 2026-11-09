@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BAR_TICKS as BAR, MAX_AUTO_LANES, MAX_SONG_TICKS } from '../audio/protocol';
+import { BAR_TICKS as BAR, MAX_AUTO_LANES, MAX_SONG_TICKS, sendParam } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
 import { createHistory } from '../history/history';
@@ -9,6 +9,7 @@ import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
 import { addDrumTrack } from './actions';
+import { addReturn, deleteReturn } from './returns';
 import { addLane } from './automation-actions';
 import { targetDef } from './automation';
 import { commandEdits } from './edits';
@@ -161,6 +162,43 @@ describe('transitions', () => {
     expect(t.automation).toEqual([]);
     expect(s.p.mixer.channels[t.id].params[mixParam('send_a').id]).toBe(IMPACT_REVERB_SEND_DB);
     s.agrees();
+  });
+
+  it('Impact sends to the first Reverb return, wherever it is', () => {
+    const s = rig();
+    deleteReturn(s.p, s.sink, 'reverb');
+    const hall = addReturn(s.p, s.sink, 'reverb', 'Hall')!; // lowest free slot: 0
+    addReturn(s.p, s.sink, 'delay');
+    const n = s.p.mixer.returns.length;
+    const t = addTransition(s.p, s.sink, 'impact', 0)!;
+    expect(s.p.mixer.returns).toHaveLength(n);
+    expect(s.p.mixer.channels[t.id].params[mixParam(sendParam(hall.slot)).id]).toBe(IMPACT_REVERB_SEND_DB);
+  });
+
+  it('Impact with no Reverb return adds "Reverb" on the lowest free slot, in one undo entry', () => {
+    const s = rig();
+    deleteReturn(s.p, s.sink, 'reverb'); // slot 0 is free again
+    expect(s.p.mixer.returns.some((r) => r.kind === 'reverb')).toBe(false);
+    const before = plain(serialize(s.p));
+    const t = addTransition(s.p, s.sink, 'impact', 0)!;
+    const r = s.p.mixer.returns.find((x) => x.kind === 'reverb')!;
+    expect(r).toMatchObject({ name: 'Reverb', slot: 0 });
+    expect(s.p.mixer.channels[t.id].params[mixParam('send_a').id]).toBe(IMPACT_REVERB_SEND_DB);
+    s.agrees();
+    s.p.history!.undo();
+    expect(plain(serialize(s.p))).toEqual(before);
+    s.agrees();
+  });
+
+  it('Impact is blocked, with the exact message, when 8 returns exist and none is a Reverb', () => {
+    const s = rig();
+    deleteReturn(s.p, s.sink, 'reverb');
+    while (s.p.mixer.returns.length < 8) addReturn(s.p, s.sink, 'delay');
+    expect(transitionBlocked(s.p, 'impact')).toBe('Needs a Reverb return: delete a return to make room');
+    expect(transitionBlocked(s.p, 'riser')).toBeNull();
+    const json = JSON.stringify(serialize(s.p));
+    expect(addTransition(s.p, s.sink, 'impact', 0)).toBeNull();
+    expect(JSON.stringify(serialize(s.p))).toBe(json);
   });
 
   it('a Riser near the song start is shortened to the bars before the playhead; at bar 1 it starts there', () => {

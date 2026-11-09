@@ -3,6 +3,7 @@ import { moduleDef } from '../../audio/catalog';
 import { addSynthTrack } from '../../state/rack-actions';
 import { addDrumTrack } from '../../state/actions';
 import { STARTER_PATCHES } from '../../state/patches';
+import { renameReturn } from '../../state/returns';
 import { Project } from '../../state/project.svelte';
 import type { SynthTrack } from '../../state/project.svelte';
 import { moduleTitles, targetLabel } from './autoLabels';
@@ -22,6 +23,10 @@ describe('automation lane labels', () => {
     // Deep Bass: one filter ("Filter"), two oscillators ("Oscillator 1", "Oscillator 2").
     expect(targetLabel(p, s, { kind: 'rack', module: 4, param: 'cutoff' })).toBe('Filter · Cutoff');
     expect(targetLabel(p, s, { kind: 'rack', module: 2, param: 'tune' })).toMatch(/^Oscillator 2 · /);
+    // A send reads "<return name> send"; a send to a return that is not there stays generic.
+    renameReturn(p, 'reverb', 'Hall');
+    expect(targetLabel(p, d, { kind: 'mix', param: 'send_a' })).toBe('Hall send');
+    expect(targetLabel(p, d, { kind: 'mix', param: 'send_e' })).toBe('Send 5');
     // A return's lanes take its name.
     p.mixer.returns[1].name = 'Echo';
     expect(targetLabel(p, 'delay', { kind: 'mix', param: 'delay_feedback' })).toBe('Echo · Feedback');

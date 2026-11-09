@@ -87,6 +87,7 @@
   import { removeLane, setLaneEnabled } from '../../state/automation-actions';
   import type { AutomationLane } from '../../state/project.svelte';
   import { targetLabel } from './autoLabels';
+  import { findReturn, returnColor } from '../../state/returns';
   import AutoPicker from './AutoPicker.svelte';
   import { laneHeight, laneView, setLaneHeight, setOpen } from './laneView.svelte';
   import { AUTO_H, LANE_H, LANE_MAX_H, LANE_MIN_H, MASTER_GREY, MASTER_ROW, dropGap, gapIndex, gapY, rowsHeight, trackBlocks } from './tlMath';
@@ -488,7 +489,7 @@
         <span class="bar" aria-hidden="true"></span>
         <span class="main static">
           <span class="mark"></span>
-          <b class="name">Master</b><span class="kind">Master · Reverb · Delay</span>
+          <b class="name">Master</b><span class="kind">{['Master', ...p.mixer.returns.map((x) => x.name)].join(' · ')}</span>
         </span>
         <span class="ms">
           <button
@@ -517,6 +518,10 @@
               title={info.lane.enabled ? 'On: the lane drives its target (click: off, the base value plays)' : 'Off: the base value plays (click: on)'}
               onclick={() => setLaneEnabled(p, engine, info.lane.id, !info.lane.enabled)}
             >{info.lane.enabled ? '●' : '○'}</button>
+            {#if typeof info.owner === 'string' && findReturn(p, info.owner)}
+              <!-- A return's lane: a dot in the return's colour next to its name (the label starts with it). -->
+              <span class="rdot" aria-hidden="true" style:background={returnColor(findReturn(p, info.owner)!.slot)}></span>
+            {/if}
             <span class="target" title={label}>{label}</span>
             <button class="x" aria-label={`Remove the ${label} lane`} title="Remove this lane" data-testid={`auto-remove-${key}-${info.k}`} onclick={() => removeLane(p, engine, info.lane.id)}>×</button>
           </div>
@@ -633,6 +638,7 @@
   .a.has:not(.lit) { color: var(--c); }
   .row.muted .name, .row.muted .kind { opacity: 0.5; }
   .main.static { flex: 1; cursor: default; align-self: center; padding-left: 0; }
+  .rdot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
   .row.master { background: color-mix(in srgb, var(--panel), var(--well) 25%); }
   .row.lane { position: relative; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px 0 12px; background: color-mix(in srgb, var(--panel), var(--well) 30%); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--c) 60%, transparent); }
   /* Under 40 px (LANE_MIN_H is 32) the two header lines close up so they still fit. */

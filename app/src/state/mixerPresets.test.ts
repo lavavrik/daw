@@ -7,9 +7,9 @@ import { addDrumTrack } from './actions';
 import { addSynthTrack } from './rack-actions';
 import { DUCK_TO_KICK, accepts, duckToKick, setMix } from './mixer-actions';
 import { KIT_ROLES } from './kits';
-import { MIX_PRESETS, applyPreset, presetById, presetsFor } from './mixerPresets';
+import { MIX_PRESETS, applyPreset, presetById, presetKindOf, presetsFor } from './mixerPresets';
 import type { PresetKind } from './mixerPresets';
-import { findReturn } from './returns';
+import { addReturn, deleteReturn, findReturn, newReturn } from './returns';
 import type { ReturnKind } from './returns';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
@@ -58,6 +58,19 @@ describe('mixer presets: the tables', () => {
     }
   });
 
+  it('track preset send levels are inside the send range; other kinds hold none', () => {
+    const send = mixParam('send_a');
+    for (const pr of MIX_PRESETS) {
+      for (const v of [pr.reverbSend, pr.delaySend]) {
+        if (pr.kind !== 'track') expect(v, pr.name).toBeUndefined();
+        else if (v !== undefined) {
+          expect(v, pr.name).toBeGreaterThanOrEqual(send.min);
+          expect(v, pr.name).toBeLessThanOrEqual(send.max);
+        }
+      }
+    }
+  });
+
   it('no preset touches fader, pan, mute or solo', () => {
     for (const pr of MIX_PRESETS) {
       for (const n of ['fader', 'pan', 'mute', 'solo']) expect(pr.params, pr.name).not.toHaveProperty(n);
@@ -69,7 +82,7 @@ describe('mixer presets: the tables', () => {
     // So presets are absolute: applying one after another never leaves a
     // knob of the first behind.
     const groups: Record<PresetKind, string[]> = {
-      track: ['eq', 'comp', 'send'], reverb: ['eq', 'reverb'], delay: ['eq', 'delay'], master: ['eq', 'limiter'],
+      track: ['eq', 'comp'], reverb: ['eq', 'reverb'], delay: ['eq', 'delay'], master: ['eq', 'limiter'],
     };
     for (const pr of MIX_PRESETS) {
       const want = MIX_PARAMS.filter((d) => groups[pr.kind].includes(d.group)).map((d) => d.name).sort();
@@ -139,7 +152,7 @@ describe('applyPreset', () => {
     const s = addSynthTrack(p, sink)!;
     expect(p.history).toBeNull();
     expect(applyPreset(p, sink, s.id, 'pad-wash')).toBe(true);
-    expect(p.mixer.channels[s.id].params[P('send_a')]).toBe(presetById('pad-wash')!.params.send_a);
+    expect(p.mixer.channels[s.id].params[P('send_a')]).toBe(presetById('pad-wash')!.reverbSend);
   });
 
   it('Flat after another preset puts EQ, comp and sends back to the defaults', () => {
@@ -171,7 +184,9 @@ describe('applyPreset', () => {
       expect(p.mixer.channels[s.id].key).toEqual({ trackId: d.id, row: 0 });
       expect(compOf(p, s.id)).toEqual(DUCK_TO_KICK);
       const pad = presetById('pad-wash')!;
-      for (const n of ['eq_on', 'eq_hp', 'eq_mid_gain', 'send_a', 'send_b']) expect(p.mixer.channels[s.id].params[P(n)], n).toBe(pad.params[n]);
+      for (const n of ['eq_on', 'eq_hp', 'eq_mid_gain']) expect(p.mixer.channels[s.id].params[P(n)], n).toBe(pad.params[n]);
+      expect(p.mixer.channels[s.id].params[P('send_a')]).toBe(pad.reverbSend);
+      expect(p.mixer.channels[s.id].params[P('send_b')]).toBe(pad.delaySend);
       expect(sent.some((c) => c[0] === Op.MIX_SET && mixParamGroup(c[2]) === 'comp')).toBe(false);
       expect(sent.some((c) => c[0] === Op.MIX_SET_KEY)).toBe(false);
       expect(h.labels.undo).toBe('Preset: Pad wash');
@@ -194,3 +209,79 @@ describe('applyPreset', () => {
 });
 
 const mixParamGroup = (id: number) => MIX_PARAMS.find((d) => d.id === id)?.group;
+
+describe('presets follow the returns (plan 29)', () => {
+  const sendsOf = (p: Project, id: string) =>
+    'abcdefgh'.split('').map((c) => p.mixer.channels[id].params[P(`send_${c}`)]);
+  const pre = (p: Project, id: string) => 'abcdefgh'.split('').map((c) => p.mixer.channels[id].params[P(`send_${c}_pre`)]);
+  const layout = (p: Project, rs: [string, 'reverb' | 'delay', number][]) => {
+    p.mixer.returns = rs.map(([name, kind, slot]) => newReturn(name.toLowerCase(), kind, name, slot));
+  };
+
+  it('a track preset sends to the first Reverb and the first Delay, and leaves other sends alone', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s = addSynthTrack(p, sink)!;
+    layout(p, [['Hall', 'reverb', 0], ['Echo', 'delay', 1], ['Room', 'reverb', 2]]);
+    setMix(p, sink, s.id, 'send_c', -9);
+    expect(applyPreset(p, sink, s.id, 'pad-wash')).toBe(true);
+    const pad = presetById('pad-wash')!;
+    expect(sendsOf(p, s.id).slice(0, 3)).toEqual([pad.reverbSend, pad.delaySend, -9]);
+  });
+
+  it('with the only Reverb on slot 3, stab-space sets send_d (and the delay send where the Delay is)', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s = addSynthTrack(p, sink)!;
+    layout(p, [['Echo', 'delay', 1], ['Verb', 'reverb', 3]]);
+    expect(applyPreset(p, sink, s.id, 'stab-space')).toBe(true);
+    const st = presetById('stab-space')!;
+    expect(sendsOf(p, s.id)).toEqual([-60, st.delaySend, -60, st.reverbSend, -60, -60, -60, -60]);
+  });
+
+  it('a value for a kind the song has no return of is skipped', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const s = addSynthTrack(p, sink)!;
+    layout(p, [['Echo', 'delay', 1]]);
+    sent.length = 0;
+    expect(applyPreset(p, sink, s.id, 'pad-wash')).toBe(true);
+    expect(sendsOf(p, s.id)[0]).toBe(-60);
+    expect(sent.some((c) => c[0] === Op.MIX_SET && c[2] === P('send_a'))).toBe(false);
+  });
+
+  it('Flat turns all 8 sends to -60 dB and post', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s = addSynthTrack(p, sink)!;
+    for (const c of 'abcdefgh') {
+      setMix(p, sink, s.id, `send_${c}`, -10);
+      setMix(p, sink, s.id, `send_${c}_pre`, 1);
+    }
+    expect(applyPreset(p, sink, s.id, 'flat')).toBe(true);
+    expect(sendsOf(p, s.id)).toEqual(Array(8).fill(-60));
+    expect(pre(p, s.id)).toEqual(Array(8).fill(0));
+  });
+
+  it('a track preset sets the pre flag of the sends it sets (post)', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const s = addSynthTrack(p, sink)!;
+    setMix(p, sink, s.id, 'send_a_pre', 1);
+    applyPreset(p, sink, s.id, 'pad-wash');
+    expect(pre(p, s.id).slice(0, 2)).toEqual([0, 0]);
+  });
+
+  it('presetKindOf is the return kind: hall is offered on a Reverb return, not on a Delay', () => {
+    const p = new Project();
+    const { sink } = fake();
+    const r = addReturn(p, sink, 'reverb')!;
+    const d = addReturn(p, sink, 'delay')!;
+    expect(presetKindOf(p, r.id)).toBe('reverb');
+    expect(presetKindOf(p, d.id)).toBe('delay');
+    expect(applyPreset(p, sink, r.id, 'hall')).toBe(true);
+    expect(applyPreset(p, sink, d.id, 'hall')).toBe(false);
+    deleteReturn(p, sink, r.id);
+    expect(presetKindOf(p, r.id)).toBeNull();
+  });
+});

@@ -24,7 +24,7 @@ frame), `engine/src/engine.rs` (commands, base values, lifecycle),
   instant change is a hold point followed by the next point.
 - **Targets.** A lane drives one of:
   - `Mix { ch, id }`: a continuous mixer param of a track strip (0..31), the
-    Reverb (32) or Delay (33) return, or the master (34);
+    a return (32..39, `MIX_RETURN0 + slot`), or the master (40);
   - `Rack { slot, module, param }`: a continuous param of a module in a synth
     track's patch.
 
@@ -247,8 +247,17 @@ export tests named in projects.md, history.md and export.md.
   by catalog name. The channel is implied by the owner.
 - **Owners.** Every `Track` has `automation: AutomationLane[]`: lanes on its
   own strip, and on synth tracks also on its own rack (Audio and drum tracks
-  have no rack). The Master row's lanes (Reverb, Delay, master) are in
-  `MixerState.automation` as `{channel, lane}`.
+  have no rack). The Master row's lanes (the master and every return) are in
+  `MixerState.automation` as `{channel, lane}`. Owners and MIDI-learn channels
+  are plain strings: a track id, a **return id** (`'reverb'` / `'delay'` for
+  the two a project starts with, a UUID for added ones) or `'master'`.
+- **Send targets.** A track's send lanes are `{mix: 'send_a'..'send_h'}`:
+  the name is the return's **slot**, which a return keeps for life (so
+  saved lanes need no migration). Labels and the picker show the return's
+  name: the lane header reads "Hall send", the picker lists *Sends › Hall*
+  (one entry per existing return; a send to a slot with no return is not
+  offered), and a Master-row lane reads "Hall · Size" with a dot in the
+  return's colour. MIDI mapping labels do the same.
 - `AutoPoint = {id, idx, tick, value, hold, curve}` (`curve` −1..1, 0 a
   straight segment; plan 16). `idx` is the engine point
   slot, and a lane's idx are always **dense** (0..n−1): the saved points are
@@ -446,7 +455,7 @@ the user's own edits would send:
 |---|---|---|---|---|
 | Riser | 8 | Noise Sweep | one bar-long C4 per bar | Filter `cutoff` ramp-up 200 Hz → 12 kHz; amp VCA `level` ramp-up −24 → 0 dB |
 | Downlifter | 4 | Noise Sweep | one bar-long C4 per bar | `cutoff` ramp-down 12 kHz → 200 Hz; amp VCA `level` ramp-down 0 → −30 dB |
-| Impact | 1 | Impact | one 1/8 C4 on beat 1 | `send_a` (Reverb) −6 dB; no lanes |
+| Impact | 1 | Impact | one 1/8 C4 on beat 1 | send to the first Reverb return −6 dB; no lanes |
 
 - **The level lane is in the rack** (the VCA cabled into the patch's Out:
   `laneModule`), not on the track fader: a fader lane would take the fader
@@ -462,9 +471,12 @@ the user's own edits would send:
   same tick, so the gate retriggers from the held level: no audible seam.
   The Impact plays C4 because its sub lands two octaves under the note (C2,
   65 Hz); keep it in C3–C5.
-- **Impact's tail** is its reverb send (house patches hold no Reverb):
-  −6 dB, louder than any mix preset's send, on whatever the Reverb return
-  holds (the return's own params are the project's, never touched here).
+- **Impact's tail** is its send to the **first Reverb return** (house
+  patches hold no Reverb): −6 dB, louder than any mix preset's send, on
+  whatever that return holds (its params are the project's, never touched
+  here). With no Reverb return, the Impact adds one named "Reverb" on the
+  lowest free slot, inside the same edit (one undo entry). With 8 returns and
+  none a Reverb it is blocked: `Needs a Reverb return: delete a return to make room`.
 - **The playhead** is the AutoBus's `songTick()` (in Song mode its
   `shownTick`: the heard tick while the song plays, else the parked song
   position; in Pattern mode the parked song position) for both menus:

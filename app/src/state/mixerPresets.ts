@@ -22,11 +22,12 @@
 // The EQ the values talk to (engine/src/dsp/eq.rs): HP 12 dB/oct (20 Hz =
 // off), low shelf at 100 Hz, a mid peak, high shelf at 8 kHz.
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
+import { MAX_RETURNS, sendParam, sendPreParam } from '../audio/protocol';
 import type { CommandSink } from './actions';
 import { edit } from './edits';
 import { setMix, setSidechain } from './mixer-actions';
 import type { MixChannelTarget } from './mixer-actions';
-import { findReturn } from './returns';
+import { findReturn, firstReturnOfKind } from './returns';
 import type { Project } from './project.svelte';
 
 /** Which strips a preset is for (a return's kind picks its presets: each effect has its own). */
@@ -42,21 +43,34 @@ export interface MixPreset {
   blurb: string;
   /** Mixer param name -> value, in catalog units (dB, Hz, ms, s, a choice index). */
   params: Readonly<Record<string, number>>;
+  /**
+   * Track presets only: the send level (dB) to the FIRST Reverb / Delay
+   * return in creation order, and its pre-fader flag (0 post, 1 pre). Absent:
+   * Off (-60) and post. Not catalog params, because which send knob that is
+   * (send_a..send_h) depends on the song's returns; applyPreset resolves it.
+   * A kind the song has no return of is skipped.
+   */
+  reverbSend?: number;
+  delaySend?: number;
+  reverbPre?: number;
+  delayPre?: number;
 }
 
 /** The catalog defaults of the params in `groups` (Flat, and every preset's base). */
 function defaults(...groups: string[]): Record<string, number> {
   return Object.fromEntries(MIX_PARAMS.filter((d) => groups.includes(d.group)).map((d) => [d.name, d.default]));
 }
-const TRACK_BASE = defaults('eq', 'comp', 'send');
+const TRACK_BASE = defaults('eq', 'comp');
 const REVERB_BASE = defaults('eq', 'reverb');
 const DELAY_BASE = defaults('eq', 'delay');
 const MASTER_BASE = defaults('eq', 'limiter');
 /** A Delay division by its label ("3/16"), as the catalog's choice index. */
 const division = (label: string) => mixParam('delay_time').choices.indexOf(label);
 
-const track = (id: string, name: string, blurb: string, params: Record<string, number>): MixPreset =>
-  ({ id, name, kind: 'track', blurb, params: { ...TRACK_BASE, ...params } });
+const track = (
+  id: string, name: string, blurb: string, params: Record<string, number>,
+  sends: Pick<MixPreset, 'reverbSend' | 'delaySend'> = {},
+): MixPreset => ({ id, name, kind: 'track', blurb, params: { ...TRACK_BASE, ...params }, ...sends });
 
 export const MIX_PRESETS: readonly MixPreset[] = [
   // ---- tracks ---------------------------------------------------------------
@@ -70,24 +84,20 @@ export const MIX_PRESETS: readonly MixPreset[] = [
   }),
   track('hats-air', 'Hats air', 'For a hats or percussion track: everything under 300 Hz out (removes the kick on a full-kit strip), harshness down, air up; a touch of room', {
     eq_on: 1, eq_hp: 300, eq_low: 0, eq_mid_freq: 3500, eq_mid_gain: -2, eq_mid_q: 1.5, eq_high: 3,
-    send_a: -22,
-  }),
+  }, { reverbSend: -22 }),
   track('pad-wash', 'Pad wash', 'Out of the kick and bass range, softened, gently levelled, washed in reverb', {
     eq_on: 1, eq_hp: 180, eq_low: 0, eq_mid_freq: 500, eq_mid_gain: -3, eq_mid_q: 0.8, eq_high: -2,
     comp_on: 1, comp_threshold: -24, comp_ratio: 2, comp_attack: 30, comp_release: 300, comp_makeup: 2,
-    send_a: -8, send_b: -24,
-  }),
+  }, { reverbSend: -8, delaySend: -24 }),
   track('stab-space', 'Stab space', 'Low end out, presence up, punchy comp, reverb plus a dub echo', {
     eq_on: 1, eq_hp: 150, eq_low: 0, eq_mid_freq: 2500, eq_mid_gain: 2, eq_mid_q: 1, eq_high: 0,
     comp_on: 1, comp_threshold: -18, comp_ratio: 3, comp_attack: 5, comp_release: 100, comp_makeup: 2,
-    send_a: -14, send_b: -16,
-  }),
+  }, { reverbSend: -14, delaySend: -16 }),
   track('lead-presence', 'Lead presence', 'Low end out, 3 kHz a little forward, a little air, steady level, some space', {
     eq_on: 1, eq_hp: 120, eq_low: 0, eq_mid_freq: 3000, eq_mid_gain: 2, eq_mid_q: 1.2, eq_high: 1.5,
     comp_on: 1, comp_threshold: -18, comp_ratio: 3, comp_attack: 8, comp_release: 150, comp_makeup: 2,
-    send_a: -16, send_b: -18,
-  }),
-  track('flat', 'Flat', 'EQ, comp and sends back to their defaults (off)', {}),
+  }, { reverbSend: -16, delaySend: -18 }),
+  track('flat', 'Flat', 'EQ, comp and all 8 sends back to their defaults (off, post-fader)', {}),
 
   // ---- the Reverb return ----------------------------------------------------
   // Every reverb preset high-passes the return: reverb on low end is mud.
@@ -133,6 +143,28 @@ export function presetKindOf(p: Project, channel: MixChannelTarget): PresetKind 
 }
 
 /**
+ * A track preset's sends. Flat: all MAX_RETURNS sends Off and post-fader.
+ * Any other preset: the send to the first Reverb return and to the first
+ * Delay return take the preset's level and pre flag (Off / post when it
+ * names none: presets are absolute); a kind with no return is skipped, and
+ * every other send is left alone.
+ */
+function applySends(p: Project, sink: CommandSink, channel: MixChannelTarget, preset: MixPreset, flat: boolean) {
+  const setSend = (slot: number, db: number | undefined, pre: number | undefined) => {
+    setMix(p, sink, channel, sendParam(slot), db ?? mixParam(sendParam(slot)).default);
+    setMix(p, sink, channel, sendPreParam(slot), pre ?? 0);
+  };
+  if (flat) {
+    for (let slot = 0; slot < MAX_RETURNS; slot++) setSend(slot, undefined, undefined);
+    return;
+  }
+  const reverb = firstReturnOfKind(p, 'reverb');
+  const delay = firstReturnOfKind(p, 'delay');
+  if (reverb) setSend(reverb.slot, preset.reverbSend, preset.reverbPre);
+  if (delay) setSend(delay.slot, preset.delaySend, preset.delayPre);
+}
+
+/**
  * Apply preset `presetId` to `channel` (a track id, a return id or
  * 'master'): every param of the preset through setMix (state + MIX_SET), in
  * catalog order, as ONE undo entry "Preset: <name>". On a keyed track strip
@@ -158,6 +190,7 @@ export function applyPreset(p: Project, sink: CommandSink, channel: MixChannelTa
       if (v === undefined || (keyed && !flat && d.group === 'comp')) continue;
       setMix(p, sink, channel, d.name, v);
     }
+    if (preset.kind === 'track') applySends(p, sink, channel, preset, flat);
     return true;
   });
 }

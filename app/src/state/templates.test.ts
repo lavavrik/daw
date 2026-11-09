@@ -16,7 +16,10 @@ import { DUCK_TO_KICK } from './mixer-actions';
 import { presetById } from './mixerPresets';
 import { BUILTIN_PATCHES } from './patches';
 import { Project } from './project.svelte';
-import { ARRANGEMENT, SONG_BARS, TEMPLATES, buildTemplate, factoryShift, templateById, templateClipCount } from './templates';
+import { addDrumTrack } from './actions';
+import { newReturn } from './returns';
+import { mixParam } from '../audio/mixerCatalog';
+import { ARRANGEMENT, SONG_BARS, TEMPLATES, applyStripMix, buildTemplate, factoryShift, templateById, templateClipCount } from './templates';
 import type { Template } from './templates';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -187,8 +190,8 @@ describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template)
     expect(p(t.chords.track, 'eq_hp')).toBe(presetById(t.chords.preset)!.params.eq_hp);
     if (t.pad) expect(p(t.pad.track, 'eq_hp')).toBe(presetById(t.pad.preset)!.params.eq_hp);
     // Sends: the template's own where it sets one, else the preset's.
-    expect(p('Drums', 'send_a')).toBe(t.drums.sends?.a ?? presetById(t.drums.preset)!.params.send_a);
-    expect(p(t.chords.track, 'send_b')).toBe(t.chords.sends?.b ?? presetById(t.chords.preset)!.params.send_b);
+    expect(p('Drums', 'send_a')).toBe(t.drums.sends?.reverb ?? presetById(t.drums.preset)!.reverbSend ?? -60);
+    expect(p(t.chords.track, 'send_b')).toBe(t.chords.sends?.delay ?? presetById(t.chords.preset)!.delaySend ?? -60);
     // The balance: the template's faders.
     expect(p('Drums', 'fader')).toBe(t.drums.fader);
     for (const part of [t.bass, t.chords, ...(t.pad ? [t.pad] : [])]) expect(p(part.track, 'fader')).toBe(part.fader);
@@ -215,5 +218,20 @@ describe.each(TEMPLATES.map((t) => [t.name, t] as const))('%s', (_, t: Template)
 
   it('builds the same project every time', () => {
     expect(buildTemplate(t.id)).toEqual(json);
+  });
+});
+
+describe('template sends follow the returns (plan 29)', () => {
+  it('a project whose first Reverb is on slot 2 gets the template send on send_c', () => {
+    const t = TEMPLATES[0];
+    const p = new Project();
+    p.mixer.returns = [newReturn('echo', 'delay', 'Echo', 1), newReturn('hall', 'reverb', 'Hall', 2)];
+    const sink = { send: () => true };
+    const track = addDrumTrack(p, sink)!;
+    applyStripMix(p, t, track.id, { preset: 'kick-punch', fader: -4, sends: { reverb: -26, delay: -20 } });
+    const ps = p.mixer.channels[track.id].params;
+    expect(ps[mixParam('send_c').id]).toBe(-26);
+    expect(ps[mixParam('send_a').id]).toBe(-60);
+    expect(ps[mixParam('send_b').id]).toBe(-20); // the Delay is on slot 1
   });
 });

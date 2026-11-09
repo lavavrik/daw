@@ -64,6 +64,12 @@ export function findReturn(p: Project, id: string): ReturnState | undefined {
   return p.mixer.returns.find((r) => r.id === id);
 }
 
+/** The slot a send level param (send_a..send_h, not a _pre flag) goes to, or null for any other param. */
+export function sendSlotOf(param: string): number | null {
+  for (let slot = 0; slot < MAX_RETURNS; slot++) if (sendParam(slot) === param) return slot;
+  return null;
+}
+
 /** The first return of `kind` in creation order (where track presets send). */
 export function firstReturnOfKind(p: Project, kind: ReturnKind): ReturnState | undefined {
   return p.mixer.returns.find((r) => r.kind === kind);

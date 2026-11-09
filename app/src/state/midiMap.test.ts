@@ -305,4 +305,14 @@ describe('MIDI mappings', () => {
     expect(mappingLabel(p, b)).toBe('Bass · Volume');
     expect(mappingLabel(p, c)).toBe(`Master · ${mixParam('limiter_ceiling').label}`);
   });
+
+  it('labels follow return names: a send reads "<return> send", a return mapping its name', async () => {
+    const { p, synth } = await rig();
+    p.mixer.returns[0].name = 'Hall';
+    learnMidi(p, 20, synth.id, { kind: 'mix', param: 'send_a' });
+    learnMidi(p, 21, 'reverb', { kind: 'mix', param: 'rev_size' });
+    const [a, b] = p.midiMap;
+    expect(mappingLabel(p, a)).toBe('Bass · Hall send');
+    expect(mappingLabel(p, b)).toBe(`Hall · ${mixParam('rev_size').label}`);
+  });
 });

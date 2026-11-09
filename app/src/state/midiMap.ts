@@ -38,7 +38,7 @@ import { isMasterChannel, sameTarget } from './automation';
 import type { AutoDef } from './automation';
 import { edit, markEdited } from './edits';
 import { accepts, resolveChannel, setMix } from './mixer-actions';
-import { findReturn } from './returns';
+import { findReturn, sendSlotOf } from './returns';
 import type { MixChannelTarget } from './mixer-actions';
 import { setParam } from './rack-actions';
 import type { AutoTarget, Project } from './project.svelte';
@@ -202,7 +202,11 @@ export function applyCc(
  */
 export function mappingLabel(p: Project, m: MidiMapping): string {
   const owner = m.owner === 'master' ? 'Master' : (findReturn(p, m.owner) ?? p.tracks.find((t) => t.id === m.owner))?.name ?? '?';
-  const param = mappingDef(p, m.owner, m.target)?.label ?? m.target.param;
+  const def = mappingDef(p, m.owner, m.target);
+  const slot = m.target.kind === 'mix' ? sendSlotOf(m.target.param) : null;
+  const sendTo = slot === null ? undefined : p.mixer.returns.find((r) => r.slot === slot);
+  // A send reads "<return name> send", as its lane does (ui/song/autoLabels.ts).
+  const param = sendTo ? `${sendTo.name} send` : (def?.label ?? m.target.param);
   if (m.target.kind === 'mix') return `${owner} · ${param}`;
   const t = p.tracks.find((x) => x.id === m.owner);
   const mod = t?.kind === 'synth' ? t.modules.find((x) => x.idx === (m.target as { module: number }).module) : undefined;

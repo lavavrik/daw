@@ -54,14 +54,18 @@
 // hearing (C2 → 16 Hz). Keep it in C3–C5.
 //
 // Impact has no reverb in its rack (house patches hold no Delay or Reverb),
-// so its tail is the track's reverb send (send_a, the Reverb return): −6 dB,
+// so its tail is the track's send to the FIRST Reverb return (plan 29): −6 dB,
 // louder than any mix preset's send (Pad wash −8), so the hit leaves a long,
-// clearly audible tail on whatever reverb the project's return holds.
-import { BAR_TICKS, MAX_AUTO_LANES, MAX_SONG_TICKS } from '../audio/protocol';
+// clearly audible tail on whatever reverb that return holds. A project with
+// no Reverb return gets one named "Reverb" on the lowest free slot, inside the
+// same edit (one undo entry); with all 8 slots taken by Delays the Impact is
+// blocked (NEEDS_REVERB_TEXT).
+import { BAR_TICKS, MAX_AUTO_LANES, MAX_SONG_TICKS, sendParam } from '../audio/protocol';
 import { LOADING_TEXT, TRACKS_FULL_TEXT, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { addLane, insertShape, setPointCurve } from './automation-actions';
 import type { AutoShape } from './automation-actions';
+import { addReturn, firstReturnOfKind, freeSlot } from './returns';
 import { laneCount } from './automation';
 import { banners } from './banners.svelte';
 import { edit } from './edits';
@@ -132,6 +136,8 @@ export interface TransitionDef {
   lanes: LaneSpec[];
   /** Mixer params set on the new track (param name → value). */
   mix: Record<string, number>;
+  /** Send level (dB) to the first Reverb return, adding a return named "Reverb" when there is none (Impact). */
+  reverbSend?: number;
 }
 
 /** One bar-long C4 per bar (see the header: picks up mid-clip). */
@@ -165,11 +171,15 @@ export const TRANSITIONS: readonly TransitionDef[] = [
     title: 'Add an Impact track: one hit at the playhead, with a long reverb tail',
     notes: () => [{ pitch: TRANSITION_PITCH, start: 0, len: IMPACT_HIT_TICKS, vel: 100 }],
     lanes: [],
-    mix: { send_a: IMPACT_REVERB_SEND_DB },
+    mix: {},
+    reverbSend: IMPACT_REVERB_SEND_DB,
   },
 ];
 
 export const transitionDef = (kind: TransitionKind): TransitionDef => TRANSITIONS.find((d) => d.kind === kind)!;
+
+/** Impact's tail needs a Reverb return, and all the return slots are taken by other kinds. */
+export const NEEDS_REVERB_TEXT = 'Needs a Reverb return: delete a return to make room';
 
 /** Why transition `kind` can't be added now (its menu item's disabled tooltip), or null. */
 export function transitionBlocked(p: Project, kind: TransitionKind): string | null {
@@ -179,6 +189,7 @@ export function transitionBlocked(p: Project, kind: TransitionKind): string | nu
   const need = d.lanes.length;
   if (laneCount(p) + need > MAX_AUTO_LANES) return `A ${d.label} needs ${need} free automation lanes: all ${MAX_AUTO_LANES} are in use`;
   if (d.lanes.some((l) => laneModule(d.patch, l.target) === null)) return `${d.patch.name} has no module for the ${d.label}'s sweep`;
+  if (d.reverbSend !== undefined && !firstReturnOfKind(p, 'reverb') && freeSlot(p) === null) return NEEDS_REVERB_TEXT;
   return null;
 }
 
@@ -243,6 +254,12 @@ export function addTransition(p: Project, sink: CommandSink, kind: TransitionKin
     addNotes(p, sink, t.id, d.notes(bars));
     addClip(p, sink, t.id, { start, len, patternId: pat.id });
     for (const [param, v] of Object.entries(d.mix)) setMix(p, sink, t.id, param, v);
+    if (d.reverbSend !== undefined) {
+      // The first Reverb return; none: add one named "Reverb" (checked up front, so a slot is free).
+      // addReturn is an edit inside this one: a single undo entry.
+      const r = firstReturnOfKind(p, 'reverb') ?? addReturn(p, sink, 'reverb', 'Reverb');
+      if (r) setMix(p, sink, t.id, sendParam(r.slot), d.reverbSend);
+    }
     for (const l of d.lanes) {
       const lane = addLane(p, sink, t.id, laneTarget(d.patch, l.target));
       // The shape spans the clip; its closing point sits one tick before the clip's end (the header:

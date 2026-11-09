@@ -1,6 +1,7 @@
 // What an automation lane's header calls its target (plan 10), pure and
 // unit-tested (autoLabels.test.ts). Mixer params by what the strip says
-// ("Fader", "Pan", "EQ Low cut", "Reverb send"), Master row lanes prefixed
+// ("Fader", "Pan", "EQ Low cut", "Hall send": a send reads
+// its return's name), Master row lanes prefixed
 // by their channel: the master or the return's name ("Master · Ceiling",
 // "Delay · Feedback"), rack params by
 // the module's title as the rack shows it ("Filter · Cutoff"; "Osc 2 ·
@@ -9,16 +10,21 @@ import { moduleDef } from '../../audio/catalog';
 import { MIX_PARAMS } from '../../audio/mixerCatalog';
 import type { MixParamDef } from '../../audio/mixerCatalog';
 import type { AutoOwner } from '../../state/automation';
-import { findReturn } from '../../state/returns';
+import { findReturn, sendSlotOf } from '../../state/returns';
 import type { AutoTarget, MasterChannel, Project, RackModule } from '../../state/project.svelte';
 
 /** A Master row channel as a lane or picker names it: "Master", or the return's name. */
 export const channelName = (p: Project, ch: MasterChannel): string => (ch === 'master' ? 'Master' : (findReturn(p, ch)?.name ?? '?'));
 
 /** A mixer param as a lane names it. */
-export function mixLabel(def: MixParamDef): string {
+export function mixLabel(def: MixParamDef, p?: Project): string {
   if (def.name === 'fader') return 'Fader';
-  if (def.group === 'send') return `${def.label} send`;
+  if (def.group === 'send') {
+    // "Hall send" (the return on that slot); a slot with no return keeps the catalog's "Send 5".
+    const slot = sendSlotOf(def.name);
+    const r = p && slot !== null ? p.mixer.returns.find((x) => x.slot === slot) : undefined;
+    return r ? `${r.name} send` : def.label;
+  }
   if (def.group === 'eq') return `EQ ${def.label}`;
   if (def.group === 'comp') return `Comp ${def.label}`;
   return def.label;
@@ -43,7 +49,7 @@ export function moduleTitles(modules: readonly Pick<RackModule, 'idx' | 'kind'>[
 export function targetLabel(p: Project, owner: AutoOwner, target: AutoTarget): string {
   if (target.kind === 'mix') {
     const def = MIX_PARAMS.find((d) => d.name === target.param);
-    const label = def ? mixLabel(def) : target.param;
+    const label = def ? mixLabel(def, p) : target.param;
     return typeof owner === 'string' ? `${channelName(p, owner)} · ${label}` : label;
   }
   if (typeof owner === 'string' || owner.kind !== 'synth') return target.param;

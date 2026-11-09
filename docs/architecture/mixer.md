@@ -322,12 +322,24 @@ first / last, and Esc closes it and puts the focus back on the button.
 
 **Rules.**
 - A preset holds absolute values for **whole sections** of its strip kind:
-  - a track preset holds the EQ, the comp and both sends with their pre flags;
+  - a track preset holds the EQ, the comp and a **reverb send** and a **delay send**
+    with their pre flags (see *Sends follow the returns* below);
   - a return preset holds its EQ and its effect;
   - a master preset holds its EQ and the limiter.
 
   Applying one after another never leaves a knob of the first one behind;
   anything a preset does not list is the catalog default.
+- **Sends follow the returns** (plan 29). A track preset's `reverbSend` /
+  `delaySend` (and `reverbPre` / `delayPre`, post when absent) are not catalog
+  params, because the knob they drive depends on the song's returns:
+  - `applyPreset` sends the reverb value to the **first Reverb return** in
+    creation order (`send_<its slot>`) and the delay value to the **first
+    Delay return**; a value absent from the preset means Off and post;
+  - if the song has no return of a kind, that value is skipped;
+  - every other send (to the other returns) is left alone;
+  - **Flat** turns all 8 sends Off and post-fader;
+  - a return strip's presets are those of its kind (`presetKindOf` is the
+    return's `kind`): Hall is offered on a Reverb return, never on a Delay.
 - A preset never holds fader, pan, mute or solo (the balance is the user's),
   nor the sidechain key.
 - **A keyed track strip** (a sidechain key: Duck to kick, or one picked by

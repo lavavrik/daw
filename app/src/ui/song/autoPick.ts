@@ -8,10 +8,10 @@
 //   bestMatch                 which row a search makes active.
 //
 // GROUPS. A track: its mixer params split into Volume / Pan / Sends / EQ /
-// Comp (section "Mixer"), then (synth tracks) one group per rack module in
+// Comp (section "Mixer"; Sends lists one entry per existing return, by its name), then (synth tracks) one group per rack module in
 // rack order, named by its rack title ("Filter", "Oscillator 2": autoLabels
 // moduleTitles; section "Rack"). The Master row: one group per channel
-// (Master, Reverb, Delay), each holding that channel's mixer params. The
+// (Master, then each return by its name), each holding that channel's mixer params. The
 // targets are automatableParams' (state/automation.ts: continuous params
 // only, no Scope), so the picker never offers what the engine refuses. A
 // target that already has a lane stays listed, marked `used` (the picker
@@ -22,6 +22,7 @@ import type { MixParamDef } from '../../audio/mixerCatalog';
 import { automatableParams, sameTarget } from '../../state/automation';
 import type { AutoOwner } from '../../state/automation';
 import type { AutoTarget, MasterChannel, Project } from '../../state/project.svelte';
+import { sendSlotOf } from '../../state/returns';
 import { channelName, mixLabel, moduleTitles, targetLabel } from './autoLabels';
 import { MASTER_ROW } from './tlMath';
 
@@ -58,6 +59,12 @@ const MIX_GROUPS: { id: string; name: string; has: (d: MixParamDef) => boolean }
 /** The Master row's channels: the master, then the returns in creation order. */
 const channels = (p: Project): MasterChannel[] => ['master', ...p.mixer.returns.map((r) => r.id)];
 
+/** The return a send level param goes to, or undefined (a pre flag, or a slot with no return). */
+const returnOfSend = (p: Project, param: string) => {
+  const slot = sendSlotOf(param);
+  return slot === null ? undefined : p.mixer.returns.find((r) => r.slot === slot);
+};
+
 /** The groups of one owner of `p` (`ownerId`: its track id or channel), `used` = targets that have a lane. */
 export function ownerGroups(p: Project, owner: AutoOwner, ownerId: string, used: readonly AutoTarget[]): PickGroup[] {
   const item = (target: AutoTarget, label: string): PickItem => ({
@@ -77,7 +84,11 @@ export function ownerGroups(p: Project, owner: AutoOwner, ownerId: string, used:
   }
   const out: PickGroup[] = [];
   for (const g of MIX_GROUPS) {
-    const items = mix.filter((x) => g.has(x.def as MixParamDef)).map((x) => item(x.target, x.def.label));
+    const items = mix
+      .filter((x) => g.has(x.def as MixParamDef))
+      // Sends: only to returns that exist, each by the return's name.
+      .filter((x) => g.id !== 'send' || returnOfSend(p, x.def.name))
+      .map((x) => item(x.target, g.id === 'send' ? returnOfSend(p, x.def.name)!.name : x.def.label));
     if (items.length) out.push({ key: `${ownerId}:mix:${g.id}`, name: g.name, section: 'Mixer', items });
   }
   if (owner.kind === 'synth') {

@@ -54,7 +54,7 @@
 // The pad first enters in the break, so the drop is the only section with
 // every part. Each section's block is its own clip, so the playlist shows the
 // sections and a section is moved or deleted as a whole.
-import { BAR_TICKS } from '../audio/protocol';
+import { BAR_TICKS, sendParam } from '../audio/protocol';
 import { pitchClass } from '../music/scales';
 import type { MusicKey } from '../music/scales';
 import type { ProjectJson } from '../project/schema';
@@ -72,6 +72,7 @@ import { loadFactoryPattern } from './pattern-library';
 import { Project, currentPattern } from './project.svelte';
 import type { PatternTrack, SynthTrack } from './project.svelte';
 import { addSynthTrack } from './rack-actions';
+import { firstReturnOfKind } from './returns';
 import { addClip, setLoop } from './song-actions';
 
 /** The parts a template arranges (one track each). */
@@ -83,8 +84,11 @@ export interface PartStrip {
   preset: string;
   /** Fader in dB: the balance (BALANCE in the header). */
   fader: number;
-  /** Send A (reverb) / Send B (delay) levels in dB, set after the preset (absent: the preset's). */
-  sends?: { a?: number; b?: number };
+  /**
+   * Send levels in dB to the song's first Reverb / first Delay return, set
+   * after the preset (absent: the preset's; a kind with no return: skipped).
+   */
+  sends?: { reverb?: number; delay?: number };
 }
 
 /** A synth part: its track name, house patch (by name), factory pattern (by id) and strip. */
@@ -134,7 +138,7 @@ export const TEMPLATES: readonly Template[] = [
   {
     id: 'deep-house-122', name: 'Deep House 122', tempo: 122, key: A_MINOR, kit: 'deep',
     blurb: 'Round kick and swung shaker, a walking organ bass, m9 keys and a warm pad, in A minor',
-    drums: { intro: 'factory-minimal', groove: 'factory-deep-shuffle', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { a: -26 } },
+    drums: { intro: 'factory-minimal', groove: 'factory-deep-shuffle', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { reverb: -26 } },
     bass: { track: 'Bass', patch: 'Organ Bass', pattern: 'factory-deep-walk', preset: 'bass-tidy', fader: -0.5 },
     chords: { track: 'Keys', patch: 'Tine Keys', pattern: 'factory-deep-m9-progression', preset: 'stab-space', fader: -4 },
     // Pad long is Am9 Fmaj7 Dm9 Em7: bars 2 and 3 swapped to follow the keys and the walk (Am Dm F Em).
@@ -146,7 +150,7 @@ export const TEMPLATES: readonly Template[] = [
     id: 'garage-130', name: 'Garage 130', tempo: 130, key: { root: 5, scale: 'minor' }, kit: 'garage',
     blurb: 'Skipping 2-step drums, a sub bass and a stabbing organ, in F minor',
     // Speed garage thins in with the garage feel (a four-on-the-floor kick at 60 %) before the 2-step.
-    drums: { intro: 'factory-speed-garage', groove: 'factory-garage-2-step', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { a: -24 } },
+    drums: { intro: 'factory-speed-garage', groove: 'factory-garage-2-step', fill: 'factory-fill-a', preset: 'kick-punch', fader: -4, sends: { reverb: -24 } },
     // Bar 2 (Db1 Eb1 C1 after the shift) folds up an octave: nothing under E1 (28).
     bass: { track: 'Bass', patch: 'Sub Bass', pattern: 'factory-garage-sub', preset: 'bass-tidy', fader: 0, lowest: 28 },
     chords: { track: 'Organ', patch: 'Garage Organ', pattern: 'factory-garage-organ', preset: 'stab-space', fader: -5 },
@@ -156,19 +160,19 @@ export const TEMPLATES: readonly Template[] = [
   {
     id: 'acid-126', name: 'Acid 126', tempo: 126, key: A_MINOR, kit: 'drum-machine',
     blurb: 'A 909-ish classic house groove, a 303 line and an M1 organ stab, in A minor',
-    drums: { intro: 'factory-four-on-the-floor', groove: 'factory-classic-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { a: -26 } },
+    drums: { intro: 'factory-four-on-the-floor', groove: 'factory-classic-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { reverb: -26 } },
     // The acid line is the lead: a dub echo under it, as the classic records have.
-    bass: { track: 'Acid', patch: 'Acid Line', pattern: 'factory-acid-303-line', preset: 'bass-tidy', fader: -2, sends: { b: -20 } },
+    bass: { track: 'Acid', patch: 'Acid Line', pattern: 'factory-acid-303-line', preset: 'bass-tidy', fader: -2, sends: { delay: -20 } },
     chords: { track: 'Stab', patch: 'Piano Stab', pattern: 'factory-classic-m1-stab', preset: 'stab-space', fader: -6 },
     reverb: 'room', delay: 'delay-dub', master: 'master-clean',
   },
   {
     id: 'tech-house-125', name: 'Tech House 125', tempo: 125, key: { root: 7, scale: 'minor' }, kit: 'drum-machine',
     blurb: 'Tight drums, a rolling Reese, a dub brass chord and strings, in G minor',
-    drums: { intro: 'factory-minimal', groove: 'factory-tech-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { a: -28 } },
+    drums: { intro: 'factory-minimal', groove: 'factory-tech-house', fill: 'factory-fill-a', preset: 'kick-punch', fader: -5, sends: { reverb: -28 } },
     bass: { track: 'Bass', patch: 'Reese Bass', pattern: 'factory-rolling-16ths', preset: 'bass-tidy', fader: -0.5 },
     // Dub chord's echoes are written a dotted 8th apart: more of the 3/16 delay thickens them.
-    chords: { track: 'Stab', patch: 'Brass Stab', pattern: 'factory-dub-chord', preset: 'stab-space', fader: -4, sends: { b: -10 } },
+    chords: { track: 'Stab', patch: 'Brass Stab', pattern: 'factory-dub-chord', preset: 'stab-space', fader: -4, sends: { delay: -10 } },
     pad: { track: 'Strings', patch: 'Strings', pattern: 'factory-pad-long', preset: 'pad-wash', fader: -6 },
     reverb: 'hall', delay: 'delay-dub', master: 'master-warm',
   },
@@ -289,13 +293,20 @@ function arrange(p: Project, t: Template, track: PatternTrack, part: TemplatePar
   }
 }
 
-/** Strip preset, then the fader and send levels. */
-function mix(p: Project, t: Template, trackId: string, strip: PartStrip) {
+/**
+ * Strip preset, then the fader and send levels. The sends go to the first
+ * Reverb / Delay return of `p` (their slot's send_x), not to a fixed knob.
+ * Exported for the test that builds on a project with another layout.
+ */
+export function applyStripMix(p: Project, t: Template, trackId: string, strip: PartStrip) {
   if (!applyPreset(p, NO_ENGINE, trackId, strip.preset)) fail(t, `preset "${strip.preset}" didn't apply`);
   setMix(p, NO_ENGINE, trackId, 'fader', strip.fader);
-  if (strip.sends?.a !== undefined) setMix(p, NO_ENGINE, trackId, 'send_a', strip.sends.a);
-  if (strip.sends?.b !== undefined) setMix(p, NO_ENGINE, trackId, 'send_b', strip.sends.b);
+  for (const [kind, db] of [['reverb', strip.sends?.reverb], ['delay', strip.sends?.delay]] as const) {
+    const r = firstReturnOfKind(p, kind);
+    if (r && db !== undefined) setMix(p, NO_ENGINE, trackId, sendParam(r.slot), db);
+  }
 }
+const mix = applyStripMix;
 
 /** A synth part's track: its patch, its (transposed) factory pattern, its strip; null for an absent part. */
 function synthPart(p: Project, t: Template, part: SynthPart, shift: number) {

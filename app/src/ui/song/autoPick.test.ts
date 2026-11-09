@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { addSynthTrack } from '../../state/rack-actions';
 import { addDrumTrack } from '../../state/actions';
 import { STARTER_PATCHES } from '../../state/patches';
+import { addReturn, deleteReturn, renameReturn } from '../../state/returns';
 import { Project } from '../../state/project.svelte';
 import type { SynthTrack } from '../../state/project.svelte';
 import { bestMatch, filterGroups, ownerGroups, pickerRows, rowGroups } from './autoPick';
 import type { PickGroup } from './autoPick';
 
 const sink = { send: () => true };
+const send = (param: string) => ({ kind: 'mix' as const, param });
 const names = (gs: readonly PickGroup[]) => gs.map((g) => g.name);
 const labels = (g: PickGroup | undefined) => g?.items.map((x) => x.label);
 
@@ -19,14 +21,27 @@ describe('automation picker groups', () => {
     expect(names(gs)).toEqual(['Volume', 'Pan', 'Sends', 'EQ', 'Comp']);
     expect(gs.every((g) => g.section === 'Mixer')).toBe(true);
     expect(labels(gs[0])).toEqual(['Volume']);
-    // Never the pre switches. Sends 3..8 are in the catalog now; the picker
-    // will list only the live returns once return slots are configurable.
-    expect(labels(gs[2])).toEqual(['Reverb', 'Delay', 'Send 3', 'Send 4', 'Send 5', 'Send 6', 'Send 7', 'Send 8']);
+    // Never the pre switches; Sends lists one entry per existing return, by name.
+    expect(labels(gs[2])).toEqual(['Reverb', 'Delay']);
     expect(labels(gs[3])).not.toContain('EQ'); // nor EQ on/off
     expect(labels(gs[4])).toContain('Threshold');
     // What the lane header will say, for searching and the tooltip.
     expect(gs[0].items[0].lane).toBe('Fader');
     expect(gs[2].items[0].lane).toBe('Reverb send');
+  });
+
+  it('lists a send per existing return, by its name, and drops the send of a deleted return', () => {
+    const p = new Project();
+    const d = addDrumTrack(p, sink)!;
+    renameReturn(p, 'reverb', 'Hall');
+    const echo = addReturn(p, sink, 'delay', 'Echo')!; // slot 2
+    const sends = () => ownerGroups(p, d, d.id, []).find((g) => g.name === 'Sends')!;
+    expect(labels(sends())).toEqual(['Hall', 'Delay', 'Echo']);
+    expect(sends().items.map((x) => x.target)).toEqual([send('send_a'), send('send_b'), send('send_c')]);
+    expect(sends().items[0].lane).toBe('Hall send');
+    deleteReturn(p, sink, echo.id);
+    expect(labels(sends())).toEqual(['Hall', 'Delay']);
+    expect(rowGroups(p, 'master').map((g) => g.name)).toEqual(['Master', 'Hall', 'Delay']);
   });
 
   it('follows the mixer groups with each module, in rack order, by its rack title', () => {

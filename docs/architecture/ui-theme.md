@@ -450,12 +450,17 @@ Callers call `openValuePopover`; opening another replaces the open one.
   `auto-ctl-midi` and the arrow keys. With no items, the value part shows
   alone.
 - **Text.** `knobMath.entryParts(def, v)` splits the readout into the field
-  text and the suffix, with an ASCII minus so the text is easy to edit. A
-  readout with no unit ("−∞", "off") borrows the unit its maximum reads in.
+  text and the suffix, with an ASCII minus so the text is easy to edit. The
+  suffix is only ever a unit after a number: a unitless decimal stays whole
+  ("0.7", never "0" + ".7"), and the minimum's label ("−∞", "Off", "off")
+  shows as it reads, with no suffix.
   `parseValue(def, text, readout)` reads the text back:
-  - a bare number is in the unit shown, so "2" next to kHz is 2 kHz;
-  - it accepts "1.2k", "-6 dB", "C3", "50%", "L25", and "-inf" / "-∞" (also
-    followed by the unit);
+  - a bare number is in the unit shown, so "2" next to kHz is 2 kHz; next
+    to the minimum's label, in the unit the maximum shows (the EQ high-pass
+    at "Off": "1" is 1 kHz);
+  - it accepts "1.2k", "-6 dB", "C3", "50%", "L25", and the minimum's label
+    in any case, alone or with a unit the param shows ("-inf dB", "Off kHz",
+    "off s"), so retyping what is shown always works;
   - a bipolar unitless amount (pan, the attenuator) also takes "-0.25" or
     "-25%".
 
@@ -464,9 +469,18 @@ Callers call `openValuePopover`; opening another replaces the open one.
   - The field opens focused with its text selected.
   - Set or Enter calls the caller's `apply` once, only when the value
     changed. Knob passes its `change`, so the edit is one undo entry with
-    the knob's usual label. A field left as it opened changes nothing.
+    the knob's usual label. A field left as it shows changes nothing.
+  - The value is read live (callers pass a getter): until the user types,
+    the field follows an undo, a MIDI CC or a lane, and Set / Reset compare
+    with the value of the moment.
   - Text that doesn't parse gets a `--rec` outline and "Not a value"
-    (`value-error`), and the card stays open.
+    (`value-error`), and the card stays open. Each invalid Enter re-mounts
+    the alert, so it is announced again; the field is described by the
+    error and the range hint.
+  - Tab past the last stop, or Shift+Tab out of the field, closes it and
+    puts the focus back on the control.
+  - Right-click in the field (and in a knob's typed entry) is the browser's
+    own menu, for paste.
   - Esc, a press outside, a wheel outside or a resize closes the card with
     no change.
   - Focus returns to the control, except on an outside press, where the
@@ -478,7 +492,8 @@ Callers call `openValuePopover`; opening another replaces the open one.
     in the field the shortcuts already leave Cmd+Z to the text.
 - **Placement.** The card sits beside the pointer. Near the right or bottom
   edge it flips to the pointer's other side, and it is clamped 8 px inside
-  the window. The keyboard opens it under the control.
+  the window, again whenever its size changes (a ResizeObserver: the error
+  line). The keyboard opens it under the control.
 - **Layering.** `position: fixed`, z-index 60 (AutoMenu's), not the top
   layer. The global tooltip is in the top layer, so tips for Set, Reset and
   the items show above the card. A press or focus moving into the card

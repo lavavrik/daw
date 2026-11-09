@@ -25,14 +25,20 @@
   //             range hint. The parsed value is clamped to [min, max] and an
   //             integer def rounds.
   //     value   the current value (the control's own, un-automated base).
+  //             Pass a getter (`get value() { return value; }`): it is read
+  //             live, so while the card is open and nothing is typed yet the
+  //             field follows the control (an undo, a MIDI CC, a lane), and
+  //             Set / Reset compare against the value of the moment. A plain
+  //             number works too (a snapshot).
   //     apply   called at most once, with the new value, when it differs from
-  //             `value`: Set / Enter with a new value, or Reset off the
-  //             default. The caller's normal edit path (Knob: bus.touch, then
+  //             the live `value`: Set / Enter with a new value, or Reset off
+  //             the default. The caller's normal edit path (Knob: bus.touch, then
   //             onchange), so it is one undo entry labelled like the
   //             control's other edits. Not called on Esc, an outside press,
   //             a scroll, an unchanged field or invalid text.
-  //     from    the control: focus goes back to it on Set, Reset, Esc and a
-  //             scroll (not on an outside press: the press's own focus wins).
+  //     from    the control: focus goes back to it on Set, Reset, Esc, a
+  //             wheel and Tab out (not on an outside press: the press's own
+  //             focus wins).
   //     auto    optional { owner, target }: the lower half lists that
   //             target's AutoMenu items (menuItems decides which; none, none
   //             shown). Omit it (or null) for a control with no menu.
@@ -45,12 +51,19 @@
   //
   // Behaviour: the field opens focused with its text selected. Text that
   // doesn't parse outlines the field in --rec, shows "Not a value" and keeps
-  // the card open. A field left as it opened changes nothing (the text is
-  // rounded: parsing it back would move the value a hair and make an undo
-  // entry for no edit; Knob's typed entry does the same). Esc, a press
-  // outside, a wheel outside (the page scrolls under it) or a resize closes
-  // it with no change. Not every `scroll` event: the timeline's playhead
-  // follow scrolls by itself while playing.
+  // the card open; every invalid Enter announces it again (the alert is
+  // re-mounted), and the field's description names the error and the range.
+  // A field left as it shows changes nothing (the text is rounded: parsing it
+  // back would move the value a hair and make an undo entry for no edit;
+  // Knob's typed entry does the same). Esc, a press outside, a wheel outside
+  // (the page scrolls under it) or a resize closes it with no change. Not
+  // every `scroll` event: the timeline's playhead follow scrolls by itself
+  // while playing. Tab past the last button, or Shift+Tab out of the field,
+  // closes it too and puts the focus back on the control (the card sits at
+  // the end of the DOM: the browser's next stop would be anywhere).
+  // The card re-places itself whenever its size changes (the error line), so
+  // it never sticks out of the window. Right-click in the field is the
+  // browser's own menu (paste); elsewhere on the card, nothing.
   // Keys typed in it stay in it (MenuBar's keepKey): Space presses the
   // focused button and never starts the song, letters never play the
   // QWERTY piano; Esc is its own (App's Esc-ends-MIDI-learn never sees it);
@@ -90,7 +103,7 @@
 </script>
 
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import type { CommandSink } from '../state/actions';
   import type { Project } from '../state/project.svelte';
   import AutoMenu, { menuItems } from './AutoMenu.svelte';
@@ -103,13 +116,19 @@
   let el = $state<HTMLDivElement | null>(null);
   let input = $state<HTMLInputElement | null>(null);
   const req = $derived(active);
-  /** The value's readout when it opened (parseValue's `shown`: a bare number is in its unit). */
+  /** The value's readout as the field shows it (parseValue's `shown`: a bare number is in its unit). */
   let readout = '';
-  /** The field's text when it opened: unchanged text changes nothing. */
+  /** The field's text as the value gives it: unchanged text changes nothing. */
   let opened = '';
   let draft = $state('');
   let unit = $state('');
   let bad = $state(false);
+  /** Each invalid Enter: re-mounts the alert so it is announced again. */
+  let badN = $state(0);
+  /** The user typed in the field: it stops following the value. */
+  let typed = false;
+  /** The control's value, read live (the caller's getter). */
+  const live = $derived(req ? req.value : 0);
   /** Placed after measuring (header: kept inside the window). */
   let left = $state(0);
   let top = $state(0);
@@ -123,30 +142,69 @@
   /** Margin kept from the window's edges (px). */
   const EDGE = 8;
 
+  /** The field's text, suffix and readout from value `v`. */
+  function show(r: ValuePopoverReq, v: number) {
+    readout = formatValue(r.def, v);
+    ({ text: opened, unit } = entryParts(r.def, v));
+    draft = opened;
+  }
+
   // A new request (another control, or the same one again): fresh text, then
   // measure and place, then focus the field with its text selected.
   $effect(() => {
     const r = req;
     if (!r) return;
-    readout = formatValue(r.def, r.value);
-    ({ text: opened, unit } = entryParts(r.def, r.value));
-    draft = opened;
-    bad = false;
-    left = r.x;
-    top = r.y;
+    untrack(() => {
+      typed = false;
+      show(r, r.value);
+      bad = false;
+      left = r.x;
+      top = r.y;
+    });
     void tick().then(() => {
       if (active !== r || !el) return;
-      // Beside the pointer; flipped to its other side when it would cross the
-      // window's right or bottom edge, and never past the top-left either.
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      left = r.x + w > innerWidth - EDGE ? r.x - w : r.x;
-      top = r.y + h > innerHeight - EDGE ? r.y - h : r.y;
-      left = Math.max(EDGE, Math.min(left, innerWidth - EDGE - w));
-      top = Math.max(EDGE, Math.min(top, innerHeight - EDGE - h));
+      place();
       input?.focus();
       input?.select();
     });
+  });
+
+  // The value moved under an untouched field (an undo, a MIDI CC, a lane):
+  // the field follows it, still all selected if it was.
+  $effect(() => {
+    const v = live;
+    untrack(() => {
+      const r = req;
+      if (!r || typed || formatValue(r.def, v) === readout) return;
+      const all = !!input && document.activeElement === input && input.selectionStart === 0 && input.selectionEnd === input.value.length;
+      show(r, v);
+      if (all) void tick().then(() => input?.select());
+    });
+  });
+
+  /**
+   * Beside the pointer; flipped to its other side when it would cross the
+   * window's right or bottom edge, and never past the top-left either. Again
+   * whenever the card's size changes (the error line appears).
+   */
+  function place() {
+    const r = active;
+    if (!r || !el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    let x = r.x + w > innerWidth - EDGE ? r.x - w : r.x;
+    let y = r.y + h > innerHeight - EDGE ? r.y - h : r.y;
+    x = Math.max(EDGE, Math.min(x, innerWidth - EDGE - w));
+    y = Math.max(EDGE, Math.min(y, innerHeight - EDGE - h));
+    left = x;
+    top = y;
+  }
+  $effect(() => {
+    const node = el;
+    if (!node) return;
+    const ro = new ResizeObserver(() => place());
+    ro.observe(node);
+    return () => ro.disconnect();
   });
 
   function close(refocus: boolean) {
@@ -165,10 +223,11 @@
     const v = parseValue(r.def, draft, readout);
     if (v === null) {
       bad = true;
+      badN++;
       input?.focus();
       return;
     }
-    if (v !== r.value) r.apply(v);
+    if (v !== r.value) r.apply(v); // the live value
     close(true);
   }
 
@@ -203,6 +262,18 @@
       close(true);
       return;
     }
+    // Tab past the last stop, or Shift+Tab before the first: out of the
+    // card, back to the control (header).
+    if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey && el) {
+      const stops = [...el.querySelectorAll<HTMLElement>('input, button, [tabindex]')].filter((x) => x.tabIndex >= 0 && !(x as HTMLButtonElement).disabled);
+      const at = document.activeElement;
+      if (stops.length && at === (e.shiftKey ? stops[0] : stops[stops.length - 1])) {
+        e.preventDefault();
+        e.stopPropagation();
+        close(true);
+        return;
+      }
+    }
     // MenuBar's keepKey: the global shortcuts (window listeners) never see
     // the keys typed here; Cmd / Ctrl chords still do.
     if (!e.metaKey && !e.ctrlKey) e.stopPropagation();
@@ -236,7 +307,7 @@
     onkeydown={key}
     onfocusout={focusOut}
     onwheel={(e) => e.stopPropagation()}
-    oncontextmenu={(e) => e.preventDefault()}
+    oncontextmenu={(e) => { if (e.target !== input) e.preventDefault(); }}
   >
     <div class="lbl ttl">{req.label}</div>
     <div class="row">
@@ -251,9 +322,10 @@
           autocomplete="off"
           aria-label={`Value of ${req.label}`}
           aria-invalid={bad}
-          aria-describedby={bad ? 'value-popover-err' : 'value-popover-range'}
+          aria-describedby={bad ? 'value-popover-err value-popover-range' : 'value-popover-range'}
           data-testid="value-input"
           onkeydown={fieldKey}
+          oninput={() => (typed = true)}
         />
         {#if unit}<span class="unit mono" aria-hidden="true">{unit}</span>{/if}
       </span>
@@ -261,7 +333,9 @@
       <button class="btn quiet" data-testid="value-reset" title={`Back to the default, ${formatValue(req.def, req.def.default)}`} onclick={reset}>Reset</button>
     </div>
     {#if bad}
-      <div class="err" id="value-popover-err" role="alert" data-testid="value-error">Not a value</div>
+      {#key badN}
+        <div class="err" id="value-popover-err" role="alert" data-testid="value-error">Not a value</div>
+      {/key}
     {/if}
     <div class="range mono" id="value-popover-range">{range}</div>
     {#if req.auto && hasItems}

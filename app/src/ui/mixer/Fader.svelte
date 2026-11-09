@@ -145,7 +145,8 @@
   function popoverAt(x: number | null, y: number | null) {
     const r = el?.getBoundingClientRect();
     openValuePopover({
-      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def: DEF, value,
+      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def: DEF,
+      get value() { return value; }, // live: the card follows an undo, a CC, a lane
       apply: change, from: el, auto: bus && auto ? auto : null,
     });
   }

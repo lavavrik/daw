@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moduleDef, paramIndex } from '../../audio/catalog';
+import { CATALOG, moduleDef, paramIndex } from '../../audio/catalog';
 import type { ParamDef } from '../../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
@@ -7,6 +7,7 @@ import {
   CLICK_SLOP_PX, DRAG_PX, MECH_DIAL_PX, MECH_TICKS, isClickTravel, dragPos, entryParts, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY,
   toPos, widestValue, ZERO_ZONE,
 } from './knobMath';
+import type { KnobDef } from './knobMath';
 
 const param = (mod: string, name: string): ParamDef => {
   const d = moduleDef(mod);
@@ -442,9 +443,17 @@ describe('entryParts (the popover field: text + unit suffix)', () => {
     expect(entryParts(mixParam('comp_ratio'), 4)).toEqual({ text: '4', unit: ':1' });
     expect(entryParts(octave, -2)).toEqual({ text: '-2', unit: 'oct' });
   });
-  it('no unit in the readout: the text whole, the maximum\'s unit as the suffix', () => {
-    expect(entryParts(mixParam('fader'), -60)).toEqual({ text: '-∞', unit: 'dB' });
-    expect(entryParts(glide, 0)).toEqual({ text: 'off', unit: 's' });
+  it('no unit after a number in the readout: the text whole, no suffix', () => {
+    // The minimum's label shows as it reads, with no unit beside it.
+    expect(entryParts(mixParam('fader'), -60)).toEqual({ text: '-∞', unit: '' });
+    expect(entryParts(mixParam('send_a'), -60)).toEqual({ text: 'Off', unit: '' });
+    expect(entryParts(mixParam('eq_hp'), 20)).toEqual({ text: 'Off', unit: '' });
+    expect(entryParts(glide, 0)).toEqual({ text: 'off', unit: '' });
+    // A unitless decimal is never split at its point (review T1 #1).
+    const amount = param('attenuator', 'amount');
+    expect(entryParts(amount, 0.7)).toEqual({ text: '0.7', unit: '' });
+    expect(entryParts(amount, -0.5)).toEqual({ text: '-0.5', unit: '' });
+    expect(entryParts(mixParam('eq_mid_q'), 0.7)).toEqual({ text: '0.7', unit: '' });
     expect(entryParts(mixParam('pan'), -0.5)).toEqual({ text: 'L50', unit: '' });
     expect(entryParts(mixParam('pan'), 0)).toEqual({ text: 'C', unit: '' });
     expect(entryParts(param('sample_player', 'root'), 60)).toEqual({ text: 'C4', unit: '' });
@@ -458,6 +467,49 @@ describe('entryParts (the popover field: text + unit suffix)', () => {
         expect(formatValue(d, back!)).toBe(formatValue(d, v));
       }
     }
+  });
+});
+
+describe('the popover field round-trips on every catalog param (review T1 #1, #5, #6)', () => {
+  const defs: KnobDef[] = [
+    ...CATALOG.modules.flatMap((m) => m.params.map((pd) => ({ ...pd, label: `${m.id}.${pd.name}` }))),
+    ...MIX_PARAMS.map((pd) => ({ ...pd, label: `mix.${pd.name}` })),
+  ].filter((d) => !d.choices.length);
+  it('text + unit, typed together (with or without a space) or the text alone beside the readout, reads back the same readout', () => {
+    expect(defs.length).toBeGreaterThan(50);
+    for (const d of defs) {
+      for (const v of [d.min, d.max, d.default, fromPos(d, 0.5)]) {
+        const shown = formatValue(d, v);
+        const { text, unit } = entryParts(d, v);
+        for (const typed of [text + unit, unit ? `${text} ${unit}` : text]) {
+          const back = parseValue(d, typed);
+          expect(back, `${d.label} "${typed}" (${shown})`).not.toBeNull();
+          expect(formatValue(d, back!), `${d.label} "${typed}"`).toBe(shown);
+        }
+        const back = parseValue(d, text, shown);
+        expect(back, `${d.label} "${text}" beside ${shown}`).not.toBeNull();
+        expect(formatValue(d, back!), `${d.label} "${text}" beside ${shown}`).toBe(shown);
+        // The suffix is a unit, never part of a number.
+        expect(unit, `${d.label} ${shown}`).not.toMatch(/^[\d.]/);
+      }
+    }
+  });
+  it('the minimum\'s label, any case, alone or with a unit the param shows', () => {
+    const hp = mixParam('eq_hp');
+    for (const t of ['Off', 'off', 'OFF', 'Off kHz', 'off hz', 'Off Hz', 'offkhz']) expect(parseValue(hp, t), t).toBe(hp.min);
+    for (const t of ['off', 'Off', 'off s', 'off ms', 'OFF S']) expect(parseValue(glide, t), t).toBe(0);
+    expect(parseValue(mixParam('send_a'), 'off db')).toBe(mixParam('send_a').min);
+    expect(parseValue(hp, 'Off dB')).toBeNull(); // not a unit this param shows
+  });
+  it('a bare number beside a minimum\'s label is in the unit the maximum shows', () => {
+    const hp = mixParam('eq_hp'); // 20 (Off) .. 1000 Hz, the maximum reads "1 kHz"
+    expect(formatValue(hp, hp.max)).toBe('1 kHz');
+    expect(parseValue(hp, '1', 'Off')).toBe(1000); // kHz
+    expect(parseValue(hp, '0.5', 'Off')).toBe(500);
+    expect(parseValue(hp, '200 Hz', 'Off')).toBe(200); // an explicit unit wins
+    expect(parseValue(glide, '0.5', 'off')).toBe(0.5); // the maximum reads "2 s"
+    // Off the label, the readout's own unit as before.
+    expect(parseValue(hp, '200', formatValue(hp, 120))).toBe(200);
   });
 });
 

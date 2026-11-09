@@ -250,11 +250,14 @@
   function popoverAt(x: number | null, y: number | null) {
     const r = knobEl?.getBoundingClientRect();
     openValuePopover({
-      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def, value,
+      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def,
+      get value() { return value; }, // live: the card follows an undo, a CC, a lane
       apply: change, from: knobEl, auto: bus && auto ? auto : null,
     });
   }
   function context(e: MouseEvent) {
+    // In the typed-entry field: the browser's own menu (paste).
+    if (editing && e.target instanceof HTMLInputElement) return;
     e.preventDefault();
     if (dragging || editing) return;
     // A keyboard-made contextmenu event has no pointer position: place it at the knob.

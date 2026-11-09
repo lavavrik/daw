@@ -321,6 +321,33 @@ export function parseNoteName(text: string): number | null {
   return step + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0) + (Number(m[3]) + 1) * 12;
 }
 
+/** Typed text, compared loosely: lower case, ASCII minus, "." decimals, single spaces. */
+const normText = (s: string) => s.trim().toLowerCase().replace(/[−–]/g, '-').replace(',', '.').replace(/\s+/g, ' ');
+
+/** What the minimum reads as, normalised (normText): its minLabel's forms, or a zero-based time's "off". */
+function minLabels(d: KnobDef): string[] {
+  if (d.minLabel) {
+    const l = [normText(d.minLabel), normText(minLabelText(d.minLabel))];
+    return d.minLabel === '-inf' ? [...l, '-∞', '∞', '-inf', 'inf'] : l;
+  }
+  return d.unit === 's' && d.min <= 0 ? ['off'] : [];
+}
+
+/** The units the param's readout can show, normalised, longest first ("khz" before "hz"). */
+function displayUnits(d: KnobDef): string[] {
+  if (d.unit === 'Hz') return ['khz', 'hz', 'k'];
+  if (d.unit === 's') return ['sec', 'ms', 's'];
+  return d.unit ? [d.unit.toLowerCase()] : [];
+}
+
+/** `t` (normalised) is the minimum's label, alone or followed by one of the param's units. */
+function isMinLabel(d: KnobDef, labels: string[], t: string): boolean {
+  if (!labels.length || !t) return false;
+  if (labels.includes(t)) return true;
+  const u = displayUnits(d).find((x) => t.endsWith(x));
+  return !!u && labels.includes(t.slice(0, -u.length).trimEnd());
+}
+
 /**
  * Typed entry (click a knob's readout, or Enter on a focused knob): text ->
  * value, clamped to the range (integers rounded), or null when it doesn't
@@ -332,14 +359,20 @@ export function parseNoteName(text: string): number | null {
  *   dB / st / oct / ct / :1 — the number, unit optional; "−" or "-" alike
  *   0..1 "45%" or "45" (percent); a decimal ≤ 1 ("0.3") is the raw value
  *   pan  "C", "L30", "R 100", or the raw -1..1 ("-0.25", "-25%");
- *        minimum labels ("−∞", "-inf", "Off"), also with the unit ("-inf dB")
+ *   min  the minimum's label ("−∞", "-inf", "Off", a zero-based time's
+ *        "off"), any case, alone or followed by a unit the param shows
+ *        ("-inf dB", "Off kHz", "off s"): retyping what is shown always works
  *   -1..1 amounts (unitless, bipolar): "-0.5" or "-50%"
  *   note "E4", "c#3", "Db4", "Mi4", "sol3" (or the MIDI number) for a note param (root)
  * A bare number is read in the unit the readout currently shows (`shown`):
  * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
+ * When the readout is the minimum's label ("Off", "off", "−∞"), it has no
+ * unit, so a bare number is read in the unit the param shows at its
+ * maximum: the EQ's high-pass at "Off" (max "1 kHz") reads "1" as 1 kHz,
+ * glide at "off" (max "2 s") reads "0.5" as 0.5 s.
  */
 export function parseValue(d: KnobDef, text: string, shown = ''): number | null {
-  const t = text.trim().toLowerCase().replace(/[−–]/g, '-').replace(',', '.').replace(/\s+/g, ' ');
+  const t = normText(text);
   if (!t) return null;
   const done = (v: number) => (Number.isFinite(v) ? clampParam(d, v) : null);
 
@@ -349,20 +382,13 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
     const n = Number(t);
     return Number.isInteger(n) ? done(n) : null;
   }
-  if (d.minLabel) {
-    // The label alone or with the param's unit after it ("-inf dB", "−∞ dB":
-    // what a dB field with its unit suffix invites).
-    const u = d.unit.toLowerCase();
-    const bare = u && t.endsWith(u) ? t.slice(0, -u.length).trimEnd() : t;
-    const ml = minLabelText(d.minLabel).toLowerCase();
-    if (bare === ml || bare === d.minLabel.toLowerCase() || (d.minLabel === '-inf' && (bare === '-∞' || bare === '∞' || bare === '-inf' || bare === 'inf'))) return d.min;
-  }
+  const labels = minLabels(d);
+  if (isMinLabel(d, labels, t)) return d.minLabel ? d.min : done(0);
   if (d.name === 'pan' && d.unit === '') {
     if (t === 'c' || t === 'center' || t === 'centre') return 0;
     const m = /^([lr]) ?(\d*\.?\d+) ?%?$/.exec(t);
     if (m) return done(((m[1] === 'l' ? -1 : 1) * Number(m[2])) / 100);
   }
-  if (d.unit === 's' && d.min <= 0 && t === 'off') return done(0);
   if (isNoteParam(d)) {
     const n = parseNoteName(t);
     if (n !== null) return done(n);
@@ -372,7 +398,10 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
   if (!m) return null;
   const n = Number(m[1]);
   const suf = m[2];
-  const sh = shown.trim().toLowerCase();
+  // The unit a bare number is in: the readout's, or the maximum's when the
+  // readout is the minimum's label (header).
+  let sh = normText(shown);
+  if (isMinLabel(d, labels, sh)) sh = normText(formatValue(d, d.max));
   switch (d.unit) {
     case 'Hz':
       if (suf === 'k' || suf === 'khz') return done(n * 1000);
@@ -407,20 +436,17 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
  * The precise-value popover's field (ui/ValuePopover.svelte): the readout
  * split into the text to edit and the unit shown as the field's suffix.
  * "1.2 kHz" -> "1.2" + "kHz", "-6.0 dB" -> "-6.0" + "dB" (ASCII minus, easy
- * to edit), "45%" -> "45" + "%", "4:1" -> "4" + ":1". A readout with no unit
- * after a number (a note name "C4", pan "L50", "−∞", "off", an integer) is
- * the text whole; its suffix is the unit the maximum reads in, so a bare
- * number still has a visible unit ("−∞" + "dB", "off" + "s"), and none when
- * the maximum has none either (pan, notes, plain counts). parseValue reads
- * the text back with the readout as `shown`: a bare "2" next to "kHz" is 2 kHz.
+ * to edit), "45%" -> "45" + "%", "4:1" -> "4" + ":1". The suffix is only
+ * ever a unit after a number: a readout without one is the text whole with
+ * no suffix, whether a unitless decimal ("0.7", "-0.5": never split at the
+ * point), a note name ("C4"), pan ("L50"), an integer, or the minimum's
+ * label ("−∞", "Off", "off"). parseValue reads the text back with the
+ * readout as `shown` (a bare "2" next to "kHz" is 2 kHz; next to a label,
+ * the maximum's unit) and accepts the text and unit typed together.
  */
 export function entryParts(d: KnobDef, v: number): { text: string; unit: string } {
-  const split = (s: string) => {
-    const a = s.replace(/−/g, '-');
-    const m = /^([+-]?(?:\d+\.?\d*|\.\d+)) ?([^\d\s].*)$/.exec(a);
-    return m ? { text: m[1], unit: m[2] } : { text: a, unit: '' };
-  };
-  const own = split(formatValue(d, v));
-  if (own.unit) return own;
-  return { text: own.text, unit: split(formatValue(d, d.max)).unit };
+  const s = formatValue(d, v).replace(/−/g, '-');
+  // The unit may not start with a digit or ".": "0.7" must not split into "0" + ".7".
+  const m = /^([+-]?(?:\d+\.?\d*|\.\d+)) ?([^\d\s.].*)$/.exec(s);
+  return m ? { text: m[1], unit: m[2] } : { text: s, unit: '' };
 }

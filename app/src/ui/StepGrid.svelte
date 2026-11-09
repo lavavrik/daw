@@ -393,7 +393,7 @@
    * keyboard-made one, at 0,0, at the slider) or its ContextMenu / Shift+F10
    * key (at the slider). Other keys pass.
    */
-  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, value: number, set: (v: number) => void) {
+  function precise(e: MouseEvent | KeyboardEvent, label: string, def: KnobDef, get: () => number, set: (v: number) => void) {
     const kbd = e instanceof KeyboardEvent;
     if (kbd && e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return;
     e.preventDefault(); // no native menu (nor, after the key, a contextmenu event)
@@ -401,8 +401,9 @@
     const r = el.getBoundingClientRect();
     const at = kbd || (e.clientX === 0 && e.clientY === 0) ? null : e;
     openValuePopover({
-      x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, label, def, value, from: el,
-      apply: (v) => { const s = snap(v); if (s !== value) set(s); },
+      x: at?.clientX ?? r.left, y: at?.clientY ?? r.bottom, label, def, from: el,
+      get value() { return get(); }, // live: the card follows an undo
+      apply: (v) => { const s = snap(v); if (s !== get()) set(s); },
     });
   }
   /** A popover opened from this slider closes with it (a deleted row, another track): its apply would edit what is gone. */
@@ -475,8 +476,8 @@
           type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill={gain.fill}
           aria-label="Gain {row.name}" oninput={(e) => setRowGain(p, engine, track.id, row.id, vol(e))}
           use:popoverOwner
-          oncontextmenu={(e) => precise(e, `${row.name} gain`, GAIN_DEF, row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
-          onkeydown={(e) => precise(e, `${row.name} gain`, GAIN_DEF, row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
+          oncontextmenu={(e) => precise(e, `${row.name} gain`, GAIN_DEF, () => row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
+          onkeydown={(e) => precise(e, `${row.name} gain`, GAIN_DEF, () => row.gain, (v) => setRowGain(p, engine, track.id, row.id, v))}
         />
         <span class="val mono">{row.gain.toFixed(2)}</span>
       </label>
@@ -486,8 +487,8 @@
           style:--fill={pan.fill} style:--fill-pos={pan.pos}
           aria-label="Pan {row.name}" oninput={(e) => setRowPan(p, engine, track.id, row.id, vol(e))}
           use:popoverOwner
-          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
-          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
+          oncontextmenu={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
+          onkeydown={(e) => precise(e, `${row.name} pan`, PAN_DEF, () => row.pan, (v) => setRowPan(p, engine, track.id, row.id, v))}
         />
         <span class="val mono">{panText(row.pan)}</span>
       </label>
@@ -569,8 +570,8 @@
         style:--fill={rangeFill(pat.swing).fill}
         data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
         use:popoverOwner
-        oncontextmenu={(e) => precise(e, 'Swing', SWING_DEF, pat.swing, (v) => setSwing(p, engine, track.id, v))}
-        onkeydown={(e) => precise(e, 'Swing', SWING_DEF, pat.swing, (v) => setSwing(p, engine, track.id, v))}
+        oncontextmenu={(e) => precise(e, 'Swing', SWING_DEF, () => pat.swing, (v) => setSwing(p, engine, track.id, v))}
+        onkeydown={(e) => precise(e, 'Swing', SWING_DEF, () => pat.swing, (v) => setSwing(p, engine, track.id, v))}
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>

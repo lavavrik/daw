@@ -324,3 +324,147 @@ test('one popover at a time: opening a second closes the first', async ({ page }
   await expect(pop).toHaveCount(1);
   await expect(pop.locator('.ttl')).toHaveText('Master');
 });
+
+// ---- plan 24 Task 1 review fixes ----
+
+/** Feed raw MIDI bytes (as midi.spec: window.__daw.midi.inject), then wait two frames. */
+async function inject(page: Page, bytes: number[]) {
+  await page.evaluate((b) => new Promise<void>((resolve) => {
+    (window as Any).__daw.midi.inject(b);
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }), bytes);
+}
+
+test('the card follows a CC while untouched, Reset compares with the live value; Forget MIDI from the card', async ({ page }) => {
+  await synthRack(page);
+  await page.waitForFunction(() => !!(window as Any).__daw?.midi);
+  const knob = page.getByTestId(CUTOFF);
+  const pop = page.getByTestId('value-popover');
+  const input = page.getByTestId('value-input');
+  // Learn CC 74 from the card.
+  await knob.click({ button: 'right' });
+  await pop.getByTestId('auto-ctl-midi').click();
+  await inject(page, [0xb0, 74, 64]); // binds
+  await expect(page.getByTestId(`${CUTOFF}-cc`)).toBeVisible();
+  // Put it on the default (1.2 kHz) and open; a CC moves the knob to its max under the card.
+  await knob.click({ button: 'right' });
+  await page.getByTestId('value-reset').click();
+  await expect.poll(() => valueOf(page, CUTOFF)).toBe(1200);
+  await knob.click({ button: 'right' });
+  await expect(input).toHaveValue('1.2');
+  await inject(page, [0xb0, 74, 127]);
+  await expect.poll(() => valueOf(page, CUTOFF)).toBe(20000);
+  await expect(input).toHaveValue('20'); // followed, still all selected
+  expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 2]);
+  // Reset compares with the live 20 kHz, not the 1.2 kHz it opened on.
+  await page.getByTestId('value-reset').click();
+  await expect(pop).toHaveCount(0);
+  await expect.poll(() => valueOf(page, CUTOFF)).toBe(1200);
+  // Typed text is the user's: a CC no longer rewrites it.
+  await knob.click({ button: 'right' });
+  await page.keyboard.type('500');
+  await inject(page, [0xb0, 74, 0]);
+  await expect.poll(() => valueOf(page, CUTOFF)).toBe(20);
+  await expect(input).toHaveValue('500');
+  await page.keyboard.press('Escape');
+  // Forget MIDI (CC 74) from the card: the tag goes, the map is empty.
+  await knob.click({ button: 'right' });
+  await expect(pop.getByTestId('auto-ctl-midi')).toHaveText('Forget MIDI (CC 74)');
+  await pop.getByTestId('auto-ctl-midi').click();
+  await expect(pop).toHaveCount(0);
+  await expect(page.getByTestId(`${CUTOFF}-cc`)).toHaveCount(0);
+  expect(await page.evaluate(() => (window as Any).__daw.project.midiMap.length)).toBe(0);
+});
+
+test('a piano letter typed in the field is text, not a note', async ({ page }) => {
+  await synthRack(page);
+  await page.evaluate(() => {
+    const w = window as Any;
+    const e = w.__daw.engine;
+    const send = e.send.bind(e);
+    w.__noteOns = 0;
+    e.send = (op: number, ...a: number[]) => { if (op === w.__daw.Op.NOTE_ON) w.__noteOns++; return send(op, ...a); };
+  });
+  const noteOns = () => page.evaluate(() => (window as Any).__noteOns as number);
+  await page.getByTestId(CUTOFF).click({ button: 'right' });
+  await page.keyboard.down('KeyH'); // A4 on the QWERTY piano
+  await page.keyboard.up('KeyH');
+  await expect(page.getByTestId('value-input')).toHaveValue('h');
+  await page.waitForTimeout(150);
+  expect(await noteOns()).toBe(0);
+  // The control: the same key with the card closed plays.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('value-popover')).toHaveCount(0);
+  await page.keyboard.down('KeyH');
+  await expect.poll(noteOns).toBeGreaterThan(0);
+  await page.keyboard.up('KeyH');
+});
+
+test('Tab past the last item or Shift+Tab out of the field closes the card, focus on the control', async ({ page }) => {
+  await synthRack(page);
+  const knob = page.getByTestId(CUTOFF);
+  const pop = page.getByTestId('value-popover');
+  await knob.click({ button: 'right' });
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Tab'); // Set, Reset, Automate, MIDI learn
+  await expect(pop.getByTestId('auto-ctl-midi')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(pop).toHaveCount(0);
+  await expect(knob).toBeFocused();
+  // Shift+Tab from the field (the first stop).
+  await knob.click({ button: 'right' });
+  await expect(page.getByTestId('value-input')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(pop).toHaveCount(0);
+  await expect(knob).toBeFocused();
+  // An outside press: closed, the focus where the user pressed.
+  await knob.click({ button: 'right' });
+  const bpm = page.getByRole('spinbutton');
+  await bpm.click();
+  await expect(pop).toHaveCount(0);
+  await expect(bpm).toBeFocused();
+});
+
+test('the error line never pushes the card out of the window; each invalid Enter re-announces', async ({ page }) => {
+  await synthRack(page);
+  const vp = page.viewportSize()!;
+  await page.getByTestId(CUTOFF).evaluate((el, [cx, cy]) => {
+    el.dispatchEvent(new MouseEvent('contextmenu', { clientX: cx, clientY: cy, button: 2, bubbles: true, cancelable: true }));
+  }, [300, vp.height - 4]);
+  const pop = page.getByTestId('value-popover');
+  const input = page.getByTestId('value-input');
+  await expect(input).toBeFocused();
+  const h0 = (await pop.boundingBox())!.height;
+  await page.keyboard.type('abc');
+  await page.keyboard.press('Enter');
+  const err = page.getByTestId('value-error');
+  await expect(err).toBeVisible();
+  await expect.poll(async () => (await pop.boundingBox())!.height).toBeGreaterThan(h0);
+  await expect.poll(async () => { const b = (await pop.boundingBox())!; return b.y + b.height; }).toBeLessThanOrEqual(vp.height - 8);
+  // The field is described by the error and the range hint.
+  await expect(input).toHaveAttribute('aria-describedby', 'value-popover-err value-popover-range');
+  // A second invalid Enter mounts a new alert (announced again).
+  const first = await err.elementHandle();
+  await page.keyboard.press('Enter');
+  await expect(err).toBeVisible();
+  expect(await first!.evaluate((n) => n.isConnected)).toBe(false);
+});
+
+test('right-click in the card\'s field, and in a knob\'s typed entry, is the browser\'s own menu', async ({ page }) => {
+  await synthRack(page);
+  const knob = page.getByTestId(CUTOFF);
+  const prevented = (sel: ReturnType<Page['getByTestId']>) => sel.evaluate((el) => {
+    const e = new MouseEvent('contextmenu', { clientX: 10, clientY: 10, button: 2, bubbles: true, cancelable: true });
+    el.dispatchEvent(e);
+    return e.defaultPrevented;
+  });
+  await knob.click({ button: 'right' });
+  expect(await prevented(page.getByTestId('value-input'))).toBe(false);
+  expect(await prevented(page.getByTestId('value-set'))).toBe(true);
+  await page.keyboard.press('Escape');
+  // The knob's own typed entry (click the readout).
+  await knob.getByTestId('knob-readout').click();
+  const entry = knob.getByTestId('knob-entry');
+  await expect(entry).toBeFocused();
+  expect(await prevented(entry)).toBe(false);
+  await expect(page.getByTestId('value-popover')).toHaveCount(0);
+});

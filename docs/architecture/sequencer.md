@@ -326,10 +326,14 @@ Patterns ▸ *Save to project library…* / *Load from library ▸* (a submenu,
 - **Factory patterns** (plan 25 Task 2, `state/factoryPatterns.ts`): 28
   read-only built-in entries in the same `LibraryPatternJson` shape — 12
   drum grooves (rows named by role, all eight rows in kit order, no sample
-  names; 16 or 32 steps; swing given in the comments as its MPC figure,
-  50 % + 25 % × swing), 8 basslines and 8 chord parts (A minor, so plan 26
-  can transpose them; bass around A1–A2, chords around A3–E5; 1, 2 or 4
-  bars). The Load popover / Load from library ▸ list (`LibraryList.svelte`)
+  names; 16 or 32 steps; swing written in MPC %, taking the swing preset's
+  exact value from `state/groove.ts` `SWING_PRESETS` where there is one, so
+  a loaded Garage 2-step shows "62 %"), 8 basslines and 8 chord parts
+  (A minor, so plan 26 can transpose them; bass around A1–A2, chords around
+  A3–E5, Disco strings an octave up; 1, 2 or 4 bars). Basslines are mono
+  lines with no overlapping notes (the house bass patches glide on an
+  overlap), except Acid 303 line, whose overlaps are its slides. Chords are
+  built from named `VOICINGS`, each holding its root. The Load popover / Load from library ▸ list (`LibraryList.svelte`)
   shows them under **Factory**, grouped Drums / Bass / Chords, only the
   groups of the selected track's kind; the rows have no Rename / Delete.
   `loadFactoryPattern` runs the library load (`loadEntry`, shared with

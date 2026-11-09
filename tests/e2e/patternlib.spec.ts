@@ -34,7 +34,7 @@ const onSteps = (page: Page, row: number) =>
     return pat.steps[row].flatMap((v: number, i: number) => (v > 0 ? [i] : []));
   }, row);
 
-test('Patterns ▸ save to the library, then load into the kit after a row was deleted: by sample name; one undo entry', async ({ page }) => {
+test('Patterns ▸ save to the library, then load into the kit after a row was deleted: by role name; one undo entry', async ({ page }) => {
   await start(page);
   for (const s of [0, 4, 8, 12]) await page.getByTestId(`step-0-${s}`).click(); // Kick
   for (const s of [4, 12]) await page.getByTestId(`step-4-${s}`).click(); // Snare
@@ -79,6 +79,33 @@ test('Patterns ▸ save to the library, then load into the kit after a row was d
   await expect(page.getByTestId('pattern-picker').locator('option')).toHaveCount(1);
   await expect(page.getByTestId('pattern-picker').locator('option:checked')).toHaveText('Pattern 1');
   await expect.poll(() => undoLabel(page)).toBe('Delete row');
+});
+
+test('an entry whose rows are not named by role maps by sample name, not by index', async ({ page }) => {
+  await start(page);
+  for (const s of [0, 4, 8, 12]) await page.getByTestId(`step-0-${s}`).click(); // Kick
+  for (const s of [4, 12]) await page.getByTestId(`step-4-${s}`).click(); // Snare
+  await page.getByTestId('pattern-save').click();
+  await page.getByTestId('pattern-save-input').fill('Named');
+  await page.getByTestId('pattern-save-input').press('Enter');
+  // As an entry from a kit with its own row names can be: rows "Row 1" … "Row 8" (no role), samples kept.
+  expect(await daw(page, (d) => {
+    const e = d.project.patternLibrary[0];
+    e.rows.forEach((r: Any, i: number) => (r.name = `Row ${i + 1}`));
+    return e.rows.map((r: Any) => r.sampleName).filter(Boolean).length;
+  })).toBe(8);
+
+  // Delete the Clap row: Snare moves from row 4 to row 3, and row 4 is now Rim.
+  await page.getByTestId('row-1').hover();
+  await page.getByTestId('row-delete-1').click();
+  await expect(page.getByTestId('row-3').getByTestId('row-name')).toHaveText('Snare');
+  await page.getByTestId('pattern-load').click();
+  await page.getByTestId('pattern-library-pop').getByTestId('library-load').click();
+  await expect(page.getByTestId('pattern-picker').locator('option:checked')).toHaveText('Named');
+  // By sample: the kick on Kick (row 0), the snare on Snare (row 3); by index it would be on Rim (row 4).
+  expect(await onSteps(page, 0)).toEqual([0, 4, 8, 12]);
+  expect(await onSteps(page, 3)).toEqual([4, 12]);
+  expect(await onSteps(page, 4)).toEqual([]);
 });
 
 test('the header Save / Load buttons: a synth pattern into another synth track; other kinds are greyed', async ({ page }) => {

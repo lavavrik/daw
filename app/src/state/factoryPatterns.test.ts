@@ -7,7 +7,8 @@ import { validate } from '../project/schema';
 import type { ProjectJson } from '../project/schema';
 import { serialize } from '../project/serialize';
 import { DEFAULT_KIT } from './defaultKit';
-import { DRUM_ROLES, FACTORY_GROUPS, FACTORY_PATTERNS, factoryGroup, factoryPattern } from './factoryPatterns';
+import { DRUM_ROLES, FACTORY_GROUPS, FACTORY_PATTERNS, VOICINGS, factoryGroup, factoryPattern } from './factoryPatterns';
+import { SWING_PRESETS, activeSwingPreset, swingToMpc } from './groove';
 import type { FactoryPattern } from './factoryPatterns';
 import { mapLibraryRows } from './pattern-library';
 import { LIBRARY_NAME_MAX, MAX_STEPS, Project } from './project.svelte';
@@ -22,6 +23,8 @@ const A_MINOR = new Set([9, 11, 0, 2, 4, 5, 7]);
 /** "Roughly A1–A2" / "roughly A3–E5": a few semitones of slack each side. */
 const BASS_RANGE = [28, 52] as const; //   E1..E3
 const CHORD_RANGE = [55, 79] as const; //  G3..G5
+/** Disco strings sit an octave up, where a string section plays: about A4–E6. */
+const STRINGS_RANGE = [67, 88] as const; // G4..E6
 
 /**
  * The kits a drum entry must map onto: state/kits.ts KITS once plan 25 Task 1
@@ -101,7 +104,7 @@ describe('factory patterns', () => {
     for (const e of synths) {
       expect([1, 2, 4], e.name).toContain(e.bars);
       expect(e.notes.length, e.name).toBeGreaterThan(0);
-      const [lo, hi] = e.group === 'bass' ? BASS_RANGE : CHORD_RANGE;
+      const [lo, hi] = e.group === 'bass' ? BASS_RANGE : e.name === 'Disco strings' ? STRINGS_RANGE : CHORD_RANGE;
       for (const n of e.notes) {
         const at = `${e.name} ${JSON.stringify(n)}`;
         expect(Number.isInteger(n.start) && Number.isInteger(n.len), at).toBe(true);
@@ -122,6 +125,60 @@ describe('factory patterns', () => {
     }
     // Every bassline starts on its A.
     for (const e of synths.filter((x) => x.group === 'bass')) expect(e.notes[0].pitch % 12, e.name).toBe(9);
+  });
+
+  it('drum swing: a preset MPC figure is exactly the preset (Garage 2-step is 62 %); fills swing like Classic house', () => {
+    const garage = drums.find((e) => e.name === 'Garage 2-step')!;
+    expect(garage.swing).toBe(SWING_PRESETS.find((p) => p.mpc === 62)!.swing);
+    expect(activeSwingPreset(garage.swing)?.label).toBe('62 %');
+    for (const e of drums) {
+      const preset = SWING_PRESETS.find((p) => p.mpc === Math.round(swingToMpc(e.swing)));
+      if (preset) expect(e.swing, e.name).toBe(preset.swing);
+    }
+    const classic = drums.find((e) => e.name === 'Classic house')!.swing;
+    for (const name of ['Fill A', 'Fill B']) expect(drums.find((e) => e.name === name)!.swing, name).toBe(classic);
+  });
+
+  it('basslines are mono lines (no note overlaps the next) except Acid 303 line, whose overlaps are its slides', () => {
+    for (const e of synths.filter((x) => x.group === 'bass')) {
+      const notes = [...e.notes].sort((a, b) => a.start - b.start);
+      const overlaps = notes.slice(1).filter((n, i) => notes[i].start + notes[i].len > n.start).length;
+      if (e.name === 'Acid 303 line') expect(overlaps, e.name).toBeGreaterThan(0);
+      else expect(overlaps, e.name).toBe(0);
+    }
+  });
+
+  it('basslines move by at most an octave, around the loop too (Disco octaves excepted: an octave line)', () => {
+    for (const e of synths.filter((x) => x.group === 'bass' && x.name !== 'Disco octaves')) {
+      const p = [...e.notes].sort((a, b) => a.start - b.start).map((n) => n.pitch);
+      p.forEach((x, i) => expect(Math.abs(p[(i + 1) % p.length] - x), `${e.name} note ${i}`).toBeLessThanOrEqual(12));
+    }
+  });
+
+  it('every chord voicing holds its root; one symbol, one pitch-class set; different symbols differ', () => {
+    const pcs = (notes: readonly number[]) => [...new Set(notes.map((n) => n % 12))].sort((a, b) => a - b).join(',');
+    const bySymbol = new Map<string, string>();
+    for (const [key, x] of Object.entries(VOICINGS)) {
+      expect(x.notes.some((n) => n % 12 === x.root), `${key} (${x.symbol}) holds its root`).toBe(true);
+      const set = pcs(x.notes);
+      if (bySymbol.has(x.symbol)) expect(set, `${key} is a ${x.symbol}`).toBe(bySymbol.get(x.symbol));
+      else bySymbol.set(x.symbol, set);
+    }
+    const sets = [...bySymbol.values()];
+    expect(new Set(sets).size, 'different symbols, different pitch classes').toBe(sets.length);
+    // Every chord of every chord entry (its notes struck together) is one of these voicings, maybe an octave up.
+    const known = new Map([...bySymbol].map(([sym, set]) => [set, sym]));
+    for (const e of synths.filter((x) => x.group === 'chords')) {
+      const at = new Map<number, number[]>();
+      for (const n of e.notes) at.set(n.start, [...(at.get(n.start) ?? []), n.pitch]);
+      const symbols = [...at.entries()].sort((a, b) => a[0] - b[0]).map(([start, notes]) => {
+        const sym = known.get(pcs(notes));
+        expect(sym, `${e.name} chord at ${start}`).toBeDefined();
+        return sym;
+      });
+      if (e.name === 'Deep m9 progression') expect([...new Set(symbols)]).toEqual(['Am9', 'Dm9', 'Fmaj7', 'Em7']);
+      if (e.name === 'Pad long') expect(symbols).toEqual(['Am9', 'Fmaj7', 'Dm9', 'Em7']);
+    }
   });
 
   it('every entry is a valid saved library pattern: validate keeps it as it is, with no warning', () => {

@@ -42,6 +42,12 @@ async function openLoad(page: Page) {
 
 test('Load ▸ Factory ▸ Garage 2-step on the drum track: a new pattern with the kick and snare by role, in one undo', async ({ page }) => {
   await start(page);
+  // Delete the Clap row first: every row below moves up one (Snare is now row 3, Rim row 4), so
+  // mapping by index would put the snare on the Rim row. By role it lands on Snare.
+  await page.getByTestId('row-1').hover();
+  await page.getByTestId('row-delete-1').click();
+  await expect(page.getByTestId('row-3').getByTestId('row-name')).toHaveText('Snare');
+  await expect(page.getByTestId('row-4').getByTestId('row-name')).toHaveText('Rim');
   const pop = await openLoad(page);
   // A drum track: Drums only.
   await expect(pop.getByTestId('factory-heading')).toHaveText('Factory');
@@ -55,23 +61,26 @@ test('Load ▸ Factory ▸ Garage 2-step on the drum track: a new pattern with t
   await expect(page.getByTestId('pattern-picker').locator('option:checked')).toHaveText('Garage 2-step');
   await expect(page.getByTestId('pattern-picker').locator('option')).toHaveCount(2);
   expect(await onSteps(page, 0)).toEqual([0, 10, 16, 26, 29]); // Kick
-  expect(await onSteps(page, 4)).toEqual([4, 7, 12, 14, 20, 26, 28, 31]); // Snare (ghosts on 7, 14, 26, 31)
-  expect(await onSteps(page, 1)).toEqual([]); // no clap in a 2-step
+  expect(await onSteps(page, 3)).toEqual([4, 7, 12, 14, 20, 26, 28, 31]); // Snare (ghosts on 7, 14, 26, 31)
+  expect(await onSteps(page, 4)).toEqual([11, 23, 30]); // Rim: its own hits, not the snare's
+  // Closed hat (moved up from row 2): every 8th, plus the pickups on 15 and 31.
+  expect(await onSteps(page, 1)).toEqual([...Array.from({ length: 16 }, (_, i) => 2 * i), 15, 31].sort((a, b) => a - b));
   for (const s of [0, 10, 29]) await expect(page.getByTestId(`step-0-${s}`)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('step-4-12')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('step-3-12')).toHaveAttribute('aria-pressed', 'true');
   expect(await daw(page, (d) => {
     const t = d.project.tracks.find((x: Any) => x.id === d.project.selectedTrackId);
     const pat = t.patterns.find((x: Any) => x.id === t.currentPatternId);
     return [pat.stepCount, pat.swing, d.project.patternLibrary.length];
-  })).toEqual([32, 0.5, 0]); // the project's library is not touched
+  })).toEqual([32, 0.48, 0]); // swing: the 62 % preset; the project's library is not touched
   await expect.poll(() => undoLabel(page)).toBe('Load factory pattern');
 
-  // One undo: the loaded pattern is gone, Pattern 1 is current again.
+  // One undo: the loaded pattern is gone, Pattern 1 is current again (the row stays deleted).
   await page.locator('body').click({ position: { x: 5, y: 400 } }); // the focus off any field
   await page.keyboard.press('ControlOrMeta+z');
   await expect(page.getByTestId('pattern-picker').locator('option')).toHaveCount(1);
   await expect(page.getByTestId('pattern-picker').locator('option:checked')).toHaveText('Pattern 1');
   expect(await onSteps(page, 0)).toEqual([]);
+  await expect(page.getByTestId('row-1').getByTestId('row-name')).toHaveText('Closed hat');
 });
 
 test('a synth track lists Bass and Chords, no Drums; "Offbeat" on a bass patch makes notes and plays', async ({ page }) => {

@@ -313,7 +313,7 @@ describe('pattern library', () => {
     const pat = currentPattern(kit);
     expect(pat.name).toBe('Garage 2-step');
     expect(pat.stepCount).toBe(32);
-    expect(pat.swing).toBe(0.5);
+    expect(pat.swing).toBe(0.48); // the 62 % preset
     const rowOf = (role: string) => kit.rows.findIndex((row) => row.name === role);
     expect(onSteps(pat.steps[rowOf('Kick')])).toEqual([0, 10, 16, 26, 29]);
     expect(onSteps(pat.steps[rowOf('Snare')])).toEqual([4, 7, 12, 14, 20, 26, 28, 31]);

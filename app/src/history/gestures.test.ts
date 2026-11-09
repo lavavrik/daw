@@ -5,9 +5,9 @@ import { cancelDrags, createGestures, registerDragCancel } from './gestures';
 import { createHistory } from './history';
 import { diffApply } from './diffApply';
 import { serialize } from '../project/serialize';
-import { addDrumTrack, setTempo } from '../state/actions';
+import { addDrumTrack, setStep, setStepVelocity, setTempo } from '../state/actions';
 import { setMix } from '../state/mixer-actions';
-import { Project } from '../state/project.svelte';
+import { Project, currentPattern } from '../state/project.svelte';
 
 /**
  * A fake history logging begin/commit, and a manual one-task-later queue.
@@ -174,6 +174,46 @@ describe('gestures', () => {
     expect(s.g.cancelDrag()).toBe(true);
     s.g.blur();
     expect(s.g.cancelDrag()).toBe(false);
+  });
+});
+
+describe('a key right after a release (plan 23 T1 review #1)', () => {
+  it('commitReleased commits a released gesture at once, only once, and never mid-press', () => {
+    const s = setup();
+    s.g.commitReleased(); // nothing was pressed: nothing to commit
+    expect(s.log).toEqual([]);
+    s.down(1);
+    s.g.commitReleased(); // still held: the press goes on
+    expect(s.log).toEqual(['begin']);
+    s.up(1);
+    s.g.commitReleased(); // released, its commit still a task away: commit now
+    expect(s.log).toEqual(['begin', 'commit']);
+    s.g.commitReleased(); // already done
+    expect(s.log).toEqual(['begin', 'commit']);
+    s.flush(); // the release's own commit still runs (a no-op on a closed history)
+    s.g.commitReleased();
+    expect(s.log).toEqual(['begin', 'commit', 'commit']);
+  });
+
+  it('a step-velocity key after a click is its own entry, not part of the click\'s', () => {
+    const sink = { send: () => true };
+    const p = new Project();
+    const d = addDrumTrack(p, sink)!;
+    const h = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, sink, from, to) });
+    p.history = h;
+    const queue: (() => void)[] = [];
+    const g = createGestures({ history: () => h, loading: () => false, later: (fn) => void queue.push(fn) });
+    const row = d.rows[0].id;
+    g.press({ pointerId: 1, isPrimary: true });
+    setStep(p, sink, d.id, row, 0, 100); // the click lights the step
+    g.release({ pointerId: 1 });
+    g.commitReleased(); // App's keydown capture, before the cell's key handler
+    setStepVelocity(p, sink, d.id, row, 0, 105, { coalesce: 'k' }); // Shift+↑
+    queue.splice(0).forEach((fn) => fn());
+    expect(h.labels.undo).toBe('Step velocity');
+    expect(h.undo()).toBe(true);
+    expect(currentPattern(d).steps[0][0]).toBe(100); // still lit: only the key was undone
+    expect(h.labels.undo).toBe('Set step');
   });
 });
 

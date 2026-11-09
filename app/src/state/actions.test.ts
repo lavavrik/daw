@@ -7,8 +7,7 @@ import {
   setStepVelocity, setTempo, stepVelocityGesture, stop, togglePlay, toggleStep,
 } from './actions';
 import { createSweepKeys } from '../history/sweep';
-import { debugStacks } from '../history/history';
-import { createHistory } from '../history/history';
+import { createHistory, debugStacks } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
 import { addSynthTrack } from './rack-actions';

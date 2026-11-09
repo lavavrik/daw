@@ -122,8 +122,11 @@ unchanged. On top of them, a **lit** cell can be re-levelled in place
   steps once per 40 px, at most once per event, so a trackpad's small
   deltas add up and a mouse notch (~100 px) is one step (`wheelPx`,
   `wheelNotch`). Shift+wheel reads `deltaX` when `deltaY` is 0 (browsers
-  move a Shift-wheel there); a plain horizontal swipe is left to the grid's
-  scroll.
+  move a Shift-wheel there). Without Shift, a mostly horizontal swipe
+  (|deltaX| > |deltaY|, Y jitter and all) is not an edit and is not
+  prevented: it stays the grid's scroll or the browser's back swipe.
+  Partial travel is forgotten after 300 ms without a wheel event
+  (`wheelCarry`), so a stray touch later never finishes an old notch.
 - **Shift-drag** from a lit cell: vertical and relative, 1 velocity per
   2 px (truncated), up is louder (`dragVel`). The pointer is captured, so
   nothing is painted and the step stays lit. Shift + press on an off cell
@@ -146,7 +149,13 @@ unchanged. On top of them, a **lit** cell can be re-levelled in place
 - Wheel and key bursts: `setStepVelocity(..., { coalesce })`, with an
   idle-aware sweep key per cell (`stepvel:<track>:<row>:<step>`,
   `history/sweep.ts`, 1 s). The grid settles after each write, so a burst
-  that nets to nothing (up, then down) leaves no entry.
+  that nets to nothing (up, then down) leaves no entry. A click's gesture
+  commits one task after its release, so a key or notch straight after a
+  click would land in the click's "Set step" entry (one undo would turn
+  the step off). With no pointer button held, it is committed first: App's
+  keydown capture calls `gestures.commitReleased()`, and the grid's wheel
+  handler calls `history.commit()` when `e.buttons === 0`. (A notch while
+  the button is still held is the same gesture, and stays one entry.)
 - A drag runs inside the App's pointer gesture (one entry per press,
   `history/gestures.ts`) through `stepVelocityGesture(p, sink, trackId)`.
   It remembers each touched step's value from before its first write, and

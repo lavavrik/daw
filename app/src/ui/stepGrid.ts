@@ -72,15 +72,31 @@ export function clampStepVel(v: number): number {
   return Math.min(STEP_VEL_MAX, Math.max(STEP_VEL_MIN, Math.round(v)));
 }
 
+/** Partial wheel travel on a cell is forgotten after this long without a wheel event. */
+export const VEL_WHEEL_IDLE_MS = 300;
+
 /**
  * A wheel event's vertical travel in px (negative = up). Line and page deltas
  * (Firefox, some mice) count one step each. With Shift, browsers move a mouse
- * wheel's delta to deltaX, so that axis is read then; a horizontal swipe
- * without Shift is 0 (the grid's own horizontal scroll, not an edit).
+ * wheel's delta to deltaX, so that axis is read then. Without Shift, a
+ * mostly horizontal swipe (|deltaX| > |deltaY|, which nearly always carries
+ * some Y jitter) is 0: the grid's horizontal scroll or the browser's back
+ * swipe, not an edit (and the caller leaves it un-prevented).
  */
 export function wheelPx(e: { deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean }): number {
+  if (!e.shiftKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return 0;
   const d = e.deltaY !== 0 ? e.deltaY : e.shiftKey ? e.deltaX : 0;
   return e.deltaMode === 0 ? d : d * VEL_WHEEL_PX;
+}
+
+/**
+ * The partial travel a wheel event on cell `key` at time `t` (ms) starts
+ * from: what `prev` left, if it was the same cell less than
+ * VEL_WHEEL_IDLE_MS ago; else 0 (a tiny touch minutes later must not finish
+ * an old notch).
+ */
+export function wheelCarry(prev: { key: string; acc: number; t: number }, key: string, t: number): number {
+  return prev.key === key && t - prev.t < VEL_WHEEL_IDLE_MS ? prev.acc : 0;
 }
 
 /**

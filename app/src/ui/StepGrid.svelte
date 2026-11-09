@@ -59,7 +59,7 @@
   import WaveformView from './vis/WaveformView.svelte';
   import { fileMap, waveBase } from './vis/waveMath';
   import {
-    dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelNotch, wheelPx, wheelVelStep,
+    dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
   } from './stepGrid';
   import { rangeFill, rangeFillBipolar } from './rangeFill';
 
@@ -193,18 +193,26 @@
   }
 
   // Wheel: only a lit cell takes it (preventDefault); over an off cell the
-  // page scrolls as before. Travel accumulates per cell (trackpads), one
-  // step per 40 px and at most one per event (stepGrid.ts wheelNotch).
-  let wheelAcc = { key: '', acc: 0 };
+  // page scrolls as before, and so does a mostly horizontal swipe
+  // (stepGrid.ts wheelPx). Travel accumulates per cell (trackpads), one
+  // step per 40 px and at most one per event (wheelNotch); partial travel
+  // is dropped after 300 ms idle (wheelCarry).
+  let wheelAcc = { key: '', acc: 0, t: 0 };
   function wheel(e: WheelEvent, rowId: string, step: number, cur: number) {
     if (cur === 0 || e.ctrlKey || e.metaKey) return; // Ctrl+wheel / pinch is the browser's zoom
     const px = wheelPx(e);
     if (px === 0) return;
     e.preventDefault();
     const key = velKey(rowId, step);
-    const n = wheelNotch(wheelAcc.key === key ? wheelAcc.acc : 0, px);
-    wheelAcc = { key, acc: n.acc };
-    if (n.notch !== 0) nudgeVel(e.currentTarget as HTMLElement, rowId, step, cur, n.notch * wheelVelStep(e.shiftKey));
+    const n = wheelNotch(wheelCarry(wheelAcc, key, e.timeStamp), px);
+    wheelAcc = { key, acc: n.acc, t: e.timeStamp };
+    if (n.notch === 0) return;
+    // No button held: a click just before has released, but its gesture
+    // commits a task later. Close it now, so this notch is its own "Step
+    // velocity" entry, not merged into the click's "Set step" (with the
+    // button still held it is the same gesture, and stays one entry).
+    if (e.buttons === 0) p.history?.commit();
+    nudgeVel(e.currentTarget as HTMLElement, rowId, step, cur, n.notch * wheelVelStep(e.shiftKey));
   }
 
   /** Shift+↑ / ↓ (±5), Alt+Shift+↑ / ↓ (±1) on a focused lit cell; announced. */
@@ -634,7 +642,6 @@
     background: var(--raised); box-shadow: var(--drop); color: var(--text);
     font-size: var(--fs-lbl); line-height: 14px;
   }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 
   .strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
   .strip-name { width: 133px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }

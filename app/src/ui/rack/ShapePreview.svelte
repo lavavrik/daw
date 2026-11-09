@@ -183,5 +183,4 @@
   .ticks { fill: none; stroke: var(--text); stroke-width: 1; opacity: 0.08; }
   .zero { stroke: var(--text); stroke-width: 1; opacity: 0.15; }
   .label { max-width: 120px; overflow: hidden; text-overflow: ellipsis; font: 9px var(--font-mono); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 </style>

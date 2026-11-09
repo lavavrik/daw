@@ -31,6 +31,13 @@
 // dragging): the old rule, the undo commits the gesture and afterApply()
 // re-opens one for the rest of the press. pointerDown() lets the shortcut
 // layer take Cmd/Ctrl+Alt+Z as undo mid-drag (an Alt-drag's bend).
+// A key right after a release (plan 23 T1 review #1): the release's commit
+// is still one task away, so a key's edit (Shift+↑ on the step just lit)
+// would land inside the click's gesture and share its entry. App's keydown
+// capture calls commitReleased() first: with no pointer down, a released
+// gesture is committed at once. Only then: an unconditional commit on every
+// key would settle (snapshot) the held recording entry at each typed note,
+// which the history takes lazily on purpose (history.ts header).
 
 export interface GestureHistory {
   begin(): void;
@@ -54,6 +61,12 @@ export interface Gestures {
   cancelDrag(): boolean;
   /** A pointer is down (a gesture is in progress). */
   pointerDown(): boolean;
+  /**
+   * A key was pressed: if every pointer is up and the last release's commit
+   * is still waiting for its task, commit now (the key's edit is then an
+   * entry of its own). Nothing otherwise.
+   */
+  commitReleased(): void;
 }
 
 /** Each drag widget's cancel: true when it was dragging (and now restored the pre-drag value). */
@@ -90,9 +103,12 @@ export function createGestures(o: {
   const down = new Set<number>();
   /** This gesture's drag was cancelled by an undo/redo key: those keys do nothing until it ends. */
   let cancelled = false;
+  /** All pointers are up and the release's commit has not run yet. */
+  let pending = false;
   const end = () => {
     down.clear();
     cancelled = false;
+    pending = false;
     o.history()?.commit();
   };
   return {
@@ -103,13 +119,20 @@ export function createGestures(o: {
         cancelled = false;
         if (!o.loading()) o.history()?.begin();
       }
+      pending = false;
       down.add(e.pointerId);
     },
     release(e) {
       down.delete(e.pointerId);
-      if (down.size === 0) cancelled = false;
+      if (down.size === 0) {
+        cancelled = false;
+        pending = true;
+      }
       later(() => {
-        if (down.size === 0) o.history()?.commit();
+        if (down.size === 0) {
+          pending = false;
+          o.history()?.commit();
+        }
       });
     },
     change(target) {
@@ -126,6 +149,11 @@ export function createGestures(o: {
       return cancelled;
     },
     pointerDown: () => down.size > 0,
+    commitReleased() {
+      if (!pending || down.size > 0) return;
+      pending = false;
+      o.history()?.commit();
+    },
   };
 }
 

@@ -463,7 +463,6 @@
   @media (max-width: 1399px) { .bar { gap: 4px; } }
   .bar > :global(*) { flex: none; }
   .bar > .spacer { flex: 1; }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
   .sep { width: 1px; height: 36px; background: var(--line); }
   .grp { display: inline-flex; align-items: center; gap: 4px; }
 

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ACCENT_MIN_VEL } from '../state/acidSteps';
 import { TRACK_COLORS } from './theme';
 import {
-  STEP_VEL_MAX, STEP_VEL_MIN, VEL_DRAG_PX, VEL_WHEEL_PX, clampStepVel, dragVel, rowColor, stepCellStyle, velChip, velKeyStep,
-  velStatus, velTip, wheelNotch, wheelPx, wheelVelStep,
+  STEP_VEL_MAX, STEP_VEL_MIN, VEL_DRAG_PX, VEL_WHEEL_IDLE_MS, VEL_WHEEL_PX, clampStepVel, dragVel, rowColor, stepCellStyle, velChip,
+  velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
 } from './stepGrid';
 
 describe('stepCellStyle', () => {
@@ -72,6 +72,21 @@ describe('step velocity editing (plan 23)', () => {
     expect(wheelPx({ deltaX: -100, deltaY: 0, deltaMode: 0, shiftKey: true })).toBe(-100);
     // A horizontal swipe without Shift is the grid's own scroll, not a velocity edit.
     expect(wheelPx({ deltaX: -100, deltaY: 0, deltaMode: 0, shiftKey: false })).toBe(0);
+    // ...even with the Y jitter a real trackpad swipe carries (the dominant axis decides).
+    expect(wheelPx({ deltaX: -30, deltaY: 4, deltaMode: 0, shiftKey: false })).toBe(0);
+    expect(wheelPx({ deltaX: 12, deltaY: -11, deltaMode: 0, shiftKey: false })).toBe(0);
+    // Mostly vertical: an edit, the X jitter ignored.
+    expect(wheelPx({ deltaX: 3, deltaY: -20, deltaMode: 0, shiftKey: false })).toBe(-20);
+  });
+
+  it('wheelCarry: partial travel carries on the same cell, and is dropped after 300 ms idle', () => {
+    expect(VEL_WHEEL_IDLE_MS).toBe(300);
+    const prev = { key: 'a', acc: -30, t: 1000 };
+    expect(wheelCarry(prev, 'a', 1016)).toBe(-30);
+    expect(wheelCarry(prev, 'a', 1299)).toBe(-30);
+    expect(wheelCarry(prev, 'a', 1300)).toBe(0);
+    expect(wheelCarry(prev, 'a', 60_000)).toBe(0);
+    expect(wheelCarry(prev, 'b', 1016)).toBe(0); // another cell starts afresh
   });
 
   it('wheelNotch: one step per 40 px accumulated, at most one per event, up is louder', () => {

@@ -1417,5 +1417,4 @@
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }
   .plug { opacity: 0.95; }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 </style>

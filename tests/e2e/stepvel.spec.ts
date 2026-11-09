@@ -159,6 +159,11 @@ test('Shift-drag up 40 px -> 120 with the accent ring; one undo; Esc and Cmd+Z m
   await page.mouse.down();
   await page.mouse.move(c.x, c.y + 40, { steps: 4 });
   await expect.poll(() => vel(page, 0, 0)).toBe(80);
+  // The drag went down across row 1's first cell, which stays unpainted (the pointer is captured).
+  const r1 = (await page.getByTestId('step-1-0').boundingBox())!;
+  expect(c.y + 40).toBeGreaterThan(r1.y);
+  expect(c.y + 40).toBeLessThan(r1.y + r1.height);
+  expect(await vel(page, 1, 0)).toBe(0);
   await page.keyboard.up('Shift');
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => vel(page, 0, 0)).toBe(100);
@@ -233,6 +238,34 @@ test('the wheel over an off cell is left to the page (it scrolls)', async ({ pag
   await expect.poll(cancelled).toEqual([false, true]);
   expect(await vel(page, 0, 0)).toBe(105);
   expect(await top()).toBe(s0);
+
+  // A mostly horizontal trackpad swipe over the lit cell (|dx| > |dy|) is not an edit, and not cancelled.
+  await page.mouse.wheel(-60, -8);
+  await expect.poll(cancelled).toEqual([false, true, false]);
+  expect(await vel(page, 0, 0)).toBe(105);
+});
+
+test('a key or wheel step right after a click is its own undo entry', async ({ page }) => {
+  await start(page);
+  // Shift+Up sent at once after the click (its gesture commits a task after the release).
+  const cell = page.getByTestId('step-0-0');
+  await cell.click();
+  await page.keyboard.press('Shift+ArrowUp');
+  expect(await vel(page, 0, 0)).toBe(105);
+  await expect.poll(() => undoLabel(page)).toBe('Step velocity');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => vel(page, 0, 0)).toBe(100); // still lit: only the key was undone
+  expect(await undoLabel(page)).toBe('Set step');
+
+  // The same for a wheel notch straight after a click (no button held).
+  const c = await center(page, 'step-0-4');
+  await page.mouse.click(c.x, c.y);
+  await page.mouse.wheel(0, -100);
+  await expect.poll(() => vel(page, 0, 4)).toBe(105);
+  await expect.poll(() => undoLabel(page)).toBe('Step velocity');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => vel(page, 0, 4)).toBe(100);
+  expect(await undoLabel(page)).toBe('Set step');
 });
 
 test('sound: a velocity-30 hit peaks quieter than a 127 hit on the same row', async ({ page }) => {

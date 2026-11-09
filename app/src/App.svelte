@@ -915,6 +915,11 @@
     const wake = () => wakeAudio();
     window.addEventListener('pointerdown', wake, true);
     window.addEventListener('keydown', wake, true);
+    // A key right after a click is its own entry, not part of the click's
+    // gesture (its commit is still a task away; history/gestures.ts
+    // commitReleased). Capture phase: before any handler edits.
+    const keyCommit = () => gestures.commitReleased();
+    window.addEventListener('keydown', keyCommit, true);
     // Esc ends MIDI learn. Bubble phase: an Esc a widget handles and stops
     // (stopPropagation: an open menu, a typed knob value, a mid-drag cancel)
     // is that widget's and leaves learn mode on. So is one another listener
@@ -927,6 +932,7 @@
     return () => {
       window.removeEventListener('pointerdown', wake, true);
       window.removeEventListener('keydown', wake, true);
+      window.removeEventListener('keydown', keyCommit, true);
       window.removeEventListener('keydown', escLearn);
     };
   });

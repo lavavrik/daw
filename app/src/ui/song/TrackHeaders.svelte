@@ -663,7 +663,6 @@
   /* The drop line: 2 px of --accent across the column, centred on the gap, with a dot at its start. */
   .drop-line { position: absolute; left: 0; right: 0; z-index: 1; height: 2px; margin-top: -1px; background: var(--accent); box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent); pointer-events: none; }
   .drop-line::before { content: ''; position: absolute; left: 0; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
-  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
   /* Context-menu padding as the menu bar's popovers (plan 22 "Menus": right >= 16 px, bottom >= 8 px); each
      item spans the inner width, so its highlight is the full band. */
   .menu { position: fixed; z-index: 50; min-width: 130px; padding: 6px 16px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }

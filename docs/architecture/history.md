@@ -58,7 +58,10 @@ edit is undoable as long as it is in the saved project.
   fader, note, clip
   or step-paint drag is one entry; the "before" snapshot is taken lazily at
   the first edit, so a click that edits nothing costs nothing, and a drag
-  that ends where it started (Escape) leaves no entry.
+  that ends where it started (Escape) leaves no entry. A key pressed after
+  every pointer is up but before that one-task-later commit
+  (`commitReleased()`, from App's keydown capture) commits the released
+  gesture first, so the key's edit is its own entry (plan 23).
 - **Undo / redo during a drag cancels the drag** (plan 16 Task 5). Every
   component with a pointer drag (`Knob`, `Fader`, `AutoLane` points /
   curves / draw / box, `ClipPanel` fade and trim handles, `SampleStrip`

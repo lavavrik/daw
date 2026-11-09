@@ -311,7 +311,8 @@
 
 /* -------------------------------------------------------- shared classes --
    .btn (raised), .btn.primary (--accent), .btn.quiet (outline); .seg and
-   .tabs (the selected child is light with dark text); .lbl, .mono, .well.
+   .tabs (the selected child is light with dark text); .lbl, .mono, .well;
+   .sr-only (visually hidden, still read out: live regions, icon labels).
    A selected child is marked by any of aria-checked/pressed/selected="true",
    .on or .active, so existing markup and new radiogroups both work.
    Sizes come from padding and line-height (no fixed heights), so markup
@@ -388,6 +389,16 @@
   border-radius: var(--r-md);
   background: var(--well);
   box-shadow: var(--well-shadow);
+}
+/* Not :where(): visually hidden must win over a component's own box rules. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  margin: 0;
 }
 
 /* ------------------------------------------------------------ mechanical --

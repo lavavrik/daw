@@ -586,6 +586,11 @@
   const STATE_TEXT = { missing: 'missing sample', failed: 'sample failed to load: stop and drop it again', pending: 'loads when playback stops' };
 
   /** The two ruler rows (RULER at the top); `data-time-labels` mirrors the TIME row for tests. */
+  /** Set a data-* attribute only when it differs (see drawRuler). */
+  function setData(el: HTMLElement, key: string, value: string) {
+    if (el.dataset[key] !== value) el.dataset[key] = value;
+  }
+
   function drawRuler() {
     const cv = rulerCv;
     const v = view;
@@ -645,7 +650,10 @@
       ctx.fillStyle = C.rulerText;
       ctx.fillText(l.text, x + 3, TY + RULER_TIME_H / 2 + 1);
     }
-    cv.dataset.timeLabels = labels.map((l) => l.text).join(' ');
+    // Test mirrors (data-time-labels, data-loop-label): written only on a
+    // change, since drawRuler runs every frame while the song plays and an
+    // attribute write (even an equal one) is a DOM mutation.
+    setData(cv, 'timeLabels', labels.map((l) => l.text).join(' '));
 
     // "Loop": a tab hanging from the loop bar at the range's right end (pinned
     // to the view's edge while that end is off screen), drawn over the bar
@@ -664,7 +672,7 @@
       ctx.fillStyle = live ? C.onColor : C.rulerText; // a dim tab is mostly the ruler: light text reads there
       ctx.fillText('Loop', tabR - tw + 2, 6.5);
     }
-    cv.dataset.loopLabel = loopLabel ? '1' : '0';
+    setData(cv, 'loopLabel', loopLabel ? '1' : '0');
 
     // The playhead head: a downward triangle on the BAR row, its line through both rows.
     const m = marker();
@@ -709,7 +717,7 @@
         if (f.scrollTick !== null) view = clampView({ ...v, scrollTick: f.scrollTick });
         wasVisible = f.visible;
       }
-      if (root) root.dataset.playhead = playTick === null ? '' : String(Math.round(playTick));
+      if (root) setData(root, 'playhead', playTick === null ? '' : String(Math.round(playTick)));
       drawPlayhead(); // the lanes redraw only when something they show changes ($effect above)
       drawRuler();
       raf = requestAnimationFrame(loop);

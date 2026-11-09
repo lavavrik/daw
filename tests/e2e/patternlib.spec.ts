@@ -196,6 +196,24 @@ test('header: an empty library popover still closes on Esc; after a save the foc
   expect(await daw(page, (d) => d.project.patternLibrary.length)).toBe(1);
 });
 
+test('header: the library popover closes when the focus Tabs out of it', async ({ page }) => {
+  await start(page);
+  await page.getByTestId('pattern-save').click();
+  await page.getByTestId('pattern-save-input').press('Enter'); // one entry, so the popover has buttons
+  const load = page.getByTestId('pattern-load');
+  await load.click();
+  const pop = page.getByTestId('pattern-library-pop');
+  await expect(pop.getByTestId('library-load').first()).toBeFocused();
+  // Shift+Tab onto Load keeps it open (Load is its own button) ...
+  await page.keyboard.press('Shift+Tab');
+  await expect(load).toBeFocused();
+  await expect(pop).toBeVisible();
+  // ... one more step leaves the pair: closed.
+  await page.keyboard.press('Shift+Tab');
+  await expect(pop).toBeHidden();
+  await expect(load).not.toBeFocused();
+});
+
 test('keyboard: → opens the library submenu on its first entry, ← goes back', async ({ page }) => {
   await start(page);
   await page.getByTestId('pattern-save').click();

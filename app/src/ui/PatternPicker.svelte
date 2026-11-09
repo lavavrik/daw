@@ -11,11 +11,13 @@
   // is the track's last one (deletePattern refuses both anyway).
   //
   // The pattern library (plan 21 Task 4; state/pattern-library.ts): Save
-  // (floppy disk) turns the picker into a name field like Rename (default
+  // (bookmark) turns the picker into a name field like Rename (default
   // "<track> · <pattern>"; Enter saves a copy, Esc or leaving it cancels);
-  // Load (open folder) opens a popover with the library (LibraryList: load,
-  // rename, delete). The popover closes on a load, Esc (focus back on
-  // Load), a press outside it, or another track / pattern being selected.
+  // Load (books) opens a popover with the library (LibraryList: load,
+  // rename, delete). Not the project's floppy / folder: those save and open
+  // the project file. The popover closes on a load, Esc (focus back on
+  // Load), a press outside it, focus leaving it and its Load button (Tab
+  // out), or another track / pattern being selected.
   // Keys typed in it stay there (no song start, no notes).
   import { tick } from 'svelte';
   import { releaseSelect, selectKey } from './selectKey';
@@ -28,8 +30,8 @@
   import PencilSimple from 'phosphor-svelte/lib/PencilSimple';
   import Trash from 'phosphor-svelte/lib/Trash';
   import Icon from './Icon.svelte';
-  import FloppyDisk from 'phosphor-svelte/lib/FloppyDisk';
-  import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
+  import BookmarkSimple from 'phosphor-svelte/lib/BookmarkSimple';
+  import Books from 'phosphor-svelte/lib/Books';
   import LibraryList from './LibraryList.svelte';
   import { flashHint } from '../state/banners.svelte';
   import { LIBRARY_NAME_MAX, defaultLibraryName, saveBlocked, savePatternToLibrary } from '../state/pattern-library';
@@ -129,6 +131,13 @@
     // Keys stay in the popover (Space presses a button, letters play nothing); Cmd / Ctrl chords pass.
     if (!e.metaKey && !e.ctrlKey) e.stopPropagation();
   }
+  /** Focus left the Load button + popover pair (Tab / Shift+Tab out): close.
+   *  A null relatedTarget (a press on nothing focusable, a re-rendered row)
+   *  is left to the pointer rule below. */
+  function libFocusOut(e: FocusEvent) {
+    const to = e.relatedTarget as Node | null;
+    if (libOpen && to && !(e.currentTarget as HTMLElement).contains(to)) closeLib(false);
+  }
   // A press outside the popover (and its Load button) closes it.
   $effect(() => {
     if (!libOpen) return;
@@ -175,10 +184,11 @@
     onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /> Delete</button>
   <button class="btn ic" data-testid="pattern-save" bind:this={saveBtn} aria-label="Save to library" disabled={!!saveWhy}
     title={saveWhy ?? "Save a copy of this pattern to the project's pattern library"}
-    onmousedown={(e) => e.preventDefault()} onclick={startSave}><Icon icon={FloppyDisk} /></button>
-  <span class="lib">
+    onmousedown={(e) => e.preventDefault()} onclick={startSave}><Icon icon={BookmarkSimple} /></button>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <span class="lib" onfocusout={libFocusOut}>
     <button class="btn ic" data-testid="pattern-load" bind:this={loadBtn} aria-label="Load from library" aria-expanded={libOpen}
-      aria-controls="pattern-library-pop" title="Load a pattern from the project's library as a new pattern" onclick={toggleLib}><Icon icon={FolderOpen} /></button>
+      aria-controls="pattern-library-pop" title="Load a pattern from the project's library as a new pattern" onclick={toggleLib}><Icon icon={Books} /></button>
     {#if libOpen}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="pop" id="pattern-library-pop" data-testid="pattern-library-pop" bind:this={pop} onkeydown={popKey}>

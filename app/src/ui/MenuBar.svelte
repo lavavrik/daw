@@ -116,6 +116,10 @@
   import FloppyDisk from 'phosphor-svelte/lib/FloppyDisk';
   import FloppyDiskBack from 'phosphor-svelte/lib/FloppyDiskBack';
   import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
+  // The pattern library has its own pair (bookmark = keep a copy, books = the
+  // library), never the project's floppy / folder.
+  import BookmarkSimple from 'phosphor-svelte/lib/BookmarkSimple';
+  import Books from 'phosphor-svelte/lib/Books';
   import Gear from 'phosphor-svelte/lib/Gear';
   import GridFour from 'phosphor-svelte/lib/GridFour';
   import Info from 'phosphor-svelte/lib/Info';
@@ -622,14 +626,14 @@
             </button>
             <hr />
             <button class="it" data-testid="menu-pattern-save" use:inertItem={saveWhy} title={saveWhy ?? 'Store a copy of this pattern in the project'} onclick={() => void startSave()}>
-              <Icon icon={FloppyDisk} /><span class="l">Save to project library…</span>
+              <Icon icon={BookmarkSimple} /><span class="l">Save to project library…</span>
             </button>
             <div class="subwrap">
               <button
                 class="it" data-testid="menu-pattern-load" bind:this={libBtn} aria-expanded={libOpen} aria-controls="menu-pattern-library"
                 title="Copy a saved pattern into the selected track as a new pattern"
                 onclick={(e) => (libOpen ? closeLib() : void openLib(e.detail === 0))} onkeydown={libBtnKey}
-              ><Icon icon={FolderOpen} /><span class="l">Load from library</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+              ><Icon icon={Books} /><span class="l">Load from library</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
               {#if libOpen}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div class="sub" id="menu-pattern-library" bind:this={libSub} onkeydown={subKey}>

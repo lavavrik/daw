@@ -135,6 +135,11 @@ not cheap. So:
   `BAD_INDEX`. They are edits (not in `NON_EDIT_OPS`).
 - No automation lane or MIDI mapping can point at a row (row gain / pan are
   native ranges, not params), so none moves or is dropped.
+- **What shifts with the index** (by design, not stored per row): each
+  later row's MIDI input note (`36 + r`, *Live drum input* below) drops by
+  one semitone, so the pad that played row 5 now plays the row that was
+  row 6; and each later row takes the colour of the row above it
+  (`rowColor`, `slot + row`). Both follow the row's position.
 
 The app (`state/actions.ts`):
 - `removeDrumRow(p, sink, trackId, rowId)`: one undo entry "Delete row":
@@ -157,8 +162,8 @@ Patterns can be saved into the project and loaded into any track of their
 kind (spec 2026-11-15-redesign-round-2 §5). Code: `state/pattern-library.ts`
 (actions, mapping, the saved form), `ui/LibraryList.svelte` (the list),
 Patterns ▸ *Save to project library…* / *Load from library ▸* (a submenu,
-`ui/MenuBar.svelte`) and the pattern header's Save (floppy disk) / Load
-(open folder) icon buttons (a popover, `ui/PatternPicker.svelte`).
+`ui/MenuBar.svelte`) and the pattern header's Save (bookmark) / Load
+(books) icon buttons (a popover, `ui/PatternPicker.svelte`; not the project's floppy / folder).
 
 - **An entry is a copy by value** (`Project.patternLibrary`,
   `LibraryPattern`): drum — step count, swing, and per row its name, its

@@ -520,8 +520,8 @@ comment and a comment per module.
 |---|---|---|---|---|
 | Leads & Stabs | Sax | mono | lead | Breathy alto-like hook lead |
 | Leads & Stabs | Brass Stab | poly | chord4 | Disco-house hit; Formant + filter bloom |
-| Leads & Stabs | Supersaw Lead | poly | chord4 | 4 + 4 + 3 detuned saws, LP12 lift, chorus (plan 28) |
-| Leads & Stabs | Hoover | mono | lead | Detuned saws + PWM, an octave pitch swoop per note, band-pass, chorus (plan 28) |
+| Leads & Stabs | Supersaw Lead | poly | chord4 | 4 + 4 + 3 saws (±35 ct per stack), LP12 lift, chorus (plan 28) |
+| Leads & Stabs | Hoover | mono | lead | Detuned saws + PWM, an octave pitch swoop per note, resonant band-pass hump at 1.1 kHz, chorus (plan 28) |
 | Plucks | Arp Pluck | poly | arp | Short bright 1/16 pluck |
 | Plucks | Soft Pluck | poly | chord4 | Saw + triangle, gentle LP24 envelope (plan 28) |
 | Plucks | Bright Pluck | poly | chord4 | Saws + square, resonant LP24 thrown open 5 oct (plan 28) |
@@ -529,7 +529,7 @@ comment and a comment per module.
 | Keys | Piano Stab | poly | chord4 | Classic house piano stab |
 | Keys | Garage Organ | poly | chord4 | Percussive UKG organ, Formant wah |
 | Keys | 90s Organ | poly | chord4 | Organ-bass stab: Garage Organ's recipe, brighter and shorter (plan 28) |
-| Keys | FM Bell | poly | chord4 | Prime sine + inharmonic FM pair (2.76 : 1), long ring (plan 28) |
+| Keys | FM Bell | poly | chord4 | Prime sine + inharmonic FM pair (2.76 : 1) under one amp envelope, long ring (plan 28) |
 | Bass | Organ Bass | mono | bass | Hollow 90s organ bass |
 | Bass | Reese Bass | mono | bass | Detuned Reese; mod wheel opens it |
 | Bass | Acid Line | mono | bass | Velocity accent, legato slide |
@@ -574,7 +574,8 @@ roll RMS, peak, centroid and envelope.
   its FM fed by a drop ADSR (decay 0.5 s): 3× → 1× (C4 lands on C2) → VCA
   (decay 1.5 s, release 1.5 s); Noise (white) → LP12 5 kHz → VCA (0.2 s
   burst); Mixer → Saturator → Out 0.35. Noise VCA idx 7 (the tests mute it
-  to track the sub). The long tail is the track's reverb send.
+  to track the sub). The long tail is the track's reverb send. Play C3–C5
+  (the Transition clip writes C4): below C3 the sub lands under 33 Hz.
 
 **Rules** (checked for every built-in by `patches.test.ts`): one MIDI In and
 one Out; MIDI In `pitch` feeds every Osc and `gate` every ADSR; at most 24

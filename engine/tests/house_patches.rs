@@ -1503,6 +1503,28 @@ fn spread_cents(r: &Render, f0: f32, k: u32, a: f32, b: f32) -> f32 {
     (m2 / w - mean * mean).sqrt() as f32
 }
 
+/// Third-octave band levels (dB re the total power over the bands), centres
+/// 100 Hz · 2^(k/3) up to 10 kHz, from a Welch spectrum between `a` and `b`
+/// s: the spectral envelope, independent of level.
+fn third_octaves(r: &Render, a: f32, b: f32) -> Vec<(f32, f32)> {
+    let p = spectrum(r, a, b);
+    let centres: Vec<f32> = (0..21).map(|k| 100.0 * 2f32.powf(k as f32 / 3.0)).collect();
+    let bands: Vec<f64> = centres
+        .iter()
+        .map(|&fc| {
+            let (lo, hi) = (fc * 2f32.powf(-1.0 / 6.0), fc * 2f32.powf(1.0 / 6.0));
+            p.iter().enumerate().filter(|(i, _)| (lo..hi).contains(&(*i as f32 * BIN_HZ))).map(|x| *x.1).sum()
+        })
+        .collect();
+    let total: f64 = bands.iter().sum();
+    centres.into_iter().zip(bands).map(|(f, x)| (f, (10.0 * (x / total).max(1e-12).log10()) as f32)).collect()
+}
+
+/// RMS difference (dB) between two [`third_octaves`] envelopes.
+fn third_octave_distance(x: &[(f32, f32)], y: &[(f32, f32)]) -> f32 {
+    (x.iter().zip(y).map(|(a, b)| (a.1 - b.1).powi(2)).sum::<f32>() / x.len() as f32).sqrt()
+}
+
 #[test]
 fn supersaw_lead_is_wide() {
     // C4 held 2.5 s, vel 100; spread around harmonics 4–6 (1.0–1.6 kHz,
@@ -1514,21 +1536,37 @@ fn supersaw_lead_is_wide() {
     };
     let (saw, strings, brass) = (spread("Supersaw Lead"), spread("Strings"), spread("Brass Stab"));
     let r = play_phrase(&mut load("Supersaw Lead"), Phrase::Chord4, 100, 1.5, 0.0);
+    // And it is not another string machine: the third-octave spectral
+    // envelope of chord4 in sustain (0.3–1 s) sits > 4 dB RMS from Strings'.
+    let env = |n: &str| third_octaves(&play(&mut load(n), &CHORD4, 100, 1.0, 0.0), 0.3, 1.0);
+    let dist = third_octave_distance(&env("Supersaw Lead"), &env("Strings"));
     eprintln!(
-        "Supersaw Lead: spread around h4–h6 {saw:.1} ct (Strings {strings:.1}, Brass Stab {brass:.1}); chord4 centroid {:.0} Hz",
+        "Supersaw Lead: spread around h4–h6 {saw:.1} ct (Strings {strings:.1}, Brass Stab {brass:.1}); chord4 centroid {:.0} Hz; third-octave distance from Strings in sustain {dist:.1} dB",
         centroid(&r, 0.05, 1.5)
     );
     assert!(saw >= 1.5 * strings && saw >= 1.5 * brass, "spread {saw:.1} ct is not 1.5× Strings' {strings:.1} and Brass Stab's {brass:.1}");
+    assert!(dist > 4.0, "only {dist:.1} dB (third-octave RMS) from Strings in sustain");
 }
+
+/// Hoover's body mixer (`housePatches.ts`): in1 the band-pass, in2 the dry saws.
+const HOOVER_BODY: (usize, ModuleKind) = (8, ModuleKind::Mixer);
 
 #[test]
 fn hoover_swoops_into_the_note() {
-    // C4 held 1 s, vel 100. f0 per 40 ms frame (10 ms hop) over 0.4–1.3 × f0
-    // (the swoop starts an octave down). The first frame (centred 20 ms) is
-    // well below the note; from 0.4 s the mean is on it.
+    assert_eq!(kind_at(&patch("Hoover"), HOOVER_BODY.0), Some(HOOVER_BODY.1), "Hoover's body mixer moved");
+    // C4 held 1 s, vel 100. f0 per 40 ms frame (10 ms hop) over 0.45–1.3 ×
+    // f0 (the swoop starts an octave down), tracked on the dry saws (A/B:
+    // the body mixer takes the dry path only). The swoop is upstream of the
+    // mixer, so it is the same; the band-pass's 1.1 kHz hump would make the
+    // tracker lock onto a harmonic while the pitch moves fast. The first
+    // frame (centred 20 ms) is well below the note; from 0.4 s the mean is on it.
     let f0 = hz(60);
     let r = play(&mut load("Hoover"), &[60], 100, 1.0, 0.0);
-    let track = f0_track(&r, 0.0, 1.0, 0.45 * f0, 1.3 * f0);
+    let mut dry = load("Hoover");
+    set(&mut dry, HOOVER_BODY, "lvl1", 0.0);
+    set(&mut dry, HOOVER_BODY, "lvl2", 1.0);
+    let rd = play(&mut dry, &[60], 100, 1.0, 0.0);
+    let track = f0_track(&rd, 0.0, 1.0, 0.45 * f0, 1.3 * f0);
     let ct: Vec<(f32, f32)> = track.iter().map(|x| (x.0, cents(x.1, f0))).collect();
     let at = |t: f32| ct.iter().min_by(|a, b| (a.0 - t).abs().total_cmp(&(b.0 - t).abs())).unwrap().1;
     let settled: Vec<f32> = ct.iter().filter(|x| x.0 >= 0.4).map(|x| x.1).collect();
@@ -1538,7 +1576,17 @@ fn hoover_swoops_into_the_note() {
         "Hoover swoop (ct re C4): 20 ms {:.0}, 60 ms {:.0}, 100 ms {:.0}, 150 ms {:.0}, 200 ms {:.0}, 300 ms {:.0}; within 50 ct at {arrive:?} s; 0.4–1 s mean {mean:.1}",
         at(0.02), at(0.06), at(0.1), at(0.15), at(0.2), at(0.3)
     );
-    eprintln!("Hoover: centroid C4 0.4–1 s {:.0} Hz", centroid(&r, 0.4, 1.0));
+    // The band-pass: a hump around its 1.1 kHz centre. Third-octave levels
+    // of the held C4 over 0.5–1 s: the loudest band at 800–1270 Hz (h3–h5)
+    // is ≥ 3 dB above the fundamental's (252 Hz) and the 2nd harmonic's.
+    let bands = third_octaves(&r, 0.5, 1.0);
+    let band = |f: f32| bands.iter().min_by(|a, b| (a.0 - f).abs().total_cmp(&(b.0 - f).abs())).unwrap().1;
+    let hump = [800.0, 1008.0, 1270.0].map(band).into_iter().fold(f32::MIN, f32::max);
+    eprintln!(
+        "Hoover: centroid C4 0.4–1 s {:.0} Hz; third-octave dB re total: 252 Hz {:.1}, 504 {:.1}, 800 {:.1}, 1008 {:.1}, 1270 {:.1}, 2016 {:.1}",
+        centroid(&r, 0.4, 1.0), band(252.0), band(504.0), band(800.0), band(1008.0), band(1270.0), band(2016.0)
+    );
+    assert!(hump >= band(252.0) + 3.0 && hump >= band(504.0) + 3.0, "no band-pass hump: {hump:.1} dB vs h1 {:.1}, h2 {:.1}", band(252.0), band(504.0));
     assert!(at(0.02) <= -500.0, "starts only {:.0} ct under the note", at(0.02));
     assert!(mean.abs() <= 15.0, "settles {mean:.1} ct off the note");
     let arrive = arrive.expect("reaches the note");
@@ -1607,23 +1655,31 @@ fn inharmonic_share(r: &Render, f0: f32, a: f32, b: f32) -> f32 {
 
 #[test]
 fn fm_bell_is_inharmonic_and_rings() {
-    // C5 (523 Hz) held 4 s, vel 100. Inharmonic share at the strike (0–0.5 s)
-    // and later (2–3 s, the index has decayed); Tine Keys (harmonic FM) as
-    // the control. Level: 20 ms RMS frames, 20 dB under the peak.
+    // C5 (523 Hz) held 4 s, vel 100. The inharmonic share (power off the
+    // harmonics) in windows through the decay: the 2.76× mode rings under
+    // the amp envelope, so it stays ≥ 25 % through 3 s; Tine Keys (harmonic
+    // FM) is the control. The clang (the FM sidebands) fades with the index:
+    // the centroid falls ≥ 10 %. Level: 20 ms RMS frames, 20 dB under the peak.
     let f0 = hz(72);
     let bell = play(&mut load("FM Bell"), &[72], 100, 4.0, 0.0);
     let tine = play(&mut load("Tine Keys"), &[72], 100, 4.0, 0.0);
-    let (b0, b2, t0) = (inharmonic_share(&bell, f0, 0.0, 0.5), inharmonic_share(&bell, f0, 2.0, 3.0), inharmonic_share(&tine, f0, 0.0, 0.5));
+    let windows = [(0.0, 0.5), (0.5, 1.0), (1.0, 2.0), (2.0, 3.0)];
+    let shares: Vec<f32> = windows.iter().map(|&(a, b)| inharmonic_share(&bell, f0, a, b)).collect();
+    let t0 = inharmonic_share(&tine, f0, 0.0, 0.5);
+    let (c0, c2) = (centroid(&bell, 0.0, 0.5), centroid(&bell, 2.0, 3.0));
     let env = rms_env_db(&bell, 0.02);
     let (pk_i, pk) = env.iter().enumerate().fold((0, f32::MIN), |m, (i, &v)| if v > m.1 { (i, v) } else { m });
     let t20 = env.iter().skip(pk_i).position(|&v| v <= pk - 20.0).map(|i| (i + pk_i) as f32 * 0.02);
     eprintln!(
-        "FM Bell C5: inharmonic {:.0} % at 0–0.5 s, {:.0} % at 2–3 s (Tine Keys {:.0} %); −20 dB at {t20:?} s; centroid 0–0.5 s {:.0} Hz, 2–3 s {:.0} Hz",
-        100.0 * b0, 100.0 * b2, 100.0 * t0, centroid(&bell, 0.0, 0.5), centroid(&bell, 2.0, 3.0)
+        "FM Bell C5: inharmonic {} (Tine Keys {:.0} % at 0–0.5 s); −20 dB at {t20:?} s; centroid 0–0.5 s {c0:.0} Hz, 2–3 s {c2:.0} Hz",
+        windows.iter().zip(&shares).map(|(w, x)| format!("{}–{} s {:.0} %", w.0, w.1, 100.0 * x)).collect::<Vec<_>>().join(", "),
+        100.0 * t0
     );
-    assert!(b0 >= 0.25, "only {:.0} % inharmonic at the strike", 100.0 * b0);
+    for (w, x) in windows.iter().zip(&shares) {
+        assert!(*x >= 0.25, "only {:.0} % inharmonic at {}–{} s", 100.0 * x, w.0, w.1);
+    }
     assert!(t0 <= 0.1, "control: Tine Keys reads {:.0} % inharmonic", 100.0 * t0);
-    assert!(b2 < b0, "the clang does not fade ({:.0} % → {:.0} %)", 100.0 * b0, 100.0 * b2);
+    assert!(c2 <= 0.9 * c0, "the clang does not fade: centroid {c0:.0} → {c2:.0} Hz");
     let t20 = t20.unwrap_or(4.0);
     assert!(t20 >= 1.5, "falls 20 dB after {t20:.2} s (want a long ring, ≥ 1.5 s)");
 }
@@ -1837,3 +1893,4 @@ fn house_patch_numbers() {
         );
     }
 }
+

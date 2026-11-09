@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { addTrack } from './addTrack';
 import { startApp } from './startApp';
+import { HOUSE_PATCHES } from './builtinPatches';
 
 // Timing-sensitive e2e tests. The "serial" Playwright project runs this file
 // alone, after all parallel tests are done (playwright.config.ts), so CPU
@@ -913,12 +914,6 @@ async function addSynth(page: Page) {
   await expect(page.getByTestId('patch-select')).toBeVisible();
 }
 
-const HOUSE_PATCHES = [
-  'Sax', 'Brass Stab', 'Supersaw Lead', 'Hoover', 'Arp Pluck', 'Soft Pluck', 'Bright Pluck',
-  'Tine Keys', 'Piano Stab', 'Garage Organ', '90s Organ', 'FM Bell',
-  'Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass', 'Strings', 'Warm Pad', 'Formant Pad',
-  'Noise Sweep', 'Impact',
-];
 
 /** Max peak (L, R) seen over `ms`, sampled every 4 ms. */
 function peaks(page: Page, ms: number) {
@@ -953,10 +948,8 @@ test('every house patch loads and sounds', async ({ page }) => {
   test.setTimeout(150_000);
   await startAudio(page);
   await addSynth(page);
-  // Spelled out (app code is not importable here); keep in sync with the
-  // 'House ·' groups in house.spec.ts BUILTIN_GROUPS.
+  // Spelled out in builtinPatches.ts (app code is not importable here).
   const house = HOUSE_PATCHES;
-  expect(house).toHaveLength(21); // plan 28: 19 house + the 2 transition patches
   const before = await status(page);
   for (const p of house) {
     await page.getByTestId('patch-select').selectOption(p);

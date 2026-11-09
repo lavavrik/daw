@@ -287,6 +287,15 @@ impl Synths {
         }
     }
 
+    /// The rack of an active synth track, read-only, else `None`.
+    pub fn rack(&self, slot: usize) -> Option<&Rack> {
+        if self.is_active(slot) {
+            self.tracks.get(slot).map(|t| &t.rack)
+        } else {
+            None
+        }
+    }
+
     /// The rack of an active synth track (for patch edits), else `None`.
     pub fn rack_mut(&mut self, slot: usize) -> Option<&mut Rack> {
         self.track_mut(slot).map(|t| &mut t.rack)

@@ -1,24 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { BUILTIN_GROUPS, PLAN28_PATCHES as PLAN28 } from './builtinPatches';
 import { startApp } from './startApp';
 
-// The menu's contract, in order (app/src/state/patches.ts BUILTIN_GROUPS and
-// housePatches.ts HOUSE_GROUPS; app code is not importable here because of
-// catalog.json's import attribute, so the lists are spelled out: adding a
-// patch means updating this list, as patches.test.ts also pins the names).
-const BUILTIN_GROUPS = [
-  { label: 'Starter', patches: ['Deep Bass', 'Chord Stab', 'Pad', 'Lead', 'Pluck'] },
-  { label: 'Sampler', patches: ['Sampler'] }, // plan 15: silent until a sample is dropped
-  { label: 'House · Leads & Stabs', patches: ['Sax', 'Brass Stab', 'Supersaw Lead', 'Hoover'] },
-  { label: 'House · Plucks', patches: ['Arp Pluck', 'Soft Pluck', 'Bright Pluck'] },
-  { label: 'House · Keys', patches: ['Tine Keys', 'Piano Stab', 'Garage Organ', '90s Organ', 'FM Bell'] },
-  { label: 'House · Bass', patches: ['Organ Bass', 'Reese Bass', 'Acid Line', 'Sub Bass'] },
-  { label: 'House · Pads', patches: ['Strings', 'Warm Pad', 'Formant Pad'] },
-  { label: 'House · FX', patches: ['Noise Sweep', 'Impact'] }, // plan 28: the Transition tracks' patches
-];
-
-/** Plan 28's new house patches (each has an example roll). */
-const PLAN28 = ['Supersaw Lead', 'Hoover', 'Soft Pluck', 'Bright Pluck', '90s Organ', 'FM Bell', 'Formant Pad'];
+// The menu's contract (BUILTIN_GROUPS) and plan 28's patches: builtinPatches.ts.
 
 // Plan 11: the patch menu's groups, the Sax's Formant panel, and Save patch refusing a built-in name. The
 // every-patch-sounds and four-house-tracks cases are timing-sensitive and live

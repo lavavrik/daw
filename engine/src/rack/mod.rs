@@ -340,6 +340,12 @@ impl Rack {
         self.queued == 0 && self.pending.iter().all(Option::is_none) && self.slots.iter().all(|s| s.module.is_none())
     }
 
+    /// Edits still waiting in the declick queue (they apply at the next
+    /// sub-block boundary after the fade-out).
+    pub fn edits_queued(&self) -> usize {
+        self.queued
+    }
+
     // ---- state -------------------------------------------------------------
 
     /// True while any Out module has produced a non-silent sample within the

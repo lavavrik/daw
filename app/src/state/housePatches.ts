@@ -754,25 +754,28 @@ const WARM_PAD: Patch = {
  * cents sharp of the other, so the eight spread unevenly and never phase-lock
  * into a single beat) plus a quieter stack an octave up for shine, through an
  * open LP12 that a short envelope lifts at the onset, and a wide chorus.
- * Measured: chord4 −16.1 dBFS, example −17.6 dBFS, vel-127 peak 0.79;
- * centroid 1.95 kHz; spread around h4–h6 of a held C4 16.7 cents RMS (Strings
- * 10.2, Brass Stab 7.0).
+ * Detune 70 (±35 cents) per stack: well wider than Strings', so it reads as
+ * a supersaw, not a string machine.
+ * Measured: chord4 −17.8 dBFS, example −18.7 dBFS, vel-127 peak 0.85;
+ * centroid 2.2 kHz; spread around h4–h6 of a held C4 24.8 cents RMS (Strings
+ * 10.2, Brass Stab 7.0); third-octave spectral distance from Strings in
+ * sustain 5.6 dB RMS (it was 4.1 at detune 40).
  */
 const SUPERSAW_LEAD: Patch = {
   name: 'Supersaw Lead',
   modules: [
     // Poly, 8 voices.
     { idx: 0, id: 'midi_in' },
-    // Stack A: four saws over ±20 cents.
-    { idx: 1, id: 'osc', params: { wave: 0, unison: 4, detune: 40 } },
+    // Stack A: four saws over ±35 cents.
+    { idx: 1, id: 'osc', params: { wave: 0, unison: 4, detune: 70 } },
     // Stack B: four more, 9 cents sharp (the eight saws spread unevenly).
-    { idx: 2, id: 'osc', params: { wave: 0, unison: 4, detune: 40, fine: 9 } },
-    // Shine: three saws an octave up.
-    { idx: 3, id: 'osc', params: { wave: 0, octave: 1, unison: 3, detune: 25 } },
+    { idx: 2, id: 'osc', params: { wave: 0, unison: 4, detune: 70, fine: 9 } },
+    // Shine: three saws an octave up, over ±20 cents.
+    { idx: 3, id: 'osc', params: { wave: 0, octave: 1, unison: 3, detune: 40 } },
     // Stacks: A and B equal, the octave under them.
-    { idx: 4, id: 'mixer', params: { lvl1: 0.6, lvl2: 0.6, lvl3: 0.25 } },
+    { idx: 4, id: 'mixer', params: { lvl1: 0.6, lvl2: 0.6, lvl3: 0.35 } },
     // Open LP12: the envelope lifts it 1.5 oct at the onset, so a note speaks bright, then settles.
-    { idx: 5, id: 'filter', params: { mode: 1, cutoff: 3000, reso: 0.1, cv_amt: 1.5 } },
+    { idx: 5, id: 'filter', params: { mode: 1, cutoff: 4000, reso: 0.1, cv_amt: 1.5 } },
     // Filter envelope: fast, settles at 0.4; velocity → brighter.
     { idx: 6, id: 'adsr', params: { attack: 0.002, decay: 0.5, sustain: 0.4, release: 0.3, vel_amt: 0.5 } },
     // Amp.
@@ -782,7 +785,7 @@ const SUPERSAW_LEAD: Patch = {
     // The width: chorus, half wet.
     { idx: 9, id: 'chorus', params: { rate: 0.5, depth: 0.5, mix: 0.4 } },
     // Out: sets the house level.
-    { idx: 10, id: 'out', params: { level: 0.36 } },
+    { idx: 10, id: 'out', params: { level: 0.3 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -809,11 +812,14 @@ const SUPERSAW_LEAD: Patch = {
  * Hoover: the rave "hoover" lead. Four detuned saws and a pulse-width-
  * modulated square, each note swooping up an octave into pitch (a pitch
  * envelope on the oscillators' linear FM: the frequency starts at half and
- * rises), through a band-pass that hollows it out, and a deep chorus. Mono
- * with legato glide, so overlapping notes slide like a pitch bend.
- * Measured on C4: −938 cents at 20 ms, −219 at 100 ms, within 50 cents at
- * 0.21 s, settled +9 cents (the detune); centroid 2.5 kHz; lead −15.8 dBFS,
- * example −15.9 dBFS, vel-127 peak 0.46 (the saturator rounds the swoop).
+ * rises), through a resonant band-pass (Q ≈ 2.3 at 1.1 kHz) that hollows it
+ * out, and a deep chorus. Mono with legato glide, so overlapping notes slide
+ * like a pitch bend.
+ * Measured on C4: −853 cents at 20 ms, −216 at 100 ms, within 50 cents at
+ * 0.19 s, settled +7 cents (the detune). Third-octave levels re the total:
+ * 252 Hz (h1) −9.0 dB, 504 −11.8, 800 −7.9, 1008 −4.0, 1270 −8.1: the hump is
+ * at the band (at reso 0.15 with 0.25 dry, h1 was the loudest). Centroid
+ * 2.0 kHz; lead −16.0 dBFS, example −16.6 dBFS, vel-127 peak 0.70.
  */
 const HOOVER: Patch = {
   name: 'Hoover',
@@ -832,10 +838,10 @@ const HOOVER: Patch = {
     { idx: 5, id: 'adsr', params: { attack: 0.001, decay: 0.3, sustain: 0, release: 0.05 } },
     // −env: the oscillators' FM input reads −1 → 0, so the pitch rises from an octave down into the note.
     { idx: 6, id: 'attenuator', params: { amount: -1, offset: 0 } },
-    // The band-pass that makes it a hoover (hollow, nasal).
-    { idx: 7, id: 'filter', params: { mode: 3, cutoff: 1100, reso: 0.15 } },
-    // Some of the full saws back under the band (body).
-    { idx: 8, id: 'mixer', params: { lvl1: 1, lvl2: 0.25 } },
+    // The band-pass that makes it a hoover (hollow, nasal): a clear hump around 1.1 kHz.
+    { idx: 7, id: 'filter', params: { mode: 3, cutoff: 1100, reso: 0.8 } },
+    // A little of the full saws back under the band (body).
+    { idx: 8, id: 'mixer', params: { lvl1: 1, lvl2: 0.08 } },
     // Grit, and it rounds the swoop's peak as it passes the band.
     { idx: 9, id: 'saturator', params: { drive: 0.25, mix: 1 } },
     // Amp.
@@ -845,7 +851,7 @@ const HOOVER: Patch = {
     // Deep chorus (the hoover's smear).
     { idx: 12, id: 'chorus', params: { rate: 0.9, depth: 0.7, mix: 0.5 } },
     // Out: sets the house level.
-    { idx: 13, id: 'out', params: { level: 0.6 } },
+    { idx: 13, id: 'out', params: { level: 1 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
@@ -877,7 +883,7 @@ const HOOVER: Patch = {
  * opens it only a little, so the pluck is a soft "dum" rather than a snap.
  * Measured on chord4: centroid 468 Hz over the first 150 ms (Bright Pluck
  * 1.87 kHz), −20 dB 0.42 s after the onset while held; −15.1 dBFS, example
- * −15.8 dBFS, vel-127 peak 0.85.
+ * −15.9 dBFS, vel-127 peak 0.85.
  */
 const SOFT_PLUCK: Patch = {
   name: 'Soft Pluck',
@@ -977,12 +983,14 @@ const BRIGHT_PLUCK: Patch = {
  * FM Bell: a struck, inharmonic bell. A sine at the note (the prime, which
  * rings longest) plus an FM pair: a sine carrier at 2.76× the note (a bell's
  * second mode, not a harmonic) modulated by a sine at the note, so its
- * sidebands fall between the harmonics (0.76×, 1.76×, 3.76×, ...). The FM
- * index decays faster than the tone, so the clang fades into a purer ring;
- * velocity → index and level.
- * Measured on C5: 43 % of the power off the harmonics over the first 0.5 s,
- * 1 % at 2–3 s (Tine Keys: 0 %); −20 dB 2.1 s after the strike; centroid
- * 1.15 kHz → 0.59 kHz. chord4 −15.0 dBFS, example −19.6 dBFS, vel-127 peak 0.82.
+ * sidebands fall between the harmonics (0.76×, 1.76×, 3.76×, ...). Prime and
+ * carrier share the one amp envelope, so the 2.76× mode rings as long as the
+ * prime; only the FM index decays faster, so the clang (the sidebands) fades
+ * into the two-mode ring. Velocity → index and level.
+ * Measured on C5: 42 % of the power off the harmonics in every window from
+ * 0 to 3 s (Tine Keys: 0 %); −20 dB 2.5 s after the strike; centroid
+ * 1.14 kHz → 0.94 kHz as the clang fades. chord4 −14.6 dBFS, example
+ * −18.7 dBFS, vel-127 peak 0.73.
  */
 const FM_BELL: Patch = {
   name: 'FM Bell',
@@ -999,39 +1007,32 @@ const FM_BELL: Patch = {
     { idx: 4, id: 'vca' },
     // Index envelope: the clang, ~1.5 s; velocity → index.
     { idx: 5, id: 'adsr', params: { attack: 0.001, decay: 1.5, sustain: 0, release: 1, vel_amt: 0.7 } },
-    // The FM layer's own fade: its 2.76× partial rings nearly as long as the prime (a bell's modes all ring).
-    { idx: 6, id: 'vca' },
-    { idx: 7, id: 'adsr', params: { attack: 0.001, decay: 4, sustain: 0, release: 1, vel_amt: 0.3 } },
-    // Prime + FM layer.
-    { idx: 8, id: 'mixer', params: { lvl1: 0.6, lvl2: 0.7 } },
+    // Prime + the FM layer (its 2.76× mode rings under the amp envelope, as long as the prime).
+    { idx: 6, id: 'mixer', params: { lvl1: 0.65, lvl2: 0.55 } },
     // Amp.
-    { idx: 9, id: 'vca' },
+    { idx: 7, id: 'vca' },
     // Amp envelope: struck, a long 5 s ring; velocity → level.
-    { idx: 10, id: 'adsr', params: { attack: 0.001, decay: 5, sustain: 0, release: 1.2, vel_amt: 0.4 } },
+    { idx: 8, id: 'adsr', params: { attack: 0.001, decay: 5, sustain: 0, release: 1.2, vel_amt: 0.4 } },
     // Out: sets the house level.
-    { idx: 11, id: 'out', params: { level: 0.25 } },
+    { idx: 9, id: 'out', params: { level: 0.25 } },
   ],
   cables: [
     { from: [0, 'pitch'], to: [1, 'pitch'] },
     { from: [0, 'pitch'], to: [2, 'pitch'] },
     { from: [0, 'pitch'], to: [3, 'pitch'] },
     { from: [0, 'gate'], to: [5, 'gate'] },
-    { from: [0, 'gate'], to: [7, 'gate'] },
-    { from: [0, 'gate'], to: [10, 'gate'] },
+    { from: [0, 'gate'], to: [8, 'gate'] },
     { from: [0, 'vel'], to: [5, 'vel'] },
-    { from: [0, 'vel'], to: [7, 'vel'] },
-    { from: [0, 'vel'], to: [10, 'vel'] },
+    { from: [0, 'vel'], to: [8, 'vel'] },
     { from: [3, 'out'], to: [4, 'in'] },
     { from: [5, 'env'], to: [4, 'cv'] },
     { from: [4, 'out'], to: [2, 'fm'] },
-    { from: [2, 'out'], to: [6, 'in'] },
-    { from: [7, 'env'], to: [6, 'cv'] },
-    { from: [1, 'out'], to: [8, 'in1'] },
-    { from: [6, 'out'], to: [8, 'in2'] },
-    { from: [8, 'out'], to: [9, 'in'] },
-    { from: [10, 'env'], to: [9, 'cv'] },
-    { from: [9, 'out'], to: [11, 'l'] },
-    { from: [9, 'out'], to: [11, 'r'] },
+    { from: [1, 'out'], to: [6, 'in1'] },
+    { from: [2, 'out'], to: [6, 'in2'] },
+    { from: [6, 'out'], to: [7, 'in'] },
+    { from: [8, 'env'], to: [7, 'cv'] },
+    { from: [7, 'out'], to: [9, 'l'] },
+    { from: [7, 'out'], to: [9, 'r'] },
   ],
 };
 
@@ -1105,7 +1106,7 @@ const NINETIES_ORGAN: Patch = {
  * long release and a chorus.
  * Measured on chord5 over one 2-bar cycle at 124 BPM: the first formant
  * moves 357–1069 Hz (1.6 oct), the centroid 1.2–2.0 kHz; −16.9 dBFS, example
- * −17.4 dBFS, vel-127 peak 0.85.
+ * −17.6 dBFS, vel-127 peak 0.85.
  */
 const FORMANT_PAD: Patch = {
   name: 'Formant Pad',
@@ -1197,6 +1198,8 @@ const NOISE_SWEEP: Patch = {
  * it (a pitch envelope on its linear FM: the "sub drop"), plus a short
  * filtered white-noise burst for the crack, glued by a saturator. The long
  * reverb is the track's reverb send (house patches hold no Reverb). Mono.
+ * Play C3–C5 (the Transition clip writes C4): the sub sits two octaves
+ * under the key, so below C3 it lands under 33 Hz and only the crack is heard.
  * Measured on C4 (a 0.25 s hit): the sub 176 Hz at 20 ms, 118 at 100 ms, 69
  * at 400 ms, landing on C2 (65 Hz); energy above 2 kHz falls 55 dB from the
  * first 50 ms to 300 ms; −20 dB after 0.98 s; −14.4 dBFS, peak 0.28.

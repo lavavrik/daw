@@ -971,6 +971,7 @@ fn house_patches_do_not_allocate() {
         peak
     };
 
+    let mut queued_loads = 0;
     arm();
 
     for p in patches.iter().chain(patches.iter()) {
@@ -980,12 +981,15 @@ fn house_patches_do_not_allocate() {
         for c in &p.cmds {
             ok(e.command(c[0] as u32, c[1], c[2], c[3], c[4]), &p.name);
         }
-        // The load was queued behind the sounding note's declick fade: one
-        // block applies it. A note sent before then would reach the old
-        // rack and be lost with it, so "audible" below would measure the
-        // previous patch's tail (plan 28: Formant Pad after Warm Pad, both
-        // slow swells, read 0.006 that way).
+        // The load was queued behind the sounding note's declick fade
+        // (2 ms, under one block): one block applies it, which the queue
+        // check confirms. A note sent before then would reach the old rack
+        // and be lost with it, so "audible" below would measure the previous
+        // patch's tail (plan 28: Formant Pad after Warm Pad, both slow
+        // swells, read 0.006 that way).
+        queued_loads += usize::from(e.rack_edits_queued(0) > 0);
         render(&mut e, 1);
+        assert_eq!(e.rack_edits_queued(0), 0, "{}: the load is still queued after a block", p.name);
         ok(e.command(OP_NOTE_OFF, 67., 0., 0., 0.), "held note off");
         let mut peak = 0.0f32;
         for notes in p.phrase.steps() {
@@ -1002,6 +1006,8 @@ fn house_patches_do_not_allocate() {
     }
 
     assert_eq!(disarm(), 0, "house patch loads and playback allocated");
+    // The loads really were made while sounding (queued behind the fade).
+    assert!(queued_loads > 0, "no load was queued: the declick path was not exercised");
 }
 
 /// Plan 12: the visual data path. The strip tap switched across track,

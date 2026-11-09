@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
+import { HOUSE_PATCHES } from './builtinPatches';
 import { startApp } from './startApp';
 
 // Plan 22 Task 2: a module's width never depends on its current values. The
@@ -48,13 +49,38 @@ test('sweeping Attack across its range never changes the ADSR width', async ({ p
   expect(new Set([...readouts].map((t) => t.length)).size).toBeGreaterThan(1);
 });
 
-test('every house patch module keeps its width when each param goes to min and max', async ({ page }) => {
-  test.setTimeout(240_000);
+/**
+ * The house patches whose every knob the min/max sweep below drives: a
+ * fixed subset (the sweep costs ~10 s per patch) that between them hold
+ * every module kind any house patch uses, which the test checks. A width
+ * depends on the module kind and the value shown, not on the patch, so
+ * this covers every house panel. If a new patch brings a new kind, add it.
+ */
+const SWEEP = ['Sax', 'Tine Keys', 'Acid Line', 'Hoover', 'Impact'];
+
+/** The module kinds of the patch loaded on track 1 (catalog kind ids). */
+const kinds = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { __daw: { project: { tracks: { modules?: { kind: number }[] }[] } } }).__daw.project.tracks[1].modules!.map((m) => m.kind));
+
+test('every house panel keeps its width when each param goes to min and max', async ({ page }) => {
+  test.setTimeout(120_000);
   await open(page);
   const patches = await page.getByTestId('patch-select').evaluate((sel) =>
     [...sel.querySelectorAll('optgroup')].filter((g) => g.label.startsWith('House')).flatMap((g) => [...g.querySelectorAll('option')].map((o) => o.value)));
-  expect(patches.length).toBe(12);
+  expect(patches).toEqual(HOUSE_PATCHES);
+  // Every kind in the house set is in the swept subset.
+  const all = new Set<number>();
+  const swept = new Set<number>();
   for (const patch of patches) {
+    await loadPatch(page, patch);
+    for (const k of await kinds(page)) {
+      all.add(k);
+      if (SWEEP.includes(patch)) swept.add(k);
+    }
+  }
+  expect([...all].filter((k) => !swept.has(k)), 'module kinds no swept patch holds').toEqual([]);
+  for (const patch of SWEEP) {
     await loadPatch(page, patch);
     const base = await widths(page);
     const sliders = await page.locator(`${PANELS} [role=slider][data-testid^="knob-"]`).evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')!));
@@ -102,12 +128,12 @@ test('a mixer strip keeps its width, and its chips stay inside it, at every knob
 // between neighbours (rackLayout.ts GAP). Before, the flow advanced
 // ceil((width + 8) / 10) units, so the gaps came out anywhere from 8 to 17 px.
 test('in every house patch flow, panel widths are whole grid units and each gap in a row is 10 px', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page);
   const patches = await page.getByTestId('patch-select').evaluate((sel) =>
     [...sel.querySelectorAll('optgroup')].filter((g) => g.label.startsWith('House')).flatMap((g) => [...g.querySelectorAll('option')].map((o) => o.value)));
-  expect(patches.length).toBe(12);
+  expect(patches).toEqual(HOUSE_PATCHES);
   /** What is off: widths not on the grid, gaps in a row other than 10 px; plus the gap count (so an all-wrapped rack can't pass vacuously). */
   const spacing = () =>
     page.locator(PANELS).evaluateAll((els) => {

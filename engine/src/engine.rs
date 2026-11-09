@@ -307,6 +307,13 @@ impl Engine {
         Engine::with_lookahead(sample_rate, crate::dsp::limiter::LOOKAHEAD_SECONDS)
     }
 
+    /// Edits waiting in synth slot `slot`'s declick queue (0 for an empty
+    /// slot). Tests use it to know a queued patch load has applied.
+    #[doc(hidden)]
+    pub fn rack_edits_queued(&self, slot: usize) -> usize {
+        self.synths.rack(slot).map_or(0, |r| r.edits_queued())
+    }
+
     /// [`new`](Engine::new) with another master-limiter lookahead (seconds).
     /// The output is delayed by the lookahead ([`latency`](Engine::latency));
     /// tests that assert exact sample positions of sequenced events use 0.

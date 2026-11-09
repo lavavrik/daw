@@ -123,12 +123,16 @@ const SAX: Notes = ([
 
 // ---- plan 28: A minor ------------------------------------------------------
 
-/** The A minor loop: Am9, Fmaj9, Dm9, Em7 (root first, then the voicing). */
+/**
+ * The A minor loop: Am9, Fmaj9, Dm9, Em7 (root first, then the voicing).
+ * The rolls that skip the root still hear each chord: Em7's voicing keeps an
+ * upper E (G B D E), so it never reads as G major.
+ */
 const AM: number[][] = [
   [57, 60, 64, 67, 71],
   [53, 57, 60, 64, 67],
   [50, 53, 57, 60, 64],
-  [52, 55, 59, 62, 67],
+  [52, 55, 59, 62, 64],
 ];
 
 /** One bar per AM chord: each hit (beat in bar, len, vel) plays AM[i][1..]. */
@@ -170,10 +174,10 @@ const HOOVER: Notes = ([
   [4, 1.6, 57, 115], [5.5, 0.6, 64, 105], [6, 1, 62, 100], [7, 0.9, 60, 95],
 ] as const).map(([b, len, n, v]) => note(n, v, b, len));
 
-/** Soft Pluck: off-beat eighth chords with a pushed last hit. */
+/** Soft Pluck: eighth-note chords, mostly off the beat (two land on it), with a pushed last hit. */
 const SOFT_PLUCKS = amHits([[0.5, 0.4, 95], [1.5, 0.4, 85], [2, 0.4, 100], [3, 0.4, 85], [3.5, 0.4, 110]]);
 
-/** Bright Pluck: a 1/16 riff over each chord (root and voicing), accents on the beat. */
+/** Bright Pluck: a 1/16 riff over each chord's voicing (no root; the second half an octave up), accents on the beat. */
 const BRIGHT_PLUCKS: Notes = Array.from({ length: 64 }, (_, k) => {
   const i = Math.floor(k / 16);
   const j = k % 16;
@@ -194,7 +198,7 @@ const ORGAN_STABS: Notes = AM.flatMap((c, i) => {
 });
 
 /**
- * FM Bell: a bell melody high up, each note with the chord tone a third
+ * FM Bell: a bell melody high up, each note doubled a third or a fourth
  * below (in A minor), the bells left ringing. (start beat, len, top pitch, below, vel).
  */
 const BELLS: Notes = ([

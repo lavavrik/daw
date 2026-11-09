@@ -95,3 +95,48 @@ test('a mixer strip keeps its width, and its chips stay inside it, at every knob
     }
   }
 });
+
+// Plan 22 final fix wave (the owner: "spacing between these patches is still
+// uneven"): every panel is a whole number of 10 px grid units wide
+// (ModulePanel's rounded width), and the flow puts exactly one unit (10 px)
+// between neighbours (rackLayout.ts GAP). Before, the flow advanced
+// ceil((width + 8) / 10) units, so the gaps came out anywhere from 8 to 17 px.
+test('in every house patch flow, panel widths are whole grid units and each gap in a row is 10 px', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page);
+  const patches = await page.getByTestId('patch-select').evaluate((sel) =>
+    [...sel.querySelectorAll('optgroup')].filter((g) => g.label.startsWith('House')).flatMap((g) => [...g.querySelectorAll('option')].map((o) => o.value)));
+  expect(patches.length).toBe(12);
+  /** What is off: widths not on the grid, gaps in a row other than 10 px; plus the gap count (so an all-wrapped rack can't pass vacuously). */
+  const spacing = () =>
+    page.locator(PANELS).evaluateAll((els) => {
+      const rs = els.map((e) => ({ id: e.getAttribute('data-testid')!, placed: e.classList.contains('placed'), r: e.getBoundingClientRect() }));
+      const bad: string[] = [];
+      if (!rs.every((q) => q.placed)) bad.push('not laid out on the grid yet');
+      for (const q of rs) {
+        const off = q.r.width % 10;
+        if (Math.min(off, 10 - off) > 0.5) bad.push(`${q.id} width ${q.r.width}`);
+      }
+      const rows = new Map<number, typeof rs>();
+      for (const q of rs) {
+        const k = Math.round(q.r.top);
+        rows.set(k, [...(rows.get(k) ?? []), q]);
+      }
+      let gaps = 0;
+      for (const row of rows.values()) {
+        row.sort((a, b) => a.r.left - b.r.left);
+        for (let i = 1; i < row.length; i++) {
+          const gap = row[i].r.left - row[i - 1].r.right;
+          gaps++;
+          if (Math.abs(gap - 10) > 0.5) bad.push(`${row[i - 1].id} -> ${row[i].id} gap ${gap}`);
+        }
+      }
+      return { bad, gaps };
+    });
+  for (const patch of patches) {
+    await loadPatch(page, patch);
+    await expect.poll(async () => (await spacing()).bad, { message: patch }).toEqual([]);
+    expect((await spacing()).gaps, patch).toBeGreaterThan(0);
+  }
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fits, flowRack, inBounds, layoutRack, moveTo, nearestFit, toPositions, FLOW_GAP, GRID, MAX_ROW, MAX_X, type Placed } from './rackLayout';
+import { fits, flowRack, inBounds, layoutRack, moveTo, nearestFit, toPositions, GAP, GRID, MAX_ROW, MAX_X, type Placed } from './rackLayout';
 
 const widths = (o: Record<number, number>) => new Map(Object.entries(o).map(([k, v]) => [Number(k), v]));
 const P = (idx: number, row: number, x: number, w: number): Placed => ({ idx, row, x, w });
@@ -12,10 +12,25 @@ describe('flowRack', () => {
   });
 
   it('wraps_by_idx_on_the_grid', () => {
-    // Footprint ceil((w + FLOW_GAP) / GRID): 182 -> 19, 220 -> 23; the third would end at 19 + 23 + 22 = 64 > 60: the third wraps.
-    const p = flowRack([2, 0, 1], widths({ 0: 182, 1: 220, 2: 220 }), 60)!;
-    expect(p).toEqual([P(0, 0, 0, 19), P(1, 0, 19, 22), P(2, 1, 0, 22)]);
-    expect(Math.ceil((182 + FLOW_GAP) / GRID)).toBe(19);
+    // Footprint = width units + GAP: 190 -> 19 + 1, 220 -> 22 + 1; the third would end at 20 + 23 + 22 = 65 > 60: the third wraps.
+    const p = flowRack([2, 0, 1], widths({ 0: 190, 1: 220, 2: 220 }), 60)!;
+    expect(p).toEqual([P(0, 0, 0, 19), P(1, 0, 20, 22), P(2, 1, 0, 22)]);
+    expect(GAP).toBe(1);
+  });
+
+  it('every_gap_in_a_row_is_exactly_one_unit', () => {
+    // The owner's "uneven spacing": panel widths are whole units (ModulePanel), so the
+    // gaps are GAP * GRID = 10 px each, whatever the widths.
+    const p = flowRack([0, 1, 2, 3, 4], widths({ 0: 180, 1: 280, 2: 250, 3: 180, 4: 230 }), 200)!;
+    expect(p.every((q) => q.row === 0)).toBe(true);
+    for (let i = 1; i < p.length; i++) expect(p[i].x - (p[i - 1].x + p[i - 1].w)).toBe(GAP);
+    expect(GAP * GRID).toBe(10);
+  });
+
+  it('fits_exactly_up_to_the_last_column', () => {
+    // 10 + 1 + 10 = 21 columns: fits in 21, wraps in 20 (the trailing gap needs no room).
+    expect(flowRack([0, 1], widths({ 0: 100, 1: 100 }), 21)!.map((q) => q.row)).toEqual([0, 0]);
+    expect(flowRack([0, 1], widths({ 0: 100, 1: 100 }), 20)!.map((q) => q.row)).toEqual([0, 1]);
   });
 
   it('a_panel_wider_than_the_rack_gets_its_own_row', () => {
@@ -25,7 +40,7 @@ describe('flowRack', () => {
 
   it('pinning_the_flow_draws_it_unchanged', () => {
     // The first drag saves the flow placement: drawn from the saved pos it is identical (no jump).
-    const w = widths({ 0: 182, 1: 276.125, 2: 251.3, 3: 180, 4: 226 });
+    const w = widths({ 0: 190, 1: 280, 2: 250, 3: 180, 4: 230 });
     const flow = flowRack([0, 1, 2, 3, 4], w, 80)!;
     const saved = toPositions(flow).map(({ idx, pos }) => ({ idx, pos }));
     expect(layoutRack(saved, w)).toEqual(flow);
@@ -43,9 +58,9 @@ describe('layoutRack', () => {
       [{ idx: 0, pos: { row: 0, x: 0 } }, { idx: 1, pos: { row: 1, x: 2 } }, { idx: 3 }, { idx: 2 }],
       widths({ 0: 100, 1: 50, 2: 31, 3: 20 }),
     )!;
-    // idx 2 then 3 (idx order) after idx 1's right edge (2 + 5 = 7), each after the previous.
-    expect(by(p, 2)).toEqual(P(2, 1, 7, 4));
-    expect(by(p, 3)).toEqual(P(3, 1, 11, 2));
+    // idx 2 then 3 (idx order) GAP after idx 1's right edge (2 + 5 + 1 = 8), each GAP after the previous.
+    expect(by(p, 2)).toEqual(P(2, 1, 8, 4));
+    expect(by(p, 3)).toEqual(P(3, 1, 13, 2));
   });
 
   it('saved_layout_without_overlap_is_drawn_as_saved', () => {
@@ -55,15 +70,24 @@ describe('layoutRack', () => {
   });
 
   it('saved_overlap_resolves_left_to_right', () => {
-    // Older data: A at x 0 was 5 wide, B at x 5; A is now 8 units -> B drawn at 8 (and saved there by the next move).
+    // Older data: A at x 0 was 5 wide, B at x 5; A is now 8 units -> B drawn at 9, GAP after A (and saved there by the next move).
     const p = layoutRack(
       [{ idx: 0, pos: { row: 0, x: 0 } }, { idx: 1, pos: { row: 0, x: 5 } }],
       widths({ 0: 80, 1: 30 }),
     )!;
     expect(by(p, 0).x).toBe(0);
-    expect(by(p, 1).x).toBe(8);
+    expect(by(p, 1).x).toBe(9);
     // Deterministic and idempotent: drawing the resolved layout again changes nothing.
     expect(layoutRack(toPositions(p), widths({ 0: 80, 1: 30 }))).toEqual(p);
+  });
+
+  it('saved_touching_panels_get_a_gap_cascading_right', () => {
+    // Saved before the GAP rule (touching was allowed): drawn GAP apart, the rest of the row follows.
+    const p = layoutRack(
+      [{ idx: 0, pos: { row: 0, x: 0 } }, { idx: 1, pos: { row: 0, x: 5 } }, { idx: 2, pos: { row: 0, x: 8 } }, { idx: 3, pos: { row: 0, x: 30 } }],
+      widths({ 0: 50, 1: 30, 2: 40, 3: 10 }),
+    )!;
+    expect(p.map((q) => q.x)).toEqual([0, 6, 10, 30]); // 3 is far enough already: it stays
   });
 
   it('keeps_empty_rows_as_saved', () => {
@@ -75,10 +99,15 @@ describe('layoutRack', () => {
 
 describe('fits', () => {
   const row = [P(0, 0, 0, 4), P(1, 0, 10, 4), P(2, 1, 0, 3)];
-  it('free_spot_between_neighbours', () => {
-    expect(fits(row, 2, 0, 4)).toBe(true); // touching 0's right edge
-    expect(fits(row, 2, 0, 7)).toBe(true); // touching 1's left edge
-    expect(fits(row, 2, 0, 14)).toBe(true);
+  it('free_spot_between_neighbours_one_unit_clear', () => {
+    expect(fits(row, 2, 0, 5)).toBe(true); // GAP after 0's right edge
+    expect(fits(row, 2, 0, 6)).toBe(true); // GAP before 1's left edge (6 + 3 + 1 = 10)
+    expect(fits(row, 2, 0, 15)).toBe(true);
+  });
+  it('touching_does_not_fit', () => {
+    expect(fits(row, 2, 0, 4)).toBe(false); // touching 0
+    expect(fits(row, 2, 0, 7)).toBe(false); // touching 1
+    expect(fits(row, 2, 0, 14)).toBe(false); // touching 1 on the other side
   });
   it('overlap_does_not_fit', () => {
     expect(fits(row, 2, 0, 3)).toBe(false);
@@ -94,48 +123,49 @@ describe('fits', () => {
 
 describe('nearestFit', () => {
   const row = [P(0, 0, 0, 4), P(1, 0, 10, 4), P(2, 1, 0, 3)];
-  it('snaps_within_reach', () => {
+  it('snaps_within_reach_one_unit_clear', () => {
     expect(nearestFit(row, 2, 0, 5, 2)).toBe(5);
-    expect(nearestFit(row, 2, 0, 3, 2)).toBe(4); // a near miss into 0
-    expect(nearestFit(row, 2, 0, 9, 2)).toBe(7); // a near miss into 1 (7 + 3 = 10)
+    expect(nearestFit(row, 2, 0, 4, 2)).toBe(5); // touching 0: one unit clear of it
+    expect(nearestFit(row, 2, 0, 8, 2)).toBe(6); // a near miss into 1 (6 + 3 + 1 = 10)
   });
   it('null_when_no_spot_in_reach', () => {
     expect(nearestFit([P(0, 0, 0, 10), P(1, 1, 0, 3)], 1, 0, 3, 2)).toBeNull();
   });
   it('ties_go_left', () => {
-    // x 5 is taken (module 1 sits at 5..6); 4 and 6 are both free, one unit away: 4 wins.
-    const s = [P(0, 0, 0, 4), P(1, 0, 5, 1), P(2, 0, 10, 4), P(3, 1, 0, 1)];
-    expect(fits(s, 3, 0, 4)).toBe(true);
-    expect(fits(s, 3, 0, 6)).toBe(true);
-    expect(nearestFit(s, 3, 0, 5, 2)).toBe(4);
+    // x 9 is too close to module 1 (9..10); 7 and 11 are both free, two units away: 7 wins.
+    const s = [P(0, 0, 0, 4), P(1, 0, 9, 1), P(2, 0, 15, 4), P(3, 1, 0, 1)];
+    expect(fits(s, 3, 0, 7)).toBe(true);
+    expect(fits(s, 3, 0, 11)).toBe(true);
+    expect(nearestFit(s, 3, 0, 9, 2)).toBe(7);
   });
   it('never_past_max_x', () => {
     // At MAX_X with the spots to the left taken: x + 1 / + 2 would be out of the saved bounds.
-    const s = [P(0, 0, MAX_X - 3, 3), P(1, 1, 0, 2)];
+    const s = [P(0, 0, MAX_X - 4, 3), P(1, 1, 0, 2)];
     expect(nearestFit(s, 1, 0, MAX_X, 2)).toBe(MAX_X);
     expect(nearestFit([P(0, 0, MAX_X - 4, 5), P(1, 1, 0, 2)], 1, 0, MAX_X, 2)).toBeNull();
   });
 });
 
 describe('moveTo', () => {
-  const start = [P(0, 0, 0, 4), P(1, 0, 4, 4), P(2, 0, 8, 4), P(3, 1, 0, 3)];
+  const start = [P(0, 0, 0, 4), P(1, 0, 5, 4), P(2, 0, 10, 4), P(3, 1, 0, 3)];
 
   it('moves_only_the_module_into_a_free_spot', () => {
-    const r = moveTo(start, 3, 0, 12)!;
-    expect(by(r, 3)).toEqual(P(3, 0, 12, 3));
-    expect([by(r, 0).x, by(r, 1).x, by(r, 2).x]).toEqual([0, 4, 8]);
+    const r = moveTo(start, 3, 0, 15)!;
+    expect(by(r, 3)).toEqual(P(3, 0, 15, 3));
+    expect([by(r, 0).x, by(r, 1).x, by(r, 2).x]).toEqual([0, 5, 10]);
   });
 
   it('overlap_is_refused_nothing_pushed', () => {
     expect(moveTo(start, 3, 0, 1)).toBeNull();
-    expect(moveTo(start, 3, 0, 10)).toBeNull();
-    expect(moveTo(start, 2, 0, 7)).toBeNull(); // a nudge left into a touching neighbour
+    expect(moveTo(start, 3, 0, 12)).toBeNull();
+    expect(moveTo(start, 3, 0, 14)).toBeNull(); // touching 2: refused too
+    expect(moveTo(start, 2, 0, 9)).toBeNull(); // a nudge left into the one-unit gap
   });
 
   it('gap_kept_when_moving_out', () => {
     const r = moveTo(start, 1, 1, 10)!;
     expect(by(r, 0).x).toBe(0);
-    expect(by(r, 2).x).toBe(8); // not closed up
+    expect(by(r, 2).x).toBe(10); // not closed up
     expect(by(r, 1)).toEqual(P(1, 1, 10, 4));
   });
 
@@ -148,13 +178,13 @@ describe('moveTo', () => {
 
   it('emptied_middle_row_stays', () => {
     const s = [P(0, 0, 0, 4), P(1, 1, 0, 4), P(2, 2, 0, 4)];
-    const r = moveTo(s, 1, 0, 6)!;
+    const r = moveTo(s, 1, 0, 6)!; // 6 = 0's right edge + more than GAP
     expect(by(r, 1).row).toBe(0);
     expect(by(r, 2)).toEqual(P(2, 2, 0, 4)); // not renumbered: row 1 is an empty band
   });
 
   it('drop_below_creates_row', () => {
-    const s = [P(0, 0, 0, 4), P(1, 0, 4, 4), P(2, 1, 0, 4)];
+    const s = [P(0, 0, 0, 4), P(1, 0, 5, 4), P(2, 1, 0, 4)];
     expect(by(moveTo(s, 0, 2, 0)!, 0)).toEqual(P(0, 2, 0, 4));
     expect(by(moveTo(s, 0, 99, 0)!, 0).row).toBe(2);
   });
@@ -164,13 +194,13 @@ describe('moveTo', () => {
     const s = [P(0, 0, 0, 4), P(1, 1, 0, 4)];
     expect(moveTo(s, 1, 2, 0)).toEqual(s);
     // Moving it up leaves a trailing empty row: gone, which moves nothing.
-    expect(Math.max(...moveTo(s, 1, 0, 4)!.map((q) => q.row))).toBe(0);
+    expect(Math.max(...moveTo(s, 1, 0, 5)!.map((q) => q.row))).toBe(0);
   });
 
   it('x_never_negative', () => {
     expect(by(moveTo([P(0, 0, 3, 4)], 0, 0, -5)!, 0).x).toBe(0);
-    expect(by(moveTo([P(0, 0, 3, 4), P(1, 1, 0, 2)], 1, -2, 7)!, 1).row).toBe(0);
-    expect(moveTo([P(0, 0, 1, 4), P(1, 1, 0, 2)], 1, 0, -5)).toBeNull(); // clamped to 0: 0..2 overlaps 1..5
+    expect(by(moveTo([P(0, 0, 3, 4), P(1, 1, 0, 2)], 1, -2, 8)!, 1).row).toBe(0);
+    expect(moveTo([P(0, 0, 2, 4), P(1, 1, 0, 2)], 1, 0, -5)).toBeNull(); // clamped to 0: 0..2 touches 2..6
   });
 });
 

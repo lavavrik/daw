@@ -23,13 +23,18 @@ export const GRID = 10;
 /** The saved bounds (state/patches.ts validates them: an out-of-range pos drops the whole rack's layout). */
 export const MAX_ROW = 31;
 export const MAX_X = 1000;
-/** Flow: the gap after each panel (px) before rounding its footprint up to the grid. */
-export const FLOW_GAP = 8;
+/** The minimum gap between two panels of a row, in grid units (exactly this in the flow). */
+export const GAP = 1;
 
 /** x, w in grid units. */
 export interface Placed { idx: number; row: number; x: number; w: number }
 
-const wUnits = (px: number) => Math.max(1, Math.ceil(px / GRID));
+/**
+ * A panel's width in grid units. The rendered width is already a multiple of
+ * GRID (ModulePanel rounds it up), so this is exact; the ceil only matters
+ * for a sub-pixel measurement and for the unit tests' raw widths.
+ */
+const wUnits = (px: number) => Math.max(1, Math.ceil(px / GRID - 1e-6));
 
 /** Sorted by (row, x, idx). Rows keep their numbers: an empty row in the middle stays (an empty band). */
 function ordered(items: Placed[]): Placed[] {
@@ -38,9 +43,9 @@ function ordered(items: Placed[]): Placed[] {
 
 /**
  * The flow layout on the grid: panels by idx, left to right, each taking
- * ceil((width + FLOW_GAP) / GRID) units, wrapping to a new row when the next
- * one would pass `cols` units (a panel wider than `cols` gets a row of its
- * own). null until every panel has a measured width (the rack shows the CSS
+ * its width in units plus GAP, wrapping to a new row when the next one would
+ * pass `cols` units (a panel wider than `cols` gets a row of its own). Every
+ * gap in a row is exactly GAP units (10 px). null until every panel has a measured width (the rack shows the CSS
  * flex flow meanwhile).
  */
 export function flowRack(idxs: readonly number[], widthsPx: ReadonlyMap<number, number>, cols: number): Placed[] | null {
@@ -49,22 +54,22 @@ export function flowRack(idxs: readonly number[], widthsPx: ReadonlyMap<number, 
   let row = 0;
   let x = 0;
   for (const idx of [...idxs].sort((a, b) => a - b)) {
-    const px = widthsPx.get(idx)!;
-    const w = wUnits(px);
+    const w = wUnits(widthsPx.get(idx)!);
     if (x > 0 && x + w > cols) { row++; x = 0; }
     out.push({ idx, row, x, w });
-    x += Math.ceil((px + FLOW_GAP) / GRID);
+    x += w + GAP;
   }
   return out;
 }
 
 /**
  * null when no module has a pos (flow). Saved overlap in a row (older data, a
- * panel that grew) is resolved left to right: each panel starts at or after
- * the previous one's right edge, so one overlap can move several panels of
- * that row (a cascade). A layout without overlap is drawn exactly as saved,
- * empty rows (gaps in the saved row numbers) included. Unpositioned modules go
- * at the end of the bottom row in idx order.
+ * panel that grew, panels saved touching before the GAP rule) is resolved left
+ * to right: each panel starts at least GAP units after the previous one's
+ * right edge, so one overlap can move several panels of that row (a cascade).
+ * A layout that keeps GAP everywhere is drawn exactly as saved, empty rows
+ * (gaps in the saved row numbers) included. Unpositioned modules go at the end
+ * of the bottom row in idx order, GAP apart.
  */
 export function layoutRack(
   mods: readonly { idx: number; pos?: RackPos }[],
@@ -85,14 +90,14 @@ export function layoutRack(
     let edge = 0;
     for (const p of items) {
       p.x = Math.max(p.x, edge);
-      edge = p.x + p.w;
+      edge = p.x + p.w + GAP;
       out.push(p);
     }
     if (row === bottom) {
       const loose = mods.filter((m) => !m.pos).sort((a, b) => a.idx - b.idx);
       for (const m of loose) {
         out.push({ idx: m.idx, row, x: edge, w: w(m.idx) });
-        edge += w(m.idx);
+        edge += w(m.idx) + GAP;
       }
     }
   }
@@ -100,19 +105,19 @@ export function layoutRack(
 }
 
 /**
- * Whether module `idx` fits at (row, x) without overlapping another module of
- * that row (itself excluded; touching is fine). A row past the last one is
- * empty, so it always fits there.
+ * Whether module `idx` fits at (row, x) with at least GAP units to every other
+ * module of that row (itself excluded): no overlap, and no touching either. A
+ * row past the last one is empty, so it always fits there.
  */
 export function fits(placed: readonly Placed[], idx: number, row: number, x: number): boolean {
   const me = placed.find((p) => p.idx === idx);
   if (!me || row < 0 || x < 0) return false;
-  return placed.every((p) => p.idx === idx || p.row !== row || p.x + p.w <= x || x + me.w <= p.x);
+  return placed.every((p) => p.idx === idx || p.row !== row || p.x + p.w + GAP <= x || x + me.w + GAP <= p.x);
 }
 
 /**
- * The fitting x in `row` nearest to `x`, at most `reach` units away (ties go
- * left), within 0..MAX_X, or null. The drag's outline snaps to a free spot
+ * The fitting x in `row` nearest to `x` (GAP from its neighbours: `fits`), at
+ * most `reach` units away (ties go left), within 0..MAX_X, or null. The drag's outline snaps to a free spot
  * just beside the pointer instead of turning red for a near miss.
  */
 export function nearestFit(placed: readonly Placed[], idx: number, row: number, x: number, reach: number): number | null {

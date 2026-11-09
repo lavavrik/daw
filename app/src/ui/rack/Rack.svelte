@@ -31,7 +31,9 @@
   // <svg>, so cables scroll with the panels. `placed` (rackLayout.ts) is the
   // drawn layout on the GRID-px grid, in one of two modes:
   //   - flow (no module has a `pos`): flowRack(idxs, measured widths, the
-  //     rail's width in grid units): panels by idx, left to right, wrapping.
+  //     rail's width in grid units): panels by idx, left to right, wrapping,
+  //     exactly 10 px (GAP) apart: every panel is a whole number of grid
+  //     units wide (ModulePanel rounds its width up), so the gaps are even;
   //     It is on the same grid as a positioned rack, so the first drag pins
   //     exactly what is drawn (plan 22: no module jumps). Until every panel
   //     has been measured, `.content`'s CSS flex-wrap flow shows instead;
@@ -281,7 +283,8 @@
   /**
    * Re-read every panel's size; when one changed, the layout below changes,
    * so measure again once the DOM has it (jacks moved). Converges: positions
-   * never change a panel's size (`width: max-content` when positioned), and
+   * never change a panel's size (its width is the same rounded max-content
+   * in flow and positioned: ModulePanel), and
    * `h` is the NATURAL height: the panel's height minus its stretch spacer
    * (ModulePanel's `[data-stretch]`, the only flex-grow child), which is
    * what a row's min-height (positioned) or the flex stretch (flow) adds.
@@ -1276,8 +1279,9 @@
   .note input { width: 160px; }
   .note .bad { flex-basis: 100%; color: var(--rec); }
   .rail { flex: 1; min-height: 0; min-width: 0; overflow: auto; border-radius: var(--r-md); background: var(--work); box-shadow: var(--well-shadow); }
-  /* Wraps into rows; `width: 100%` (not max-content) so the rail's width is the wrap point. */
-  .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 8px; width: 100%; box-sizing: border-box; padding: 6px; }
+  /* Wraps into rows; `width: 100%` (not max-content) so the rail's width is the wrap point. The CSS flow (before the
+     first measure) uses the same gaps as flowRack: 14 px between rows, 10 px (GAP) between panels. */
+  .content { position: relative; display: flex; flex-wrap: wrap; align-items: stretch; align-content: flex-start; gap: 14px 10px; width: 100%; box-sizing: border-box; padding: 6px; }
   .empty { margin: 8px; color: var(--text-2); }
   /* Drag feedback (plan 18): where the panel lands, and the band for a new row below the last one. */
   .outline, .newrow { position: absolute; box-sizing: border-box; pointer-events: none; border-radius: var(--r-lg); }

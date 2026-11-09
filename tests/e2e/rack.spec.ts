@@ -190,15 +190,25 @@ test('drag module to a new row', async ({ page }) => {
   await expect.poll(async () => maxShift(rects, await panelRects(page))).toBeLessThanOrEqual(1);
 });
 
-/** The largest |Δleft| + |Δtop| (px) of any module in both rect sets, except `skip`. */
+/**
+ * The largest |Δleft| + |Δtop| (px) of any module of `a` in `b`, except `skip`.
+ * A module of `a` missing from `b` (and not skipped) is Infinity: a module that
+ * vanished must fail the check, not pass it.
+ */
 function maxShift(a: Record<number, { left: number; top: number }>, b: Record<number, { left: number; top: number }>, skip: number[] = []) {
   let worst = 0;
   for (const [k, r] of Object.entries(a)) {
     const idx = Number(k);
-    if (skip.includes(idx) || !b[idx]) continue;
+    if (skip.includes(idx)) continue;
+    if (!b[idx]) return Infinity;
     worst = Math.max(worst, Math.abs(b[idx].left - r.left) + Math.abs(b[idx].top - r.top));
   }
   return worst;
+}
+
+/** Waits until module `idx` is drawn somewhere else than in `before` (the DOM has the move). */
+async function settled(page: Page, before: Record<number, { left: number; top: number }>, idx: number) {
+  await expect.poll(async () => maxShift({ [idx]: before[idx] }, await panelRects(page))).toBeGreaterThan(1);
 }
 
 // ---- Plan 22 Task 3: free-spot-only placement --------------------------------
@@ -369,11 +379,12 @@ test('x stays within 0..1000', async ({ page }) => {
   await page.keyboard.press('Alt+ArrowRight');
   expect(await positions(page)).toEqual(pos);
 
-  // Module 7 into the VCA's row, right up against it: a nudge right would overlap it.
+  // Module 7 into the VCA's row, as close as it may go (one grid unit clear, rackLayout GAP): a nudge right
+  // would leave no gap.
   const w7 = Math.ceil(rects[7].width / 10);
-  await dragToGridX(page, 7, 1000 - w7, 6);
+  await dragToGridX(page, 7, 1000 - w7 - 1, 6);
   pos = await positions(page);
-  expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 });
+  expect(pos[7]).toEqual({ row: pos[6]!.row, x: 1000 - w7 - 1 });
   await page.getByTestId('module-header-7').focus();
   await page.keyboard.press('Alt+ArrowRight');
   expect(await positions(page)).toEqual(pos); // refused, nothing written (the VCA is not pushed)
@@ -425,22 +436,25 @@ test('a near miss snaps to the free spot beside a neighbour; Alt+Left into it do
   expect(Math.abs(rects[2].top - rects[1].top)).toBeLessThan(1); // 1 and 2 share the first row, 2 last
   const x1 = (rects[1].left - 6) / 10;
   const end1 = x1 + Math.ceil(rects[1].width / 10); // module 1's right edge (grid units)
-  // Pin with 2 moved 6 units right (free space), then 2 dropped 1 unit into 1: it snaps to 1's right edge.
+  // Pin with 2 moved 6 units right (free space), then 2 dropped 1 unit into 1: it snaps to one grid unit
+  // (rackLayout GAP, 10 px) clear of 1's right edge.
   await dragHeader(page, 2, 60, 0);
   const x2 = (await positions(page))[2]!.x;
   expect(x2).toBe((rects[2].left - 6) / 10 + 6);
   await dragToGridX(page, 2, end1 - 1);
   let pos = await positions(page);
-  expect(pos[2]).toEqual({ row: 0, x: end1 });
+  expect(pos[2]).toEqual({ row: 0, x: end1 + 1 });
   expect(pos[1]).toEqual({ row: 0, x: x1 }); // module 1 never moves
-  // Alt+Left into the touching neighbour: nothing written, the live region says why.
+  const r2 = await panelRects(page);
+  expect(r2[2].left - (r2[1].left + r2[1].width)).toBeCloseTo(10, 0); // the gap on screen: exactly 10 px
+  // Alt+Left into the one-unit gap (it would touch): nothing written, the live region says why.
   await page.getByTestId('module-header-2').focus();
   await page.keyboard.press('Alt+ArrowLeft');
   expect(await positions(page)).toEqual(pos);
   await expect(page.getByTestId('jack-status')).toHaveText(NO_ROOM);
   // Alt+Right into free space moves it.
   await page.keyboard.press('Alt+ArrowRight');
-  await expect.poll(async () => (await positions(page))[2]).toEqual({ row: 0, x: end1 + 1 });
+  await expect.poll(async () => (await positions(page))[2]).toEqual({ row: 0, x: end1 + 2 });
   pos = await positions(page);
   // A deep overlap (5 units into 1) is refused; Esc mid-drag writes nothing either.
   const a = await headerGrip(page, 2);
@@ -494,6 +508,7 @@ test('other modules never move up or down: a drag out of a row, Alt+Down, a remo
   await dragHeader(page, tall, 0, lastBottom + 40 - before[tall].top);
   await expect.poll(() => undoLabel(page)).toBe('Move module');
   expect((await rowOf())[tall]!.row).toBe(rowTops.length); // a new row below the others
+  await settled(page, before, tall); // the move is drawn: only now can "nothing else moved" be checked
   await expect.poll(async () => maxShift(before, await panelRects(page), [tall])).toBeLessThanOrEqual(1);
 
   // 2. Alt+Down out of a row: the first module that fits one row down at the same x (not a new row).
@@ -502,7 +517,8 @@ test('other modules never move up or down: a drag out of a row, Alt+Down, a remo
   const w = (i: number) => Math.ceil(before[i].width / 10);
   const free = (i: number) => {
     const r = pos[i]!.row + 1;
-    return Object.entries(pos).every(([k, q]) => Number(k) === i || q!.row !== r || q!.x + w(Number(k)) <= pos[i]!.x || pos[i]!.x + w(i) <= q!.x);
+    // rackLayout fits: one grid unit (GAP) clear of every row neighbour.
+    return Object.entries(pos).every(([k, q]) => Number(k) === i || q!.row !== r || q!.x + w(Number(k)) + 1 <= pos[i]!.x || pos[i]!.x + w(i) + 1 <= q!.x);
   };
   const lastRow = Math.max(...Object.values(pos).map((q) => q!.row));
   const down = Number(Object.keys(pos).find((k) => pos[Number(k)]!.row < lastRow - 1 && free(Number(k))));
@@ -510,6 +526,7 @@ test('other modules never move up or down: a drag out of a row, Alt+Down, a remo
   await page.getByTestId(`module-header-${down}`).focus();
   await page.keyboard.press('Alt+ArrowDown');
   await expect.poll(async () => (await rowOf())[down]!.row).toBe(pos[down]!.row + 1);
+  await settled(page, before, down);
   await expect.poll(async () => maxShift(before, await panelRects(page), [down])).toBeLessThanOrEqual(1);
 
   // 3. Remove a module of a middle row (not the rack's tallest: that would shrink every band).

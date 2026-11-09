@@ -15,12 +15,33 @@ push rule).
 
 **The grid.** Everything sits on one grid: columns of 10 px (`GRID`) from
 the content padding (6 px), and rows. A panel's `x` and width are in grid
-units (its width rounded up). The pure layout is
-`app/src/ui/rack/rackLayout.ts` (tests: `rackLayout.test.ts`).
+units. The pure layout is `app/src/ui/rack/rackLayout.ts` (tests:
+`rackLayout.test.ts`).
+
+**Even spacing (plan 22 final fix wave).** The owner: "spacing between these
+patches is still uneven". The flow used to advance `ceil((width + 8 px) / 10)`
+units per panel while the panels kept their natural widths (182, 251.3,
+276.1 px …), so the visible gaps came out anywhere from 8 to 17 px. Now:
+
+- Every panel's rendered width is a whole number of grid units:
+  ModulePanel's `width: calc-size(max-content, round(up, size, 10px))`
+  (border-box; `min-width: 180px`), in flow and positioned alike. Nothing in
+  a panel depends on its values (Task 2's fixed chips), so the width is fixed
+  per module kind (and title). `calc-size()` is Chrome-only, as is the app.
+- The flow puts exactly one unit (`GAP`, 10 px) between neighbours.
+- `fits` requires at least `GAP` to every row neighbour, so panels never
+  touch and every gap on screen is a multiple of 10 px. `nearestFit` and
+  `moveTo` go through `fits`, so a near miss snaps to one unit clear of the
+  neighbour, and Alt+arrow into that last unit is refused.
+- A saved layout closer than `GAP` (saved touching before this rule, or a
+  panel that got wider) is resolved like any saved overlap (below). Tidy
+  gives the uniform flow.
+- e2e: `rackwidths.spec.ts` checks every house patch's flow: every width a
+  multiple of 10 px and every gap in a row 10 px (±0.5).
 
 - **Flow** (no module has a `pos`: house patches, older projects, after
   Tidy). `flowRack` places the panels by `idx`, left to right, each taking
-  `ceil((width + 8 px) / 10)` units, and wraps when the next one would pass
+  its width in units plus `GAP` (1 unit), and wraps when the next one would pass
   the rail's inner width (a panel wider than the rail gets a row of its
   own). It is on the same grid as a positioned rack, so the first drag pins
   every module exactly where it is drawn. (Plan 22 root cause: the flow
@@ -45,26 +66,25 @@ units (its width rounded up). The pure layout is
     other modules vertically.
   - Every panel gets `min-height` = the band height (`box-sizing:
     border-box`), so the jacks of every row line up at the bottom. Panels
-    keep `width: max-content`: far to the right, shrink-to-fit would squeeze
-    them.
+    keep their rounded max-content width (above): far to the right,
+    shrink-to-fit would squeeze them.
   - `.content` gets an explicit width (at least 100 %) and height, so the
     rail scrolls both ways.
 
 **Placement rule (plan 22).** Only the module you move ever moves.
 
 - `fits(placed, idx, row, x)` says whether the module fits at (row, x)
-  without overlapping another module of that row. Touching is fine, and a
-  new row below the last always fits.
+  with at least `GAP` (1 unit) to every other module of that row: no
+  overlap and no touching. A new row below the last always fits.
 - `moveTo` moves only that module, and returns null when it doesn't fit
   there. The caller then writes nothing and the module stays. There is no
   push and no swap.
 - Overlap already in the saved data (an older project saved under the push
   rule with different widths, a panel that got wider) is resolved by
   `layoutRack`, deterministically: left to right in each row, each panel
-  starts at or after the previous one's right edge. This cascades: one
-  overlap can move several panels further along that row. A layout without
-  overlap is
-  drawn exactly as saved (`saved_layout_without_overlap_is_drawn_as_saved`).
+  starts at least `GAP` after the previous one's right edge. This cascades: one
+  overlap can move several panels further along that row. A layout that
+  keeps `GAP` everywhere is drawn exactly as saved (`saved_layout_without_overlap_is_drawn_as_saved`).
   Every move saves the whole drawn layout (`toPositions`), so the
   resolution happens once and the next move writes it into the data.
   Drawing never pushes anything that the saved data doesn't already
@@ -114,8 +134,8 @@ handle. A press on its × is not a drag.
     row" band shows;
   - x is `round((pointer − grab offset − 6) / 10)`, then the nearest x
     within 2 units (20 px) where the module fits (`nearestFit`, ties to the
-    left). A near miss beside a neighbour snaps against it instead of
-    turning red;
+    left). A near miss beside a neighbour snaps to one unit (10 px) clear of
+    it instead of turning red;
   - a dashed outline (`rack-drop-outline`) shows where the module would
     land. Where it doesn't fit, the outline stays at the pointer's x and
     turns red, with "No free spot there — the module stays" under it
@@ -182,8 +202,8 @@ disabled when the rack already flows.
     other module stays within 1 px, with the grid shown during the drag;
   - a drop onto another module is refused (red outline, hint, nothing
     written);
-  - a near miss snaps against the neighbour, and Alt+Left into it does
-    nothing;
+  - a near miss snaps to 10 px clear of the neighbour, and Alt+Left into
+    that gap does nothing;
   - a nudge or drop into the VCA at x 1000 is refused;
   - every band is as tall as the rack's tallest panel, and removing that
     panel shrinks them (no ratchet);
@@ -227,13 +247,13 @@ no hex literals (`noHexColors.test.ts`).
   vel colour. A cable takes its output's colour. `theme.test.ts` checks
   every catalog module, category and port gets one.
 - **Widths and heights.** Cards are at least 180 px and as wide as their
-  knob grid (`max-content` when positioned); with the mech controls a row of
+  knob grid, rounded up to the 10 px grid (see "Even spacing"); with the mech controls a row of
   modules is ~420–440 px tall, so the rail scrolls vertically sooner. The
   positioned layout re-measures as before (`rackLayout`); tests that drop a
   module into another row scroll that row into view first (`rack.spec.ts`
   `dragToGridX`). The card has no negative margins: Chrome sizes them
   differently for a flex item (the CSS flow shown before the first measure)
-  and a `width: max-content` panel (drawn), and the two widths must agree,
+  and an absolutely positioned panel (drawn), and the two widths must agree,
   or the grid layout would differ from what was measured.
 
 - **Stable widths (plan 22).** No param value may change a module's

@@ -194,8 +194,8 @@
     <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}><Icon icon={X} size={12} /></button>
   </header>
   <!-- No negative margins anywhere in the card: Chrome counts them differently
-       for a flow (flex item) and a positioned (width: max-content) panel, and
-       the two widths must agree (rackLayout snaps to the measured width). -->
+       for a flow (flex item) and a positioned (absolute) panel, and the two
+       widths must agree (rackLayout places by the measured width). -->
   <div class="body">
     {#if samples && sampleIdx >= 0}
       <label class="smp" title="Drop a sample here (library or Finder), or pick one the project has">
@@ -284,14 +284,24 @@
   /* The faceplate (spec §11; .mech-panel / .mech-head / .screw in theme.css):
      the gradient panel, 8 px corners, a 30 px header strip in the category
      colour (--c), the screws below it and in the bottom corners. Tokens only. */
-  .panel { flex: none; display: flex; flex-direction: column; min-width: 180px; color: var(--text); }
+  /* Width on the rack's 10 px grid (plan 22 final fix wave, the owner's "uneven
+     spacing"): the panel's natural (max-content) width rounded UP to a whole
+     10 px, border-box, in flow and positioned alike. Nothing in a panel depends
+     on its values (Task 2's fixed chips), so this is fixed per module kind and
+     title; rackLayout.ts then keeps exactly 10 px between panels in the flow
+     (and at least that when positioned), so every gap is a multiple of 10.
+     min-width is a multiple of 10 too. Chrome-only app: calc-size() is fine. */
+  .panel {
+    flex: none; display: flex; flex-direction: column; box-sizing: border-box;
+    width: calc-size(max-content, round(up, size, 10px)); min-width: 180px; color: var(--text);
+  }
   .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
   .screw { z-index: 1; }
   header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 18px; border-radius: var(--r-md) var(--r-md) 0 0; cursor: grab; touch-action: none; user-select: none; }
   header:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-  /* Positioned rack: max-content, not shrink-to-fit (far right, the containing block's leftover width would squeeze the panel).
-     border-box: the row's min-height is a measured offsetHeight. */
-  .panel.placed { position: absolute; width: max-content; box-sizing: border-box; }
+  /* Positioned rack: the same rounded max-content width as in flow (above), not shrink-to-fit (far right, the
+     containing block's leftover width would squeeze the panel). border-box: the row's min-height is a measured offsetHeight. */
+  .panel.placed { position: absolute; }
   .panel.lifted { z-index: 3; box-shadow: var(--mech-panel-shadow), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; white-space: nowrap; }

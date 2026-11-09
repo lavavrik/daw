@@ -3,7 +3,8 @@ import { startApp } from './startApp';
 
 // No "Click to start audio" splash (spec 2026-11-15 §10,
 // docs/architecture/audio-path.md "Start-up"). The engine is built at page
-// load; until the browser lets audio start, the ⚙ slot holds the "Audio
+// load; until the browser lets audio start, the top bar's badge slot
+// (`audio-status`, plan 22: empty while all is well) holds the "Audio
 // paused" pill; the first click resumes and still does what it was aimed at.
 //
 // This file runs Chrome WITHOUT --autoplay-policy=no-user-gesture-required
@@ -31,7 +32,7 @@ test('the app renders without a click; the pill says paused; clicking Play start
   await expect(pill).toHaveAttribute('data-state', 'paused');
   await expect(pill).toHaveText('Audio paused — click anywhere to start');
   await expect(pill.locator('svg')).toHaveCount(1); // the SpeakerSlash icon
-  await expect(page.getByTestId('cpu')).toHaveCount(0); // steps aside for the longer pill
+  await expect(page.getByTestId('topbar-warning')).toHaveCount(0); // one badge: the audio state wins
 
   // The first click (on Play) both starts audio and plays.
   await page.getByTestId('play').click();
@@ -39,9 +40,11 @@ test('the app renders without a click; the pill says paused; clicking Play start
   expect(await ctxState(page)).toBe('running');
   await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => playing(page)).toBe(1);
-  // The pill is the ⚙ latency pill again.
+  // The pill is gone (headless Chrome blocks Web MIDI, so the slot may hold
+  // that badge instead); View ▸ Performance reads the running engine.
+  await expect(pill).not.toContainText('Audio paused');
   await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms$/);
-  await expect(page.getByTestId('cpu')).toBeVisible();
+  await expect(page.getByTestId('cpu')).toHaveText(/^CPU \d+% · \d+ drop$/);
   await page.getByTestId('song-stop').click();
 });
 
@@ -67,6 +70,7 @@ test('a context the browser suspends later shows the pill again; clicking it res
   await expect(pill).toHaveAttribute('data-state', 'paused');
   await pill.getByRole('button').click();
   await expect(pill).toHaveAttribute('data-state', 'running');
+  await expect(pill).not.toContainText('Audio paused');
   await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms$/);
 });
 

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
-import { openMenu } from './topbar';
+import { openAudioSettings, openMenu } from './topbar';
 import { makeWav } from './wav';
 import { startApp } from './startApp';
 
@@ -61,11 +61,11 @@ test('every button has a name in the drum, sampler and clip views, the settings 
     expect(await unnamed(page), `${m} menu`).toEqual([]);
   }
   await page.keyboard.press('Escape');
-  // The audio settings panel (a <details>; its summary is the ⚙ pill).
-  await page.getByTestId('settings-button').click();
+  // The audio settings dialog (modal since plan 22; View ▸ Performance opens it).
+  await openAudioSettings(page);
   await expect(page.getByTestId('settings')).toBeVisible();
   expect(await unnamed(page), 'settings').toEqual([]);
-  await page.getByTestId('settings-button').click();
+  await page.keyboard.press('Escape');
   await expect(page.getByTestId('settings')).toBeHidden();
   // A sampler track (dropped on + Add track) and its Instrument view.
   const wav = [...makeWav(220, 300)];

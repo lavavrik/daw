@@ -48,3 +48,17 @@ export function createTipTiming(delay = TIP_DELAY_MS, quick = TIP_QUICK_MS) {
     },
   };
 }
+
+/** Whitespace runs as one space, ends trimmed: how a tip and an element's text are compared. */
+const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * The tip would only repeat what the element already shows (a menu item
+ * titled with its own label): Tooltip.svelte then shows nothing, but still
+ * claims the `title` so the native tip stays off too. An empty tip is never
+ * "redundant" here (there is nothing to show anyway).
+ */
+export function tipRepeatsText(tip: string, visibleText: string): boolean {
+  const t = squash(tip);
+  return t !== '' && t === squash(visibleText);
+}

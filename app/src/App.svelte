@@ -777,7 +777,7 @@
    * The pill's click (and Options ▸ Audio settings… while paused): retry a
    * failed start, else resume. Resolves once audio runs (or failed), with
    * the pill already updated, so a caller can open what the running state
-   * shows (TopBar: the ⚙ Settings).
+   * shows (TopBar: the Audio settings dialog).
    */
   async function resumeAudio(): Promise<void> {
     if (!engine) return startEngine();

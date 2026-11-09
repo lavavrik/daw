@@ -28,11 +28,33 @@
   //             only that layer).
   //   View      Mixer (a toggle), the editor tabs (BottomPanel.pickTab through
   //             `onTab`; a tab the selected track can't show is inert with
-  //             shortcuts.ts tabFor's hint), Reset lane heights
-  //   Options   Keyboard: octave − / + and "Keys play: <track>"; MIDI… (the
-  //             MIDI popover), Audio settings… (the ⚙ Settings panel),
-  //             Metronome, Count-in, Recording offset
+  //             shortcuts.ts tabFor's hint), Reset lane heights, Performance
+  //             (plan 22: a live CPU · dropouts · latency readout, 4 Hz from
+  //             TopBar's telemetry; a click opens Audio settings)
+  //   Options   Keyboard: octave − / + and "Keys play: <track>"; Note names ▸
+  //             (a submenu: Letters / Solfège, aria-pressed); MIDI: <device>
+  //             (the MIDI popover; the label is the status: "MIDI: Arturia
+  //             KeyStep" / "no device" / "blocked"), Audio settings… (the
+  //             modal Settings.svelte), Metronome, Count-in, Recording offset
   //   Help      Keyboard shortcuts… (ShortcutsSheet), About…
+  // Plan 22 moved the top bar's pills in here under their test ids:
+  // keys-target (the track name in Keys play), octave ("Octave N"),
+  // midi-status (the MIDI item's label), cpu / latency / settings-button
+  // (View ▸ Performance). The pills' own octave − / + merged into the menu's
+  // (menu-octave-down / -up).
+  //
+  // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names): one open
+  // at a time (`sub`), flying out to the right of their item. → or Enter /
+  // Space on the item opens it on its first entry (a click opens it without
+  // moving the focus); ↑ ↓ Home End move inside; ← or Esc closes it and puts
+  // the focus back on its item (Esc closes only that layer).
+  //
+  // LOOK (plan 22): the popover has 16 px of padding at the sides and 8 px
+  // at the bottom (the owner: "more breathing room on the right and
+  // bottom"), and every item is exactly the popover's inner width, so the
+  // hover / focus highlight is one full-width band. (Buttons shrink to fit
+  // their text even as display: flex, so items inside a wrapper, e.g. the
+  // old note-name pair, were narrower: `.it` sets width: 100%.)
   //
   // KEYBOARD AND FOCUS. Each menu is a button (aria-expanded, aria-controls)
   // and a popover holding a plain list of buttons: no role=menu (plan 20's
@@ -83,6 +105,7 @@
     PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern,
   } from '../state/pattern-actions';
   import { REC_OFFSET_MAX, REC_OFFSET_MIN, undoTakeTitle } from '../state/recorder';
+  import { BT_LATENCY_MS } from '../audio/restart';
   import type { Recorder, RecStatus } from '../state/recorder';
   import { recPrefs, seedRecPrefs, setCountIn, setRecOffset } from '../state/recPrefs.svelte';
   import type { ProjectSession } from '../project/session';
@@ -103,6 +126,10 @@
   import LibraryList from './LibraryList.svelte';
   import CaretRight from 'phosphor-svelte/lib/CaretRight';
   import { blockInert, inertItem } from './inertItem';
+  import type { MidiStatus } from '../input/midi';
+  import { midiLabel, midiTip } from './topStatus';
+  import Gauge from 'phosphor-svelte/lib/Gauge';
+  import TextAa from 'phosphor-svelte/lib/TextAa';
   import ArrowClockwise from 'phosphor-svelte/lib/ArrowClockwise';
   import ArrowCounterClockwise from 'phosphor-svelte/lib/ArrowCounterClockwise';
   import ArrowsVertical from 'phosphor-svelte/lib/ArrowsVertical';
@@ -148,6 +175,8 @@
     octave,
     onOctave,
     onTab = () => {},
+    midi = { state: 'no-devices', devices: [] },
+    perf = { cpu: 0, dropouts: 0, latencyMs: 0, latencyText: '' },
     onOpenMidi,
     onOpenSettings,
     alsoInside = null,
@@ -167,10 +196,14 @@
     onOctave: (o: number) => void;
     /** View ▸ an editor tab (App: BottomPanel.pickTab). */
     onTab?: (t: PanelTab) => void;
-    /** Options ▸ MIDI…: open the MIDI popover; Esc in it returns the focus to `back`. */
+    /** The MIDI status (Options ▸ MIDI…'s label). */
+    midi?: MidiStatus;
+    /** View ▸ Performance's live readout (TopBar's 4 Hz telemetry). */
+    perf?: { cpu: number; dropouts: number; latencyMs: number; latencyText: string };
+    /** Options ▸ MIDI…: open the MIDI popover under `back` (the Options button); Esc in it returns the focus there. */
     onOpenMidi: (back: HTMLElement) => void;
-    /** Options ▸ Audio settings…: open the Settings panel. */
-    onOpenSettings: () => void;
+    /** Options ▸ Audio settings…, View ▸ Performance: open the Settings dialog; its close returns the focus to `back`. */
+    onOpenSettings: (back: HTMLElement | null) => void;
     /** Besides the menu row, presses / focus here are not "outside" (TopBar's name button: it toggles File itself). */
     alsoInside?: HTMLElement | null;
     /** The open menu's name (bindable: TopBar's name button shows File's state). */
@@ -198,7 +231,7 @@
     confirming = null;
     renaming = false;
     saving = false;
-    libOpen = false;
+    sub = null;
     opener = from;
     open = m;
   }
@@ -206,7 +239,7 @@
     confirming = null;
     renaming = false;
     saving = false;
-    libOpen = false;
+    sub = null;
     open = null;
   }
   /** Close and give the focus back to the opener (after a command, Escape), never to <body>. */
@@ -368,7 +401,7 @@
       open = 'File';
       renaming = false;
       saving = false;
-      libOpen = false;
+      sub = null;
       confirming = null;
     }
     run(cmd);
@@ -429,9 +462,6 @@
   let saveInput = $state<HTMLInputElement | null>(null);
   /** Why Save to project library… can't run (no pattern track, a full library). */
   const saveWhy = $derived(ptrack ? saveBlocked(p) : NO_PATTERNS);
-  let libOpen = $state(false);
-  let libBtn = $state<HTMLButtonElement | null>(null);
-  let libSub = $state<HTMLElement | null>(null);
   async function startSave() {
     if (!ptrack || !cur) return;
     draft = defaultLibraryName(ptrack, cur.name);
@@ -453,23 +483,35 @@
       void tick().then(() => panel()?.querySelector<HTMLElement>('[data-testid="menu-pattern-save"]')?.focus());
     }
   }
-  const subItems = () => (libSub ? [...libSub.querySelectorAll<HTMLElement>('button, input')] : []);
-  async function openLib(focusFirst: boolean) {
-    libOpen = true;
+  // ---- submenus (SUBMENUS above) --------------------------------------------
+  type SubName = 'lib' | 'notes';
+  /** The open submenu (one at a time). */
+  let sub = $state<SubName | null>(null);
+  const subBtns: Partial<Record<SubName, HTMLButtonElement>> = {};
+  let subEl = $state<HTMLElement | null>(null);
+  const subItems = () => (subEl ? [...subEl.querySelectorAll<HTMLElement>('button, input')] : []);
+  async function openSub(s: SubName, focusFirst: boolean) {
+    sub = s;
     await tick();
-    if (focusFirst) (subItems()[0] ?? libSub?.querySelector<HTMLElement>('[tabindex]'))?.focus();
+    if (focusFirst) (subItems()[0] ?? subEl?.querySelector<HTMLElement>('[tabindex]'))?.focus();
   }
-  function closeLib() {
-    libOpen = false;
-    libBtn?.focus();
+  function closeSub() {
+    const back = sub ? subBtns[sub] : null;
+    sub = null;
+    back?.focus();
   }
-  function libBtnKey(e: KeyboardEvent) {
+  /** A click on a submenu's item: toggle it (Enter / Space are clicks with detail 0: open on its first entry). */
+  function subClick(s: SubName, e: MouseEvent) {
+    if (sub === s) closeSub();
+    else void openSub(s, e.detail === 0);
+  }
+  function subBtnKey(e: KeyboardEvent, s: SubName) {
     if (e.key !== 'ArrowRight') return;
     e.preventDefault();
     e.stopPropagation(); // not panelKey's "next menu"
-    void openLib(true);
+    void openSub(s, true);
   }
-  /** Keys in the submenu: ↑ ↓ Home End move inside it; ← and Esc go back to Load from library. */
+  /** Keys in a submenu: ↑ ↓ Home End move inside it; ← and Esc go back to its item. */
   function subKey(e: KeyboardEvent) {
     if (e.defaultPrevented || e.target instanceof HTMLInputElement) return; // the rename field's own keys
     const items = subItems();
@@ -482,7 +524,7 @@
     else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
       e.preventDefault(); // Esc: the document listener leaves the menu open (topmost layer only)
       e.stopPropagation();
-      closeLib();
+      closeSub();
       return;
     } else return;
     e.preventDefault();
@@ -524,9 +566,11 @@
     closeToOpener();
     if (back) onOpenMidi(back);
   }
-  function openSettings() {
+  /** Options ▸ Audio settings…, View ▸ Performance: the dialog; its close gives the focus back to menu `m`'s button. */
+  function settingsFrom(m: MenuName) {
+    const back = btns[m] ?? null;
     closeToOpener();
-    onOpenSettings();
+    onOpenSettings(back);
   }
 
   // ---- Help ----------------------------------------------------------------
@@ -630,13 +674,13 @@
             </button>
             <div class="subwrap">
               <button
-                class="it" data-testid="menu-pattern-load" bind:this={libBtn} aria-expanded={libOpen} aria-controls="menu-pattern-library"
+                class="it" data-testid="menu-pattern-load" bind:this={subBtns.lib} aria-expanded={sub === 'lib'} aria-controls="menu-pattern-library"
                 title="Copy a saved pattern into the selected track as a new pattern"
-                onclick={(e) => (libOpen ? closeLib() : void openLib(e.detail === 0))} onkeydown={libBtnKey}
+                onclick={(e) => subClick('lib', e)} onkeydown={(e) => subBtnKey(e, 'lib')}
               ><Icon icon={Books} /><span class="l">Load from library</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
-              {#if libOpen}
+              {#if sub === 'lib'}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div class="sub" id="menu-pattern-library" bind:this={libSub} onkeydown={subKey}>
+                <div class="sub" id="menu-pattern-library" bind:this={subEl} onkeydown={subKey}>
                   <LibraryList {p} {engine} track={ptrack} testid="menu-library" onloaded={closeToOpener} />
                 </div>
               {/if}
@@ -659,24 +703,50 @@
             title={laneView.heights.size ? 'Give every automation lane its default height' : 'No lane was resized'}
             onclick={() => view(() => (laneView.heights = new Map()))}
           ><Icon icon={ArrowsVertical} /><span class="l">Reset lane heights</span></button>
+          <hr />
+          <!-- Live (4 Hz): the test ids of the old CPU and ⚙ latency pills. -->
+          <button
+            class="it perf" data-testid="settings-button"
+            title="Audio thread CPU load · {perf.dropouts} dropouts (missed audio blocks) this session · {perf.latencyText}. Click for audio settings."
+            onclick={() => settingsFrom('View')}
+          >
+            <Icon icon={Gauge} /><span class="l">Performance</span>
+            <span class="pv" data-testid="cpu" class:bad={perf.dropouts > 0}>CPU {perf.cpu}% · {perf.dropouts} drop</span>
+            <span class="pv" data-testid="latency" class:warn={perf.latencyMs > BT_LATENCY_MS}>{Math.round(perf.latencyMs)} ms</span>
+          </button>
         {:else if m === 'Options'}
           <p class="sec"><Icon icon={Keyboard} size={12} /> Keyboard</p>
           <div class="oct" role="group" aria-label="Octave">
-            <span class="l">Octave <b data-testid="menu-octave">{octave}</b></span>
+            <span class="l" data-testid="octave">Octave <b data-testid="menu-octave">{octave}</b></span>
             <button class="sq" data-testid="menu-octave-down" aria-label="Octave down" title="Octave down (Z)" use:inertItem={octave <= 0 ? 'Already the lowest octave' : null} onclick={() => onOctave(octave - 1)}>−</button>
             <button class="sq" data-testid="menu-octave-up" aria-label="Octave up" title="Octave up (X)" use:inertItem={octave >= 8 ? 'Already the highest octave' : null} onclick={() => onOctave(octave + 1)}>+</button>
           </div>
           <p class="info" data-testid="menu-keys-target" title="The computer keyboard and MIDI play the selected drum or synth track">
-            Keys play: <b>{keysTrack?.name ?? '(no track)'}</b>
+            Keys play: {#if keysTrack}<span class="sw" style:background={keysTrack.color}></span>{/if}<b data-testid="keys-target">{keysTrack?.name ?? '(no track)'}</b>
           </p>
-          <!-- Two pressed-state buttons (the menu is plain buttons, no ARIA menu / radio roles). -->
-          <div role="group" aria-label="Note names">
-            <button class="it" aria-pressed={noteNames.style === 'letters'} data-testid="menu-notenames-letters" title="C D E" onclick={() => setNoteNames('letters')}><span class="l">Note names: C D E</span>{#if noteNames.style === 'letters'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
-            <button class="it" aria-pressed={noteNames.style === 'solfege'} data-testid="menu-notenames-solfege" title="Do Re Mi" onclick={() => setNoteNames('solfege')}><span class="l">Note names: Do Re Mi</span>{#if noteNames.style === 'solfege'}<span class="ck"><Icon icon={Check} /></span>{/if}</button>
+          <div class="subwrap">
+            <button
+              class="it" data-testid="menu-notenames" bind:this={subBtns.notes} aria-expanded={sub === 'notes'} aria-controls="menu-notenames-sub"
+              onclick={(e) => subClick('notes', e)} onkeydown={(e) => subBtnKey(e, 'notes')}
+            ><Icon icon={TextAa} /><span class="l">Note names</span><span class="cur">{noteNames.style === 'letters' ? 'C D E' : 'Do Re Mi'}</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+            {#if sub === 'notes'}
+              <!-- Two pressed-state buttons (the menu is plain buttons, no ARIA menu / radio roles). -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="sub notes" id="menu-notenames-sub" role="group" aria-label="Note names" bind:this={subEl} onkeydown={subKey}>
+                <button class="it" aria-pressed={noteNames.style === 'letters'} data-testid="menu-notenames-letters" onclick={() => setNoteNames('letters')}>
+                  <span class="l">Letters</span><span class="ex">C D E</span><span class="ck" class:off={noteNames.style !== 'letters'}><Icon icon={Check} /></span>
+                </button>
+                <button class="it" aria-pressed={noteNames.style === 'solfege'} data-testid="menu-notenames-solfege" onclick={() => setNoteNames('solfege')}>
+                  <span class="l">Solfège</span><span class="ex">Do Re Mi</span><span class="ck" class:off={noteNames.style !== 'solfege'}><Icon icon={Check} /></span>
+                </button>
+              </div>
+            {/if}
           </div>
           <hr />
-          <button class="it" data-testid="menu-midi" onclick={openMidi}><Icon icon={Plugs} /><span class="l">MIDI…</span></button>
-          <button class="it" data-testid="menu-audio-settings" onclick={openSettings}><Icon icon={Gear} /><span class="l">Audio settings…</span></button>
+          <button class="it" data-testid="menu-midi" title={midiTip(midi)} onclick={openMidi}>
+            <Icon icon={Plugs} /><span class="l" data-testid="midi-status">MIDI: {midiLabel(midi)}</span>
+          </button>
+          <button class="it" data-testid="menu-audio-settings" onclick={() => settingsFrom('Options')}><Icon icon={Gear} /><span class="l">Audio settings…</span></button>
           <hr />
           <button class="it" data-testid="menu-metronome" aria-pressed={p.metronome} onclick={() => setMetronome(p, engine, !p.metronome)}>
             <Icon icon={Metronome} /><span class="l">Metronome</span>{#if p.metronome}<span class="ck"><Icon icon={Check} /></span>{/if}
@@ -720,16 +790,19 @@
   /* Short windows (the 40 px top bar, TopBar.svelte): a 16 px row. */
   @media (max-height: 739px) { .mb { height: 16px; line-height: 16px; } }
 
-  /* The popover: a --panel card with the lift (as plan 20's ⋯ menu). */
+  /* The popover: a --panel card with the lift (as plan 20's ⋯ menu). 16 px
+     sides, 8 px bottom (plan 22: LOOK in the header comment). */
   .pop[hidden] { display: none; }
   .pop {
-    position: absolute; top: calc(100% + 4px); left: -3px; z-index: 10; width: max-content; min-width: 210px; max-width: 300px;
-    display: flex; flex-direction: column; gap: 1px; padding: 6px; white-space: normal;
+    position: absolute; top: calc(100% + 4px); left: -3px; z-index: 10; width: max-content; min-width: 210px; max-width: 320px;
+    display: flex; flex-direction: column; gap: 1px; padding: 6px 16px 8px; white-space: normal;
     background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
     font: 500 var(--fs-ctl) var(--font-ui);
   }
+  /* width 100%: a button shrinks to its text even as display: flex, and the
+     highlight must be the popover's full inner width (plan 22). */
   .it {
-    display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
+    display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 26px; padding: 0 8px; border: 0; border-radius: var(--r-sm);
     background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer;
   }
   .it :global(svg) { flex: none; color: var(--text-2); }
@@ -740,6 +813,17 @@
   .it:focus-visible, .sq:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .ck { display: inline-flex; }
   .ck :global(svg) { color: var(--accent); }
+  /* The unchecked note-name entry keeps the check's room (both rows line up). */
+  .ck.off { visibility: hidden; }
+  /* Note names ▸: the current style beside the item; the example after each entry. */
+  .cur, .ex { font: 500 var(--fs-lbl) var(--font-ui); color: var(--text-2); }
+  .sub.notes { min-width: 180px; }
+  .sw { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; }
+  /* View ▸ Performance: live values in mono (tabular), a warning in a fill
+     (never --rec / --accent text on --panel: ui-theme.md "Rules of use"). */
+  .pv { padding: 1px 5px; border-radius: var(--r-xs); background: var(--well); font: 500 var(--fs-lbl) var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); }
+  .pv.bad { background: var(--rec); color: var(--on-color); font-weight: 700; }
+  .pv.warn { background: var(--accent); color: var(--on-color); font-weight: 700; }
   kbd { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text-2); }
   hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
   .sec {
@@ -771,8 +855,8 @@
   .subwrap { position: relative; display: flex; flex-direction: column; }
   .chev { display: inline-flex; }
   .sub {
-    position: absolute; left: calc(100% + 6px); top: -6px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
-    max-height: min(360px, 60vh); overflow-y: auto; padding: 6px;
+    position: absolute; left: calc(100% + 16px); top: -6px; z-index: 11; width: max-content; min-width: 240px; max-width: 320px;
+    max-height: min(360px, 60vh); overflow-y: auto; padding: 6px 16px 8px;
     background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift);
   }
 </style>

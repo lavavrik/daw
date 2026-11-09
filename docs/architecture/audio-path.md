@@ -75,20 +75,21 @@ rule can't be bypassed, but it needs no "Click to start audio" screen:
   midi.md "When MIDI access is requested").
 - **The audio pill** (`ui/AudioStatusPill.svelte`, state in
   `audio/audioStatus.ts`; `data-testid="audio-status"` with `data-state`)
-  sits in the ⚙ latency slot: a SpeakerSlash icon and "Audio paused —
-  click anywhere to start" (`--accent`) while the context is suspended, the
-  ⚙ latency once it runs (`AudioEngine.onStateChange` follows
-  `statechange`), and "Audio failed — retry" (`--rec`, the error in its
+  sits in the top bar's one badge slot at the right end (plan 22: empty
+  while all is well): a SpeakerSlash icon and "Audio paused — click
+  anywhere to start" (`--accent`) while the context is suspended, nothing
+  (or another warning: dropouts, MIDI blocked, high latency) once it runs
+  (`AudioEngine.onStateChange` follows `statechange`), and "Audio failed —
+  retry" (`--rec`, the error in its
   tooltip) if `AudioEngine.start()` threw or `resume()` was refused (an
   exception in `onstarted` is a bug, not an audio failure: it surfaces
   unhandled). Its click resumes, or retries the start. With no engine yet
   App shows a bare bar holding it: a quiet "Starting audio…" while the
   engine is built (a hanging start is never a blank page), or the failed
-  pill. The CPU pill (and below 1400 px the MIDI pill) steps aside while it
-  shows, so the bar keeps one row at 1280 px. Options ▸ Audio settings…
-  while paused awaits the resume, then opens Settings; the Settings panel
-  closes whenever the status kind changes (it never stays mounted, and
-  polling, inside a hidden ⚙).
+  pill. It is the only thing at the right, so the bar keeps one row at
+  1280 px (the mini spectrum gives up its room). Options ▸ Audio settings…
+  (or View ▸ Performance) while paused awaits the resume, then opens the
+  Settings dialog.
 - **Banners:** the start screen's other note, "Autosave is off — this
   project is open in another tab" (`autosave-off`), is a banner from mount on.
 - **Tests:** Playwright launches Chrome with
@@ -249,12 +250,13 @@ overlay shows them). The worklet accepts `{type:'test-fail'}` to make the next
 
 ## Restarting the engine (audio settings)
 
-The ⚙ readout at the right of the top bar opens **Settings**
-(`app/src/ui/Settings.svelte`): the latency hint (`interactive`, the default;
+**Settings** (`app/src/ui/Settings.svelte`, a modal dialog since plan 22;
+opened from Options ▸ Audio settings…, View ▸ Performance and the top bar's
+dropout / latency badge): the latency hint (`interactive`, the default;
 `balanced`; `playback`; or a custom buffer in ms, passed as seconds), a 4 Hz
 readout of the sample rate, `baseLatency`, `outputLatency` and their total, and
 the Bluetooth hint (no buffer setting removes the 100–300 ms a wireless output
-adds; it turns orange above 40 ms, as does the ⚙ readout). The hint is saved in
+adds; it turns orange above 40 ms, and the top bar shows a latency badge). The hint is saved in
 `localStorage` (`daw.latencyHint`) and used by the next start
 (App's page-load `AudioEngine.start({ latencyHint })`).
 

@@ -30,6 +30,15 @@ function measure(page: Page) {
   });
 }
 
+/** A fake Web MIDI (connectMidi reads inputs / onstatechange): one input named `name`, or none. Headless Chrome blocks Web MIDI otherwise. */
+async function fakeMidi(page: Page, name: string | null) {
+  await page.addInitScript((name) => {
+    const inputs = new Map(name ? [['fake-1', { id: 'fake-1', name, state: 'connected', onmidimessage: null }]] : []);
+    const access = { inputs, onstatechange: null };
+    Object.defineProperty(navigator, 'requestMIDIAccess', { value: () => Promise.resolve(access), configurable: true });
+  }, name);
+}
+
 test('one row at 1280×800 with no horizontal scroll, also with the web fonts blocked', async ({ page }) => {
   // Fonts blocked (Review focus: offline): the stacks fall back to system-ui / ui-monospace.
   await page.route(/\.(woff2?|ttf)(\?.*)?$/, (r) => r.abort());
@@ -37,14 +46,14 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   await page.getByTestId('play').click();
   await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
   await page.evaluate(() => {
-    (window as Any).__daw.engine.dropouts = () => 123; // the widest CPU pill
+    (window as Any).__daw.engine.dropouts = () => 123; // the widest badge
   });
-  await expect(page.getByTestId('cpu')).toContainText('123');
+  await expect(page.getByTestId('topbar-warning')).toHaveText('123 dropouts');
   const out = await measure(page);
   expect(out.rows).toBe(1);
   expect(out.height).toBeLessThanOrEqual(65);
   expect(out.docWidth).toBeLessThanOrEqual(1280);
-  for (const id of ['project-menu', 'menu-file', 'menu-help', 'undo', 'redo', 'play', 'song-stop', 'loop-toggle', 'timer', 'master-volume', 'topbar-spectrum', 'keys-target', 'cpu', 'settings-button']) {
+  for (const id of ['project-menu', 'menu-file', 'menu-help', 'undo', 'redo', 'play', 'song-stop', 'loop-toggle', 'timer', 'master-volume', 'topbar-spectrum', 'topbar-warning']) {
     await expect(page.getByTestId(id)).toBeInViewport();
   }
   // The timer's box already fits bar 999: a 3-digit bar moves nothing.
@@ -57,48 +66,135 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   expect((await measure(page)).rows).toBe(1);
 });
 
-test('one row at 1280×800 with the CPU pill red (dropouts) and a long MIDI device name: the MIDI pill ellipsizes', async ({ page }) => {
+// Plan 22 Task 1: Keys, octave, MIDI, CPU and latency moved into the menus;
+// the top right is empty until something needs attention.
+test('the top right is empty in the normal state; the pills live in the menus', async ({ page }) => {
   const NAME = 'Arturia KeyStep Pro Mk II USB MIDI Interface Port 1';
-  // A fake Web MIDI with one input whose name is long (connectMidi reads inputs / onstatechange).
-  await page.addInitScript((name) => {
-    const input = { id: 'fake-1', name, state: 'connected', onmidimessage: null };
-    const access = { inputs: new Map([['fake-1', input]]), onstatechange: null };
-    Object.defineProperty(navigator, 'requestMIDIAccess', { value: () => Promise.resolve(access), configurable: true });
-  }, NAME);
+  await fakeMidi(page, NAME);
   await start(page);
-  const midi = page.getByTestId('midi-status');
-  await expect(midi).toHaveAttribute('title', `MIDI: ${NAME}`);
-  await page.getByTestId('play').click();
-  await page.evaluate(() => {
-    (window as Any).__daw.engine.dropouts = () => 123;
+  const slot = page.getByTestId('audio-status');
+  await expect(slot).toHaveAttribute('data-state', 'running');
+  await expect(page.getByTestId('topbar-warning')).toHaveCount(0);
+  await expect(slot).toBeEmpty();
+  expect((await slot.boundingBox())?.width ?? 0).toBe(0);
+  // Nothing at the right of the mini spectrum but the spacer and the (empty) slot.
+  const right = await page.evaluate(() => {
+    const kids = [...document.querySelector('header.bar')!.children] as HTMLElement[];
+    const mini = kids.findIndex((k) => k.dataset.testid === 'topbar-spectrum');
+    return kids.slice(mini + 1).filter((k) => !k.classList.contains('spacer') && k.getBoundingClientRect().width > 0).map((k) => k.className);
   });
-  await expect(page.getByTestId('cpu')).toHaveClass(/bad/);
-  await expect(page.getByTestId('cpu')).toContainText('123');
-  const out = await measure(page);
-  expect(out.rows).toBe(1);
-  expect(out.docWidth).toBeLessThanOrEqual(1280);
-  for (const id of ['midi-status', 'cpu', 'settings-button', 'keys-target', 'topbar-spectrum']) await expect(page.getByTestId(id)).toBeInViewport();
-  // The name is cut with an ellipsis inside the pill's max width (full text in the tooltip).
-  const cut = await midi.evaluate((b) => {
-    const t = b.querySelector<HTMLElement>('.ell')!;
-    return { pill: b.getBoundingClientRect().width, clipped: t.scrollWidth > t.clientWidth, ellipsis: getComputedStyle(t).textOverflow };
-  });
-  expect(cut.pill).toBeLessThanOrEqual(120);
-  expect(cut).toMatchObject({ clipped: true, ellipsis: 'ellipsis' });
+  expect(right).toEqual([]);
+  // The moved controls, under their test ids, in the menus.
+  await openMenu(page, 'Options');
+  await expect(page.getByTestId('keys-target')).toHaveText('Drums');
+  await expect(page.getByTestId('octave')).toHaveText(/^Octave \d$/);
+  await expect(page.getByTestId('midi-status')).toHaveText(`MIDI: ${NAME}`);
+  // A long device name is cut with an ellipsis inside the menu (full name in the tooltip).
+  const midiItem = page.getByTestId('menu-midi');
+  await expect(midiItem).toHaveAttribute('title', `MIDI: ${NAME}`);
+  expect(await page.getByTestId('midi-status').evaluate((l) => l.scrollWidth > l.clientWidth && getComputedStyle(l).textOverflow === 'ellipsis')).toBe(true);
+  await openMenu(page, 'View');
+  await expect(page.getByTestId('cpu')).toHaveText(/^CPU \d+% · 0 drop$/);
+  await expect(page.getByTestId('latency')).toHaveText(/^\d+ ms$/);
 });
 
-test('short windows (1280×720): the compact 40 px bar, still one row', async ({ page }) => {
+test('View ▸ Performance: live CPU, dropouts and latency; a click opens Audio settings, Esc gives the focus back to View', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'View');
+  const item = page.getByTestId('settings-button');
+  await expect(item).toBeVisible();
+  await expect(item).toContainText('Performance');
+  await expect(page.getByTestId('cpu')).toHaveText(/^CPU \d+% · \d+ drop$/);
+  // Live while the menu is open (4 Hz from the top bar's telemetry).
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 7));
+  await expect(page.getByTestId('cpu')).toContainText('· 7 drop');
+  await expect(page.getByTestId('cpu')).toHaveClass(/\bbad\b/);
+  await item.click();
+  await expect(page.getByTestId('settings')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('settings')).toBeHidden();
+  await expect(page.getByTestId('menu-view')).toBeFocused();
+});
+
+test('the warning badge: dropouts in the last 10 s, MIDI blocked, high latency; a click does the fix', async ({ page }) => {
+  await fakeMidi(page, null);
+  await start(page);
+  const badge = page.getByTestId('topbar-warning');
+  await expect(badge).toHaveCount(0);
+
+  // Dropouts: "N dropouts", red; a click opens Audio settings. (The 10 s
+  // window itself is unit-tested: topStatus.test.ts.)
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 2));
+  await expect(badge).toHaveText('2 dropouts');
+  await expect(badge).toHaveAttribute('data-kind', 'dropouts');
+  await badge.click();
+  await expect(page.getByTestId('settings')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(badge).toBeFocused(); // the focus back on what opened it
+  // A lower total is a new engine (an audio restart): the count starts over.
+  await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 0));
+  await expect(badge).toHaveCount(0);
+
+  // High latency (Bluetooth-size): the orange badge, which opens Audio settings.
+  await page.evaluate(() => ((window as Any).__daw.engine.latencyMs = () => 180));
+  await expect(badge).toHaveText('180 ms latency');
+  await expect(badge).toHaveAttribute('data-kind', 'latency');
+  await page.mouse.move(600, 500); // not on the badge: its title is back from the tooltip layer
+  await expect(badge).toHaveAttribute('title', /Bluetooth/);
+  await badge.click();
+  await expect(page.getByTestId('settings')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('settings')).toBeHidden();
+});
+
+test('MIDI blocked shows the badge; it opens the MIDI popover, which says so; a second click closes it', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'requestMIDIAccess', { value: () => Promise.reject(new DOMException('denied', 'SecurityError')), configurable: true });
+  });
+  await start(page);
+  const badge = page.getByTestId('topbar-warning');
+  await expect(badge).toHaveText('MIDI blocked');
+  await expect(badge).toHaveAttribute('data-kind', 'midi');
+  await expect(page.getByTestId('midi-status')).toHaveText('MIDI: blocked'); // Options ▸ MIDI…'s label
+  await badge.click();
+  const pop = page.getByTestId('midi-popover');
+  await expect(pop).toBeVisible();
+  await expect(page.getByTestId('midi-devices')).toContainText('denied');
+  // It opens under the badge, inside the window.
+  const b = (await badge.boundingBox())!;
+  const r = (await pop.boundingBox())!;
+  expect(r.y).toBeGreaterThan(b.y + b.height);
+  expect(r.x + r.width).toBeLessThanOrEqual(1280);
+  await badge.click();
+  await expect(pop).toHaveCount(0);
+});
+
+test('a suspended context shows the paused pill in the badge slot; its click resumes', async ({ page }) => {
+  await fakeMidi(page, null);
+  await start(page);
+  const slot = page.getByTestId('audio-status');
+  await page.evaluate(() => (window as Any).__daw.engine.context.suspend());
+  await expect(slot).toHaveAttribute('data-state', 'paused');
+  await expect(slot).toHaveText('Audio paused — click anywhere to start');
+  await slot.getByRole('button').click();
+  await expect(slot).toHaveAttribute('data-state', 'running');
+  await expect(slot).toBeEmpty();
+});
+
+test('short windows (1280×720): the compact 40 px bar, still one row; the short badge keeps a 24 px hit area', async ({ page }) => {
   await start(page, 720);
   await page.getByTestId('play').click();
   const out = await measure(page);
   expect(out.rows).toBe(1);
   expect(out.height).toBeLessThanOrEqual(41);
   expect(out.docWidth).toBeLessThanOrEqual(1280);
-  // The short pills keep a 24 px hit area: a click 3 px above the ⚙ pill still opens Settings.
-  const gear = (await page.getByTestId('settings-button').boundingBox())!;
-  expect(gear.height).toBeLessThan(24);
-  await page.mouse.click(gear.x + gear.width / 2, gear.y - 3);
-  await expect(page.getByTestId('settings')).toBeVisible();
+  // Headless Chrome blocks Web MIDI: the badge says so. A click 3 px above it still opens the popover.
+  const badge = page.getByTestId('topbar-warning');
+  await expect(badge).toHaveText('MIDI blocked');
+  const b = (await badge.boundingBox())!;
+  expect(b.height).toBeLessThan(24);
+  await page.mouse.click(b.x + b.width / 2, b.y - 3);
+  await expect(page.getByTestId('midi-popover')).toBeVisible();
 });
 
 test('names: "Play song" is a toggle, "Stop all" stops either transport', async ({ page }) => {
@@ -361,17 +457,18 @@ function contrastOf(page: Page, testid: string) {
 
 test('contrast: warning pills and the pattern transport status meet WCAG (text 4.5:1, icons 3:1)', async ({ page }) => {
   await start(page);
-  // Dropouts: the red CPU pill.
+  // The badge: red for dropouts and MIDI blocked, orange for latency; and
+  // View ▸ Performance's red dropout readout.
   await page.evaluate(() => ((window as Any).__daw.engine.dropouts = () => 3));
+  await expect(page.getByTestId('topbar-warning')).toHaveAttribute('data-kind', 'dropouts');
+  expect(await contrastOf(page, 'topbar-warning')).toBeGreaterThanOrEqual(4.5);
   await expect(page.getByTestId('cpu')).toHaveClass(/\bbad\b/);
   expect(await contrastOf(page, 'cpu')).toBeGreaterThanOrEqual(4.5);
-  // MIDI blocked and a Bluetooth-size latency: forced on (they depend on the machine).
-  await page.evaluate(() => {
-    document.querySelector('[data-testid="midi-status"]')!.classList.add('bad');
-    document.querySelector('[data-testid="settings-button"]')!.classList.add('warn');
-  });
-  expect(await contrastOf(page, 'midi-status')).toBeGreaterThanOrEqual(4.5);
-  expect(await contrastOf(page, 'settings-button')).toBeGreaterThanOrEqual(4.5);
+  // Latency: forced on (it depends on the machine).
+  await page.evaluate(() => document.querySelector('[data-testid="topbar-warning"]')!.classList.add('latency'));
+  expect(await contrastOf(page, 'topbar-warning')).toBeGreaterThanOrEqual(4.5);
+  await page.evaluate(() => document.querySelector('[data-testid="latency"]')!.classList.add('warn'));
+  expect(await contrastOf(page, 'latency')).toBeGreaterThanOrEqual(4.5);
   // The pattern ▶ (icon, stopped and playing).
   expect(await contrastOf(page, 'pattern-play')).toBeGreaterThanOrEqual(3);
   // Rec, unarmed: a --text label (4.07:1 on --raised, the palette's own

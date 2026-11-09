@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeNoiseWav, makeWav } from './wav';
-import { openMenu } from './topbar';
+import { openMenu, openAudioSettings } from './topbar';
 import { addTrack } from './addTrack';
 import { pickAutomation } from './automate';
 import { startApp } from './startApp';
@@ -232,7 +232,7 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
 
   // 3. Another latency hint: an audio restart. The clip is in the new engine: heard in Song mode.
   await page.evaluate(() => ((window as unknown as { __oldEngine: unknown }).__oldEngine = (window as unknown as Win).__daw.engine));
-  await page.getByTestId('settings-button').click();
+  await openAudioSettings(page);
   const settings = page.getByTestId('settings');
   await settings.getByTestId('latency-hint').selectOption('playback');
   await settings.getByTestId('settings-apply').click();
@@ -240,7 +240,7 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
     .poll(() => page.evaluate(() => (window as unknown as Win).__daw.engine !== (window as unknown as { __oldEngine: unknown }).__oldEngine && !document.querySelector('[data-testid="loading"]')), { timeout: 10_000 })
     .toBe(true);
   expect(await only()).toEqual(want);
-  await page.keyboard.press('Escape'); // close the settings popover
+  await page.keyboard.press('Escape'); // close the settings dialog
   await page.keyboard.press('Space'); // focus is in the top bar: the song transport
   await expect.poll(() => page.evaluate(() => (window as unknown as Win).__daw.project.mode)).toBe('song');
   const heard = await page.evaluate(
@@ -447,14 +447,14 @@ test('automation round-trips through save, undo, restart and export', async ({ p
 
   // 3. Another latency hint: an audio restart. The lanes are unchanged and drive the new engine: the drop is heard.
   await page.evaluate(() => ((window as unknown as { __oldEngine: unknown }).__oldEngine = (window as unknown as Win).__daw.engine));
-  await page.getByTestId('settings-button').click();
+  await openAudioSettings(page);
   const settings = page.getByTestId('settings');
   await settings.getByTestId('latency-hint').selectOption('playback');
   await settings.getByTestId('settings-apply').click();
   await expect
     .poll(() => page.evaluate(() => (window as unknown as Win).__daw.engine !== (window as unknown as { __oldEngine: unknown }).__oldEngine && !document.querySelector('[data-testid="loading"]')), { timeout: 10_000 })
     .toBe(true);
-  await page.keyboard.press('Escape'); // close the settings popover
+  await page.keyboard.press('Escape'); // close the settings dialog
   expect(await lanes()).toEqual(want);
   const rec = await playSong(2000);
   const ms10 = BAR / 100; // ticks in 10 ms (1 bar = 1 s)

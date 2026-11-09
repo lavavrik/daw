@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { makeWav } from './wav';
 import { startApp } from './startApp';
+import { openAudioSettings } from './topbar';
 
 // Audio settings (plan 7 Task 3): Apply re-creates the AudioContext and the
 // engine and replays the project held in memory onto it -- no reload, no
@@ -151,7 +152,7 @@ test('restart keeps project and handles', async ({ page }) => {
   await expect.poll(async () => (await stripPeaks(page, [1], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.evaluate(() => ((window as unknown as W).__oldEngine = (window as unknown as W).__daw.engine));
 
-  await page.getByTestId('settings-button').click();
+  await openAudioSettings(page);
   const panel = page.getByTestId('settings');
   await expect(panel).toBeVisible();
   await expect(panel.getByTestId('settings-rate')).toHaveText(/\d+(\.\d+)? kHz/);
@@ -169,6 +170,8 @@ test('restart keeps project and handles', async ({ page }) => {
   expect(await page.evaluate(() => (window as unknown as W).__oldEngine!.context.state)).toBe('closed');
   expect(await page.evaluate(() => (window as unknown as W).__daw.engine!.latencyHint)).toBe('playback');
   expect(await page.evaluate(() => localStorage.getItem('daw.latencyHint'))).toBe('playback');
+  await page.keyboard.press('Escape'); // close the dialog (modal: the page behind is inert)
+  await expect(panel).toBeHidden();
   await expect(page.getByTestId('play')).toHaveText(/Play/);
   await expect(page.getByTestId('banner')).toBeHidden();
 
@@ -248,7 +251,7 @@ test('a refused restart keeps the running audio; an empty custom buffer cannot b
     for (const s of [0, 4, 8, 12]) a.setStep(d.id, d.rows![0].id, s, 120);
   });
   const before = await snapshot(page);
-  await page.getByTestId('settings-button').click();
+  await openAudioSettings(page);
   const panel = page.getByTestId('settings');
 
   // Custom with the field emptied: nothing would apply, so Apply is off and says why.
@@ -281,6 +284,8 @@ test('a refused restart keeps the running audio; an empty custom buffer cannot b
   });
   expect(kept).toEqual({ same: true, state: 'running', hint: null });
   expect(await snapshot(page)).toBe(before);
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
   await page.getByTestId('pattern-play').click();
   await expect.poll(async () => (await stripPeaks(page, [0], 600))[0], { timeout: 5_000 }).toBeGreaterThan(0.01);
   await page.getByTestId('pattern-stop').click();
@@ -332,7 +337,7 @@ test('undo audible after restart', async ({ page }) => {
 
   // Another latency hint: an audio restart.
   await page.evaluate(() => ((window as unknown as W).__oldEngine = (window as unknown as W).__daw.engine));
-  await page.getByTestId('settings-button').click();
+  await openAudioSettings(page);
   const panel = page.getByTestId('settings');
   await panel.getByTestId('latency-hint').selectOption('playback');
   await panel.getByTestId('settings-apply').click();
@@ -340,6 +345,8 @@ test('undo audible after restart', async ({ page }) => {
     const x = window as unknown as W;
     return x.__daw.engine !== x.__oldEngine && !document.querySelector('[data-testid="loading"]');
   }), { timeout: 10_000 }).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
 
   // ⌘Z (the row gain comes back) and Play: heard within a second.
   await page.keyboard.press('ControlOrMeta+z');
@@ -348,4 +355,69 @@ test('undo audible after restart', async ({ page }) => {
   await expect.poll(() => masterPeak(page, 100), { timeout: 1_000, intervals: [0] }).toBeGreaterThan(0.05);
   await page.getByTestId('pattern-stop').click();
   await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
+});
+
+// Plan 22 Task 1: Audio settings is a modal dialog. In the old <details>
+// popover in the top bar the select's picker opened clipped to the bar
+// (Settings.svelte, WHY A MODAL): selectOption worked, a real pick did not.
+// Here the picker is opened with a real click and an option picked with the
+// mouse, as a person does.
+test('Audio settings is a modal: a real click opens the latency picker and picks; Esc closes it and the focus returns', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => localStorage.removeItem('daw.latencyHint'));
+  await startAudio(page);
+  await page.getByTestId('menu-options').click();
+  await page.getByTestId('menu-audio-settings').click();
+  const dlg = page.getByTestId('settings');
+  await expect(dlg).toBeVisible();
+  // A modal <dialog> (top layer, the page behind inert), no Note names in it (they live in Options ▸ Note names ▸).
+  expect(await dlg.evaluate((d) => d.tagName === 'DIALOG' && (d as HTMLDialogElement).open && d.matches(':modal'))).toBe(true);
+  await expect(dlg.getByTestId('note-names')).toHaveCount(0);
+  const sel = dlg.getByTestId('latency-hint');
+  await expect(sel).toBeFocused(); // the first control
+  await expect(sel).toHaveValue('interactive');
+
+  // Real clicks: open the picker, then click "Balanced" in it.
+  await sel.click();
+  expect(await sel.evaluate((s) => s.matches(':open'))).toBe(true);
+  const balanced = sel.locator('option[value="balanced"]');
+  const box = (await balanced.boundingBox())!;
+  // The option is what is under the pointer there (not something behind the picker).
+  expect(await page.evaluate(({ x, y }) => (document.elementFromPoint(x, y) as HTMLOptionElement | null)?.value ?? null, { x: box.x + box.width / 2, y: box.y + box.height / 2 })).toBe('balanced');
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(sel).toHaveValue('balanced');
+  await expect(dlg).toBeVisible(); // the pick does not close the dialog
+  expect(await sel.evaluate((s) => s.matches(':open'))).toBe(false);
+
+  // And by keyboard-free selectOption, the custom buffer appears.
+  await sel.selectOption('custom');
+  await expect(dlg.getByTestId('latency-applies')).toHaveText('Applies Custom 20 ms');
+  // Again by mouse, back to Playback.
+  await sel.click();
+  await sel.locator('option[value="playback"]').click();
+  await expect(sel).toHaveValue('playback');
+  await expect(dlg.getByTestId('latency-custom')).toHaveCount(0);
+
+  // Esc with the picker open closes only the picker.
+  await sel.click();
+  expect(await sel.evaluate((s) => s.matches(':open'))).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect.poll(() => sel.evaluate((s) => s.matches(':open'))).toBe(false);
+  await expect(dlg).toBeVisible();
+  // Keys inside the modal never reach the app: Space does not start the song.
+  await page.keyboard.press('Space');
+  expect(await page.evaluate(() => (window as unknown as W).__daw.project.playing)).toBe(false);
+  // Esc closes it (nothing applied) and the focus goes back to Options.
+  await page.keyboard.press('Escape');
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId('menu-options')).toBeFocused();
+  expect(await page.evaluate(() => (window as unknown as W).__daw.engine!.latencyHint)).toBe('interactive');
+  // A press on the backdrop closes it too; a press inside its padding does not.
+  await openAudioSettings(page);
+  const r = (await dlg.boundingBox())!;
+  await page.mouse.click(r.x + 4, r.y + r.height - 4);
+  await expect(dlg).toBeVisible();
+  await page.mouse.click(r.x - 20, r.y + 10);
+  await expect(dlg).toBeHidden();
+  await expect(page.getByTestId('menu-view')).toBeFocused();
 });

@@ -159,16 +159,20 @@ module the FX pool dropped. Slots become the new track ids in
 
 ## The popover
 
-- **Where.** The top bar's `midi-status` pill is a button (`aria-haspopup=
-  "dialog"`) that toggles `ui/MidiPopover.svelte`
-  (`data-testid="midi-popover"`, `role="dialog"`, `aria-label="MIDI"`),
-  anchored under the pill in a `position: relative` wrapper (the bar is
-  `overflow-x: clip`, so it can drop below). App passes `midiCc` (the last
-  CC, any channel) to TopBar.
+- **Where.** Options ▸ MIDI… (`menu-midi`; its label is the status,
+  `midi-status`: "MIDI: Arturia KeyStep" / "no device" / "blocked", the full
+  device list in its tooltip; plan 22 removed the top bar's MIDI pill) opens
+  `ui/MidiPopover.svelte` (`data-testid="midi-popover"`, `role="dialog"`,
+  `aria-label="MIDI"`) under the Options button. While MIDI is blocked the
+  top bar's warning badge ("MIDI blocked") opens it too, under the badge,
+  and toggles it. The popover places itself (`position: fixed` from its
+  anchor's box, left- or right-aligned by the window half) and TopBar
+  renders it after its `<header>`. App passes `midiCc` (the last CC, any
+  channel) to TopBar.
 - **Non-modal**, like the piano roll's Examples popover: Esc (stopped, so
-  it is not also "cancel learn"; focus returns to the pill), a pointer press
-  outside it, or focus moving away (Tab out) closes it. Pressing the pill
-  again is its own toggle.
+  it is not also "cancel learn"; focus returns to what opened it), a
+  pointer press outside it, or focus moving away (Tab out) closes it.
+  Pressing the badge again is its own toggle.
 - **Sections.** Devices: one line per device, or the status text for
   none / denied / unsupported. Last CC: `CC 74 = 100`
   (`data-testid="midi-last-cc"`), or "Move a knob on your controller".

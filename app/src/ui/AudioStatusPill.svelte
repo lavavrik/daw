@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The audio pill while audio is not running (audio/audioStatus.ts): it sits
-  // in the ⚙ latency pill's slot (TopBar), or alone in App's bare bar when
+  // The audio pill while audio is not running (audio/audioStatus.ts): it is
+  // the top bar's one badge (TopBar's `audio-status` slot), or alone in App's bare bar when
   // the engine could not be built. Paused: --accent, "Audio paused — click
   // anywhere to start" after a SpeakerSlash icon. Failed: --rec, "Audio
   // failed — retry", the error in the tooltip. A click resumes (paused) or
@@ -26,8 +26,8 @@
 
 <style>
   /* A filled pill (vivid colour, --on-color text), like TopBar's warning
-     pills. Tight (600 weight, 6 px sides): at 1280 px the bar has ~240 px
-     for it (MIDI and CPU step aside), audiostart.spec.ts checks one row. */
+     badge. Tight (600 weight, 6 px sides): at 1280 px the bar has ~240 px
+     for it (the mini spectrum gives up its room), audiostart.spec.ts checks one row. */
   .pill {
     position: relative; display: inline-flex; align-items: center; gap: 3px; height: var(--pill-h, 22px); box-sizing: border-box; padding: 0 6px;
     border: 0; border-radius: var(--r-md); background: var(--accent) var(--gloss); box-shadow: var(--raised-shadow);

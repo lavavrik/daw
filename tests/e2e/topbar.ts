@@ -21,3 +21,13 @@ export async function openMenu(page: Page, m: MenuName) {
 export async function closeMenu(page: Page, m: MenuName) {
   if (await isOpen(page, m)) await button(page, m).click();
 }
+
+/**
+ * Open the Audio settings dialog (Settings.svelte, modal since plan 22)
+ * through View ▸ Performance (`settings-button`, the old ⚙ pill's id).
+ * Options ▸ Audio settings… (`menu-audio-settings`) opens the same dialog.
+ */
+export async function openAudioSettings(page: Page) {
+  await openMenu(page, 'View');
+  await page.getByTestId('settings-button').click();
+}

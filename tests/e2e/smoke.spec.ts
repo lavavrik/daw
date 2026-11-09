@@ -403,7 +403,7 @@ test('add synth track, it plays from the keyboard', async ({ page }) => {
   const row = page.getByTestId('track-1');
   await expect(row).toContainText('Synth · Deep Bass');
   await expect(row).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
+  await expect(page.getByTestId('keys-target')).toContainText('Synth');
   // Synth tracks open on the Piano roll (default); the rack is one tab away.
   await expect(page.getByRole('button', { name: 'Piano roll' })).toHaveClass(/active/);
   await expect(page.getByTestId('pianoroll')).toBeVisible();
@@ -422,7 +422,7 @@ test('selecting drums moves the keys to the drum track (plan 15), and back', asy
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('track-0')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('button', { name: 'Step grid' })).toHaveClass(/active/);
-  await expect(page.getByTestId('keys-target')).toContainText('Keys → Drums');
+  await expect(page.getByTestId('keys-target')).toContainText('Drums');
   // The keys play drum rows now (ruling G: the octave's C = row 1): KeyK is
   // row 13, which the kit lacks, so silence shows the synth no longer gets it...
   await page.keyboard.down('KeyK');
@@ -435,7 +435,7 @@ test('selecting drums moves the keys to the drum track (plan 15), and back', asy
   await page.keyboard.up('KeyA');
   await expect.poll(slot(page, 5), { timeout: 2_000 }).toBeLessThan(0.001); // the hit rings out
   await page.getByTestId('track-1').click();
-  await expect(page.getByTestId('keys-target')).toContainText('Keys → Synth');
+  await expect(page.getByTestId('keys-target')).toContainText('Synth');
   await page.keyboard.down('KeyA');
   await expect.poll(slot(page, 5), { timeout: 1_000 }).toBeGreaterThan(0.05);
   await page.keyboard.up('KeyA');
@@ -1043,22 +1043,26 @@ test('step cells toggle from the keyboard (Enter), as a press does', async ({ pa
   await expect(cell).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('octave buttons: step, remembered across reload, Z steps, Space still plays after a click', async ({ page }) => {
+test('octave buttons: step, remembered across reload, Z steps, Space still plays after Esc', async ({ page }) => {
+  // Plan 22: the top bar's octave pill moved into Options ▸ Keyboard (same `octave` id).
   await startAudio(page);
   const pill = page.getByTestId('octave');
-  await expect(pill).toHaveText('Oct 4');
-  await page.getByTestId('octave-up').click();
-  await expect(pill).toHaveText('Oct 5');
+  await expect(pill).toHaveText('Octave 4');
+  await openMenu(page, 'Options');
+  await page.getByTestId('menu-octave-up').click();
+  await expect(pill).toHaveText('Octave 5');
   await page.reload();
   await startApp(page);
-  await expect(pill).toHaveText('Oct 5'); // remembered (localStorage daw.octave)
+  await expect(pill).toHaveText('Octave 5'); // remembered (localStorage daw.octave)
   await page.keyboard.press('KeyZ');
-  await expect(pill).toHaveText('Oct 4'); // Z steps from the stored value
-  // Focus must not stay on the clicked button: Space plays instead of re-clicking it.
-  await page.getByTestId('octave-up').click();
+  await expect(pill).toHaveText('Octave 4'); // Z steps from the stored value
+  // A setting keeps the menu open (keys stay in it); Esc closes it, then Space plays.
+  await openMenu(page, 'Options');
+  await page.getByTestId('menu-octave-up').click();
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1);
-  await expect(pill).toHaveText('Oct 5');
+  await expect(pill).toHaveText('Octave 5');
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(0);
 });

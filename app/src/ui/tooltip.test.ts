@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTipTiming, placeTip, TIP_GAP, TIP_MARGIN } from './tooltip';
+import { createTipTiming, placeTip, tipRepeatsText, TIP_GAP, TIP_MARGIN } from './tooltip';
 
 const vp = { width: 1000, height: 800 };
 const tip = { width: 100, height: 30 };
@@ -46,5 +46,21 @@ describe('tip timing', () => {
     const t = createTipTiming();
     t.hidden(1000);
     expect(t.delayFor(1100)).toBe(250);
+  });
+});
+
+describe('tipRepeatsText (no tip that only repeats the visible text)', () => {
+  it('is true when the title equals the text, ignoring outer and repeated whitespace', () => {
+    expect(tipRepeatsText('Mixer', 'Mixer')).toBe(true);
+    expect(tipRepeatsText('  Audio settings… ', '\n Audio   settings…\n')).toBe(true);
+  });
+  it('is false when the tip says more, or differs in case', () => {
+    expect(tipRepeatsText('Metronome (click on every beat)', 'Metronome')).toBe(false);
+    expect(tipRepeatsText('mixer', 'Mixer')).toBe(false);
+  });
+  it('is false for an icon-only element (no visible text) and for an empty tip', () => {
+    expect(tipRepeatsText('Undo', '')).toBe(false);
+    expect(tipRepeatsText('', '')).toBe(false);
+    expect(tipRepeatsText('   ', '   ')).toBe(false);
   });
 });

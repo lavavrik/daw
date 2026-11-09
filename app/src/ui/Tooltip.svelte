@@ -28,8 +28,15 @@
   // (MenuBar's undo / redo and View items): '' is a real mutation, the tip
   // hides, and release restores an empty title (no native tooltip). (2) Any
   // scroll event, including programmatic ones (playhead follow), hides the tip.
+  //
+  // A tip that only repeats the element's visible text (a menu item titled
+  // with its own label; tooltip.ts tipRepeatsText) is MUTED (plan 22): the
+  // element is still claimed, so its `title` is out of the way and the native
+  // tip never fires, but the layer stays hidden and no aria-describedby is
+  // added (the accessible name already says it). Checked at claim time and on
+  // every repaint, so a title that changes to something longer shows.
   import { onMount } from 'svelte';
-  import { createTipTiming, placeTip } from './tooltip';
+  import { createTipTiming, placeTip, tipRepeatsText } from './tooltip';
 
   let el: HTMLDivElement;
   const ID = 'tooltip-layer';
@@ -69,10 +76,24 @@
     function open() { if (!isOpen()) el.showPopover(); }
     function close() { if (isOpen()) el.hidePopover(); }
 
+    /** The tip only repeats the target's own visible text (shown: nothing). */
+    const repeats = (t: HTMLElement, text: string) => tipRepeatsText(text, t.innerText ?? '');
+    /** Point aria-describedby at the layer only while it has something to add. */
+    function describe(t: HTMLElement, on: boolean) {
+      if (on) t.setAttribute('aria-describedby', ID);
+      else if (t.getAttribute('aria-describedby') === ID) {
+        if (prevDescribed === null) t.removeAttribute('aria-describedby');
+        else t.setAttribute('aria-describedby', prevDescribed);
+      }
+    }
+
     function paint() {
       if (!target) return;
       const text = textOf(target);
       if (!text) { release(); return; }
+      // Muted: keep the claim (no native tip), show nothing.
+      if (repeats(target, text)) { close(); lastKey = ''; describe(target, false); return; }
+      describe(target, true);
       const r = target.getBoundingClientRect();
       const key = `${text}|${r.left}|${r.top}|${r.width}|${r.height}|${innerWidth}|${innerHeight}`;
       if (key === lastKey && isOpen()) return;
@@ -128,22 +149,26 @@
       target = t;
       viaFocus = byFocus;
       absorb(t);
-      // The text first (the layer still hidden), then the reference to it.
+      // The text first (the layer still hidden), then the reference to it
+      // (none for a muted tip: see the header).
       el.textContent = textOf(t);
       prevDescribed = t.getAttribute('aria-describedby');
-      t.setAttribute('aria-describedby', ID);
+      describe(t, !repeats(t, textOf(t)));
       // Live changes to the text (title re-set by the framework, or data-tip).
       watch = new MutationObserver(() => {
         if (!target) return;
         absorb(target);
         if (showing) paint();
-        else el.textContent = textOf(target);
+        else {
+          el.textContent = textOf(target);
+          describe(target, !repeats(target, textOf(target)));
+        }
       });
       watch.observe(t, { attributes: true, attributeFilter: ['title', 'data-tip'] });
       const reveal = () => {
         if (!target || !target.isConnected) { release(); return; }
         showing = true;
-        timing.shown();
+        if (!repeats(target, textOf(target))) timing.shown(); // a muted tip opens no quick-switch window
         paint();
         guardTimer = window.setInterval(guard, GUARD_MS);
       };

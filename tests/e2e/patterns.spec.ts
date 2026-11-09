@@ -215,7 +215,7 @@ test('Space stops what plays; stopped, it plays the pattern with focus in the bo
   await page.keyboard.press('Space');
   await expect.poll(state).toBe('pattern:stopped');
   // ... and once the top bar is used (a click there), the song again.
-  await page.getByTestId('keys-target').click(); // a non-focusable pill: the focus stays on the page
+  await page.getByTestId('hint-line').click(); // non-focusable text in the top bar: the focus stays on the page
   await page.keyboard.press('Space');
   await expect.poll(state).toBe('song:playing');
   await page.keyboard.press('Space');

@@ -4,7 +4,7 @@
   //
   //   [menu row / project name + hint line · ↶ ↷] | ▶ ■ Loop · Tempo LCD ·
   //   BIG TIMER · metronome · Master slider · mini spectrum · (spacer) ·
-  //   [Keys → track, octave / MIDI, CPU, ⚙ latency] (two stacked pill rows)
+  //   [one warning badge, only when something needs attention]
   //
   // LEFT BLOCK (plan 21): the MENU ROW on top — File · Edit · Add · Patterns
   // · View · Options · Help (MenuBar.svelte, which holds the menus, their
@@ -31,8 +31,9 @@
   //
   // ⌘O (App) calls `request`, which hands it to MenuBar.request (the File
   // menu's inline "Discard and open…" question). Options ▸ MIDI… opens the
-  // MIDI popover under its pill (Esc then returns the focus to Options);
-  // Options ▸ Audio settings… opens the ⚙ panel.
+  // MIDI popover under the Options button (Esc returns the focus there);
+  // Options ▸ Audio settings… and View ▸ Performance open the Audio settings
+  // dialog (Settings.svelte, modal; the focus returns to the menu button).
   //
   // UNDO / REDO (↶ ↷): the history's newest entries, named in the tooltips
   // ("Undo Move notes"); ⌘Z / ⇧⌘Z (Ctrl+Y) do the same (input/shortcuts.ts).
@@ -69,38 +70,44 @@
   // analyser bus (ui/vis/Spectrum.svelte, no labels) on an --lcd well; a
   // click opens the Mixer tab, where the full analyser is.
   //
-  // RIGHT: two rows of pills (as on the canvas): Keys → track and the octave
-  // (wheel steps it); then MIDI (opens MidiPopover), CPU + dropouts, and the
-  // ⚙ latency pill, which opens Settings (ui/Settings.svelte: latency hint,
-  // sample rate / base / output / total latency, the Bluetooth hint, Apply =
-  // engine restart via App). The latency turns orange above 40 ms. Until
-  // the browser lets audio start (no start splash: spec 2026-11-15 §10) that
-  // slot (`audio-status`, data-state = audio/audioStatus.ts kind) holds the
-  // "Audio paused — click anywhere to start" pill instead, or "Audio failed —
-  // retry" (AudioStatusPill.svelte). The CPU pill (0 % while nothing
-  // renders) steps aside for the longer text, and below 1400 px the MIDI
-  // pill too, so the bar keeps one row at 1280 px. Telemetry
-  // refreshes at 4 Hz. If the engine dies after start, a red "Audio engine
-  // stopped — reload" alert appears before the pills.
+  // RIGHT (plan 22 Task 1, the owner: "move it all into proper menus"):
+  // EMPTY in the normal state. Keys → track and the octave are Options ▸
+  // Keyboard; the MIDI status is Options ▸ MIDI…'s label ("MIDI: Arturia
+  // KeyStep" / "no device" / "blocked"); CPU, dropouts and latency are View ▸
+  // Performance, a live item that opens Audio settings. Their test ids moved
+  // with them (keys-target, octave, midi-status, cpu, latency,
+  // settings-button). Telemetry still refreshes here at 4 Hz: it feeds that
+  // item and the badge.
+  // ONE BADGE (the `audio-status` slot, data-state = audio/audioStatus.ts
+  // kind; empty and 0 px wide when all is well) shows the first of:
+  //   - audio paused / failed: AudioStatusPill ("Audio paused — click
+  //     anywhere to start" resumes, "Audio failed — retry" retries);
+  //   - dropouts in the last 10 s, MIDI blocked, output latency over 40 ms
+  //     (Bluetooth): `topbar-warning` (data-kind), decided by topStatus.ts.
+  //     A click opens Audio settings (dropouts, latency) or the MIDI popover
+  //     under the badge (blocked: it says how to unblock).
+  // If the engine dies after start, a red "Audio engine stopped — reload"
+  // alert appears before it.
   //
   // LAYOUT: one row that never wraps at ≥ 1280 px (e2e layout.spec.ts /
-  // topbar.spec.ts measure it, playing, unsaved and with a 3-digit dropout
-  // tail). Fixed widths where text changes (the name and hint, Play/Stop,
-  // the timer's digits, the master readout), so playback never re-flows the
-  // bar; the long readouts (Keys target, MIDI device, project name, hint)
-  // ellipsize with the full text in their tooltips. Below 1400 px CPU's
-  // "· N drop" tail is hidden while there are none, and with dropouts the
-  // red pill reads "1% · 123" (the words are in the tooltip). The widest
-  // state at 1280 px (playing, unsaved, 123 dropouts) leaves ~25 px (~13 px
-  // with the web fonts blocked).
+  // topbar.spec.ts measure it, playing, unsaved and with a dropout badge or
+  // the "Audio paused" pill). Fixed widths where text changes (the name and
+  // hint, Play/Stop, the timer's digits, the master readout), so playback
+  // never re-flows the bar. The room the pills left (plan 22) went to
+  // breathing space: 8 px between the groups (4 px below 1400 px, for the
+  // paused pill at 1280 px), and the mini spectrum grows to
+  // 360 px; it is the one flexible part, so a badge or the paused pill takes
+  // its room at 1280 px (it never goes under 66 px).
   // overflow-x: clip is the last guard: it never becomes a scroll container,
-  // so the popovers can drop below.
+  // so the popovers can drop below. (It is also half of why a base-select
+  // inside a <details> in the bar could not be picked from: Settings.svelte.)
+  // The Settings dialog and the MIDI popover render AFTER the <header>, so
+  // nothing in the bar clips or stacks over them.
   import { onMount, tick } from 'svelte';
   import { TELEMETRY } from '../audio/protocol';
   import type { AudioEngine } from '../audio/engine';
   import type { AudioClock } from '../audio/audioClock';
   import { mixParam } from '../audio/mixerCatalog';
-  import { BT_LATENCY_MS } from '../audio/restart';
   import type { LatencyHint } from '../audio/restart';
   import Settings from './Settings.svelte';
   import AudioStatusPill from './AudioStatusPill.svelte';
@@ -119,7 +126,8 @@
   import Play from 'phosphor-svelte/lib/Play';
   import Repeat from 'phosphor-svelte/lib/Repeat';
   import Stop from 'phosphor-svelte/lib/Stop';
-  import { liveInputTrack, previewTempo, setMetronome, setTempo } from '../state/actions';
+  import Warning from 'phosphor-svelte/lib/Warning';
+  import { previewTempo, setMetronome, setTempo } from '../state/actions';
   import { setMix } from '../state/mixer-actions';
   import type { Project } from '../state/project.svelte';
   import type { MidiStatus } from '../input/midi';
@@ -127,19 +135,11 @@
   import MenuBar from './MenuBar.svelte';
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC } from '../input/shortcutList';
-  import { DEFAULT_OCTAVE, wheelOctaveSteps } from '../input/qwertyPiano';
+  import { DEFAULT_OCTAVE } from '../input/qwertyPiano';
+  import { createDropWindow, topWarning } from './topStatus';
   import type { Recorder, RecStatus } from '../state/recorder';
   import type { ProjectSession } from '../project/session';
   import { banners } from '../state/banners.svelte';
-
-  // Wheel over the octave pill: accumulated (see wheelOctaveSteps). Svelte's
-  // onwheel is passive, so this can't stop page scroll (the bar doesn't scroll).
-  let wheelAcc = 0;
-  function onOctaveWheel(e: WheelEvent) {
-    const r = wheelOctaveSteps(wheelAcc, e.deltaY, e.deltaMode);
-    wheelAcc = r.acc;
-    if (r.steps) onOctave(Math.min(8, Math.max(0, octave + r.steps)));
-  }
 
   let {
     p,
@@ -203,17 +203,10 @@
     onAudioResume?: () => Promise<void>;
   } = $props();
 
-  /** The Settings panel mounts while open (its readout polls only then). */
+  /** The Audio settings dialog mounts while open (its readout polls only then). */
   let settingsOpen = $state(false);
-  // The ⚙ <details> unmounts while audio is not running and comes back
-  // closed: Settings must not stay mounted (and polling) inside it.
-  // (Keyed on the kind alone: an audio restart hands over a new, equal
-  // status object and must not close the panel it was applied from.)
-  const audioKind = $derived(audio.kind);
-  $effect(() => {
-    void audioKind;
-    settingsOpen = false;
-  });
+  /** Where its close puts the focus (the menu button or the badge that opened it). */
+  let settingsReturn = $state<HTMLElement | null>(null);
 
   // ---- menu bar (MenuBar.svelte) -------------------------------------------
   const mod = IS_MAC ? '⌘' : 'Ctrl+';
@@ -225,25 +218,30 @@
   export function request(cmd: 'new' | 'open') {
     menuBar?.request(cmd);
   }
-  /** Options ▸ MIDI…: the popover under the pill; Esc returns the focus to `back` (the Options button). */
-  let midiReturn = $state<HTMLElement | null>(null);
+  // The MIDI popover: under what opened it (`midiAt`: the Options button or
+  // the badge). Esc returns the focus to `midiBack`; presses on `midiToggle`
+  // (the badge) are its own toggle, not "outside".
+  let midiOpen = $state(false);
+  let midiAt = $state<HTMLElement | null>(null);
+  let midiBack = $state<HTMLElement | null>(null);
+  let midiToggle = $state<HTMLElement | null>(null);
+  /** Options ▸ MIDI…: the popover under the Options button. */
   function openMidi(back: HTMLElement) {
-    midiReturn = back;
+    midiAt = midiBack = back;
+    midiToggle = null;
     midiOpen = true;
   }
-  /** Options ▸ Audio settings…: open the ⚙ panel and focus its first control. */
-  let settingsEl = $state<HTMLDetailsElement | null>(null);
-  async function openSettings() {
-    // Paused: the ⚙ slot is the audio pill until audio runs. Resume (the
-    // menu click is the gesture), let the ⚙ pill render, then open it.
+  /** Options ▸ Audio settings…, View ▸ Performance, the badge: the modal. */
+  async function openSettings(back: HTMLElement | null) {
+    // Paused: resume first (the click is the gesture), so Apply and the
+    // readout see a running context. A refusal turns the badge into
+    // "Audio failed — retry"; the dialog still opens (it says what runs).
     if (audio.kind !== 'running') {
       await onAudioResume();
       await tick();
     }
-    if (!settingsEl) return; // still not running (refused: the pill says so)
-    settingsEl.open = true;
-    await tick();
-    settingsEl.querySelector<HTMLElement>('.panel select, .panel button, .panel input')?.focus();
+    settingsReturn = back;
+    settingsOpen = true;
   }
 
   // ---- hint line -----------------------------------------------------------
@@ -271,40 +269,36 @@
   const MASTER_AUTO = { owner: 'master', target: { kind: 'mix', param: 'fader' } } as const;
   const masterDb = $derived(p.mixer.master.params[MASTER_DEF.id] ?? MASTER_DEF.default);
 
-  // ---- pills ---------------------------------------------------------------
-  // Reactive: follows track selection (project state is $state).
-  const keysTrack = $derived(liveInputTrack(p));
-  let midiOpen = $state(false);
-  let midiBtn = $state<HTMLElement | null>(null);
-  const midiLabel = $derived(
-    midi.state === 'connected'
-      ? midi.devices[0] + (midi.devices.length > 1 ? ` +${midi.devices.length - 1}` : '')
-      : midi.state === 'denied'
-        ? 'blocked'
-        : midi.state === 'unsupported'
-          ? 'unsupported'
-          : 'no device',
-  );
-  const midiTip = $derived(
-    midi.state === 'denied'
-      ? 'MIDI access is blocked. Enable it in Chrome site settings (lock icon > Site settings > MIDI devices), then reload.'
-      : midi.state === 'unsupported'
-        ? 'This browser has no Web MIDI. Use Chrome.'
-        : midi.state === 'connected' ? `MIDI: ${midi.devices.join(', ')}` : 'MIDI: no device connected',
-  );
-  const BT_TIP = 'High output latency — Bluetooth headphones? Use wired output for playing live.';
-
+  // ---- telemetry, the badge ----------------------------------------------
   let cpu = $state(0);
   let dropouts = $state(0);
+  /** Dropouts in the last 10 s (the badge). */
+  let recentDrops = $state(0);
+  const drops = createDropWindow();
   let latency = $state('');
   let latencyMs = $state(0);
   let engineError = $state<string | null>(null); // set from engine.failure (effect below)
-  /** The mini spectrum's measured width (it grows to 3× when the bar has room). */
+  /** The mini spectrum's measured width (it grows when the bar has room). */
   let miniW = $state(66);
+  /** View ▸ Performance's live readout. */
+  const perf = $derived({ cpu, dropouts, latencyMs, latencyText: latency });
+  const warning = $derived(audio.kind === 'running' ? topWarning({ recentDrops, midi: midi.state, latencyMs }) : null);
+  let badge = $state<HTMLElement | null>(null);
+  function badgeClick() {
+    if (!warning || !badge) return;
+    if (warning.kind === 'midi') {
+      if (midiOpen) midiOpen = false;
+      else {
+        midiAt = midiBack = midiToggle = badge;
+        midiOpen = true;
+      }
+    } else void openSettings(badge);
+  }
 
   function refresh() {
     cpu = Math.round(engine.telemetry()[TELEMETRY.cpu] * 100);
     dropouts = engine.dropouts();
+    recentDrops = drops.push(performance.now(), dropouts);
     latencyMs = engine.latencyMs();
     latency = `Output latency ${latencyMs.toFixed(1)} ms at ${engine.sampleRate / 1000} kHz`;
   }
@@ -331,8 +325,8 @@
     <div class="menus">
       <MenuBar
         bind:this={menuBar} bind:open={menuOpen} alsoInside={nameBtn}
-        {p} {engine} {session} {restoreOffer} {recorder} {rec} {undoLabels} {onUndo} {onRedo} {octave} {onOctave} {onTab}
-        onOpenMidi={openMidi} onOpenSettings={() => void openSettings()}
+        {p} {engine} {session} {restoreOffer} {recorder} {rec} {undoLabels} {onUndo} {onRedo} {octave} {onOctave} {onTab} {midi} {perf}
+        onOpenMidi={openMidi} onOpenSettings={(back) => void openSettings(back)}
       />
     </div>
     <div class="id">
@@ -401,72 +395,42 @@
     </span>
   {/if}
 
-  <div class="io">
-    <div class="row">
-      <span class="pill keys" data-testid="keys-target" title="Computer keyboard and MIDI play this track">
-        {#if keysTrack}
-          <span class="sw" style:background={keysTrack.color}></span>Keys → {keysTrack.name}
-        {:else}
-          Keys → (no track)
-        {/if}
-      </span>
-      <!-- mousedown is cancelled so a click never moves focus onto the button: Space keeps meaning play/stop (not "click the focused button") and the piano roll keeps its keyboard focus. -->
-      <span class="pill octave" onwheel={onOctaveWheel}>
-        <button class="oct" data-testid="octave-down" title="Octave down (Z)" aria-label="Octave down" disabled={octave <= 0}
-          onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave - 1)}>−</button>
-        <span data-testid="octave" title="QWERTY octave (Z / X)">Oct {octave}</span>
-        <button class="oct" data-testid="octave-up" title="Octave up (X)" aria-label="Octave up" disabled={octave >= 8}
-          onmousedown={(e) => e.preventDefault()} onclick={() => onOctave(octave + 1)}>+</button>
-      </span>
-    </div>
-    <div class="row small" class:audio-off={audio.kind !== 'running'}>
-      <span class="midiwrap">
-        <button class="pill midi" data-testid="midi-status" class:ok={midi.state === 'connected'} class:bad={midi.state === 'denied'} title={midiTip} bind:this={midiBtn}
-          aria-haspopup="dialog" aria-expanded={midiOpen} onmousedown={(e) => e.preventDefault()} onclick={() => { midiReturn = null; midiOpen = !midiOpen; }}
-        >{#if midi.state === 'connected'}<span class="led"></span>{/if}<span class="ell">MIDI: {midiLabel}</span></button>
-        {#if midiOpen}
-          <MidiPopover {p} status={midi} cc={midiCc} anchor={midiBtn} returnFocus={midiReturn} onclose={() => (midiOpen = false)} />
-        {/if}
-      </span>
-      {#if audio.kind === 'running'}
-        <span class="pill" class:bad={dropouts > 0} data-testid="cpu" title="Audio thread CPU load · {dropouts} dropouts (missed audio blocks) this session">
-          <span class="cpuw">CPU{' '}</span>{cpu}%<span class="long">{' '}· {dropouts}<span class="dropw">{' '}drop</span></span>
-        </span>
-      {/if}
-      <span class="audio" data-testid="audio-status" data-state={audio.kind}>
-        {#if audio.kind === 'running'}
-          <details class="pop settings" bind:this={settingsEl} ontoggle={(e) => (settingsOpen = (e.currentTarget as HTMLDetailsElement).open)}>
-            <summary
-              class="pill" data-testid="settings-button" aria-label="Audio settings" class:warn={latencyMs > BT_LATENCY_MS}
-              title="{latencyMs > BT_LATENCY_MS ? `${latency}. ${BT_TIP}` : latency}. Click for audio settings."
-            >⚙ <span data-testid="latency">{Math.round(latencyMs)} ms</span></summary>
-            <div class="panel">
-              {#if settingsOpen}
-                <Settings
-                  {engine} hint={latencyHint} busy={restarting || p.loading}
-                  blocked={banners.exporting ? 'Wait for the export to finish' : null}
-                  onApply={onApplyAudio}
-                />
-              {/if}
-            </div>
-          </details>
-        {:else}
-          <AudioStatusPill status={audio} onresume={() => void onAudioResume()} />
-        {/if}
-      </span>
-    </div>
-  </div>
+  <!-- The one badge (see RIGHT): 0 px wide while all is well. -->
+  <span class="status" data-testid="audio-status" data-state={audio.kind}>
+    {#if audio.kind !== 'running'}
+      <AudioStatusPill status={audio} onresume={() => void onAudioResume()} />
+    {:else if warning}
+      <button
+        class="badge" class:latency={warning.kind === 'latency'} data-testid="topbar-warning" data-kind={warning.kind}
+        title={warning.title} bind:this={badge} onclick={badgeClick}
+        aria-haspopup="dialog" aria-expanded={warning.kind === 'midi' ? midiOpen : undefined}
+      ><Icon icon={Warning} size={12} weight="bold" />{warning.label}</button>
+    {/if}
+  </span>
 </header>
+{#if midiOpen}
+  <MidiPopover {p} status={midi} cc={midiCc} anchor={midiAt} toggle={midiToggle} returnFocus={midiBack} onclose={() => (midiOpen = false)} />
+{/if}
+{#if settingsOpen}
+  <Settings
+    {engine} hint={latencyHint} busy={restarting || p.loading}
+    blocked={banners.exporting ? 'Wait for the export to finish' : null}
+    onApply={onApplyAudio} returnFocus={settingsReturn} onclose={() => (settingsOpen = false)}
+  />
+{/if}
 
 <style>
   /* Tokens only (spec §2; the canvas board "Song view"). Widths: see LAYOUT
      in the header comment; layout.spec.ts measures the bar at 1440 / 1400 /
      1280 / 1024 px. Below 1280 px the bar may wrap onto a second row. */
   .bar {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 64px; box-sizing: border-box; padding: 0 12px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 64px; box-sizing: border-box; padding: 0 12px;
     background: var(--top); border-bottom: 1px solid var(--line); white-space: nowrap; overflow-x: clip;
     position: relative; z-index: 5; font: var(--fs-ctl) var(--font-ui); color: var(--text);
   }
+  /* 8 px between the groups where there is room; 4 px below 1400 px, where
+     the "Audio paused" pill (228 px) needs it to keep one row at 1280 px. */
+  @media (max-width: 1399px) { .bar { gap: 4px; } }
   .bar > :global(*) { flex: none; }
   .bar > .spacer { flex: 1; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
@@ -511,13 +475,6 @@
   .tp.play { color: color-mix(in srgb, var(--play) 55%, var(--text)); }
   .tp.play.on { background-color: var(--play); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 16px color-mix(in srgb, var(--play) 80%, transparent); }
 
-  /* Popover panel (the ⚙ Settings). */
-  .panel {
-    position: absolute; top: calc(100% + 8px); left: 0; z-index: 10; padding: 8px; white-space: normal;
-    background: var(--panel); border-radius: var(--r-md); box-shadow: var(--lift); color: var(--text);
-  }
-  .row { display: flex; gap: 6px; }
-
   /* NumberField's LCD is sized for 3 digits + label; 58 px holds "124.5" at 18 px. */
   .tempo { display: flex; }
   .tempo { --nf-lcd-w: 58px; }
@@ -525,59 +482,28 @@
   .master { width: 104px; }
   .master { --slider-min-w: 0px; }
 
-  .mini { display: flex; align-items: center; justify-content: center; flex: 3 1 66px; min-width: 66px; max-width: 198px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
+  .mini { display: flex; align-items: center; justify-content: center; flex: 3 1 66px; min-width: 66px; max-width: 360px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
   .mini:hover { filter: brightness(1.15); }
   .mini:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* Right: two rows of raised pills. */
-  .io { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-  .io .row { gap: 4px; align-items: center; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; padding: 0 8px; border: 0;
-    border-radius: var(--r-md); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow);
-    color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); font-variant-numeric: tabular-nums;
+  /* Right: the one badge (see RIGHT in the header comment). Warnings fill
+     the badge (vivid colour, --on-color text: 5.6:1 on --rec, 8.8:1 on
+     --accent); --rec or --accent text on --raised would be under 3:1. */
+  .status { display: inline-flex; --pill-h: 22px; }
+  .badge {
+    position: relative; display: inline-flex; align-items: center; gap: 4px; height: var(--pill-h); box-sizing: border-box; padding: 0 8px;
+    border: 0; border-radius: var(--r-md); background: var(--rec) var(--gloss); box-shadow: var(--raised-shadow);
+    color: var(--on-color); font: 700 11px var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
   }
-  .small .pill { height: 22px; font-size: 11px; padding: 0 6px; }
-  button.pill, summary.pill { cursor: pointer; }
-  button.pill:hover, summary.pill:hover { filter: brightness(1.08); }
-  .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .pill.keys { display: block; line-height: 26px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
-  .pill.midi { max-width: 120px; }
-  .pill.midi .ell { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  /* Warnings fill the pill (vivid colour, --on-color text: 5.6:1 on --rec,
-     8.8:1 on --accent); --rec or --accent text on --raised would be under 3:1. */
-  .pill.bad { background-color: var(--rec); color: var(--on-color); font-weight: 700; }
-  .pill.midi.ok { background-color: color-mix(in srgb, var(--play) 30%, var(--raised)); }
-  .led { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--play); vertical-align: 1px; }
-  .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
-  .octave { padding: 0 2px; gap: 0; }
-  .octave > span { padding: 0 2px; }
-  button.oct { position: relative; width: 18px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
-  button.oct:disabled { opacity: 0.4; cursor: default; }
-  /* Bigger hit area without changing the layout width. */
-  button.oct::before { content: ''; position: absolute; inset: -6px -2px; }
-  .midiwrap { position: relative; display: inline-flex; }
-  .audio { display: inline-flex; --pill-h: 22px; }
-  .pop { position: relative; }
-  /* Block-level flex: no line box (and its strut) around the summary. */
-  .pop summary.pill { display: flex; }
-  .pop summary { list-style: none; }
-  .pop summary::-webkit-details-marker { display: none; }
-  .settings summary.warn { background-color: var(--accent); color: var(--on-color); font-weight: 700; }
-  /* At the right edge: the panel opens leftwards. */
-  .settings .panel { left: auto; right: 0; width: 270px; padding: 10px 12px; }
-  @media (max-width: 1399px) {
-    .pill:not(.bad) .long { display: none; }
-    .pill.keys { max-width: 120px; }
-    .pill.midi { max-width: 88px; }
-    /* With dropouts the red pill drops its "CPU " and "drop" words: "1% · 123" (tooltip unchanged). */
-    .pill.bad .cpuw, .pill.bad .dropw { display: none; }
-    /* Room for the "Audio paused" pill; the first click brings MIDI back (it starts audio). */
-    .audio-off .midiwrap { display: none; }
-  }
+  .badge.latency { background-color: var(--accent); }
+  .badge:hover { filter: brightness(1.08); }
+  .badge:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  /* A 24 px hit area around the short badge. */
+  .badge::after { content: ''; position: absolute; inset: -4px -2px; }
+
   /* Short windows (< 740 px tall): a 40 px bar, so the piano roll keeps
      C2..C5 at 9 px rows at 1280×720 (pianoroll.spec.ts): 36 px transport
-     buttons, tempo LCD and timer (BigTimer.svelte), shorter pills. The
+     buttons, tempo LCD and timer (BigTimer.svelte), a shorter badge. The
      approved 64 px look from 740 px up. */
   @media (max-height: 739px) {
     .bar { min-height: 40px; padding-block: 2px; }
@@ -595,15 +521,7 @@
     .sep { height: 28px; }
     .tempo { --nf-lcd-h: 36px; --nf-lcd-pad: 9px; }
     .mini { height: 32px; }
-    .io { gap: 2px; }
-    .pill { height: 17px; font-size: 11px; }
-    .small .pill { height: 17px; }
-    .audio { --pill-h: 17px; }
-    .pill.keys { line-height: 17px; }
-    /* Hit areas of at least 24 px around the short pills (their look stays 17 px). */
-    button.pill, summary.pill { position: relative; }
-    button.pill::after, summary.pill::after { content: ''; position: absolute; inset: -4px -2px; }
-    button.oct::before { inset: -4px -3px; }
+    .status { --pill-h: 17px; }
   }
   .fatal { padding: 4px 10px; border-radius: var(--r-sm); background: var(--rec); color: var(--on-color); font-weight: 700; }
   .fatal button { padding: 1px 8px; border: 0; border-radius: var(--r-sm); background: var(--text); color: var(--on-color); font: inherit; cursor: pointer; }

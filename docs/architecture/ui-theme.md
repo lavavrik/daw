@@ -53,8 +53,9 @@ Rules of use:
 - Never `--play`, `--accent` or `--rec` as text or an icon on `--raised`
   (1.7–2.8:1, under WCAG's 4.5:1 for text and 3:1 for icons). A warning or
   status puts the colour in a fill instead: the vivid colour under
-  `--on-color` text (the top bar's red dropout / MIDI-blocked pill, the
-  orange latency pill, an armed Rec, a playing ▶), a light mix of the colour
+  `--on-color` text (the top bar's red dropout / MIDI-blocked badge, the
+  orange latency badge, View ▸ Performance's red dropout readout, an armed
+  Rec, a playing ▶), a light mix of the colour
   with `--text` for an icon (an idle ▶: `--play` 55% / `--text`, 3.3:1), or
   an LED dot beside a `--text` label (Rec; the dot's `--on-color` ring keeps
   it 3:1 from the button).
@@ -211,7 +212,9 @@ Letters are the QWERTY piano, so every `<select>` takes
 and sample pickers, choice params, the mixer's sidechain picker, the pattern
 picker, the step grid's step count, the piano roll's grid and length, the
 Acid tab's length / root / scale and Settings'
-latency. After a pick, `releaseSelect(sel)` gives the keys back:
+latency. After a pick, `releaseSelect(sel)` gives the keys back (except in
+the modal Settings dialog: no key reaches the piano behind a modal, so its
+select keeps the focus):
 base-select's picker hands focus back to its select as it closes, after the
 change event, so besides the blur a one-shot `focus` listener blurs it again
 for 200 ms, plus a check on the next frame. `releaseSelect(sel, to)` focuses
@@ -300,7 +303,7 @@ one 64 px `--top` row. The header comment has the details; in short:
 
 | Part | What | Test id |
 |---|---|---|
-| Menu bar | `ui/MenuBar.svelte` (plan 21): File · Edit · Add · Patterns · View · Options · Help, 12 px text buttons on top of the left block. Each is a button (`aria-expanded`, `aria-controls`) over a popover of plain buttons (no ARIA menu): ↓ / ↑ open it on the first / last item, ↑ ↓ Home End move inside, ← → open the neighbour, Esc closes it and returns the focus to its opener (a document listener that stops the key: MIDI learn stays on), a press outside or Tab out closes it; one open at a time, pointing at another menu button switches. Items show their shortcut and an icon. plan 20's ⋯ items live in File (New … Export WAV…, Undo take, the discard question) and Options (Rec offset) under their old test ids. Help ▸ Keyboard shortcuts is `ui/ShortcutsSheet.svelte`, built from `input/shortcutList.ts` (a unit test keeps it in sync with `shortcuts.ts`). Every popover stays in the DOM, `hidden` while closed | `menu-file` … `menu-help`, `menu-<name>-panel` (+ the old ids); e2e helper `openMenu(page, 'File')` (`tests/e2e/topbar.ts`) |
+| Menu bar | `ui/MenuBar.svelte` (plan 21): File · Edit · Add · Patterns · View · Options · Help, 12 px text buttons on top of the left block. Each is a button (`aria-expanded`, `aria-controls`) over a popover of plain buttons (no ARIA menu): ↓ / ↑ open it on the first / last item, ↑ ↓ Home End move inside, ← → open the neighbour, Esc closes it and returns the focus to its opener (a document listener that stops the key: MIDI learn stays on), a press outside or Tab out closes it; one open at a time, pointing at another menu button switches. Items show their shortcut and an icon; the popover has 16 px of padding at the sides and 8 px at the bottom, and every item is the popover's full inner width (one highlight band). Submenus (Patterns ▸ Load from library, Options ▸ Note names ▸ Letters / Solfège) fly out to the right: → / Enter / Space open one on its first entry, ← / Esc go back to its item. plan 20's ⋯ items live in File (New … Export WAV…, Undo take, the discard question) and Options (Rec offset) under their old test ids; plan 22 moved the top bar's pills in (below). Help ▸ Keyboard shortcuts is `ui/ShortcutsSheet.svelte`, built from `input/shortcutList.ts` (a unit test keeps it in sync with `shortcuts.ts`). Every popover stays in the DOM, `hidden` while closed (a submenu's entries only exist while it is open) | `menu-file` … `menu-help`, `menu-<name>-panel` (+ the old ids); e2e helpers `openMenu(page, 'File')`, `openAudioSettings(page)` (`tests/e2e/topbar.ts`) |
 | Name + hint line | under the menus: project name, `●` when unsaved (a click opens File); under it the flashed hint (`banners.hint`), else the title / aria-label of the control last pointed at anywhere in the app (one `mouseover` listener on the document, `bigTimer.ts` `hintText`), else a static tip | `project-menu`, `project-name`, `hint-line` |
 | ↶ ↷ | 32 px raised icon buttons beside the name, under the menus (18 px in the short bar) | `undo`, `redo` |
 | Song transport | "Play song" (an aria-pressed toggle, like Space; pressed and glowing while the song plays), "Stop all" (stops either transport), Loop — 44 px, `--r-lg` | `play`, `song-stop`, `loop-toggle` |
@@ -309,16 +312,19 @@ one 64 px `--top` row. The header comment has the details; in short:
 | Metronome | 32 px icon toggle (`--accent` when on) | — |
 | Master | Knob's slider variant on the master channel's `fader` param (curve `fader` = the fader law; `setMix`); automation, MIDI learn and undo as every Knob | `master-volume` |
 | Mini spectrum | the master spectrum on an `--lcd` well; opens the Mixer | `topbar-spectrum` |
-| Pills | Keys → track and octave; MIDI, CPU, ⚙ latency (opens Settings) | `keys-target`, `octave`, `midi-status`, `cpu`, `settings-button` |
+| Badge | Plan 22: the right end is empty while all is well. ONE badge when something needs attention: "Audio paused" / "Audio failed" (AudioStatusPill: resume / retry), then "N dropouts" (in the last 10 s), "MIDI blocked", "N ms latency" (over 40 ms) from `ui/topStatus.ts`; a click opens Audio settings or the MIDI popover. Red fill, orange for latency | `audio-status` (the slot, `data-state`), `topbar-warning` (`data-kind`) |
+| Moved into the menus (plan 22) | Options ▸ Keyboard: "Octave N" with − / +, "Keys play: ■ track"; Options ▸ MIDI: <status> (the MIDI popover); View ▸ Performance: live "CPU n% · n drop" and "n ms", opens Audio settings (`ui/Settings.svelte`, a modal `<dialog>`). The pills' octave − / + merged into the menu's | `octave`, `keys-target`, `midi-status`, `cpu`, `latency`, `settings-button` (+ `menu-octave-down` / `-up`) |
 
-Fit: one row at ≥ 1280 px in the widest state (playing, unsaved, 123
-dropouts) with ~25 px to spare (~13 px with the web fonts blocked; the
-menu row, 252 px, sets the left block's width), also with the web fonts blocked
-(`tests/e2e/topbar.spec.ts`, `layout.spec.ts`). Text that changes has a
-fixed box (name, hint, timer digits up to bar 999, the master
-readout) or ellipsizes (Keys, MIDI). Below 1280 px the bar may wrap.
+Fit: one row at ≥ 1280 px in the widest states (playing, unsaved, the
+"123 dropouts" badge; the 228 px "Audio paused" pill), also with the web
+fonts blocked (`tests/e2e/topbar.spec.ts`, `layout.spec.ts`,
+`audiostart.spec.ts`; the menu row, 252 px, sets the left block's width).
+The groups are 8 px apart (4 px below 1400 px) and the mini spectrum grows
+from 66 to 360 px: it is the one flexible part and gives its room to the
+badge. Text that changes has a fixed box (name, hint, timer digits up to
+bar 999, the master readout). Below 1280 px the bar may wrap.
 Windows under 740 px tall get a 40 px bar (36 px transport, tempo and
-timer; the short pills keep 24 px hit areas; the left block is two lines:
+timer; the short badge keeps a 24 px hit area; the left block is two lines:
 the 16 px menu row, then the name, the hint and 18 px ↶ ↷ on one line): the piano roll must still
 show C2..C5 at 9 px rows at 1280×720 (`pianoroll.spec.ts`).
 
@@ -378,6 +384,11 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
 - **Top layer.** The layer is a `popover="manual"` shown with
   `showPopover()`, so it is drawn above modal `<dialog>`s (Settings, the
   shortcuts sheet), which no z-index can reach.
+- **No echo.** When the tip (trimmed, whitespace squashed) equals the
+  element's visible text (`innerText`; `tooltip.ts` `tipRepeatsText`), the
+  element is still claimed (its `title` moves to `data-tip`, so no native
+  tip either) but nothing shows and no `aria-describedby` is added. Checked
+  again whenever the title changes.
 - **Timing.** 250 ms delay; 0 ms while a tip is showing or within 600 ms of one
   hiding (moving along a toolbar). 13 px (`--fs-body`), `--lcd` background,
   max 320 px, flips above the element near the bottom edge, clamped to the

@@ -169,26 +169,32 @@ test('Options ▸ Keyboard: octave − / + change the octave; Keys play names th
   await start(page);
   await openMenu(page, 'Options');
   await expect(page.getByTestId('menu-keys-target')).toContainText('Keys play: Drums');
+  await expect(page.getByTestId('keys-target')).toHaveText('Drums'); // the old pill's id: the track name
   const oct = Number(await page.getByTestId('menu-octave').textContent());
   await page.getByTestId('menu-octave-up').click();
   await expect(page.getByTestId('menu-octave')).toHaveText(String(oct + 1));
-  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct + 1}`); // the pill follows
+  await expect(page.getByTestId('octave')).toHaveText(`Octave ${oct + 1}`); // the old pill's id: the menu's readout
   await expect(panel(page, 'Options')).toBeVisible(); // a setting keeps the menu open
   await page.getByTestId('menu-octave-down').click();
   await page.getByTestId('menu-octave-down').click();
-  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct - 1}`);
+  await expect(page.getByTestId('octave')).toHaveText(`Octave ${oct - 1}`);
   // The Z / X keys play on the new octave (the shortcuts were told), also
   // with the focus on the menu button Esc returned it to.
   await page.keyboard.press('Escape');
   await page.keyboard.press('KeyX');
-  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct}`);
+  await expect(page.getByTestId('octave')).toHaveText(`Octave ${oct}`);
 });
 
-test('Options ▸ MIDI… opens the MIDI panel; Esc gives the focus back to Options', async ({ page }) => {
+test('Options ▸ MIDI… opens the MIDI panel under Options; Esc gives the focus back to Options', async ({ page }) => {
   await start(page);
   await openMenu(page, 'Options');
+  await expect(page.getByTestId('midi-status')).toHaveText(/^MIDI: (blocked|no device|unsupported|.+)$/); // the status is the label
   await page.getByTestId('menu-midi').click();
   await expect(page.getByTestId('midi-popover')).toBeVisible();
+  const o = (await btn(page, 'Options').boundingBox())!;
+  const pop = (await page.getByTestId('midi-popover').boundingBox())!;
+  expect(Math.abs(pop.x - o.x)).toBeLessThan(2); // left-aligned under the Options button
+  expect(pop.y).toBeGreaterThan(o.y + o.height);
   await expect(panel(page, 'Options')).toBeHidden();
   await expect(page.getByTestId('midi-popover')).toBeFocused();
   await page.keyboard.press('Escape');
@@ -201,6 +207,9 @@ test('Options: Audio settings… opens Settings; Metronome and Count-in toggle (
   await openMenu(page, 'Options');
   await page.getByTestId('menu-audio-settings').click();
   await expect(page.getByTestId('settings')).toBeVisible();
+  await page.keyboard.press('Escape'); // a modal: close it before using the page again
+  await expect(page.getByTestId('settings')).toBeHidden();
+  await expect(btn(page, 'Options')).toBeFocused();
   await openMenu(page, 'Options');
   await page.getByTestId('menu-metronome').click();
   await expect(page.getByTestId('menu-metronome')).toHaveAttribute('aria-pressed', 'true');
@@ -263,7 +272,7 @@ test('after a command chosen with the mouse, the shortcuts work again: Space sta
   await expect(btn(page, 'View')).toBeFocused();
   const oct = Number((await page.getByTestId('octave').textContent())!.replace(/\D/g, ''));
   await page.keyboard.press('KeyX');
-  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct + 1}`);
+  await expect(page.getByTestId('octave')).toHaveText(`Octave ${oct + 1}`);
   await page.keyboard.press('Space');
   await expect.poll(() => daw(page, (d) => d.project.playing)).toBe(true);
   await expect(panel(page, 'View')).toBeHidden(); // Space did not also press the button
@@ -299,4 +308,50 @@ test('the About dialog closes on its backdrop, not on a press inside its padding
   await expect(dlg).toBeVisible();
   await page.mouse.click(box.x - 20, box.y + 10); // the backdrop
   await expect(dlg).toBeHidden();
+});
+
+// Plan 22 Task 1 (the owner: "more breathing room on the right and bottom";
+// "the highlighted item should have full width").
+test('every item spans the popover\'s inner width; 16 px padding at the sides, 8 px at the bottom', async ({ page }) => {
+  await start(page);
+  for (const m of MENUS) {
+    await openMenu(page, m);
+    const out = await panel(page, m).evaluate((p) => {
+      const cs = getComputedStyle(p);
+      const inner = p.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const items = [...p.querySelectorAll<HTMLElement>('.it')].filter((i) => !i.closest('.sub') && i.getClientRects().length);
+      return { right: parseFloat(cs.paddingRight), bottom: parseFloat(cs.paddingBottom), inner, widths: [...new Set(items.map((i) => i.getBoundingClientRect().width))] };
+    });
+    expect(out.right, m).toBeGreaterThanOrEqual(16);
+    expect(out.bottom, m).toBeGreaterThanOrEqual(8);
+    for (const w of out.widths) expect(Math.abs(w - out.inner), `${m}: an item ${w} px in ${out.inner}`).toBeLessThan(0.5);
+  }
+  // The hovered item's highlight is that full band (the Options entries once sat in a narrower wrapper).
+  await openMenu(page, 'Options');
+  const item = page.getByTestId('menu-notenames');
+  await item.hover();
+  const hl = await item.evaluate((i) => ({ bg: getComputedStyle(i).backgroundColor, w: i.getBoundingClientRect().width, inner: i.parentElement!.parentElement!.clientWidth - 32 }));
+  expect(hl.bg).not.toBe('rgba(0, 0, 0, 0)');
+  expect(Math.abs(hl.w - hl.inner)).toBeLessThan(0.5);
+});
+
+test('no tooltip on an item whose title equals its text (and no native one either)', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'View');
+  // A View item with a title that only repeats its label (the rule is global, in Tooltip.svelte).
+  const item = page.getByTestId('menu-view-mixer');
+  await item.evaluate((b) => b.setAttribute('title', (b as HTMLElement).innerText.trim()));
+  const text = await item.innerText();
+  await item.hover();
+  await page.waitForTimeout(500); // past the 250 ms delay
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  expect(await item.getAttribute('title')).toBeNull(); // claimed: the native tip can't fire
+  expect(await item.getAttribute('aria-describedby')).toBeNull(); // nothing to add to the name
+  // A title that says more does show.
+  const perf = page.getByTestId('settings-button');
+  await perf.hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await expect(page.getByRole('tooltip')).toContainText('Click for audio settings');
+  await page.mouse.move(700, 600);
+  await expect(item).toHaveAttribute('title', text.trim()); // put back on release
 });

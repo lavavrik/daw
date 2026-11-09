@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { addTrack } from './addTrack';
 import { startApp } from './startApp';
+import { openMenu } from './topbar';
 
 // MIDI learn (plan 14 Task 3; docs/architecture/midi.md "UI"): right-click a
 // knob or fader ▸ "MIDI learn", the next CC binds to it, later CCs move it
@@ -156,9 +157,11 @@ test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async (
   await page.getByTestId(`track-${slot}`).click();
   await page.getByRole('button', { name: 'Instrument' }).click();
 
-  const pill = page.getByTestId('midi-status');
+  // Plan 22: the MIDI pill became Options ▸ MIDI… (its label is the status, `midi-status`).
+  const pill = { click: async () => { await openMenu(page, 'Options'); await page.getByTestId('menu-midi').click(); } };
   const pop = page.getByTestId('midi-popover');
   await expect(pop).toHaveCount(0);
+  await expect(page.getByTestId('midi-status')).toHaveText(/^MIDI: /);
   await pill.click();
   await expect(pop).toBeVisible();
   await expect(pop).toHaveAttribute('role', 'dialog');
@@ -168,9 +171,10 @@ test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async (
   await expect(page.getByTestId('midi-last-cc')).toHaveText('Move a knob on your controller');
   await expect(pop).toContainText('Right-click a knob → MIDI learn');
 
-  // The pill toggles; live last-CC readout.
-  await pill.click();
+  // A press on the menu bar closes it (outside); live last-CC readout.
+  await page.getByTestId('menu-options').click();
   await expect(pop).toHaveCount(0);
+  await page.keyboard.press('Escape'); // the Options menu that press opened
   await pill.click();
   await inject(page, [0xb0, 20, 33]);
   await expect(page.getByTestId('midi-last-cc')).toHaveText('CC 20 = 33');
@@ -188,8 +192,8 @@ test('MIDI popover: devices, last CC, mappings, forget (one undo), Esc', async (
   await expect(row).toHaveText(/^CC 74 → .* · Filter · Cutoff/);
   await expect(page.getByTestId('midi-last-cc')).toHaveText('CC 74 = 64');
 
-  // An outside press closes it.
-  await page.getByTestId('timeline').click({ position: { x: 5, y: 5 } });
+  // An outside press closes it (right of the popover, which hangs under Options).
+  await page.getByTestId('timeline').click({ position: { x: 600, y: 5 } });
   await expect(pop).toHaveCount(0);
   await pill.click();
 
@@ -219,8 +223,8 @@ test('removing a mapped track drops its mapping', async ({ page }) => {
   expect(await midiMap(page)).toHaveLength(1);
   await page.evaluate((id) => (window as Any).__daw.actions.removeTrack(id), t);
   expect(await midiMap(page)).toEqual([]);
-  const pill = page.getByTestId('midi-status');
-  await pill.click();
+  await openMenu(page, 'Options');
+  await page.getByTestId('menu-midi').click();
   await expect(page.getByTestId('midi-popover')).toContainText('Right-click a knob → MIDI learn');
   await expect(page.getByTestId('midi-map-74')).toHaveCount(0);
   // CC 74 now moves nothing (no mapping, no change in the model).

@@ -10,7 +10,8 @@ import { startApp } from './startApp';
 
 // (Rec and Count-in moved to the bottom panel's pattern transport in plan 20;
 // rec-button stands for it.)
-const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'rec-button', 'settings-button'];
+// (Plan 22: the ⚙ pill became View ▸ Performance; the menus stand for it.)
+const ESSENTIAL = ['project-menu', 'undo', 'redo', 'play', 'rec-button', 'menu-view', 'menu-options'];
 
 for (const width of [1440, 1280, 1024]) {
   test(`top bar fits at ${width} px: no control is clipped`, async ({ page }) => {
@@ -25,7 +26,7 @@ for (const width of [1440, 1280, 1024]) {
     await page.getByRole('button', { name: 'Remove track Drums' }).click();
     await page.getByTestId('inline-confirm-ok').click();
     await expect(page.getByTestId('track-0')).toHaveCount(0);
-    await expect(page.getByTestId('keys-target')).toContainText('(no track)');
+    await expect(page.getByTestId('keys-target')).toHaveText('(no track)'); // Options ▸ Keyboard
     await page.getByTestId('play').click();
     await expect(page.getByTestId('play')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('project-name')).toContainText('unsaved');
@@ -54,9 +55,9 @@ for (const width of [1440, 1280, 1024]) {
   });
 }
 
-// The widest state also has the dropout tail ("· 123 drop": a 3-digit
-// count): at 1440 and 1400 px (wide readouts) and at
-// 1280 px (the narrow step), with the master spectrum in the bar, it must
+// The widest state also has the dropout badge ("123 dropouts": a 3-digit
+// count; plan 22: the only thing at the top right): at 1440 and 1400 px and
+// at 1280 px (the narrow step), with the master spectrum in the bar, it must
 // still fit on one row (a wrap mid-session would move everything below).
 for (const width of [1440, 1400, 1280]) {
   test(`top bar fits at ${width} px with 123 dropouts, unsaved and playing`, async ({ page }) => {
@@ -77,7 +78,8 @@ for (const width of [1440, 1400, 1280]) {
       const e = window.__daw.engine as unknown as { dropouts: () => number };
       e.dropouts = () => 123;
     });
-    await expect(page.getByTestId('cpu')).toContainText('123 drop');
+    await expect(page.getByTestId('cpu')).toContainText('123 drop'); // View ▸ Performance
+    await expect(page.getByTestId('topbar-warning')).toHaveText('123 dropouts');
     const out = await page.evaluate(() => {
       const bar = document.querySelector('header')!;
       const b = bar.getBoundingClientRect();
@@ -93,7 +95,7 @@ for (const width of [1440, 1400, 1280]) {
     });
     expect(out.clipped).toEqual([]);
     expect(out.rows, 'one row').toBe(1);
-    await expect(page.getByTestId('cpu')).toBeInViewport();
+    await expect(page.getByTestId('topbar-warning')).toBeInViewport();
   });
 }
 

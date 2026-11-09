@@ -15,6 +15,7 @@ import { MAX_ROWS, MAX_STEPS, currentPattern, isPatternTrack, synthTrack } from 
 import type { DrumPattern, Note, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
+import { humanizeAmount, humanizeSeed, humanizedStart, humanizedVel, nextHumanizeCounter } from './groove';
 
 export const MAX_NOTE_LEN = 61440;
 /** Last start tick the engine accepts (MAX_PATTERN_BARS bars). */
@@ -186,6 +187,33 @@ export function quantizeNotes(
     }
     updateNotes(p, sink, trackId, changes);
   });
+}
+
+/**
+ * Humanize (plan 25; docs/architecture/sequencer.md "Humanize"): jitter the
+ * velocity (±HUMANIZE_VEL) and start (±HUMANIZE_TICKS) of each note by up to
+ * that much x `amount` (0..1); `ids` empty = every note, like Quantize.
+ * Starts stay inside the pattern (state/groove.ts humanizedStart: >= 0, the
+ * end never past the pattern end); notes already past the end (kept,
+ * silent) are skipped, so Humanize never brings one into the loop.
+ * Deterministic: seeded by the pattern id and its humanize counter, each
+ * note keyed by its id. One undo entry ("Humanize"). Amount 0 (or NaN) is a
+ * no-op: no write, no entry, the counter is not used.
+ */
+export function humanizeNotes(p: Project, sink: CommandSink, trackId: string, amount: number, ids: string[] = []) {
+  const a = humanizeAmount(amount);
+  const tp = target(p, trackId);
+  if (a === 0 || !tp) return;
+  const { t, pat } = tp;
+  const want = ids.length ? new Set(ids) : null;
+  const total = patternTicks(t);
+  const seed = humanizeSeed(pat.id, nextHumanizeCounter(pat.id));
+  const changes: { id: string; start: number; vel: number }[] = [];
+  for (const n of pat.notes) {
+    if ((want && !want.has(n.id)) || n.start >= total) continue;
+    changes.push({ id: n.id, start: humanizedStart(n.start, n.len, total, seed, n.id, a), vel: humanizedVel(n.vel, seed, n.id, a) });
+  }
+  edit(p, 'Humanize', () => updateNotes(p, sink, trackId, changes));
 }
 
 // ---- pattern CRUD ------------------------------------------------------------

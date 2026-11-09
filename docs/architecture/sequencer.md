@@ -168,6 +168,72 @@ The pure maths is in `ui/stepGrid.ts` and the writes are in
 `state/actions.ts`, so the velocity lane (Task 2) shares the clamp, the
 writes and the gesture's begin, commit and cancel.
 
+### Swing presets (plan 25)
+Code: `app/src/state/groove.ts` (`SWING_PRESETS`, `mpcToSwing`,
+`swingToMpc`, `activeSwingPreset`), the popover in `ui/StepGrid.svelte`.
+
+The engine's `swing` (0..1) pushes every odd 16th late by
+`swing * 0.5 * 240` ticks (`drums.rs` `step_tick`). A pair of 16ths is 480
+ticks, so the off-16th sounds at `240 + 120 * swing`, which is
+`0.5 + 0.25 * swing` of the pair. MPC swing % is that same fraction:
+
+| MPC % | swing | off-16th in the pair |
+|---|---|---|
+| 50 (Straight) | 0 | 240 / 480 |
+| 54 | 0.16 | 259.2 / 480 |
+| 58 | 0.32 | 278.4 / 480 |
+| 62 | 0.48 | 297.6 / 480 |
+| 66 | 0.64 | 316.8 / 480 |
+
+`mpc = 50 + 25 * swing` and `swing = (mpc - 50) / 25`. The slider's top
+(swing 1) is MPC 75 %. 66 % is just short of a true 16th triplet (2/3 of the
+pair: 66.7 %, swing 0.667). Every preset falls on the slider's 1 % grid, so
+the slider, its readout and the right-click ValuePopover show it exactly.
+
+The button after the swing readout opens the presets popover (shared
+`ui/PopButton.svelte`: Esc, a press outside and Tab out close it). A chip
+calls `setSwing` with the preset's value, so it is one "Swing" undo entry,
+like a slider drag. The chip whose value matches the current swing (at the
+slider's 1 % resolution) is pressed, and the button shows its name
+("MPC 58 %", "Straight"), else "Presets".
+
+### Humanize (plan 25)
+Code: `app/src/state/groove.ts` (the jitter and the bounds),
+`humanizeDrum` in `state/actions.ts`, `humanizeNotes` in
+`state/pattern-actions.ts`, and the shared `ui/HumanizeCard.svelte`
+(amount 0–100 %, Apply) behind the **Humanize…** buttons of the step grid
+footer and the piano roll toolbar.
+
+- **Drums:** every lit step in the current pattern's first `stepCount`
+  steps gets a velocity moved by up to ±`HUMANIZE_VEL` (20) × amount,
+  rounded and clamped to 1..127. Off steps stay off and lit steps stay
+  lit. Steps past the step count, which are hidden, are not touched.
+- **Notes:** each note's velocity moves the same way, and its start moves
+  by up to ±`HUMANIZE_TICKS` (12) × amount ticks (spec §1), kept inside the
+  pattern: the start stays ≥ 0, and the end (start + len) stays at or before
+  the pattern end. A note that already overhangs the end may only move
+  earlier, so its end never grows. Notes past the end (kept, silent) are
+  skipped, as Quantize skips them. The piano roll humanizes the selection,
+  or every note when nothing is selected, as Quantize does.
+- **Deterministic:** each value's offset is
+  `jitter(seed, key) × max × amount`, with `jitter` in [-1, 1) from a hash
+  (FNV-1a, then murmur3's finaliser). `key` is the item's own identity:
+  `row:step` for a step, the note id for a note. This makes the result
+  independent of iteration order. `seed = humanizeSeed(patternId, counter)`,
+  where the counter counts that pattern's Humanizes in this session
+  (`nextHumanizeCounter`). The counter is not saved and not undone, so the
+  same pattern and counter always give the same result, and a second
+  Humanize gives a new one. Redo replays the entry's snapshot, so it
+  matches exactly.
+- **Undo:** one entry, "Humanize": the whole pass runs in one `edit()`, as
+  SET_STEP or NOTE_SET commands. Amount 0 (or NaN) returns before `edit()`
+  and does not use the counter, so it makes no entry and writes nothing. A
+  pass that changes nothing, such as an empty pattern, makes no entry
+  either, because the history drops entries whose snapshots are equal.
+- The amount (default 50 %) is remembered for the session and shared by
+  both editors. Moving the slider is not an edit: only Apply (or Enter on
+  the slider) writes.
+
 ### Deleting a row (plan 21 task 7)
 Engine rows are **slot-indexed** (`DrumTrack::rows[MAX_ROWS]`, and every
 pattern's `steps[row][step]`), so deleting a row in the middle means every

@@ -9,6 +9,7 @@ import { makeDrumPattern } from './pattern-actions';
 import { edit, markEdited } from './edits';
 import { dropTrackMappings } from './midiMap';
 import { clampStepVel } from '../ui/stepGrid';
+import { humanizeAmount, humanizeSeed, humanizedVel, nextHumanizeCounter } from './groove';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -285,6 +286,37 @@ export function setSwing(p: Project, sink: CommandSink, trackId: string, s: numb
     const pat = currentPattern(track);
     pat.swing = clamp(s, 0, 1);
     sink.send(Op.SET_SWING, track.slot, pat.swing);
+  });
+}
+
+/**
+ * Humanize (plan 25; docs/architecture/sequencer.md "Humanize"): jitter the
+ * velocity of every lit step of the current pattern's first `stepCount`
+ * steps by up to ±HUMANIZE_VEL x `amount` (0..1), kept at 1..127 so no step
+ * turns off and no off step turns on. Deterministic: seeded by the pattern
+ * id and its humanize counter (state/groove.ts). One undo entry
+ * ("Humanize"). Amount 0 (or NaN) is a no-op: no write, no entry, and the
+ * counter is not used. Returns how many steps changed.
+ */
+export function humanizeDrum(p: Project, sink: CommandSink, trackId: string, amount: number): number {
+  const a = humanizeAmount(amount);
+  const track = p.tracks.find((t) => t.id === trackId);
+  if (a === 0 || !track || track.kind !== 'drum') return 0;
+  const pat = currentPattern(track);
+  const seed = humanizeSeed(pat.id, nextHumanizeCounter(pat.id));
+  return edit(p, 'Humanize', () => {
+    let changed = 0;
+    track.rows.forEach((row, r) => {
+      for (let s = 0; s < pat.stepCount; s++) {
+        const cur = pat.steps[r][s];
+        if (cur === 0) continue;
+        const v = humanizedVel(cur, seed, `${r}:${s}`, a);
+        if (v === cur) continue;
+        setStep(p, sink, trackId, row.id, s, v);
+        changed++;
+      }
+    });
+    return changed;
   });
 }
 

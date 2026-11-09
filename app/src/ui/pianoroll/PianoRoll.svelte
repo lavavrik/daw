@@ -4,6 +4,7 @@
   import MagnetStraight from 'phosphor-svelte/lib/MagnetStraight';
   import Eraser from 'phosphor-svelte/lib/Eraser';
   import BookOpen from 'phosphor-svelte/lib/BookOpen';
+  import DiceFive from 'phosphor-svelte/lib/DiceFive';
   import Icon from '../Icon.svelte';
   /** Grid size survives track switches for the session (the roll remounts per track). */
   let lastGrid: GridKey = '1/16';
@@ -45,6 +46,11 @@
   // Every other key bubbles on: letters keep playing the QWERTY piano, Z/X
   // change octave, R arms recording, Space toggles the transport.
   //
+  // Humanize… (plan 25 Task 3; docs/architecture/sequencer.md "Humanize"):
+  // an amount card (HumanizeCard) whose Apply is humanizeNotes on the
+  // selection, or every note (like Quantize): starts and velocities jittered,
+  // kept inside the pattern, one "Humanize" undo entry.
+  //
   // Examples ▾ (plan 13): the house patches' example phrases
   // (state/houseExamples.ts), grouped like the patch menu, the example for
   // this track's patch first. A row's name adds it as a new pattern of this
@@ -60,6 +66,9 @@
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { releaseSelect, selectKey } from '../selectKey';
   import InlineConfirm from '../InlineConfirm.svelte';
+  import PopButton from '../PopButton.svelte';
+  import HumanizeCard from '../HumanizeCard.svelte';
+  import { HUMANIZE_TICKS, HUMANIZE_VEL } from '../../state/groove';
   import { THEME } from '../theme';
   import { MAX_PATTERNS } from '../../audio/protocol';
   import { TRACKS_FULL_TEXT } from '../../state/actions';
@@ -68,8 +77,8 @@
   import type { ExampleRoll } from '../../state/houseExamples';
   import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, quantizeNotes, setPatternBars,
-    updateNotes,
+    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, humanizeNotes, quantizeNotes,
+    setPatternBars, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { MAX_TRACKS, currentPattern } from '../../state/project.svelte';
@@ -945,6 +954,19 @@
     <button data-testid="pr-quantize" title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
       <Icon icon={MagnetStraight} /> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
     </button>
+    <PopButton id="pr-humanize-pop-{track.id}" label="Humanize" testid="humanize-pop">
+      {#snippet trigger(a)}
+        <button {...a} data-testid="pr-humanize" aria-label="Humanize…" title="Humanize: jitter note starts and velocities, the selection or every note">
+          <Icon icon={DiceFive} /><span class="t"> Humanize…</span>
+        </button>
+      {/snippet}
+      {#snippet children(close)}
+        <HumanizeCard
+          hint="Moves {selNotes.length === 1 ? 'the selected note' : selNotes.length ? `the ${selNotes.length} selected notes` : 'every note'} by up to ±{HUMANIZE_TICKS} ticks and ±{HUMANIZE_VEL} velocity at 100 %, inside the pattern."
+          onapply={(a) => humanizeNotes(p, engine, track.id, a, selectedIds())} {close}
+        />
+      {/snippet}
+    </PopButton>
     <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /> Clear</button>
     {#if clearAsk}
       <InlineConfirm
@@ -1043,6 +1065,11 @@
   .bar .exrow button.plus { flex: none; font-size: var(--fs-lbl); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line); }
   .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: var(--raised); color: var(--text); filter: none; outline: none; }
   .exmenu .full { margin: 0 0 4px; color: var(--accent); font-size: var(--fs-ctl); white-space: nowrap; }
+  /* Room for the readout on the one-row toolbar at 1280 px (pianoroll.spec
+     "layout at 1280×720"): Humanize… is icon-only below 1440 px (its name
+     stays: aria-label, and the tooltip says what it does), like the pattern
+     picker's Duplicate. */
+  @media (max-width: 1439px) { .t { display: none; } }
   .readout {
     margin-left: auto; padding: 2px 8px; border-radius: var(--r-sm); white-space: nowrap;
     background: var(--lcd); box-shadow: var(--well-shadow); color: var(--text); font: 500 var(--fs-ctl)/16px var(--font-mono);

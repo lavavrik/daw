@@ -37,6 +37,15 @@
   // (actions.ts removeDrumRow). The rows have no context menu (right-click
   // on a cell clears it), so the button is the only way in.
   //
+  // Swing presets and Humanize (plan 25 Task 3; docs/architecture/sequencer.md
+  // "Swing presets", "Humanize"): the button after the swing readout opens a
+  // popover of MPC preset chips (state/groove.ts SWING_PRESETS: Straight,
+  // 54-66 %); a chip is setSwing with the preset's value, so one "Swing" undo
+  // entry, and the chip (and the button) shows the preset the swing matches.
+  // The slider and its right-click ValuePopover are unchanged. Humanize…
+  // opens an amount card (HumanizeCard) whose Apply is humanizeDrum on the
+  // current pattern: one "Humanize" entry.
+  //
   // Step velocity (plan 23 Task 1; docs/architecture/sequencer.md "Step
   // velocity"): on a LIT cell the wheel (±5 a notch, ±1 with Shift), a
   // Shift-drag (vertical, 1 per 2 px, up is louder) and Shift+↑ / ↓ (±5;
@@ -46,6 +55,11 @@
   // Cmd+Z cancel). A "vel 96" chip floats above the cell while editing.
   import { onDestroy, onMount, tick } from 'svelte';
   import Trash from 'phosphor-svelte/lib/Trash';
+  import CaretDown from 'phosphor-svelte/lib/CaretDown';
+  import DiceFive from 'phosphor-svelte/lib/DiceFive';
+  import PopButton from './PopButton.svelte';
+  import HumanizeCard from './HumanizeCard.svelte';
+  import { HUMANIZE_VEL, SWING_PRESETS, activeSwingPreset } from '../state/groove';
   import Icon from './Icon.svelte';
   import { registerDragCancel } from '../history/gestures';
   import { createSweepKeys } from '../history/sweep';
@@ -53,8 +67,8 @@
   import type { AudioEngine } from '../audio/engine';
   import { droppedFiles } from '../library/drag';
   import {
-    addRow, removeDrumRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setStepVelocity, setSwing,
-    stepVelocityGesture,
+    addRow, humanizeDrum, removeDrumRow, setRowGain, setRowMute, setRowPan, setRowSample, setStep, setStepCount, setStepVelocity,
+    setSwing, stepVelocityGesture,
   } from '../state/actions';
   import type { StepVelocityGesture } from '../state/actions';
   import { mod } from '../audio/audioClock';
@@ -123,6 +137,8 @@
 
   /** The pattern being edited (steps, step count, swing); rows stay per track. */
   const pat = $derived(currentPattern(track));
+  /** The swing preset the current swing matches (1 % resolution), or null. */
+  const preset = $derived(activeSwingPreset(pat.swing));
 
   const GHOST = 60;
   const FULL = 100;
@@ -557,6 +573,38 @@
       />
       <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
     </label>
+    <PopButton id="swing-presets-pop-{track.id}" label="Swing presets" testid="swing-presets-pop" place="above">
+      {#snippet trigger(a)}
+        <button {...a} class="btn pop" data-testid="swing-presets" title="Swing presets in MPC terms (50 % is straight)">
+          {preset ? (preset.mpc === 50 ? 'Straight' : `MPC ${preset.label}`) : 'Presets'} <Icon icon={CaretDown} />
+        </button>
+      {/snippet}
+      {#snippet children()}
+        <p class="lbl pop-h">Swing (MPC)</p>
+        <div class="seg" role="group" aria-label="Swing presets">
+          {#each SWING_PRESETS as s (s.mpc)}
+            <button
+              type="button" data-testid="swing-preset-{s.mpc}" aria-pressed={preset?.mpc === s.mpc}
+              title="{s.label === 'Straight' ? 'Straight (MPC 50 %)' : `MPC ${s.label}`}: swing {Math.round(s.swing * 100)}%"
+              onclick={() => setSwing(p, engine, track.id, s.swing)}
+            >{s.label}</button>
+          {/each}
+        </div>
+      {/snippet}
+    </PopButton>
+    <PopButton id="humanize-pop-{track.id}" label="Humanize" testid="humanize-pop" place="above">
+      {#snippet trigger(a)}
+        <button {...a} class="btn pop" data-testid="humanize" title="Jitter the velocity of every lit step in this pattern">
+          <Icon icon={DiceFive} /> Humanize…
+        </button>
+      {/snippet}
+      {#snippet children(close)}
+        <HumanizeCard
+          hint="Moves each lit step's velocity by up to ±{HUMANIZE_VEL} at 100 %. Steps never turn on or off."
+          onapply={(a) => humanizeDrum(p, engine, track.id, a)} {close}
+        />
+      {/snippet}
+    </PopButton>
   </div>
 </div>
 
@@ -685,4 +733,6 @@
   .add { padding: 4px 12px; }
   .swing { width: 160px; }
   .pct { width: 32px; color: var(--text); }
+  .pop { padding: 4px 10px; }
+  .pop-h { margin: 0; }
 </style>

@@ -98,6 +98,13 @@ export const humanizeAmount = (amount: number) => (Number.isFinite(amount) ? Mat
  */
 const counters = new Map<string, number>();
 
+/**
+ * The counter the next Humanize of `patternId` uses (0 first), without
+ * using it: an action peeks, computes, and calls nextHumanizeCounter only
+ * when something changed (a Humanize that changes nothing uses no counter).
+ */
+export const peekHumanizeCounter = (patternId: string): number => counters.get(patternId) ?? 0;
+
 /** The next counter of `patternId` (0 first), counted as used. */
 export function nextHumanizeCounter(patternId: string): number {
   const n = counters.get(patternId) ?? 0;

@@ -12,7 +12,7 @@ import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
 import {
   HUMANIZE_TICKS, HUMANIZE_VEL, SWING_PRESETS, activeSwingPreset, humanizeSeed, humanizedStart, humanizedVel, jitter,
-  mpcToSwing, swingToMpc,
+  mpcToSwing, peekHumanizeCounter, swingToMpc,
 } from './groove';
 
 function rig() {
@@ -191,6 +191,18 @@ describe('humanizeDrum', () => {
     expect(humanizeDrum(p, sink, s.id, 1)).toBe(0);
     expect(entries()).toBe(n);
   });
+
+  it('a Humanize that changes nothing uses no counter: the next one is still counter 0', () => {
+    const { p, sink, entries } = rig();
+    const t = addDrumTrack(p, sink)!;
+    const n = entries();
+    expect(humanizeDrum(p, sink, t.id, 1)).toBe(0); // empty: nothing to change
+    expect(peekHumanizeCounter(currentPattern(t).id)).toBe(0);
+    expect(entries()).toBe(n);
+    setStep(p, sink, t.id, t.rows[0].id, 0, 100);
+    expect(humanizeDrum(p, sink, t.id, 1)).toBeGreaterThan(0);
+    expect(peekHumanizeCounter(currentPattern(t).id)).toBe(1);
+  });
 });
 
 describe('humanizeNotes', () => {
@@ -259,11 +271,26 @@ describe('humanizeNotes', () => {
     after.forEach((x, i) => { if (i !== 1) expect(x).toEqual(before[i]); });
   });
 
+  it('returns how many notes changed, like humanizeDrum; nothing changed: no entry, no counter used', () => {
+    const { p, sink, t, notes, entries } = synth();
+    const before = notes();
+    const changed = humanizeNotes(p, sink, t.id, 1);
+    const after = notes();
+    expect(changed).toBe(after.filter((x, i) => x.start !== before[i].start || x.vel !== before[i].vel).length);
+    expect(changed).toBeGreaterThan(0);
+    const pat = currentPattern(t);
+    const counter = peekHumanizeCounter(pat.id);
+    const n = entries();
+    expect(humanizeNotes(p, sink, t.id, 1, ['no-such-note'])).toBe(0);
+    expect(entries()).toBe(n);
+    expect(peekHumanizeCounter(pat.id)).toBe(counter);
+  });
+
   it('amount 0 is a no-op with no undo entry', () => {
     const { p, sink, sent, t, notes, entries } = synth();
     const before = notes();
     const n = entries();
-    humanizeNotes(p, sink, t.id, 0);
+    expect(humanizeNotes(p, sink, t.id, 0)).toBe(0);
     expect(notes()).toEqual(before);
     expect(sent).toEqual([]);
     expect(entries()).toBe(n);

@@ -7,6 +7,7 @@ import { validate } from '../project/schema';
 import type { ProjectJson } from '../project/schema';
 import { serialize } from '../project/serialize';
 import { DEFAULT_KIT } from './defaultKit';
+import { KITS, KIT_ROLES } from './kits';
 import { DRUM_ROLES, FACTORY_GROUPS, FACTORY_PATTERNS, VOICINGS, factoryGroup, factoryPattern } from './factoryPatterns';
 import { SWING_PRESETS, activeSwingPreset, swingToMpc } from './groove';
 import type { FactoryPattern } from './factoryPatterns';
@@ -25,16 +26,6 @@ const BASS_RANGE = [28, 52] as const; //   E1..E3
 const CHORD_RANGE = [55, 79] as const; //  G3..G5
 /** Disco strings sit an octave up, where a string section plays: about A4–E6. */
 const STRINGS_RANGE = [67, 88] as const; // G4..E6
-
-/**
- * The kits a drum entry must map onto: state/kits.ts KITS once plan 25 Task 1
- * has landed (a track built from a kit names its rows by role and holds the
- * kit's files), else the starter kit (DEFAULT_KIT). The glob is empty when
- * kits.ts does not exist, so this file builds either way.
- */
-type KitLike = { id: string; rows: { role?: string; name: string; file: string }[] };
-const kitsModule = Object.values(import.meta.glob('./kits.ts', { eager: true }))[0] as { KITS?: KitLike[] } | undefined;
-const KITS: KitLike[] = kitsModule?.KITS ?? [{ id: 'starter', rows: DEFAULT_KIT.map((r) => ({ ...r })) }];
 
 describe('factory patterns', () => {
   it('has the spec\'s entries, by group, in order', () => {
@@ -65,6 +56,7 @@ describe('factory patterns', () => {
   });
 
   it('the drum roles are DEFAULT_KIT\'s row names', () => {
+    expect(DRUM_ROLES).toBe(KIT_ROLES); // the same list (factoryPatterns re-exports kits.ts's)
     expect([...DRUM_ROLES]).toEqual(DEFAULT_KIT.map((r) => r.name));
   });
 
@@ -88,7 +80,8 @@ describe('factory patterns', () => {
 
   it('every drum entry maps onto every kit with no dropped row', () => {
     for (const kit of KITS) {
-      const target = kit.rows.map((r) => ({ name: r.role ?? r.name, sampleName: r.file.slice(r.file.lastIndexOf('/') + 1) }));
+      // A track built from the kit: rows named by role, each holding the kit's file.
+      const target = kit.rows.map((r) => ({ name: r.role, sampleName: r.file }));
       for (const e of drums) {
         const { to, dropped } = mapLibraryRows(e.rows, target, e.stepCount);
         expect(dropped, `${e.name} on ${kit.id}`).toBe(0);

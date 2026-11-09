@@ -35,6 +35,8 @@ import { BAR_TICKS } from '../audio/protocol';
 import type { LibraryPatternJson } from '../project/schema';
 import { SWING_PRESETS, mpcToSwing } from './groove';
 import { MAX_STEPS } from './project.svelte';
+import { KIT_ROLES } from './kits';
+import type { KitRole } from './kits';
 
 export type FactoryGroup = 'drums' | 'bass' | 'chords';
 
@@ -49,12 +51,12 @@ export const FACTORY_GROUPS: readonly { group: FactoryGroup; label: string; kind
 ];
 
 /**
- * The drum row roles, as DEFAULT_KIT (state/defaultKit.ts) names its rows,
- * top to bottom. Not imported from there (that module pulls in the sample
- * import path); factoryPatterns.test.ts pins the two equal.
+ * The drum row roles, top to bottom: state/kits.ts KIT_ROLES (the default
+ * drum track's row names and every kit's), re-exported under this file's
+ * name.
  */
-export const DRUM_ROLES = ['Kick', 'Clap', 'Closed hat', 'Open hat', 'Snare', 'Rim', 'Shaker', 'Perc'] as const;
-export type DrumRole = (typeof DRUM_ROLES)[number];
+export const DRUM_ROLES = KIT_ROLES;
+export type DrumRole = KitRole;
 
 // ---- drums --------------------------------------------------------------------
 

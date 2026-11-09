@@ -25,7 +25,8 @@
 // entry row that has steps goes to
 //   1. the first free target row with the same ROLE name, if the entry row
 //      is named after a role (DRUM_ROLES: "Kick", "Clap", … as DEFAULT_KIT
-//      and every kit name their rows), else
+//      and every kit name their rows; compared as kits.ts rowHasRole does,
+//      case and surrounding spaces ignored, on both sides), else
 //   2. the first free target row whose sample has the same FILE NAME, else
 //   3. the target row with the same INDEX, if that row is still free, else
 //   4. nowhere: its steps are dropped, and the load reports how many rows
@@ -48,6 +49,7 @@ import { setStepCount, setSwing } from './actions';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
 import { DRUM_ROLES, factoryPattern } from './factoryPatterns';
+import { rowHasRole } from './kits';
 import { freeName, newPattern, patternOf, renamePattern, sendNote, setPatternBars } from './pattern-actions';
 import { LIBRARY_NAME_MAX, MAX_LIBRARY_PATTERNS, MAX_STEPS, currentPattern, isPatternTrack } from './project.svelte';
 import type { DrumPattern, DrumTrack, LibraryPattern, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
@@ -110,7 +112,8 @@ export const kindText = (kind: 'drum' | 'synth') => `${kind} pattern`;
 
 // ---- drum row mapping ---------------------------------------------------------
 
-const ROLES: ReadonlySet<string> = new Set(DRUM_ROLES);
+/** The role a row name stands for (kits.ts rowHasRole: case and outer spaces ignored), or undefined. */
+const roleOf = (name: string) => DRUM_ROLES.find((role) => rowHasRole(name, role));
 
 /**
  * Where each of `rows` (an entry's) lands in a track whose rows are
@@ -138,7 +141,7 @@ export function mapLibraryRows(
         taken.add(j);
       }
     });
-  claim((r) => (ROLES.has(r.name) ? r.name : undefined), (t, role) => t.name === role);
+  claim((r) => roleOf(r.name), (t, role) => rowHasRole(t.name, role));
   claim((r) => r.sampleName, (t, file) => t.sampleName === file);
   let dropped = 0;
   rows.forEach((r, i) => {

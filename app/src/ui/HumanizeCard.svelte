@@ -1,5 +1,8 @@
 <script module lang="ts">
-  /** The last amount used (0..100 %), for the whole session: both editors share it. Starts at 50 %. */
+  /**
+   * The last amount applied (1..100 %), for the whole session: both editors
+   * share it. Starts at 50 %, and is never 0 (Apply does nothing at 0).
+   */
   let lastAmount = 50;
 </script>
 
@@ -18,8 +21,9 @@
     close: () => void;
   } = $props();
 
-  let amount = $state(lastAmount);
+  let amount = $state(lastAmount > 0 ? lastAmount : 50);
   function apply() {
+    if (amount <= 0) return; // Enter on the slider at 0: nothing to apply (as the disabled button)
     lastAmount = amount;
     onapply(amount / 100);
     close();

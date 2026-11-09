@@ -92,6 +92,17 @@ test('Humanize at 50 % changes some step velocities, never turns a step on or of
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(async () => (await pat(page)).steps).toEqual(before);
   expect(await undoLabel(page)).not.toBe('Humanize');
+
+  // Enter at 0 % applies nothing and is not remembered: the card opens at the last nonzero amount.
+  await page.getByTestId('humanize').click();
+  await page.getByTestId('humanize-amount').fill('0');
+  await expect(page.getByTestId('humanize-pct')).toHaveText('0%');
+  await page.getByTestId('humanize-amount').press('Enter');
+  await expect(page.getByTestId('humanize-pop')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('humanize-pop')).toHaveCount(0);
+  await page.getByTestId('humanize').click();
+  await expect(page.getByTestId('humanize-pct')).toHaveText('50%');
 });
 
 test('the piano roll Humanize moves some note starts, inside the pattern, in one undo', async ({ page }) => {

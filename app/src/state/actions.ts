@@ -9,7 +9,7 @@ import { makeDrumPattern } from './pattern-actions';
 import { edit, markEdited } from './edits';
 import { dropTrackMappings } from './midiMap';
 import { clampStepVel } from '../ui/stepGrid';
-import { humanizeAmount, humanizeSeed, humanizedVel, nextHumanizeCounter } from './groove';
+import { humanizeAmount, humanizeSeed, humanizedVel, nextHumanizeCounter, peekHumanizeCounter } from './groove';
 
 /** AudioEngine satisfies this structurally; tests use a recording fake. */
 export interface CommandSink {
@@ -295,28 +295,30 @@ export function setSwing(p: Project, sink: CommandSink, trackId: string, s: numb
  * steps by up to ±HUMANIZE_VEL x `amount` (0..1), kept at 1..127 so no step
  * turns off and no off step turns on. Deterministic: seeded by the pattern
  * id and its humanize counter (state/groove.ts). One undo entry
- * ("Humanize"). Amount 0 (or NaN) is a no-op: no write, no entry, and the
- * counter is not used. Returns how many steps changed.
+ * ("Humanize"). Amount 0 (or NaN), or a pattern where nothing would change,
+ * is a no-op: no write, no entry, and the counter is not used. Returns how
+ * many steps changed.
  */
 export function humanizeDrum(p: Project, sink: CommandSink, trackId: string, amount: number): number {
   const a = humanizeAmount(amount);
   const track = p.tracks.find((t) => t.id === trackId);
   if (a === 0 || !track || track.kind !== 'drum') return 0;
   const pat = currentPattern(track);
-  const seed = humanizeSeed(pat.id, nextHumanizeCounter(pat.id));
+  const seed = humanizeSeed(pat.id, peekHumanizeCounter(pat.id));
+  const changes: { rowId: string; step: number; vel: number }[] = [];
+  track.rows.forEach((row, r) => {
+    for (let s = 0; s < pat.stepCount; s++) {
+      const cur = pat.steps[r][s];
+      if (cur === 0) continue;
+      const v = humanizedVel(cur, seed, `${r}:${s}`, a);
+      if (v !== cur) changes.push({ rowId: row.id, step: s, vel: v });
+    }
+  });
+  if (!changes.length) return 0; // nothing to change: no entry, no counter used
+  nextHumanizeCounter(pat.id);
   return edit(p, 'Humanize', () => {
-    let changed = 0;
-    track.rows.forEach((row, r) => {
-      for (let s = 0; s < pat.stepCount; s++) {
-        const cur = pat.steps[r][s];
-        if (cur === 0) continue;
-        const v = humanizedVel(cur, seed, `${r}:${s}`, a);
-        if (v === cur) continue;
-        setStep(p, sink, trackId, row.id, s, v);
-        changed++;
-      }
-    });
-    return changed;
+    for (const c of changes) setStep(p, sink, trackId, c.rowId, c.step, c.vel);
+    return changes.length;
   });
 }
 

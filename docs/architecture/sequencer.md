@@ -228,11 +228,15 @@ footer and the piano roll toolbar.
 - **Undo:** one entry, "Humanize": the whole pass runs in one `edit()`, as
   SET_STEP or NOTE_SET commands. Amount 0 (or NaN) returns before `edit()`
   and does not use the counter, so it makes no entry and writes nothing. A
-  pass that changes nothing, such as an empty pattern, makes no entry
-  either, because the history drops entries whose snapshots are equal.
+  pass that would change nothing (an empty pattern, no selected note that
+  moves) is computed first (`peekHumanizeCounter`) and returns the same
+  way: no entry, no write, and the counter stays unused, so the next
+  Humanize still gets that counter. Both actions return how many steps /
+  notes changed.
 - The amount (default 50 %) is remembered for the session and shared by
-  both editors. Moving the slider is not an edit: only Apply (or Enter on
-  the slider) writes.
+  both editors; only a nonzero Apply sets it, so the card never opens at 0.
+  Moving the slider is not an edit: only Apply (or Enter on the slider,
+  which does nothing at 0) writes.
 
 ### Deleting a row (plan 21 task 7)
 Engine rows are **slot-indexed** (`DrumTrack::rows[MAX_ROWS]`, and every

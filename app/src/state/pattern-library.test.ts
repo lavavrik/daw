@@ -99,6 +99,14 @@ describe('mapLibraryRows', () => {
       .toEqual({ to: [0, 1], dropped: 0 });
   });
 
+  it('roles compare as kits.ts rowHasRole does: case and surrounding spaces ignored, on both sides', () => {
+    const kit = (...names: string[]) => names.map((name) => ({ name, sampleName: null }));
+    expect(mapLibraryRows([row(undefined, true, ' kick '), row(undefined, true, 'CLOSED HAT')], kit('Snare', 'closed hat', 'Kick ')))
+      .toEqual({ to: [2, 1], dropped: 0 });
+    // Still only roles: "kick 2" is a label, so it goes by index (row 0, Snare), not to Kick.
+    expect(mapLibraryRows([row(undefined, true, 'kick 2')], kit('Snare', 'Kick'))).toEqual({ to: [0], dropped: 0 });
+  });
+
   it('names the drop', () => {
     expect(droppedRowsText(1)).toBe('1 row not in this kit');
     expect(droppedRowsText(3)).toBe('3 rows not in this kit');

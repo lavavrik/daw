@@ -15,7 +15,7 @@ import { MAX_ROWS, MAX_STEPS, currentPattern, isPatternTrack, synthTrack } from 
 import type { DrumPattern, Note, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
-import { humanizeAmount, humanizeSeed, humanizedStart, humanizedVel, nextHumanizeCounter } from './groove';
+import { humanizeAmount, humanizeSeed, humanizedStart, humanizedVel, nextHumanizeCounter, peekHumanizeCounter } from './groove';
 
 export const MAX_NOTE_LEN = 61440;
 /** Last start tick the engine accepts (MAX_PATTERN_BARS bars). */
@@ -197,23 +197,29 @@ export function quantizeNotes(
  * end never past the pattern end); notes already past the end (kept,
  * silent) are skipped, so Humanize never brings one into the loop.
  * Deterministic: seeded by the pattern id and its humanize counter, each
- * note keyed by its id. One undo entry ("Humanize"). Amount 0 (or NaN) is a
- * no-op: no write, no entry, the counter is not used.
+ * note keyed by its id. One undo entry ("Humanize"). Amount 0 (or NaN), or
+ * notes that would not move, is a no-op: no write, no entry, the counter is
+ * not used. Returns how many notes changed (as humanizeDrum).
  */
-export function humanizeNotes(p: Project, sink: CommandSink, trackId: string, amount: number, ids: string[] = []) {
+export function humanizeNotes(p: Project, sink: CommandSink, trackId: string, amount: number, ids: string[] = []): number {
   const a = humanizeAmount(amount);
   const tp = target(p, trackId);
-  if (a === 0 || !tp) return;
+  if (a === 0 || !tp) return 0;
   const { t, pat } = tp;
   const want = ids.length ? new Set(ids) : null;
   const total = patternTicks(t);
-  const seed = humanizeSeed(pat.id, nextHumanizeCounter(pat.id));
+  const seed = humanizeSeed(pat.id, peekHumanizeCounter(pat.id));
   const changes: { id: string; start: number; vel: number }[] = [];
   for (const n of pat.notes) {
     if ((want && !want.has(n.id)) || n.start >= total) continue;
-    changes.push({ id: n.id, start: humanizedStart(n.start, n.len, total, seed, n.id, a), vel: humanizedVel(n.vel, seed, n.id, a) });
+    const start = humanizedStart(n.start, n.len, total, seed, n.id, a);
+    const vel = humanizedVel(n.vel, seed, n.id, a);
+    if (start !== n.start || vel !== n.vel) changes.push({ id: n.id, start, vel });
   }
+  if (!changes.length) return 0; // nothing to change: no entry, no counter used
+  nextHumanizeCounter(pat.id);
   edit(p, 'Humanize', () => updateNotes(p, sink, trackId, changes));
+  return changes.length;
 }
 
 // ---- pattern CRUD ------------------------------------------------------------

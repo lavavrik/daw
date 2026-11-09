@@ -8,9 +8,24 @@
   //   EQ (collapsed, "on" toggle in its header) ·
   //   Comp (tracks; collapsed, "on" toggle, the sidechain source always shown
   //   as "SC: Drums · kick", live gain reduction) ·
-  //   Reverb / Delay settings (returns) · sends "Reverb" / "Delay" with pre
-  //   toggles (tracks) · Pan · Limiter ceiling + GR (master) ·
-  //   fader | dB scale | stereo meter · fader readout.
+  //   Reverb / Delay settings (returns) · Sends (tracks; below) · Pan ·
+  //   Limiter ceiling + GR (master) · fader | dB scale | stereo meter ·
+  //   fader readout.
+  //
+  // Returns (plan 29): the header shows the return's colour dot
+  // (`--return-<slot>`), its name and returnSummary as the subtitle ("Reverb
+  // · 1.8 s"); its knobs wear the colour too. Double-clicking the name edits
+  // it in place (`return-name-input`: Enter or a click away saves through
+  // renameReturn, Esc cancels; a refused name keeps the old one). Its Presets
+  // card ends with "Delete return" (deleteReturn: one undo entry).
+  //
+  // Sends (tracks, plan 29 option C): a folding Section like EQ / Comp,
+  // closed by default (view state, per strip), not rendered with no returns.
+  // Closed it shows SendBars (one mini bar per return, in creation order and
+  // colour; a click opens the section) and "k of n" (sends above −∞); open,
+  // a knob per return, two per row, ring in the return's colour, labelled
+  // with the return's name, each with its pre/post button. A send is the
+  // catalog param send_a..send_h of the return's slot (protocol sendParam).
   // All edits go through mixer-actions.ts (state + engine command); knobs and
   // the fader coalesce their sends to one per animation frame. Every
   // continuous knob and the fader follow their automation lane (`auto`,
@@ -33,10 +48,11 @@
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
   import type { MixParamDef, MixTarget } from '../../audio/mixerCatalog';
-  import { MAX_KEYS, MIX_METER_STRIDE } from '../../audio/protocol';
+  import { MAX_KEYS, MIX_METER_STRIDE, sendParam, sendPreParam } from '../../audio/protocol';
   import type { ChannelState, Project, SidechainKey } from '../../state/project.svelte';
   import { channelState, duckToKick, keyLabel, kickKey, pickSidechain, rowKeyAllowed, setMix, toggleMute, toggleSolo } from '../../state/mixer-actions';
-  import { KIND_NAME, findReturn } from '../../state/returns';
+  import { KIND_NAME, RETURN_NAME_MAX, deleteReturn, findReturn, renameReturn, returnColor } from '../../state/returns';
+  import SendBars from './SendBars.svelte';
   import { applyPreset, presetsFor } from '../../state/mixerPresets';
   import type { PresetKind } from '../../state/mixerPresets';
   import { flashHint } from '../../state/banners.svelte';
@@ -49,7 +65,7 @@
   import { soloTitle } from '../soloTitle';
   import Meter from './Meter.svelte';
   import Section from './Section.svelte';
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import { useAutoBus } from '../autoBus';
   import type { MeterBus } from './meterBus';
   import { SCALE_TICKS, delayClampNote, faderPos, formatDb } from './mixMath';
@@ -76,11 +92,13 @@
     onselect?: () => void;
   } = $props();
 
-  /** The strip colour: the track's, or a neutral for returns and the master. */
-  const knobColor = $derived(color ?? 'var(--text-dim)');
+  /** This strip's return (undefined: a track or the master). */
+  const ret = $derived(kind === 'return' ? findReturn(p, target) : undefined);
+  /** The knobs' colour: the track's, the return's (`--return-<slot>`), or a neutral for the master. */
+  const knobColor = $derived(color ?? (ret ? returnColor(ret.slot) : 'var(--text-dim)'));
   const ch = $derived<ChannelState | undefined>(channelState(p, target));
   /** A return's effect (null: a track or the master). */
-  const retKind = $derived(kind === 'return' ? (findReturn(p, target)?.kind ?? null) : null);
+  const retKind = $derived(ret?.kind ?? null);
   const val = (n: string) => ch?.params[mixParam(n).id] ?? mixParam(n).default;
   const set = (n: string, v: number) => setMix(p, engine, target, n, v);
   /** The lane target of mixer param `n` on this channel (Knob / Fader follow it: ui/autoBus.ts). */
@@ -114,6 +132,43 @@
     const to = e.key === 'Home' ? 0 : e.key === 'End' ? all.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length;
     all[to]?.focus();
   }
+
+  // ---- return: rename in place, delete ---------------------------------------
+  let editing = $state(false);
+  let draft = $state('');
+  let nameInput = $state<HTMLInputElement | null>(null);
+  let nameBtn = $state<HTMLButtonElement | null>(null);
+  async function startRename() {
+    if (kind !== 'return') return;
+    draft = name;
+    editing = true;
+    await tick();
+    nameInput?.focus();
+    nameInput?.select();
+  }
+  /** Leave the field: save (Enter, a click away) or cancel (Esc). Once only: the field's blur on removal is ignored. */
+  async function endRename(save: boolean, refocus: boolean) {
+    if (!editing) return;
+    editing = false;
+    // An unchanged name makes no undo entry; a refused one (empty, too long) keeps the old name.
+    if (save && draft.trim() !== name && !renameReturn(p, target, draft)) flashHint(`A return's name is 1 to ${RETURN_NAME_MAX} characters`);
+    if (!refocus) return;
+    await tick();
+    nameBtn?.focus();
+  }
+  function renameKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' && e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    void endRename(e.key === 'Enter', true);
+  }
+
+  // ---- sends (tracks) --------------------------------------------------------
+  let sendsOpen = $state(false);
+  /** The send level param's minimum: −∞ (Off). */
+  const SEND_MIN = mixParam(sendParam(0)).min;
+  /** How many of this track's sends (to existing returns) are above −∞. */
+  const sendsOn = $derived(kind === 'track' ? p.mixer.returns.filter((r) => val(sendParam(r.slot)) > SEND_MIN).length : 0);
 
   // ---- sidechain -----------------------------------------------------------
   // Select values: "none", "t:<trackId>" (a whole track), "r:<trackId>:<row>".
@@ -243,18 +298,43 @@
 >
   <span class="screw" style:left="3px" style:top="42px"></span><span class="screw" style:right="3px" style:top="42px"></span>
   <span class="screw" style:left="3px" style:bottom="4px"></span><span class="screw" style:right="3px" style:bottom="4px"></span>
-  <button
-    type="button"
-    class="name mech-head"
-    data-testid="strip-name"
-    disabled={!onselect}
-    aria-pressed={onselect ? selected : undefined}
-    title={onselect ? `${name} — click to select and edit it` : `${name}${subtitle ? ` (${subtitle})` : ''}`}
-    onclick={() => onselect?.()}
-  >
-    <b>{name}</b>
-    {#if subtitle}<span class="sub">{subtitle}</span>{/if}
-  </button>
+  {#if editing}
+    <div class="name mech-head editing" data-testid="strip-name">
+      <input
+        class="rename"
+        bind:this={nameInput}
+        bind:value={draft}
+        data-testid="return-name-input"
+        aria-label={`New name for the ${name} return`}
+        spellcheck="false"
+        autocomplete="off"
+        onkeydown={renameKey}
+        onblur={() => void endRename(true, false)}
+      />
+      {#if subtitle}<span class="sub">{subtitle}</span>{/if}
+    </div>
+  {:else}
+    <button
+      type="button"
+      class="name mech-head"
+      data-testid="strip-name"
+      bind:this={nameBtn}
+      disabled={!onselect && kind !== 'return'}
+      aria-pressed={onselect ? selected : undefined}
+      title={onselect ? `${name} — click to select and edit it`
+        : kind === 'return' ? `${name}${subtitle ? ` (${subtitle})` : ''} — double-click to rename`
+        : `${name}${subtitle ? ` (${subtitle})` : ''}`}
+      onclick={() => onselect?.()}
+      ondblclick={() => void startRename()}
+      onkeydown={(e) => { if (kind === 'return' && e.key === 'F2') { e.preventDefault(); void startRename(); } }}
+    >
+      <span class="nm">
+        {#if ret}<span class="dot" style:--rc={returnColor(ret.slot)} data-testid="return-dot" aria-hidden="true"></span>{/if}
+        <b>{name}</b>
+      </span>
+      {#if subtitle}<span class="sub">{subtitle}</span>{/if}
+    </button>
+  {/if}
   <span class="presets">
     <PopButton id="strip-presets-pop-{channel}" label={`${name} presets`} testid="strip-presets-pop" float>
       {#snippet trigger(a)}
@@ -270,6 +350,10 @@
           {#if canDuck}
             <hr />
             <button type="button" class="it" data-testid="preset-duck" title="Key the comp from the Kick row and pump this track with every kick" onclick={() => { close(); duck(); }}>Duck to kick</button>
+          {/if}
+          {#if kind === 'return'}
+            <hr />
+            <button type="button" class="it" data-testid="preset-delete-return" title={`Delete the ${name} return, every track's send to it and its lanes (Cmd/Ctrl+Z brings it all back)`} onclick={() => { close(); deleteReturn(p, engine, target); }}>Delete return</button>
           {/if}
         </div>
       {/snippet}
@@ -340,16 +424,22 @@
     </Section>
   {/if}
 
-  {#if kind === 'track'}
-    <div class="row sends" title="Sends: how much of this track goes to the Reverb and Delay returns">
-      {#each [['send_a', 'send_a_pre'], ['send_b', 'send_b_pre']] as [s, pre] (s)}
+  {#if kind === 'track' && p.mixer.returns.length}
+    <Section title="Sends" {name} testid="sends" aside={`${sendsOn} of ${p.mixer.returns.length}`} bind:open={sendsOpen}>
+      {#snippet summary()}
+        <SendBars returns={p.mixer.returns} level={(slot) => val(sendParam(slot))} onopen={() => (sendsOpen = true)} />
+      {/snippet}
+      {#each p.mixer.returns as r (r.id)}
+        {@const s = sendParam(r.slot)}
+        {@const pre = sendPreParam(r.slot)}
         {@const isPre = val(pre) === 1}
-        <div class="send">
-          <Knob variant="mech" size="sm" def={mixParam(s)} value={val(s)} color={knobColor} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
-          <button type="button" class="pre mech-btn" aria-pressed={isPre} aria-label={`${name} ${mixParam(s).label} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}><span class="led" class:lit={isPre} aria-hidden="true"></span>{isPre ? 'pre' : 'post'}</button>
+        <!-- --c: the pre LED glows in the return's colour too. -->
+        <div class="send" style:--c={returnColor(r.slot)}>
+          <Knob variant="mech" size="sm" def={{ ...mixParam(s), label: r.name }} value={val(s)} color={returnColor(r.slot)} moduleName={`${name} send to`} testid={`knob-${s}`} auto={autoOf(s)} onchange={(v) => set(s, v)} />
+          <button type="button" class="pre mech-btn" aria-pressed={isPre} aria-label={`${name} ${r.name} send pre-fader`} title={isPre ? 'Pre-fader: the send ignores this fader — click for post-fader' : 'Post-fader: the send follows this fader — click for pre-fader'} data-testid={`${s}-pre`} onclick={() => set(pre, isPre ? 0 : 1)}><span class="led" class:lit={isPre} aria-hidden="true"></span>{isPre ? 'pre' : 'post'}</button>
         </div>
       {/each}
-    </div>
+    </Section>
   {/if}
 
   {#if kind !== 'master'}
@@ -417,6 +507,13 @@
   .plist hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
   .name:disabled { cursor: default; }
   .name:not(:disabled):hover { filter: brightness(1.06); }
+  /* A return's name row: its colour dot (an 8 px circle: geometry) before the name. */
+  .nm { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+  .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--rc); box-shadow: 0 0 0 1px var(--mech-recess), 0 0 5px color-mix(in srgb, var(--rc) 55%, transparent); }
+  /* Renaming a return: the name becomes a recessed field, the subtitle stays. */
+  .name.editing { cursor: default; }
+  .rename { width: 100%; box-sizing: border-box; height: 16px; padding: 0 4px; border: 0; border-radius: var(--r-xs); background: var(--mech-recess); box-shadow: var(--mech-chip-shadow); color: var(--text); font: 700 var(--fs-lbl) var(--font-ui); }
+  .rename:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
   .name b { font-size: var(--fs-lbl); line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .sub { font: 600 var(--fs-xs)/12px var(--font-ui); letter-spacing: 0.04em; text-transform: none; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   /* Returns and master sit on --raised: light text at full opacity (dark text and the dimmed subtitle lack contrast there). */
@@ -439,9 +536,8 @@
   .scpick select { width: 100%; }
   /* A row under an engraved divider (--mech-divider). */
   .row { display: flex; flex-direction: column; align-items: center; gap: 4px; box-shadow: var(--mech-divider); padding-top: 5px; margin-top: 1px; }
-  /* Sends: the two knobs side by side, each with its pre/post button under it. */
-  .sends { display: grid; grid-template-columns: 1fr 1fr; justify-items: center; gap: 0; }
-  .send { display: flex; flex-direction: column; align-items: center; gap: 2px; --c: var(--sig-vel); }
+  /* Sends: a cell per return in the Section's two-column grid, the knob over its pre/post button (--c: the return's colour, for the LED). */
+  .send { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
   .pre { display: inline-flex; align-items: center; gap: 3px; min-width: 0; height: 16px; padding: 0 5px; font-size: var(--fs-xs); }
   .pre .led { width: 5px; height: 5px; }
   /* Master: the limiter's ceiling knob beside its GR readout. */

@@ -286,8 +286,8 @@ faceplates"):
   while it is on (M `--sig-cv`, S `--track-7`, ∿ `--play`). Test ids,
   `aria-pressed` and titles are unchanged;
 - every knob is a compact mech dial (`Knob variant="mech" size="sm"`, 46
-  px in a 56 px cell: two cells fill the strip's 112 px inside exactly), two per row: EQ, Comp, the returns' effects, the two sends (side by
-  side, each with its pre/post `.mech-btn` and a small LED under it), pan,
+  px in a 56 px cell: two cells fill the strip's 112 px inside exactly), two per row: EQ, Comp, the returns' effects, the sends (one per
+  return, each with its pre/post `.mech-btn` and a small LED under it), pan,
   the master's limiter ceiling beside its GR chip. The Delay's 12-way time
   division stays a skinned select; a ≤ 6-choice param would be LED buttons;
 - the fader (`Fader.svelte`) is the mech fader: an 8 px `--mech-slot`, a
@@ -304,10 +304,56 @@ scrollbar: it would eat the two-knob rows' width; wheel or focus scroll
 it), so the fader, scale, meter and readout always stay in view. With no
 scrollbar the cue is a 14 px fade (a `mask-image`) at the edge that has
 more past it (`fade-top` / `fade-bot`, re-checked on scroll and on any size
-change). At 1280×720 a track strip's pan sits below the sends, scrolled.
-- **Section headers** (EQ, Comp, the return's effect): one leading glyph,
+change). With the Sends section closed (its default) a track strip's pan
+sits right under the section headers.
+- **Section headers** (EQ, Comp, the return's effect, Sends): one leading glyph,
   the section's icon (brighter while open), or the ▸ / ▾ triangle when it
   has none; never both.
+
+### Returns and sends on the strips (plan 29 Task 7)
+
+Layout, left to right: the track strips, a dashed divider, the return strips
+(`p.mixer.returns`, creation order), the **"+ Return"** ghost strip, the
+Master, the analyser (`MixerView.svelte`).
+
+- **Return strips** (`Strip kind="return"`, test id `strip-<returnId>`, so
+  the default two stay `strip-reverb` / `strip-delay`). The header is
+  neutral (`--raised`, so a return never passes for a track) and shows a
+  colour dot (`return-dot`, `--return-<slot>`: `returnColor(slot)`), the
+  name, and `returnSummary(r)` as the subtitle (`ui/mixer/returnSummary.ts`:
+  "Reverb · 1.8 s" from `rev_decay`, "Delay · 3/16" from `delay_time`'s
+  choice; worked out from the params, never stored, not the preset name).
+  The return's own knobs (EQ, effect, pan) wear its colour. The fx section
+  (`fx`, `fx-expand`) holds the knobs of the return's `kind`.
+- **Rename:** double-click the name (or F2 on it): it becomes a field,
+  `return-name-input`. Enter or a click away saves through `renameReturn`,
+  Esc cancels; an unchanged name makes no undo entry, a refused one (empty
+  or over 24 characters after trimming) keeps the old name and says so in
+  the status line.
+- **Delete:** the last item of the return's Presets card,
+  `preset-delete-return` ("Delete return", one undo entry: `deleteReturn`).
+- **"+ Return"** (`AddReturn.svelte`): a 96 px dashed outline as tall as
+  the strips; its button `add-return` opens a floating card with
+  `add-return-reverb` / `add-return-delay` (`addReturn`: lowest free slot,
+  catalog defaults, "Reverb N" / "Delay N"). A press anywhere on the
+  outline opens it too. Not rendered at 8 returns.
+- **Sends on a track strip** (spec option C): a folding `Section` like EQ
+  and Comp, `sends` / `sends-expand`, closed by default (view state, per
+  strip, never saved), **not rendered with zero returns**.
+  - Closed: the header reads "▸ SENDS" with "k of n" at its right end
+    (`sends-aside`; k = sends above −∞), and under it `SendBars.svelte`:
+    one 6 px mini bar per return (`send-bar-<slot>`), in creation order,
+    filled in the return's colour to the send's fader position (`faderPos`,
+    the knob's own travel). The bars only show (not draggable); a click on
+    one opens the section. They are out of the tab order (the header button
+    opens it from the keyboard).
+  - Open: a knob per return, two per row: `knob-send_<letter>` (the slot's
+    catalog param, `sendParam(slot)`), its ring and its pre LED in the
+    return's colour, labelled with the return's name (the label is cut to
+    the cell), and its pre/post button `send_<letter>-pre`. Behaviour, keys,
+    automation and MIDI learn are every knob's.
+- **Analyser:** a return shown in it is named by its name and drawn in its
+  colour (`RETURN_COLORS[slot]`, the canvas needs the value).
 
 ## Strip presets (plan 27)
 

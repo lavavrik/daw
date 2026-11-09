@@ -27,7 +27,7 @@ them.
 | Depth | `--raised-shadow --gloss --well-shadow --lift --drop --handle --handle-shadow` | `THEME.raisedShadow` … |
 | Radii | `--r-xs` 3 · `--r-sm` 6 · `--r-md` 8 · `--r-lg` 12 · `--r-menu` 10 | `RADII.xs/sm/md/lg/menu` (numbers) |
 | Type | `--font-ui --font-mono --fs-body` 13 · `--fs-ctl` 12 · `--fs-lbl` 10 · `--fs-xs` 9 · `--fs-tag` 8 · `--fs-head` 11 | `THEME.fontUi` … |
-| Data | `--track-0..7`, `--cat-<category>`, `--sig-<signal>` | `TRACK_COLORS`, `CATEGORY_COLORS`, `SIGNAL_COLORS` |
+| Data | `--track-0..7`, `--return-0..7`, `--cat-<category>`, `--sig-<signal>` | `TRACK_COLORS`, `RETURN_COLORS`, `CATEGORY_COLORS`, `SIGNAL_COLORS` |
 | Mechanical (rack and mixer only) | `--mech-*` (below, "Mechanical faceplates") | `THEME.mechPanel` … `THEME.mechLedHot` |
 
 `THEME` keys map to CSS names by `tokenName` (`textDim` → `--text-dim`,
@@ -69,6 +69,15 @@ Rules of use:
   `--raised` itself is 4.07:1, a palette question raised with the owner.)
 - Track, category and signal colours are **data**: a component gets them from
   state or `theme.ts` and passes them in as `--c` (`style:--c={color}`).
+- Return colours (plan 29) are `--return-0..7`, one per engine **slot**, not
+  per return: `state/returns.ts` `returnColor(slot)` gives
+  `var(--return-<slot>)`, so a colour is derived, never saved, and undoing a
+  delete brings the same one back. The mixer uses it for a return strip's
+  header dot and knobs, and on the track strips for the send knob rings, the
+  pre LEDs and the Sends section's mini bars (`docs/architecture/mixer.md`
+  "Returns and sends on the strips"). Canvas code (the analyser) reads
+  `RETURN_COLORS[slot]` from `theme.ts`. The return headers stay on
+  `--raised`: the colour is a dot, so a return never passes for a track.
 - `CATEGORY_COLORS` and `SIGNAL_COLORS` use the spec's keys verbatim. The
   catalog's categories (`source/shaping/utility/effect`) and signal kinds
   (`audio/cv/gate/pitch`) map onto them in `theme.ts`: `moduleColor(def)`

@@ -2,8 +2,10 @@
   // The Mixer tab: the whole mixer, whatever track is selected. A horizontal
   // scroll of strips — one per track in track order (same order and colours
   // as the track headers), then the returns (p.mixer.returns, in creation
-  // order; plan 29) and the Master, which are styled neutrally so they never
-  // pass for tracks. Clicking a
+  // order; plan 29), the dashed "+ Return" ghost strip (AddReturn; gone at
+  // MAX_RETURNS) and the Master. Returns and the Master are styled neutrally
+  // so they never pass for tracks (a return wears its colour only on its dot
+  // and its knobs). Clicking a
   // track strip's name selects that track (the tab stays on the mixer).
   //
   // Meters: the app's one frame loop (ui/vis/frameLoop.ts) ticks the
@@ -22,7 +24,7 @@
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../../audio/engine';
   import { MIX_MASTER } from '../../audio/protocol';
-  import { returnChannel } from '../../state/returns';
+  import { MAX_RETURNS, returnChannel } from '../../state/returns';
   import { selectTrack } from '../../state/actions';
   import type { Project } from '../../state/project.svelte';
   import { createMeterBus } from './meterBus';
@@ -30,6 +32,8 @@
   import { createIdleDriver } from '../vis/idleDriver';
   import Strip from './Strip.svelte';
   import AnalyserPanel from './AnalyserPanel.svelte';
+  import AddReturn from './AddReturn.svelte';
+  import { returnSummary } from './returnSummary';
   import { analyserBus } from '../vis/analyserBus';
 
   let { p, engine }: { p: Project; engine: AudioEngine } = $props();
@@ -65,9 +69,9 @@
   {#if p.tracks.length === 0}<p class="empty">No tracks yet — add one in the track list.</p>{/if}
   <div class="gap" aria-hidden="true"></div>
   {#each p.mixer.returns as r (r.id)}
-    <!-- Send A..H is the tracks' send to slot 0..7 (plan 29 Task 7 redesigns these strips). -->
-    <Strip {p} {engine} {bus} target={r.id} kind="return" channel={returnChannel(r)} name={r.name} subtitle={`Return (send ${String.fromCharCode(65 + r.slot)})`} />
+    <Strip {p} {engine} {bus} target={r.id} kind="return" channel={returnChannel(r)} name={r.name} subtitle={returnSummary(r)} />
   {/each}
+  {#if p.mixer.returns.length < MAX_RETURNS}<AddReturn {p} {engine} />{/if}
   <Strip {p} {engine} {bus} target="master" kind="master" channel={MIX_MASTER} name="Master" subtitle="Limiter → output" />
   <AnalyserPanel {p} />
 </div>

@@ -5,7 +5,8 @@
   // (ui/vis/analyserBus.ts owns that choice: view state, not saved, not an
   // edit; a removed track falls back to the Master).
   //
-  //   header   "Analyser · Master" / "Analyser · <strip name>" (strip colour)
+  //   header   "Analyser · Master" / "Analyser · <strip name>" (strip colour:
+  //            a track's, or a return's `--return-<slot>` by name, plan 29)
   //   spectrum 320 × 140, 60 bands, peak-hold dots, grid, hover readout
   //   stereo   120 × 120 goniometer + correlation bar: the Master only
   //
@@ -15,7 +16,7 @@
   import { analyserBus, type AnalyserSource } from '../vis/analyserBus';
   import Goniometer from '../vis/Goniometer.svelte';
   import Spectrum from '../vis/Spectrum.svelte';
-  import { THEME } from '../theme';
+  import { RETURN_COLORS, THEME } from '../theme';
 
   let { p }: { p: Project } = $props();
 
@@ -25,7 +26,7 @@
   const source = $derived.by(() => {
     if (shown === 'master') return { name: 'Master', color: null };
     const r = p.mixer.returns.find((x) => returnChannel(x) === shown);
-    if (r) return { name: r.name, color: null };
+    if (r) return { name: r.name, color: RETURN_COLORS[r.slot] ?? null }; // a value: the spectrum draws on a canvas
     const t = p.tracks.find((tr) => tr.slot === shown);
     return { name: t?.name ?? `Channel ${shown}`, color: t?.color ?? null };
   });

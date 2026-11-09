@@ -113,6 +113,10 @@ test('mixer shows strips for tracks + returns + master', async ({ page }) => {
   await expect(strip(page, 'master').getByTestId('strip-name')).toContainText('Master');
   // Values are visible: fader readouts, sends labelled by return, SC source, limiter.
   await expect(strip(page, 0).getByTestId('fader-readout')).toHaveText('0.0 dB');
+  // The Sends section folds (plan 29): closed it shows "0 of 2"; open, a knob per return named after it.
+  await expect(strip(page, 1).getByTestId('sends-aside')).toHaveText('0 of 2');
+  await expect(strip(page, 1).getByTestId('knob-send_a')).toHaveCount(0);
+  await strip(page, 1).getByTestId('sends-expand').click();
   await expect(strip(page, 1).getByTestId('knob-send_a')).toContainText('Reverb');
   await expect(strip(page, 1).getByTestId('knob-send_a')).toContainText('Off');
   await expect(strip(page, 1).getByTestId('knob-send_b')).toContainText('Delay');
@@ -416,6 +420,10 @@ test('strip knobs fit their 56 px cells; a strip whose upper controls scroll sho
   const s = strip(page, 1);
   await s.getByTestId('eq-expand').click();
   await s.getByTestId('comp-expand').click();
+  // The send knobs too, one wearing a long (24-character) return name as its label.
+  await page.evaluate(() => (window as unknown as { __daw: { actions: { renameReturn(id: string, n: string): boolean } } }).__daw.actions.renameReturn('reverb', 'Long Cathedral Hall Room'));
+  await s.getByTestId('sends-expand').click();
+  await expect(s.getByTestId('knob-send_a')).toContainText('Long Cathedral');
   // Every compact dial fits inside the strip's 112 px content box, two per row.
   const fit = await s.evaluate((el) => {
     const cs = getComputedStyle(el);

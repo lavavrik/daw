@@ -57,6 +57,36 @@ test('one row at 1280×800 with no horizontal scroll, also with the web fonts bl
   expect((await measure(page)).rows).toBe(1);
 });
 
+test('one row at 1280×800 with the CPU pill red (dropouts) and a long MIDI device name: the MIDI pill ellipsizes', async ({ page }) => {
+  const NAME = 'Arturia KeyStep Pro Mk II USB MIDI Interface Port 1';
+  // A fake Web MIDI with one input whose name is long (connectMidi reads inputs / onstatechange).
+  await page.addInitScript((name) => {
+    const input = { id: 'fake-1', name, state: 'connected', onmidimessage: null };
+    const access = { inputs: new Map([['fake-1', input]]), onstatechange: null };
+    Object.defineProperty(navigator, 'requestMIDIAccess', { value: () => Promise.resolve(access), configurable: true });
+  }, NAME);
+  await start(page);
+  const midi = page.getByTestId('midi-status');
+  await expect(midi).toHaveAttribute('title', `MIDI: ${NAME}`);
+  await page.getByTestId('play').click();
+  await page.evaluate(() => {
+    (window as Any).__daw.engine.dropouts = () => 123;
+  });
+  await expect(page.getByTestId('cpu')).toHaveClass(/bad/);
+  await expect(page.getByTestId('cpu')).toContainText('123');
+  const out = await measure(page);
+  expect(out.rows).toBe(1);
+  expect(out.docWidth).toBeLessThanOrEqual(1280);
+  for (const id of ['midi-status', 'cpu', 'settings-button', 'keys-target', 'topbar-spectrum']) await expect(page.getByTestId(id)).toBeInViewport();
+  // The name is cut with an ellipsis inside the pill's max width (full text in the tooltip).
+  const cut = await midi.evaluate((b) => {
+    const t = b.querySelector<HTMLElement>('.ell')!;
+    return { pill: b.getBoundingClientRect().width, clipped: t.scrollWidth > t.clientWidth, ellipsis: getComputedStyle(t).textOverflow };
+  });
+  expect(cut.pill).toBeLessThanOrEqual(120);
+  expect(cut).toMatchObject({ clipped: true, ellipsis: 'ellipsis' });
+});
+
 test('short windows (1280×720): the compact 40 px bar, still one row', async ({ page }) => {
   await start(page, 720);
   await page.getByTestId('play').click();
@@ -197,6 +227,35 @@ test('master slider: the master fader, on the fader law, one undo entry per drag
   await page.getByTestId('song-stop').click(); // … stopped at the start, where the lane applies
   await expect(vol).toHaveAttribute('data-auto', 'on');
   await expect.poll(async () => Number(await vol.getAttribute('aria-valuenow'))).toBeCloseTo(-12, 1);
+});
+
+test('master slider: a click on the track jumps there; a press on the handle never jumps', async ({ page }) => {
+  await start(page);
+  const vol = page.getByTestId('master-volume');
+  const track = page.getByTestId('master-volume-track');
+  const t = (await track.boundingBox())!;
+  const y = t.y + t.height / 2;
+  const handleX = async () => {
+    const h = (await vol.locator('.handle').boundingBox())!;
+    return (h.x + h.width / 2 - t.x) / t.width;
+  };
+  // A click (press + release, no move) at 30 % of the track: the handle goes there.
+  await page.mouse.click(t.x + t.width * 0.3, y);
+  await expect.poll(handleX).toBeCloseTo(0.3, 1);
+  const jumped = Number(await vol.getAttribute('aria-valuenow'));
+  expect(jumped).toBeLessThan(-5);
+  await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Set Volume/);
+  // A press-and-release on the handle, a few px off its centre: no change at all.
+  const h = (await vol.locator('.handle').boundingBox())!;
+  await page.mouse.click(h.x + h.width / 2 + 3, h.y + h.height / 2);
+  await page.waitForTimeout(50);
+  expect(Number(await vol.getAttribute('aria-valuenow'))).toBe(jumped);
+  // A drag from the handle moves by the pointer's travel, not to where it was pressed.
+  await page.mouse.move(h.x + h.width / 2 + 3, h.y + h.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(h.x + h.width / 2 + 3 + i * 4, h.y + h.height / 2);
+  await page.mouse.up();
+  expect(Number(await vol.getAttribute('aria-valuenow'))).toBeGreaterThan(jumped);
 });
 
 test('menu bar: the ⋯ controls moved to File / Options with their test ids; Escape and a press outside close it', async ({ page }) => {

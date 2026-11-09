@@ -26,7 +26,7 @@ them.
 | Accents | `--play --accent --rec --on-color` | `THEME.play`, `.accent`, `.rec`, `.onColor` |
 | Depth | `--raised-shadow --gloss --well-shadow --lift --drop --handle --handle-shadow` | `THEME.raisedShadow` … |
 | Radii | `--r-xs` 3 · `--r-sm` 6 · `--r-md` 8 · `--r-lg` 12 · `--r-menu` 10 | `RADII.xs/sm/md/lg/menu` (numbers) |
-| Type | `--font-ui --font-mono --fs-body` 13 · `--fs-ctl` 12 · `--fs-lbl` 10 · `--fs-xs` 9 · `--fs-tag` 8 | `THEME.fontUi` … |
+| Type | `--font-ui --font-mono --fs-body` 13 · `--fs-ctl` 12 · `--fs-lbl` 10 · `--fs-xs` 9 · `--fs-tag` 8 · `--fs-head` 11 | `THEME.fontUi` … |
 | Data | `--track-0..7`, `--cat-<category>`, `--sig-<signal>` | `TRACK_COLORS`, `CATEGORY_COLORS`, `SIGNAL_COLORS` |
 | Mechanical (rack and mixer only) | `--mech-*` (below, "Mechanical faceplates") | `THEME.mechPanel` … `THEME.mechLedHot` |
 
@@ -40,8 +40,9 @@ Beyond the spec's values (plan 20 Task 11, for the literals the review found):
   the select picker: the spec's 10 px). A radius that is half the element's
   height (a pill end, a 6 px groove's 3 px, a circle) is geometry and stays
   a literal.
-- `--fs-xs` (captions: jack names, meter scales, step values) and `--fs-tag`
-  (the A / CC badges). Sizes outside the five (the 11 px in older toolbars,
+- `--fs-xs` (captions: jack names, meter scales, step values), `--fs-tag`
+  (the A / CC badges) and `--fs-head` 11 (the mechanical faceplates'
+  `.mech-head` strip: 800, uppercase, tracked). Sizes outside the five (the 11 px in older toolbars,
   the 18 px tempo, the 32 px timer) are still literals in their components.
 - `--drop` (`0 2px 4px rgba(0,0,0,.3)`): the board's small drop under an on
   step cell, for a raised thing that has no recipe of its own.
@@ -340,8 +341,20 @@ Icons come from `phosphor-svelte` (MIT, Svelte 5), drawn through
   the solid transport glyphs Play / Stop), `label`. Colour is always
   `currentColor`: set `color` on the button, never a fill on the icon, and
   the Idle / active / disabled rules above apply unchanged.
-- **Sizes:** 16 in the 32 px icon buttons, 20 in the 44 px transport
-  buttons, 12 inside the 22 px pattern transport.
+- **Size scale** (three steps, plus the transport):
+  - **16, buttons** (the `Icon` default): the 32 px icon buttons, toolbar
+    and header buttons (pattern New … Load, piano-roll and Acid tools, rack
+    + Module / Save patch / Tidy), menu and popover items (menu bar, + Add
+    track list, Examples);
+  - **14, rows**: list rows (Browser folder / sample / patch / kit rows) and
+    the small 11 px-text pills that sit in a row (+ Add track, the rack's
+    "Add example roll" link);
+  - **12, badges**: chevrons and carets (submenu ▸, AutoPicker groups),
+    section and group headers (mixer EQ / Comp, the Keyboard menu header),
+    status pills (audio paused, preview), the track header's Automate…
+    chip, the small × dismiss buttons, and the 22 px pattern transport;
+  - **20**: only the 44 px song transport (Play, Loop).
+  Nothing else (no 10, no 18): pick the step of the element's role.
 - **Icon-only buttons:** the button needs an `aria-label` (or visually hidden
   text, as the song Play's `.sr-only` "Play song") and a tooltip (a plain `title`;
   the global layer below shows it). The icon itself stays decorative
@@ -358,8 +371,13 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
 - **Claim / release.** When the pointer enters such an element (or it gets
   keyboard focus, `:focus-visible` only) the layer moves `title` into
   `data-tip` (so the native tip never fires) and sets `aria-describedby` to the
-  layer. When the tip hides, `title` and the old `aria-describedby` are put
-  back, so code and tests that read `title` still work.
+  layer, whose text is written then (still hidden), so a screen reader never
+  hears the previous tip during the delay. When the tip hides, `title` and
+  the old `aria-describedby` are put back, so code and tests that read
+  `title` still work.
+- **Top layer.** The layer is a `popover="manual"` shown with
+  `showPopover()`, so it is drawn above modal `<dialog>`s (Settings, the
+  shortcuts sheet), which no z-index can reach.
 - **Timing.** 250 ms delay; 0 ms while a tip is showing or within 600 ms of one
   hiding (moving along a toolbar). 13 px (`--fs-body`), `--lcd` background,
   max 320 px, flips above the element near the bottom edge, clamped to the
@@ -369,11 +387,15 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
   element does not re-show until the pointer has left it.
 - **Live.** A `title`/`data-tip` change while shown updates the text; the
   element being removed or hidden (a menu closing, a re-rendered cell) hides
-  the tip (one connected/visible check per animation frame while shown).
+  the tip (a connected/visible check and re-place every 120 ms while shown,
+  and on resize: not every frame, since measuring forces a layout).
 - Touch pointers are ignored. `data-tip` alone (no `title`) also works.
 - **Limits.** A reactive `title` that becomes absent mid-hover is not
   observable (removing an absent attribute fires no mutation), so the last
-  title is restored on hide until the next render. Any scroll event, including
+  title would be restored on hide until the next render. A title that comes
+  and goes while hovered therefore uses `''` for "none" (MenuBar's undo /
+  redo and View items): a real mutation, the tip hides, and an empty title
+  shows nothing. Any scroll event, including
   programmatic ones (playhead follow), hides the tip. An authored `data-tip`
   is never overwritten or removed and wins over `title`. A tip opened by
   keyboard focus is not closed by the pointer leaving, only by focus leaving.
@@ -382,7 +404,10 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
   Anything else reading `title` of a hovered element must do the same.
 - **Limits.** A reactive `title` that becomes absent mid-hover is not
   observable (removing an absent attribute fires no mutation), so the last
-  title is restored on hide until the next render. Any scroll event, including
+  title would be restored on hide until the next render. A title that comes
+  and goes while hovered therefore uses `''` for "none" (MenuBar's undo /
+  redo and View items): a real mutation, the tip hides, and an empty title
+  shows nothing. Any scroll event, including
   programmatic ones (playhead follow), hides the tip. An authored `data-tip`
   is never overwritten or removed and wins over `title`. A tip opened by
   keyboard focus is not closed by the pointer leaving, only by focus leaving.

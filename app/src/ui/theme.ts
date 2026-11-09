@@ -50,6 +50,8 @@ export const THEME = {
   /** Below the spec's sizes: captions (jack names, scales) and badges (A, CC). */
   fsXs: '9px',
   fsTag: '8px',
+  /** The mechanical faceplates' header strip (.mech-head). */
+  fsHead: '11px',
   // Mechanical faceplates (plan 21 Task 10, spec §11): rack modules and mixer strips only.
   mechPanel: 'linear-gradient(#56626e, #46525e)',
   mechPanelShadow: 'inset 0 1px 0 rgba(255,255,255,.14), inset 0 -2px 0 rgba(0,0,0,.25), 0 8px 18px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4)',

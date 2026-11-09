@@ -65,6 +65,8 @@
      (jack names, meter scales, step values), tag for badges (A, CC). */
   --fs-xs: 9px;
   --fs-tag: 8px;
+  /* The mechanical faceplates' header strip (.mech-head: 800, uppercase, tracked). */
+  --fs-head: 11px;
 
   /* Data colours (state/palette.ts, ui/theme.ts) for CSS that wants them by index or name. */
   --track-0: #ff7a6b;
@@ -412,7 +414,7 @@
   background: var(--c) var(--mech-head-gloss);
   box-shadow: var(--mech-head-shadow);
   color: var(--on-color);
-  font: 800 11px var(--font-ui);
+  font: 800 var(--fs-head) var(--font-ui);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }

@@ -28,14 +28,22 @@
 //                                 'up' / 'down': the first in-key pitch at or
 //                                 above / below (falls back to the other way
 //                                 at the 0..127 edge).
-//   scaleDegree(pitch, key)       0-based degree in key.scale, or null.
+//   scaleDegree(pitch, key)       0-based degree in key.scale ITSELF, or
+//                                 null (0..4 for a pentatonic, 0..11 for
+//                                 chromatic): for display / membership only.
+//   harmonyDegree(pitch, key)     0-based degree in the key's HARMONY scale
+//                                 (0..6), or null: THE degree diatonicChord
+//                                 and degreePitchClass take.
 //   diatonicChord(key, degree, seventh)
-//                                 the chord stacked in thirds on `degree`
-//                                 (0-based, any integer: wraps mod 7) of the
-//                                 key's HARMONY scale, as semitones above
-//                                 that degree's note: A minor degree 0,
-//                                 seventh -> [0, 3, 7, 10] (Am7).
-//   degreePitchClass(key, degree) that degree's pitch class (harmony scale).
+//                                 the chord stacked in thirds on harmony
+//                                 degree `degree` (0-based, any integer:
+//                                 wraps mod 7), as semitones above that
+//                                 degree's note: A minor degree 0, seventh
+//                                 -> [0, 3, 7, 10] (Am7).
+//   degreePitchClass(key, degree) that harmony degree's pitch class.
+//   DEGREE SPACES: chord maths only ever takes harmony degrees (0..6). Never
+//   pass a scaleDegree to diatonicChord: for a pentatonic they differ (A
+//   minor pentatonic: E is scaleDegree 3 but harmonyDegree 4).
 //   ChordType, CHORD_TYPES        the stamp / Chord module types, in WIRE
 //                                 ORDER (the engine's Chord "type" param is an
 //                                 index into CHORD_TYPES; append only), each
@@ -58,9 +66,13 @@
 //   - Pentatonic harmony: minor pentatonic -> natural minor, major
 //     pentatonic -> major (their parent scales), so In key always stacks
 //     real thirds.
-//   - 'inKey' roots: voiceChord snaps the root to the HARMONY scale first
-//     (nearestInKey, ties up), then stacks the seventh on its degree
-//     (plan 26 "My call: In key gives sevenths"). Every other type plays its
+//   - 'inKey' roots: voiceChord snaps the root to the KEY's own scale first
+//     (nearestInKey, ties up), so a pentatonic key only builds chords on its
+//     five notes; then it stacks the seventh on that note's HARMONY degree
+//     (the parent scale gives the quality: A minor pentatonic's E -> Em7).
+//     Chromatic is the exception: every note is "in" it, so its roots snap
+//     to its harmony (major) scale instead. (plan 26 "My call: In key gives
+//     sevenths"; Task 1 review #4.) Every other type plays its
 //     fixed intervals on the root as given (the caller snaps it with
 //     nearestInKey when Snap to key is on).
 //   - Inversion i (0..MAX_INVERSION) moves the lowest min(i, n-1) notes up an
@@ -125,7 +137,10 @@ export function isKeyRoot(pitch: number, key: MusicKey): boolean {
   return fromRoot(pitch, key) === 0;
 }
 
-/** 0-based degree of `pitch` in key.scale, or null when it is not in key. */
+/**
+ * 0-based degree of `pitch` in key.scale itself, or null when it is not in
+ * key. NOT the degree chord maths takes (see harmonyDegree).
+ */
 export function scaleDegree(pitch: number, key: MusicKey): number | null {
   const i = SCALES[key.scale].intervals.indexOf(fromRoot(pitch, key));
   return i < 0 ? null : i;
@@ -162,7 +177,16 @@ export function nearestInKey(pitch: number, key: MusicKey, dir?: 'up' | 'down'):
 const harmonyOf = (key: MusicKey) => SCALES[SCALES[key.scale].harmony].intervals;
 const mod = (n: number, m: number) => ((n % m) + m) % m;
 
-/** Pitch class of `degree` (0-based, wraps) of the key's harmony scale. */
+/**
+ * 0-based degree of `pitch` in the key's HARMONY scale (0..6), or null when
+ * it is not in it: the degree diatonicChord / degreePitchClass take.
+ */
+export function harmonyDegree(pitch: number, key: MusicKey): number | null {
+  const i = harmonyOf(key).indexOf(fromRoot(pitch, key));
+  return i < 0 ? null : i;
+}
+
+/** Pitch class of harmony `degree` (0-based, wraps) of the key. */
 export function degreePitchClass(key: MusicKey, degree: number): number {
   const iv = harmonyOf(key);
   return pitchClass(key.root + iv[mod(degree, iv.length)]);
@@ -212,15 +236,20 @@ export const MAX_INVERSION = 3;
 /** C chromatic (harmony: C major): what 'inKey' follows when voiceChord gets no key. */
 const NO_KEY: MusicKey = { root: 0, scale: 'chromatic' };
 
-/** The harmony scale as a key: what In key roots snap to. */
-const harmonyKey = (key: MusicKey): MusicKey => ({ root: key.root, scale: SCALES[key.scale].harmony });
+/**
+ * What In key roots snap to: the key's own scale (every scale but chromatic
+ * is a subset of its harmony scale, so the snapped root always has a
+ * harmony degree), or for chromatic its harmony (major) scale.
+ */
+const rootKey = (key: MusicKey): MusicKey =>
+  key.scale === 'chromatic' ? { root: key.root, scale: SCALES[key.scale].harmony } : key;
 
 /**
- * The root an 'inKey' chord is built on (`rootPitch` snapped to the harmony
- * scale, ties up), or `rootPitch` itself for a fixed type.
+ * The root an 'inKey' chord is built on (`rootPitch` snapped to the key's
+ * scale, ties up; chromatic: to major), or `rootPitch` itself for a fixed type.
  */
 export function chordRoot(rootPitch: number, type: ChordType, key: MusicKey = NO_KEY): number {
-  return type === 'inKey' ? nearestInKey(rootPitch, harmonyKey(key)) : Math.round(rootPitch);
+  return type === 'inKey' ? nearestInKey(rootPitch, rootKey(key)) : Math.round(rootPitch);
 }
 
 /** The intervals `type` plays on `rootPitch` ('inKey': the seventh on chordRoot's degree). */
@@ -228,8 +257,7 @@ export function chordIntervals(type: ChordType, rootPitch: number, key: MusicKey
   const def = CHORD_TYPES.find((c) => c.id === type);
   if (!def) throw new Error(`unknown chord type "${type}"`);
   if (def.intervals) return [...def.intervals];
-  const hk = harmonyKey(key);
-  const degree = scaleDegree(chordRoot(rootPitch, type, key), hk)!; // chordRoot is in the harmony scale
+  const degree = harmonyDegree(chordRoot(rootPitch, type, key), key)!; // chordRoot is in the harmony scale
   return diatonicChord(key, degree, true);
 }
 

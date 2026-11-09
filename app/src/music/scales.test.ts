@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CHORD_TYPES, DEFAULT_KEY, MAX_INVERSION, SCALES, SCALE_IDS, chordIntervals, degreePitchClass, diatonicChord, inKey, isKeyRoot,
+  CHORD_TYPES, DEFAULT_KEY, MAX_INVERSION, SCALES, SCALE_IDS, chordIntervals, chordRoot, degreePitchClass, diatonicChord, harmonyDegree, inKey, isKeyRoot,
   nearestInKey, pitchClass, scaleDegree, voiceChord,
 } from './scales';
 import type { MusicKey, ScaleId } from './scales';
@@ -168,6 +168,38 @@ describe('chord types and voicing', () => {
     expect(voiceChord(61, 'inKey', 0, AMIN)).toEqual([62, 65, 69, 72]);
     expect(chordIntervals('inKey', 64, AMIN)).toEqual([0, 3, 7, 10]); // Em7
     expect(voiceChord(60, 'inKey', 0)).toEqual([60, 64, 67, 71]); // no key: C major harmony
+  });
+
+  it('pentatonic In key snaps to the pentatonic itself, the parent scale gives the quality (review #4)', () => {
+    const amp = key(9, 'minorPentatonic'); // A C D E G
+    expect(chordRoot(59, 'inKey', amp)).toBe(60); // B (not in it): A / C tie -> up to C
+    expect(voiceChord(59, 'inKey', 0, amp)).toEqual([60, 64, 67, 71]); // Cmaj7, never Bm7b5
+    expect(voiceChord(65, 'inKey', 0, amp)).toEqual([64, 67, 71, 74]); // F -> E (nearer): Em7, never Fmaj7
+    expect(voiceChord(64, 'inKey', 0, amp)).toEqual([64, 67, 71, 74]); // E: Em7 (natural minor)
+    const cmp = key(0, 'majorPentatonic'); // C D E G A
+    expect(voiceChord(66, 'inKey', 0, cmp)).toEqual([67, 71, 74, 77]); // F# -> G (nearer): G7, never F#m7b5
+    expect(voiceChord(71, 'inKey', 0, cmp)).toEqual([72, 76, 79, 83]); // B -> C: Cmaj7
+    // Every In key root of a non-chromatic key is in the key itself.
+    for (const scale of SCALE_IDS.filter((x) => x !== 'chromatic')) {
+      for (let p = 0; p < 128; p++) expect(inKey(chordRoot(p, 'inKey', key(4, scale)), key(4, scale))).toBe(true);
+    }
+    // Chromatic snaps to its harmony (major): C# in C chromatic -> D, Dm7.
+    expect(voiceChord(61, 'inKey', 0, key(0, 'chromatic'))).toEqual([62, 65, 69, 72]);
+  });
+
+  it('harmonyDegree is the parent-scale degree; scaleDegree the scale\'s own (review #5)', () => {
+    const amp = key(9, 'minorPentatonic');
+    expect(scaleDegree(64, amp)).toBe(3); // E: 4th note of A C D E G
+    expect(harmonyDegree(64, amp)).toBe(4); // E: 5th note of A minor
+    expect(harmonyDegree(59, amp)).toBe(1); // B is in the parent scale
+    expect(harmonyDegree(61, amp)).toBeNull();
+    expect(harmonyDegree(61, key(0, 'chromatic'))).toBeNull(); // C# is not in C major
+    for (const scale of SCALE_IDS) {
+      for (let p = 0; p < 24; p++) {
+        const d = harmonyDegree(p, key(2, scale));
+        if (d !== null) expect(degreePitchClass(key(2, scale), d)).toBe(pitchClass(p));
+      }
+    }
   });
 
   it('fixed types play on the root as given; inversions move the lowest notes up', () => {

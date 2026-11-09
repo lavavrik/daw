@@ -58,17 +58,29 @@ Pure, no Svelte. Its header lists the API; the rules worth knowing:
   nearest in-key pitch, **a tie goes up** (C#4 in A minor → D4). With
   `'up'` / `'down'`: the first in-key pitch that way, falling back to the
   other way at the 0..127 edge.
-- `diatonicChord(key, degree, seventh)`: thirds stacked on `degree` of the
-  key's *harmony* scale, as semitones above the degree's note (A minor
-  degree 0 → `[0, 3, 7, 10]`, Am7). Pentatonics use their parent scale, so
-  chords always stack real thirds; chromatic uses major (*my call*: there
-  is no diatonic harmony to follow).
+- **Two degree spaces.** `scaleDegree(pitch, key)` is the degree in the
+  key's own scale (0..4 for a pentatonic, 0..11 for chromatic);
+  `harmonyDegree(pitch, key)` is the degree in its *harmony* scale (always
+  0..6). Chord maths (`diatonicChord`, `degreePitchClass`) only takes
+  harmony degrees: in A minor pentatonic, E is scale degree 3 but harmony
+  degree 4. Never pass one where the other is expected.
+- `diatonicChord(key, degree, seventh)`: thirds stacked on harmony degree
+  `degree`, as semitones above the degree's note (A minor degree 0 →
+  `[0, 3, 7, 10]`, Am7). Pentatonics use their parent scale, so chords
+  always stack real thirds; chromatic uses major (*my call*: there is no
+  diatonic harmony to follow). Harmonic minor gives the textbook chords,
+  i = Am(maj7) and III = Cmaj7♯5 included: correct, if harsh for house;
+  pick a fixed type (m7) when they are not wanted.
 - `CHORD_TYPES` (wire order, the engine Chord module's type index): maj,
   min, 7, maj7, m7, m9, sus2, sus4, dim, In key. `voiceChord(rootPitch,
   type, inversion, key?)` gives MIDI pitches, ascending, dropping any
-  outside 0..127. In key snaps the root to the harmony scale and plays the
-  diatonic **seventh** (plan 26: house chords are 7ths and 9ths); the fixed
-  types play on the root as given. Inversion 0..3 moves the lowest
+  outside 0..127. In key snaps the root to the **key's own scale** (ties
+  up), then plays the diatonic **seventh** on that note's harmony degree
+  (plan 26: house chords are 7ths and 9ths). So a pentatonic key only builds
+  chords on its five notes, with the parent scale's quality (A minor
+  pentatonic: B → C, Cmaj7, never Bm7♭5); chromatic, where every note is
+  "in", snaps to its harmony (major) scale instead. The fixed types play on
+  the root as given. Inversion 0..3 moves the lowest
   min(inversion, n − 1) notes up an octave.
 
 **Parity with the engine.** The Rust mirror (Task 3) cannot run TS, so

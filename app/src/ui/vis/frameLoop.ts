@@ -78,7 +78,7 @@ export interface FrameLoop {
   /** The engine whose visSab the loop serves (null: stop). */
   attach(engine: VisSource | null): void;
   /**
-   * The strip tap: a mixer channel 0..MIX_DELAY or -1 (off). Sent to the
+   * The strip tap: a mixer channel 0..(MIX_RETURN0 + 1) or -1 (off). Sent to the
    * attached engine now and to every engine attached later.
    */
   setTap(ch: number): void;

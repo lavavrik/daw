@@ -13,7 +13,7 @@ use super::*;
 use crate::automation::Target;
 use crate::mixer::catalog::{FADER_LAW, P_EQ_MID_FREQ, P_FADER, P_MUTE, P_PAN, P_SEND_A};
 use crate::protocol::*;
-use crate::{MAX_AUTO_LANES, MAX_AUTO_POINTS, MIX_REVERB, MAX_SONG_TICKS};
+use crate::{MAX_AUTO_LANES, MAX_AUTO_POINTS, MIX_RETURN0, MAX_SONG_TICKS};
 
 const SR: f32 = 48000.0;
 /// Frames per tick at 120 bpm / 48 kHz.
@@ -181,7 +181,7 @@ fn linear_lane_follows_the_line() {
     ok(point(&mut e, 1, 1, 3840.0, -4.0, false));
     // The send is measured on its gain; the Reverb return is muted so the
     // output shows the fader alone.
-    cmd(&mut e, OP_MIX_SET, MIX_REVERB as f64, P_MUTE as f64, 1.0, 0.0);
+    cmd(&mut e, OP_MIX_SET, MIX_RETURN0 as f64, P_MUTE as f64, 1.0, 0.0);
     song(&mut e, true);
     render(&mut e, 9600); // parked at tick 0: settles at the lane's start
     let x = render(&mut e, BLOCK)[0];
@@ -575,11 +575,11 @@ fn auto_commands_validate() {
     // Lane and slot indices.
     assert_eq!(set(&mut e, MAX_AUTO_LANES as f64, 1.0, 0.0, 0.0), ERR_BAD_INDEX);
     assert_eq!(set(&mut e, -1.0, 1.0, 0.0, 0.0), ERR_BAD_INDEX);
-    assert_eq!(set(&mut e, 0.0, 1.0, 35.0, 0.0), ERR_BAD_INDEX, "mix channel");
+    assert_eq!(set(&mut e, 0.0, 1.0, 41.0, 0.0), ERR_BAD_INDEX, "mix channel");
     assert_eq!(set(&mut e, 0.0, 2.0, 32.0, 0.0), ERR_BAD_INDEX, "rack slot");
     // Kinds and targets.
     assert_eq!(set(&mut e, 0.0, 3.0, 0.0, 0.0), ERR_BAD_VALUE, "kind");
-    assert_eq!(set(&mut e, 0.0, 1.0, 0.0, 30.0), ERR_BAD_VALUE, "unknown param");
+    assert_eq!(set(&mut e, 0.0, 1.0, 0.0, 42.0), ERR_BAD_VALUE, "unknown param");
     assert_eq!(set(&mut e, 0.0, 1.0, 0.0, P_MUTE as f64), ERR_BAD_VALUE, "integer param");
     assert_eq!(set(&mut e, 0.0, 1.0, MIX_MASTER as f64, P_PAN as f64), ERR_BAD_VALUE, "not on the master");
     assert_eq!(set(&mut e, 0.0, 1.0, 5.0, P_FADER as f64), ERR_BAD_VALUE, "empty slot");
@@ -593,7 +593,7 @@ fn auto_commands_validate() {
     assert_eq!(set(&mut e, 0.0, 2.0, 3.0, (16 + FILTER_MODE) as f64), ERR_BAD_VALUE, "integer rack param");
     // Audio slots accept mixer targets; returns and the master always exist.
     ok(set(&mut e, 0.0, 1.0, 2.0, P_FADER as f64));
-    ok(set(&mut e, 1.0, 1.0, MIX_REVERB as f64, P_FADER as f64));
+    ok(set(&mut e, 1.0, 1.0, MIX_RETURN0 as f64, P_FADER as f64));
     ok(set(&mut e, 2.0, 2.0, 3.0, (16 + FILTER_CUTOFF) as f64));
     // A second lane on the same target; the same lane again is fine.
     assert_eq!(set(&mut e, 3.0, 1.0, 2.0, P_FADER as f64), ERR_BAD_VALUE, "duplicate target");

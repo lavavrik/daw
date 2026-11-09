@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-import { withAppendedParams } from '../../app/src/project/testdata/appendedParams';
+import { withAppendedMixer, withAppendedParams } from '../../app/src/project/testdata/appendedParams';
 import { makeWav } from './wav';
 import { closeMenu, openMenu } from './topbar';
 import { startApp } from './startApp';
@@ -500,7 +500,7 @@ test('v1 project opens in v6', async ({ page }) => {
   // (v4 -> v5) and key (v5 -> v6) is as saved in v1.
   const strip = (j: { schemaVersion: number; samples: { file: string }[] }) => ({ ...j, schemaVersion: 0, samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })) });
   // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
-  const v4 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v1.mixer, automation: [] }, midiMap: [], patternLibrary: [], key: { root: 9, scale: 'minor' } };
+  const v4 = { ...v1, tracks: v1.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...withAppendedMixer(v1.mixer), automation: [] }, midiMap: [], patternLibrary: [], key: { root: 9, scale: 'minor' } };
   expect(strip(out)).toEqual(strip(v4));
 
   await page.evaluate(async (names) => {
@@ -576,7 +576,7 @@ test('v2 project opens in v6', async ({ page }) => {
     samples: j.samples.map((s) => ({ ...s, file: s.file.replace(/-[0-9a-f]{8}-/, '-#-') })),
   });
   // Params appended to the catalog since (appendedParams.ts) are written with their defaults.
-  const v4 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...v2.mixer, automation: [] }, midiMap: [], patternLibrary: [], key: { root: 9, scale: 'minor' } };
+  const v4 = { ...v2, tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })), mixer: { ...withAppendedMixer(v2.mixer), automation: [] }, midiMap: [], patternLibrary: [], key: { root: 9, scale: 'minor' } };
   expect(out.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips)).toEqual(
     v2.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips),
   );

@@ -1,7 +1,7 @@
 // Mixer edits. Like actions.ts: mutate Project.mixer AND send the matching
 // engine command. Channel index on the wire: the track's slot, or
-// MIX_REVERB / MIX_DELAY / MIX_MASTER for the shared channels.
-import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
+// MIX_RETURN0 (+ 1) / MIX_MASTER for the shared channels.
+import { MAX_KEYS, MIX_RETURN0, MIX_MASTER, Op, keyCode } from '../audio/protocol';
 import { clampParam } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixParamDef, MixTarget } from '../audio/mixerCatalog';
@@ -21,8 +21,8 @@ interface Resolved {
 
 function resolve(p: Project, target: MixChannelTarget): Resolved | null {
   switch (target) {
-    case 'reverb': return { ch: p.mixer.reverb, index: MIX_REVERB, kind: 'return' };
-    case 'delay': return { ch: p.mixer.delay, index: MIX_DELAY, kind: 'return' };
+    case 'reverb': return { ch: p.mixer.reverb, index: MIX_RETURN0, kind: 'return' };
+    case 'delay': return { ch: p.mixer.delay, index: MIX_RETURN0 + 1, kind: 'return' };
     case 'master': return { ch: p.mixer.master, index: MIX_MASTER, kind: 'master' };
   }
   const t = p.tracks.find((x) => x.id === target);
@@ -38,8 +38,8 @@ function resolve(p: Project, target: MixChannelTarget): Resolved | null {
  * mixer params in a project file (project/schema.ts).
  */
 export function accepts(def: MixParamDef, kind: MixTarget, index: number): boolean {
-  if (def.group === 'reverb') return index === MIX_REVERB;
-  if (def.group === 'delay') return index === MIX_DELAY;
+  if (def.group === 'reverb') return index === MIX_RETURN0;
+  if (def.group === 'delay') return index === (MIX_RETURN0 + 1);
   return def.appliesTo.includes(kind);
 }
 

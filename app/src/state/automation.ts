@@ -12,7 +12,7 @@
 //   pointCommands    the engine commands that turn one lane's points into
 //                    another set: removals first (see there).
 //   bend             a curved segment's shape (plan 16): f(x) = x^(2^(-3c)).
-import { AUTO_KIND, MAX_AUTO_LANES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, packAutoParam } from '../audio/protocol';
+import { AUTO_KIND, MAX_AUTO_LANES, MIX_RETURN0, MIX_MASTER, Op, autoPoint, packAutoParam } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
@@ -50,7 +50,7 @@ export const tupleCurve = (t: PointTuple): number => t[3] ?? 0;
 export const bend = (x: number, c: number): number => (c === 0 ? x : x ** (2 ** (-3 * c)));
 
 /** The engine mixer channel of a Master row channel. */
-export const MASTER_CHANNEL_INDEX: Record<MasterChannel, number> = { reverb: MIX_REVERB, delay: MIX_DELAY, master: MIX_MASTER };
+export const MASTER_CHANNEL_INDEX: Record<MasterChannel, number> = { reverb: MIX_RETURN0, delay: MIX_RETURN0 + 1, master: MIX_MASTER };
 const MASTER_KIND: Record<MasterChannel, MixTarget> = { reverb: 'return', delay: 'return', master: 'master' };
 
 export const isMasterChannel = (x: unknown): x is MasterChannel => x === 'reverb' || x === 'delay' || x === 'master';

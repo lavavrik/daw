@@ -305,7 +305,7 @@ fn spec6_with(song: bool, audio: bool) -> Engine {
         mix(&mut e, ch, P_SEND_B, -18.);
         mix(&mut e, ch, P_FADER, -6.);
     }
-    for ch in [daw_engine::MIX_REVERB, daw_engine::MIX_DELAY, daw_engine::MIX_MASTER] {
+    for ch in [daw_engine::MIX_RETURN0, (daw_engine::MIX_RETURN0 + 1), daw_engine::MIX_MASTER] {
         mix(&mut e, ch, P_EQ_ON, 1.);
         mix(&mut e, ch, P_EQ_MID_GAIN, 2.);
     }

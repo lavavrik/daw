@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, keyCode } from '../audio/protocol';
+import { MAX_KEYS, MIX_RETURN0, MIX_MASTER, Op, keyCode } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, removeDrumRow, removeTrack } from './actions';
@@ -44,7 +44,7 @@ describe('mixer state', () => {
       [Op.MIX_SET, 0, P('fader'), 6, 0],
       [Op.MIX_SET, 0, P('fader'), -60, 0],
       [Op.MIX_SET, 0, P('mute'), 1, 0],
-      [Op.MIX_SET, MIX_REVERB, P('rev_decay'), mixParam('rev_decay').max, 0],
+      [Op.MIX_SET, MIX_RETURN0, P('rev_decay'), mixParam('rev_decay').max, 0],
       [Op.MIX_SET, MIX_MASTER, P('limiter_ceiling'), -3, 0],
       [Op.MIX_SET, 0, P('fader'), 0, 0],
     ]);
@@ -76,8 +76,8 @@ describe('mixer state', () => {
     setMix(p, sink, 'reverb', 'rev_decay', 2);
     setMix(p, sink, 'delay', 'delay_feedback', 0.5);
     expect(sent).toEqual([
-      [Op.MIX_SET, MIX_REVERB, P('rev_decay'), 2, 0],
-      [Op.MIX_SET, MIX_DELAY, P('delay_feedback'), 0.5, 0],
+      [Op.MIX_SET, MIX_RETURN0, P('rev_decay'), 2, 0],
+      [Op.MIX_SET, MIX_RETURN0 + 1, P('delay_feedback'), 0.5, 0],
     ]);
   });
 

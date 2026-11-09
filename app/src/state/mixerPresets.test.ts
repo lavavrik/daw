@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MIX_DELAY, MIX_MASTER, MIX_REVERB, Op } from '../audio/protocol';
+import { MIX_RETURN0, MIX_MASTER, Op } from '../audio/protocol';
 import { MIX_PARAMS, mixParam } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import { Project } from './project.svelte';
@@ -21,8 +21,8 @@ const P = (n: string) => mixParam(n).id;
 /** The catalog's channel kind and wire index of a preset kind (a track: any slot). */
 const CHANNEL: Record<PresetKind, { kind: MixTarget; index: number }> = {
   track: { kind: 'track', index: 0 },
-  reverb: { kind: 'return', index: MIX_REVERB },
-  delay: { kind: 'return', index: MIX_DELAY },
+  reverb: { kind: 'return', index: MIX_RETURN0 },
+  delay: { kind: 'return', index: MIX_RETURN0 + 1 },
   master: { kind: 'master', index: MIX_MASTER },
 };
 function withHistory(p: Project, sink: ReturnType<typeof fake>['sink']) {

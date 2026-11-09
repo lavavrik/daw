@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   Op, Err, MAX_BLOCK, MAX_SAMPLE_FLOATS, MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, TELEMETRY, TELEMETRY_LEN,
   PORT_STRIDE, packPort, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, BAR_TICKS, MAX_CLIPS, MAX_SONG_TICKS, STEP_TICKS,
-  MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode,
+  MAX_KEYS, MAX_RETURNS, MIX_RETURN0, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, keyCode, sendParam, sendPreParam,
   MAX_ARENA_FLOATS, MAX_CLIP_GAIN, CLIP_FADE_SECONDS, MAX_AUTO_LANES, MAX_AUTO_POINTS, AUTO_KIND, packAutoParam,
   autoPoint, PATTERN_FOCUS_NONE, VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
 } from './protocol';
@@ -67,14 +67,14 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
   const ts: Record<string, number> = {
     MAX_BLOCK, MAX_TRACKS, MAX_ROWS, MAX_STEPS, MAX_SAMPLES, MAX_SAMPLE_FLOATS, TELEMETRY_LEN,
     MAX_MODULES, MAX_POLY, MAX_PORTS, MAX_PARAMS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_CLIPS, MAX_SONG_TICKS,
-    MAX_KEYS, MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, MAX_ARENA_FLOATS,
+    MAX_KEYS, MAX_RETURNS, MIX_RETURN0, MIX_MASTER, MIX_CHANNELS, MIX_METER_STRIDE, MAX_ARENA_FLOATS,
     MAX_AUTO_LANES, MAX_AUTO_POINTS,
     VIS_SCOPES, VIS_SCOPE_RING, VIS_SCOPE_WINDOW, VIS_SCOPE_HDR, VIS_TAP_RING, VIS_VOICE_LEN,
   };
   for (const [k, v] of Object.entries(TELEMETRY)) ts[`TELEMETRY_${snake(k)}`] = v;
 
   it('parsed every MAX_*, TELEMETRY_*, MIX_* and VIS_* constant', () => {
-    expect(Object.keys(rust).length).toBe(19 + 10 + 5 + 6);
+    expect(Object.keys(rust).length).toBe(20 + 10 + 4 + 6);
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -98,7 +98,14 @@ describe('size and telemetry parity with engine/src/lib.rs', () => {
 
 describe('mixer constants', () => {
   it('channels follow the track strips', () => {
-    expect([MIX_REVERB, MIX_DELAY, MIX_MASTER, MIX_CHANNELS]).toEqual([32, 33, 34, 35]);
+    expect([MIX_RETURN0, MAX_RETURNS, MIX_MASTER, MIX_CHANNELS]).toEqual([32, 8, 40, 41]);
+  });
+  it('sendParam names the catalog sends by slot', () => {
+    const names = ['send_a', 'send_b', 'send_c', 'send_d', 'send_e', 'send_f', 'send_g', 'send_h'];
+    names.forEach((n, k) => {
+      expect(sendParam(k)).toBe(n);
+      expect(sendPreParam(k)).toBe(`${n}_pre`);
+    });
   });
   it('key codes pack slot*32 (+ row + 1)', () => {
     expect(keyCode(null)).toBe(-1);
@@ -111,7 +118,7 @@ describe('mixer constants', () => {
 describe('mixer catalog golden', () => {
   const cat = JSON.parse(readFileSync(new URL('../../../engine/mixer_catalog.json', import.meta.url), 'utf8'));
   it('channels match the constants', () => {
-    expect(cat.channels).toEqual({ tracks: 32, reverb: MIX_REVERB, delay: MIX_DELAY, master: MIX_MASTER });
+    expect(cat.channels).toEqual({ tracks: 32, returns: MIX_RETURN0, maxReturns: MAX_RETURNS, master: MIX_MASTER });
   });
   it('param ids are their positions, defaults in range', () => {
     cat.params.forEach((p: { id: number; min: number; max: number; default: number }, i: number) => {

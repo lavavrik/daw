@@ -1,9 +1,10 @@
 //! Mixer: channel strips, sends, returns, the master bus and its limiter,
 //! and the meters.
 //!
-//! # Channels (`MIX_CHANNELS = 35`)
-//! 0..31 are the track strips (one per slot), 32 is the Reverb return, 33
-//! the Delay return and 34 the master. Every param lives in
+//! # Channels (`MIX_CHANNELS = 41`)
+//! 0..31 are the track strips (one per slot), 32..39 the return slots (slot
+//! 0 = Reverb, slot 1 = Delay until plan 29 task 2 makes them configurable)
+//! and 40 the master. Every param lives in
 //! [`catalog::PARAMS`] (ids, ranges, defaults, which channels accept it).
 //!
 //! # Signal flow (once per whole block, after every Song-mode piece rendered)
@@ -105,7 +106,7 @@ mod tests;
 use crate::automation::{AutoFrame, Target};
 use crate::dsp::{db_to_lin, Compressor, Delay, Eq3, Limiter, Reverb};
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE};
-use crate::{MAX_BLOCK, MAX_KEYS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY, MIX_MASTER, MIX_METER_STRIDE, MIX_REVERB};
+use crate::{MAX_BLOCK, MAX_KEYS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER, MIX_METER_STRIDE, MIX_RETURN0};
 use catalog::*;
 
 /// A strip keeps running this long after its slot last held a track or
@@ -344,7 +345,7 @@ pub(crate) struct Strip {
     fresh: bool,
     /// Bit `id`: param `id` is driven by an automation lane; its effective
     /// value is `auto_vals[id]` (the base stays in `values`).
-    auto_mask: u32,
+    auto_mask: u64,
     auto_vals: [f32; MIX_PARAMS],
 }
 
@@ -384,7 +385,7 @@ impl Strip {
 
     /// Is param `id` driven by an automation lane?
     fn masked(&self, id: u32) -> bool {
-        id < 32 && self.auto_mask >> id & 1 != 0
+        id < 64 && self.auto_mask >> id & 1 != 0
     }
 
     /// Effective value of param `id`: the automated one while a lane drives
@@ -564,7 +565,7 @@ pub struct Mixer {
     /// No block has run since `new` / `reset_all`: an automation step on a
     /// return or the master lands at once (track strips use `fresh`).
     auto_fresh: bool,
-    /// The tapped channel (`0..=MIX_DELAY`), or −1 (off); see "Strip tap".
+    /// The tapped channel (`0..MIX_MASTER`), or −1 (off); see "Strip tap".
     tap_ch: i32,
     /// The tap buffer may hold data from an earlier block (zero it once).
     tap_dirty: bool,
@@ -638,10 +639,10 @@ impl Mixer {
         self.auto_fresh = true;
     }
 
-    /// The strip tap: `ch` in `0..=MIX_DELAY`, or −1 (off). Anything else
+    /// The strip tap: `ch` in `0..MIX_MASTER`, or −1 (off). Anything else
     /// (the master included) turns it off; `protocol::decode` refuses those.
     pub fn set_tap(&mut self, ch: i32) {
-        self.tap_ch = if (0..=MIX_DELAY as i32).contains(&ch) { ch } else { -1 };
+        self.tap_ch = if (0..MIX_MASTER as i32).contains(&ch) { ch } else { -1 };
     }
 
     /// The tapped channel, or −1.
@@ -730,13 +731,13 @@ impl Mixer {
     /// never touched. Anything invalid is ignored.
     pub fn automate(&mut self, ch: usize, id: u32, value: f32, ramp: u32) {
         let Some(p) = param(id) else { return };
-        if !p.accepts(ch) || p.integer || !value.is_finite() || id >= 32 {
+        if !p.accepts(ch) || p.integer || !value.is_finite() || id >= 64 {
             return;
         }
         let v = value.clamp(p.min, p.max);
         let fresh_bus = self.auto_fresh && ch >= MAX_TRACKS;
         let Some(s) = self.strips.get_mut(ch) else { return };
-        s.auto_mask |= 1 << id;
+        s.auto_mask |= 1u64 << id;
         if let Some(x) = s.auto_vals.get_mut(id as usize) {
             *x = v;
         }
@@ -761,7 +762,7 @@ impl Mixer {
         if !s.masked(id) {
             return;
         }
-        s.auto_mask &= !(1 << id);
+        s.auto_mask &= !(1u64 << id);
         let base = s.v(id);
         self.set(ch, id, base);
     }
@@ -1063,15 +1064,15 @@ impl Mixer {
         }
 
         // Returns: send bus -> effect (100% wet) -> EQ -> fader/pan/mute.
-        for ch in [MIX_REVERB, MIX_DELAY] {
+        for ch in [MIX_RETURN0, MIX_RETURN0 + 1] {
             let Some(st) = strips.get_mut(ch) else { continue };
-            let bus = if ch == MIX_REVERB { &buses.send_a } else { &buses.send_b };
+            let bus = if ch == MIX_RETURN0 { &buses.send_a } else { &buses.send_b };
             let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, from, to), bus.span(0, from, to)) else {
                 continue;
             };
             wl.copy_from_slice(bl);
             wr.copy_from_slice(br);
-            if ch == MIX_REVERB {
+            if ch == MIX_RETURN0 {
                 reverb.process(wl, wr);
             } else {
                 delay.process(wl, wr);

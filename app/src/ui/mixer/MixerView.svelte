@@ -20,7 +20,7 @@
   // selection falls back to the Master.
   import { onMount } from 'svelte';
   import type { AudioEngine } from '../../audio/engine';
-  import { MIX_DELAY, MIX_MASTER, MIX_REVERB } from '../../audio/protocol';
+  import { MIX_RETURN0, MIX_MASTER } from '../../audio/protocol';
   import { selectTrack } from '../../state/actions';
   import type { Project } from '../../state/project.svelte';
   import { createMeterBus } from './meterBus';
@@ -42,8 +42,8 @@
   });
   $effect(() => analyserBus().sync([
     ...p.tracks.map((t) => ({ ch: t.slot, key: t.id })),
-    { ch: MIX_REVERB, key: 'reverb' },
-    { ch: MIX_DELAY, key: 'delay' },
+    { ch: MIX_RETURN0, key: 'reverb' },
+    { ch: MIX_RETURN0 + 1, key: 'delay' },
   ]));
 </script>
 
@@ -63,8 +63,8 @@
   {/each}
   {#if p.tracks.length === 0}<p class="empty">No tracks yet — add one in the track list.</p>{/if}
   <div class="gap" aria-hidden="true"></div>
-  <Strip {p} {engine} {bus} target="reverb" kind="return" channel={MIX_REVERB} name="Reverb" subtitle="Return (send A)" />
-  <Strip {p} {engine} {bus} target="delay" kind="return" channel={MIX_DELAY} name="Delay" subtitle="Return (send B)" />
+  <Strip {p} {engine} {bus} target="reverb" kind="return" channel={MIX_RETURN0} name="Reverb" subtitle="Return (send A)" />
+  <Strip {p} {engine} {bus} target="delay" kind="return" channel={(MIX_RETURN0 + 1)} name="Delay" subtitle="Return (send B)" />
   <Strip {p} {engine} {bus} target="master" kind="master" channel={MIX_MASTER} name="Master" subtitle="Limiter → output" />
   <AnalyserPanel {p} />
 </div>

@@ -7,7 +7,7 @@
 // engine state means undo restored everything the engine plays.
 import { moduleDef } from '../audio/catalog';
 import { defaultMixParams } from '../audio/mixerCatalog';
-import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERNS, MAX_SONG_TICKS, MIX_CHANNELS, MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE } from '../audio/protocol';
+import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERNS, MAX_SONG_TICKS, MAX_RETURNS, MIX_CHANNELS, MIX_RETURN0, Op, PORT_STRIDE } from '../audio/protocol';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import { MAX_ROWS, MAX_TRACKS } from '../state/project.svelte';
 import type { ProjectJson } from '../project/schema';
@@ -102,8 +102,8 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
     const autoRange = (kind: number, ch: number, id: number): { min: number; max: number } | null => {
       if (kind === 1) {
         const def = MIX_PARAMS[id];
-        const k = ch < MAX_TRACKS ? 'track' : ch === MIX_REVERB || ch === MIX_DELAY ? 'return' : 'master';
-        const ok = def && !def.integer && (def.group === 'reverb' ? ch === MIX_REVERB : def.group === 'delay' ? ch === MIX_DELAY : def.appliesTo.includes(k));
+        const k = ch < MAX_TRACKS ? 'track' : ch < MIX_RETURN0 + MAX_RETURNS ? 'return' : 'master';
+        const ok = def && !def.integer && def.appliesTo.includes(k); // reverb/delay params apply to every return
         if (!ok || ch < 0 || ch >= MIX_CHANNELS || (ch < MAX_TRACKS && !m.slots[ch])) return null;
         return def;
       }

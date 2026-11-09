@@ -19,7 +19,9 @@ describe('automation picker groups', () => {
     expect(names(gs)).toEqual(['Volume', 'Pan', 'Sends', 'EQ', 'Comp']);
     expect(gs.every((g) => g.section === 'Mixer')).toBe(true);
     expect(labels(gs[0])).toEqual(['Volume']);
-    expect(labels(gs[2])).toEqual(['Reverb', 'Delay']); // never the pre switches
+    // Never the pre switches. Sends 3..8 are in the catalog now; the picker
+    // will list only the live returns once return slots are configurable.
+    expect(labels(gs[2])).toEqual(['Reverb', 'Delay', 'Send 3', 'Send 4', 'Send 5', 'Send 6', 'Send 7', 'Send 8']);
     expect(labels(gs[3])).not.toContain('EQ'); // nor EQ on/off
     expect(labels(gs[4])).toContain('Threshold');
     // What the lane header will say, for searching and the tooltip.

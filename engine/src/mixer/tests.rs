@@ -5,7 +5,7 @@
 use super::catalog::*;
 use super::Key;
 use crate::protocol::*;
-use crate::{Engine, MIX_DELAY, MIX_MASTER, MIX_REVERB};
+use crate::{Engine, MIX_MASTER, MIX_RETURN0};
 
 const SR: f32 = 48000.0;
 const BLOCK: usize = 128;
@@ -205,26 +205,26 @@ fn solo_mutes_others_keeps_returns() {
     drums(&mut e, 1, 0, 0, &[0]);
     ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
     render(&mut e, 24000);
-    assert!(meter(&e, 0).0 > 0.3 && meter(&e, 1).0 > 0.2 && meter(&e, MIX_REVERB).0 > 0.001);
-    let rev_before = meter(&e, MIX_REVERB).0;
+    assert!(meter(&e, 0).0 > 0.3 && meter(&e, 1).0 > 0.2 && meter(&e, MIX_RETURN0).0 > 0.001);
+    let rev_before = meter(&e, MIX_RETURN0).0;
 
     mix(&mut e, 1, P_SOLO, 1.0);
     let (l, _) = render(&mut e, 1280);
     assert!(max_step(&l) < 0.02, "solo fade step {}", max_step(&l));
     assert_eq!(meter(&e, 0).0, 0.0, "unsoloed track muted");
     assert!(meter(&e, 1).0 > 0.2, "soloed track plays");
-    let rev = meter(&e, MIX_REVERB).0;
+    let rev = meter(&e, MIX_RETURN0).0;
     assert!(rev > 0.1 * rev_before, "the return keeps its tail: {rev} vs {rev_before}");
     // The muted track feeds the Reverb no more: its tail decays.
     render(&mut e, 48000);
-    assert!(meter(&e, MIX_REVERB).0 < 0.5 * rev, "tail decays without new input");
+    assert!(meter(&e, MIX_RETURN0).0 < 0.5 * rev, "tail decays without new input");
 
     mix(&mut e, 1, P_SOLO, 0.0);
     let (l, _) = render(&mut e, 1280);
     assert!(max_step(&l) < 0.02, "unsolo step {}", max_step(&l));
     assert!(meter(&e, 0).0 > 0.3, "un-solo restores the track");
     render(&mut e, 4800);
-    assert!(meter(&e, MIX_REVERB).0 > 0.001, "and its send");
+    assert!(meter(&e, MIX_RETURN0).0 > 0.001, "and its send");
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn send_to_reverb_produces_tail_after_source_stops() {
         }
         ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
         let (l, _) = render(&mut e, 48000);
-        (l, meter(&e, 0).0, meter(&e, MIX_REVERB).0)
+        (l, meter(&e, 0).0, meter(&e, MIX_RETURN0).0)
     };
     let (dry, ..) = run(false);
     let end = 2400 + 72 + 1;
@@ -389,10 +389,10 @@ fn hot_mix_stays_under_ceiling() {
         mix(&mut e, slot, P_SEND_A, 6.0);
         mix(&mut e, slot, P_SEND_B, 6.0);
     }
-    mix(&mut e, MIX_REVERB, P_REV_DECAY, 20.0);
-    mix(&mut e, MIX_REVERB, P_FADER, 6.0);
-    mix(&mut e, MIX_DELAY, P_DELAY_FEEDBACK, 0.95);
-    mix(&mut e, MIX_DELAY, P_FADER, 6.0);
+    mix(&mut e, MIX_RETURN0, P_REV_DECAY, 20.0);
+    mix(&mut e, MIX_RETURN0, P_FADER, 6.0);
+    mix(&mut e, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.95);
+    mix(&mut e, MIX_RETURN0 + 1, P_FADER, 6.0);
     mix(&mut e, MIX_MASTER, P_FADER, 6.0);
     ok(e.command(OP_SET_MASTER_GAIN, 2.0, 0.0, 0.0, 0.0));
     ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
@@ -447,9 +447,9 @@ fn slot_reuse_resets_channel() {
     ok(a.command(OP_REMOVE_TRACK, 0.0, 0.0, 0.0, 0.0)); // no drums: compare the pad alone
     // The Delay still echoes the old send (a tail is never cut): end it
     // quickly, then restore the return's defaults (its lines are silent).
-    mix(&mut a, MIX_DELAY, P_DELAY_FEEDBACK, 0.0);
+    mix(&mut a, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.0);
     render(&mut a, 48000);
-    ok(a.command(OP_MIX_RESET, MIX_DELAY as f64, 0.0, 0.0, 0.0));
+    ok(a.command(OP_MIX_RESET, (MIX_RETURN0 + 1) as f64, 0.0, 0.0, 0.0));
     render(&mut a, 4800);
 
     // Reuse: a fresh pad on slot 3 in A, and the same in a fresh engine B.
@@ -487,10 +487,10 @@ fn mix_commands_validate() {
     load(&mut e, 0, 100, |_| 0.5);
     drums(&mut e, 1, 0, 0, &[0]);
     let set = |e: &mut Engine, a: f64, b: f64, c: f64| e.command(OP_MIX_SET, a, b, c, 0.0);
-    assert_eq!(set(&mut e, 35.0, 0.0, 0.0), ERR_BAD_INDEX, "channel");
-    assert_eq!(set(&mut e, 0.0, 30.0, 0.0), ERR_BAD_INDEX, "param id");
+    assert_eq!(set(&mut e, 41.0, 0.0, 0.0), ERR_BAD_INDEX, "channel");
+    assert_eq!(set(&mut e, 0.0, 42.0, 0.0), ERR_BAD_INDEX, "param id");
     assert_eq!(set(&mut e, MIX_MASTER as f64, P_SOLO as f64, 1.0), ERR_BAD_INDEX, "master has no solo");
-    assert_eq!(set(&mut e, MIX_DELAY as f64, P_REV_SIZE as f64, 0.5), ERR_BAD_INDEX, "reverb param on the delay");
+    assert_eq!(set(&mut e, 0.0, P_REV_SIZE as f64, 0.5), ERR_BAD_INDEX, "reverb param on a track");
     assert_eq!(set(&mut e, 0.0, P_FADER as f64, 7.0), ERR_BAD_VALUE);
     assert_eq!(set(&mut e, 0.0, P_MUTE as f64, 0.5), ERR_BAD_VALUE);
     assert_eq!(set(&mut e, 0.0, P_PAN as f64, f64::NAN), ERR_BAD_VALUE);
@@ -500,12 +500,12 @@ fn mix_commands_validate() {
     // A valid set reads back; MIX_RESET restores the default.
     assert_eq!(set(&mut e, 0.0, P_FADER as f64, -12.5), OK);
     assert_eq!(e.mixer().param(0, P_FADER), -12.5);
-    assert_eq!(set(&mut e, MIX_REVERB as f64, P_REV_DECAY as f64, 8.0), OK);
+    assert_eq!(set(&mut e, MIX_RETURN0 as f64, P_REV_DECAY as f64, 8.0), OK);
     assert_eq!(e.command(OP_MIX_RESET, 0.0, 0.0, 0.0, 0.0), OK);
-    assert_eq!(e.command(OP_MIX_RESET, MIX_REVERB as f64, 0.0, 0.0, 0.0), OK);
+    assert_eq!(e.command(OP_MIX_RESET, MIX_RETURN0 as f64, 0.0, 0.0, 0.0), OK);
     assert_eq!(e.mixer().param(0, P_FADER), 0.0);
-    assert_eq!(e.mixer().param(MIX_REVERB, P_REV_DECAY), 2.2);
-    assert_eq!(e.command(OP_MIX_RESET, 35.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
+    assert_eq!(e.mixer().param(MIX_RETURN0, P_REV_DECAY), 2.2);
+    assert_eq!(e.command(OP_MIX_RESET, 41.0, 0.0, 0.0, 0.0), ERR_BAD_INDEX);
 
     // Keys: the source must exist (a track) or be a drum track (a row).
     let key = |e: &mut Engine, ch: f64, code: f64| e.command(OP_MIX_SET_KEY, ch, code, 0.0, 0.0);
@@ -557,7 +557,7 @@ fn stop_and_loop_wrap_keep_effect_tails() {
     ok(e.command(OP_STOP, 0.0, 0.0, 0.0, 0.0));
     let (l, r) = render(&mut e, 48000);
     assert!(peak(&l).max(peak(&r)) > 1e-4, "Stop keeps the delay tail");
-    assert!(meter(&e, MIX_DELAY).0 > 0.0 || peak(&l[40000..]).max(peak(&r[40000..])) > 0.0);
+    assert!(meter(&e, MIX_RETURN0 + 1).0 > 0.0 || peak(&l[40000..]).max(peak(&r[40000..])) > 0.0);
 }
 
 #[test]
@@ -711,8 +711,8 @@ fn post_fader_send_applies_the_gate_once() {
     gate_patch(&mut e, 0, 0.5);
     hold(&mut e, 0, 60.0);
     mix(&mut e, 0, P_SEND_B, 0.0);
-    mix(&mut e, MIX_DELAY, P_DELAY_FEEDBACK, 0.0);
-    mix(&mut e, MIX_DELAY, P_DELAY_PING_PONG, 0.0);
+    mix(&mut e, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.0);
+    mix(&mut e, MIX_RETURN0 + 1, P_DELAY_PING_PONG, 0.0);
     ok(e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0));
     render(&mut e, 48000); // echoes settle to a steady DC
     let (l, _) = render(&mut e, BLOCK);
@@ -783,13 +783,13 @@ fn mixer_delay_reverb_unchanged() {
     mix(&mut e, 0, P_SEND_B, 0.0);
     mix(&mut e, 0, P_SEND_A_PRE, 1.0);
     mix(&mut e, 0, P_SEND_B_PRE, 1.0);
-    mix(&mut e, MIX_DELAY, P_DELAY_FEEDBACK, 0.7);
+    mix(&mut e, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.7);
     hold(&mut e, 0, 57.0);
     let (mut l, mut r) = render(&mut e, 24000);
     ok(e.command(OP_NOTE_OFF, 57.0, 0.0, 0.0, 0.0));
-    mix(&mut e, MIX_REVERB, P_REV_SIZE, 1.0);
-    mix(&mut e, MIX_REVERB, P_REV_DECAY, 6.0);
-    mix(&mut e, MIX_DELAY, P_DELAY_TIME, 8.0);
+    mix(&mut e, MIX_RETURN0, P_REV_SIZE, 1.0);
+    mix(&mut e, MIX_RETURN0, P_REV_DECAY, 6.0);
+    mix(&mut e, MIX_RETURN0 + 1, P_DELAY_TIME, 8.0);
     let (l2, r2) = render(&mut e, 72000);
     l.extend_from_slice(&l2);
     r.extend_from_slice(&r2);

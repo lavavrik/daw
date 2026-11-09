@@ -36,13 +36,14 @@ describe('mixer catalog', () => {
     // The literal table from app/src/ui/mixer/mixMath.ts before plan 19.
     expect(faderLaw).toEqual([[-60, 0], [-40, 0.14], [-30, 0.25], [-20, 0.38], [-10, 0.55], [0, 0.75], [6, 1]]);
     expect(faderLaw).toBe(MIXER_CATALOG.faderLaw);
-    // The fader and both sends use it as their knob curve, over its range.
-    for (const name of ['fader', 'send_a', 'send_b']) {
+    // The fader and all eight sends use it as their knob curve, over its range.
+    const faders = ['fader', 'send_a', 'send_b', 'send_c', 'send_d', 'send_e', 'send_f', 'send_g', 'send_h'];
+    for (const name of faders) {
       const d = mixParam(name);
       expect(d.curve, name).toBe('fader');
       expect([d.min, d.max]).toEqual([faderLaw[0][0], faderLaw[faderLaw.length - 1][0]]);
     }
-    expect(MIX_PARAMS.filter((p) => p.curve === 'fader').map((p) => p.name)).toEqual(['fader', 'send_a', 'send_b']);
+    expect(MIX_PARAMS.filter((p) => p.curve === 'fader').map((p) => p.name)).toEqual(faders);
   });
   it('mixParam throws on unknown', () => {
     expect(() => mixParam('nope')).toThrow();

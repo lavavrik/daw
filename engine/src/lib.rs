@@ -79,11 +79,14 @@ pub const MAX_AUTO_POINTS: usize = 512;
 /// its own preallocated key buffer; whole-track keys need no slot).
 pub const MAX_KEYS: usize = 8;
 // Mixer channels (`mixer` module): 0..MAX_TRACKS-1 are the track strips,
-// then the two returns and the master. Mirrored in app/src/audio/protocol.ts.
-pub const MIX_REVERB: usize = 32;
-pub const MIX_DELAY: usize = 33;
-pub const MIX_MASTER: usize = 34;
-pub const MIX_CHANNELS: usize = 35;
+// then up to `MAX_RETURNS` return slots, then the master. Mirrored in
+// app/src/audio/protocol.ts.
+/// Return slots (each a Reverb or Delay, or off).
+pub const MAX_RETURNS: usize = 8;
+/// First return channel; slot `k` is channel `MIX_RETURN0 + k`.
+pub const MIX_RETURN0: usize = 32;
+pub const MIX_MASTER: usize = 40;
+pub const MIX_CHANNELS: usize = 41;
 /// Floats per channel in the meters array (`Engine::meters`):
 /// peak L, peak R, gain reduction (dB, ≥ 0).
 pub const MIX_METER_STRIDE: usize = 3;
@@ -137,10 +140,9 @@ mod tests {
     fn constants_are_consistent() {
         assert_eq!(STEP_TICKS * 4.0, PPQ);
         assert_eq!(BAR_TICKS, 4.0 * PPQ);
-        assert_eq!(MIX_REVERB, MAX_TRACKS);
-        assert_eq!(MIX_DELAY, MAX_TRACKS + 1);
-        assert_eq!(MIX_MASTER, MAX_TRACKS + 2);
-        assert_eq!(MIX_CHANNELS, MAX_TRACKS + 3);
+        assert_eq!(MIX_RETURN0, MAX_TRACKS);
+        assert_eq!(MIX_MASTER, MAX_TRACKS + MAX_RETURNS);
+        assert_eq!(MIX_CHANNELS, MAX_TRACKS + MAX_RETURNS + 1);
         // Key codes pack `slot * 32 + row + 1`.
         assert!(MAX_ROWS < 32 && MAX_TRACKS <= 32);
         assert_eq!(VIS_VOICE_LEN, MAX_TRACKS * MAX_POLY * 2);

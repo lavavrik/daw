@@ -16,7 +16,7 @@ use crate::rack::modules::theory::{Key as MusicKey, SCALES};
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
     BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
-    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS, MIX_DELAY,
+    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER,
 };
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
@@ -97,7 +97,7 @@ pub const OP_AUTO_OVERRIDE: u32 = 54; // a=lane: suspend until the next breakpoi
 // Plan 16: 55 was taken by OP_VIS_TAP (plan 12), so the curve is 56.
 pub const OP_AUTO_POINT_CURVE: u32 = 56; // a=lane*512+idx b=curve -1..1 of the segment it starts (0 linear); AUTO_POINT_SET resets it to 0
 // Visual data path (plan 12, docs/architecture/visuals.md). Not an edit.
-pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=33 (tracks, returns) or -1 = off; the master is BAD_VALUE
+pub const OP_VIS_TAP: u32 = 55; // a=mixer channel 0..=39 (tracks, returns) or -1 = off; the master is BAD_VALUE
 // Pattern transport focus (plan 20 task 12). Not an edit.
 pub const OP_SET_PATTERN_FOCUS: u32 = 57; // a=slot 0..MAX_TRACKS-1 (only it plays in Pattern mode) or 255 = none (every track)
 // Drum rows (plan 21 task 7): remove / insert a row, shifting the later rows
@@ -207,7 +207,7 @@ pub enum Command {
     AutoLaneEnable { lane: usize, on: bool },
     /// Suspend `lane` until its next breakpoint (a manual move).
     AutoOverride { lane: usize },
-    /// The strip tap: mixer channel `0..=MIX_DELAY`, or −1 (off).
+    /// The strip tap: mixer channel `0..MIX_MASTER`, or −1 (off).
     VisTap { ch: i32 },
     /// Pattern mode plays only `slot`'s pattern; `None` (wire 255): every
     /// track's (see "Pattern focus" in the engine docs).
@@ -610,7 +610,7 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         OP_AUTO_OVERRIDE => Command::AutoOverride { lane: index(a, MAX_AUTO_LANES)? },
         // −1 (off) or a track / return channel; the master (the worklet taps
         // the output itself) and anything else are BAD_VALUE.
-        OP_VIS_TAP => Command::VisTap { ch: if a == -1.0 { -1 } else { int_in(a, 0, MIX_DELAY as u32)? as i32 } },
+        OP_VIS_TAP => Command::VisTap { ch: if a == -1.0 { -1 } else { int_in(a, 0, MIX_MASTER as u32 - 1)? as i32 } },
         OP_SET_PATTERN_FOCUS => {
             Command::SetPatternFocus { slot: if a == 255.0 { None } else { Some(index(a, MAX_TRACKS)?) } }
         }
@@ -897,18 +897,23 @@ mod tests {
     fn decode_mix_commands() {
         use crate::mixer::catalog::*;
         assert_eq!(decode(OP_MIX_SET, 3., P_FADER as f64, -6., 0.), Ok(Command::MixSet { channel: 3, param: P_FADER, value: -6.0 }));
-        assert_eq!(decode(OP_MIX_SET, 34., P_LIMITER_CEILING as f64, -6., 0.), Ok(Command::MixSet { channel: 34, param: 29, value: -6.0 }));
+        assert_eq!(decode(OP_MIX_SET, 40., P_LIMITER_CEILING as f64, -6., 0.), Ok(Command::MixSet { channel: 40, param: 29, value: -6.0 }));
         assert_eq!(decode(OP_MIX_SET, 32., P_REV_DECAY as f64, 20., 0.), Ok(Command::MixSet { channel: 32, param: 22, value: 20.0 }));
         assert_eq!(decode(OP_MIX_SET, 33., P_DELAY_TIME as f64, 11., 0.), Ok(Command::MixSet { channel: 33, param: 25, value: 11.0 }));
         // Channel, param id and channel kind are indices; values are values.
-        for (a, b) in [(35., 0.), (-1., 0.), (0.5, 0.), (f64::NAN, 0.), (0., 30.), (0., -1.), (0., 0.5), (0., f64::INFINITY)] {
+        // Sends C..H (ids 30..41) are valid on tracks; 42 is past the catalog.
+        assert_eq!(decode(OP_MIX_SET, 3., 40., -6., 0.), Ok(Command::MixSet { channel: 3, param: 40, value: -6.0 }));
+        assert_eq!(decode(OP_MIX_SET, 3., 41., 1., 0.), Ok(Command::MixSet { channel: 3, param: 41, value: 1.0 }));
+        assert_eq!(decode(OP_MIX_SET, 39., P_DELAY_TIME as f64, 4., 0.), Ok(Command::MixSet { channel: 39, param: 25, value: 4.0 }));
+        assert_eq!(decode(OP_MIX_SET, 39., P_REV_SIZE as f64, 0.5, 0.), Ok(Command::MixSet { channel: 39, param: 21, value: 0.5 }));
+        for (a, b) in [(41., 0.), (-1., 0.), (0.5, 0.), (f64::NAN, 0.), (0., 42.), (0., -1.), (0., 0.5), (0., f64::INFINITY)] {
             assert_eq!(decode(OP_MIX_SET, a, b, 0., 0.), Err(ERR_BAD_INDEX), "{a} {b}");
         }
-        for (a, b) in [(34., P_PAN), (34., P_COMP_ON), (32., P_SOLO), (32., P_DELAY_TIME), (33., P_REV_SIZE), (0., P_LIMITER_CEILING), (0., P_REV_SIZE)] {
+        for (a, b) in [(40., P_PAN), (40., P_COMP_ON), (32., P_SOLO), (31., P_DELAY_TIME), (40., P_REV_SIZE), (0., P_LIMITER_CEILING), (0., P_REV_SIZE), (32., 31), (40., 30)] {
             assert_eq!(decode(OP_MIX_SET, a, b as f64, 0., 0.), Err(ERR_BAD_INDEX), "channel {a} param {b}");
         }
         for (b, c) in [(P_FADER, 6.5), (P_FADER, -61.), (P_FADER, f64::NAN), (P_MUTE, 0.5), (P_MUTE, 2.), (P_PAN, 1.01), (P_EQ_HP, 19.), (P_COMP_RATIO, 0.5), (P_DELAY_TIME, 12.), (P_DELAY_TIME, 1.5)] {
-            let ch = if b == P_DELAY_TIME { 33. } else { 0. };
+            let ch = if b == P_DELAY_TIME { 39. } else { 0. };
             assert_eq!(decode(OP_MIX_SET, ch, b as f64, c, 0.), Err(ERR_BAD_VALUE), "param {b} value {c}");
         }
         assert_eq!(decode(OP_MIX_SET_KEY, 5., -1., 0., 0.), Ok(Command::MixSetKey { channel: 5, key: Key::None }));
@@ -918,11 +923,11 @@ mod tests {
         for bad in [-2., 2. * 32. + 17., 2. * 32. + 31., 32. * 32., 0.5, f64::NAN, f64::INFINITY] {
             assert_eq!(decode(OP_MIX_SET_KEY, 5., bad, 0., 0.), Err(ERR_BAD_VALUE), "key {bad}");
         }
-        for bad in [32., 34., -1., 0.5] {
+        for bad in [32., 40., -1., 0.5] {
             assert_eq!(decode(OP_MIX_SET_KEY, bad, -1., 0., 0.), Err(ERR_BAD_INDEX), "channel {bad}");
         }
-        assert_eq!(decode(OP_MIX_RESET, 34., 0., 0., 0.), Ok(Command::MixReset { channel: 34 }));
-        assert_eq!(decode(OP_MIX_RESET, 35., 0., 0., 0.), Err(ERR_BAD_INDEX));
+        assert_eq!(decode(OP_MIX_RESET, 40., 0., 0., 0.), Ok(Command::MixReset { channel: 40 }));
+        assert_eq!(decode(OP_MIX_RESET, 41., 0., 0., 0.), Err(ERR_BAD_INDEX));
     }
     #[test]
     fn decode_auto_commands() {
@@ -941,7 +946,7 @@ mod tests {
         );
         assert_eq!(decode(OP_AUTO_LANE_SET, 5., 0., 0., 0.), Ok(Command::AutoLaneSet { lane: 5, target: Target::None }));
         // Lane and channel / slot indices are ERR_BAD_INDEX.
-        for (a, b, c) in [(lanes, 1., 0.), (-1., 1., 0.), (0.5, 1., 0.), (f64::NAN, 1., 0.), (0., 1., 35.), (0., 2., 32.), (0., 2., -1.)] {
+        for (a, b, c) in [(lanes, 1., 0.), (-1., 1., 0.), (0.5, 1., 0.), (f64::NAN, 1., 0.), (0., 1., 41.), (0., 2., 32.), (0., 2., -1.)] {
             assert_eq!(decode(OP_AUTO_LANE_SET, a, b, c, 0.), Err(ERR_BAD_INDEX), "{a} {b} {c}");
         }
         // Kinds and non-automatable targets are ERR_BAD_VALUE.
@@ -949,11 +954,11 @@ mod tests {
             (3., 0., 0.),
             (-1., 0., 0.),
             (1.5, 0., 0.),
-            (1., 0., 30.),                         // no such param
+            (1., 0., 42.),                         // no such param
             (1., 0., P_MUTE as f64),               // integer
             (1., 33., P_DELAY_TIME as f64),        // a choice
-            (1., 34., P_PAN as f64),               // not on the master
-            (1., 32., P_DELAY_FEEDBACK as f64),    // the Delay return's
+            (1., 40., P_PAN as f64),               // not on the master
+            (1., 0., P_DELAY_FEEDBACK as f64),     // a return param on a track
             (1., 0., 0.5),
             (2., 0., 32. * 16.),                   // module 32
             (2., 0., 12.),                         // param 12 >= MAX_PARAMS

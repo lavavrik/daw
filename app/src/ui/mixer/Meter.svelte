@@ -20,7 +20,7 @@
 
   let { bus, channel, ceilingDb = 0, name, master = false }: {
     bus: MeterBus;
-    /** Mixer channel index (0..31 track slot, MIX_REVERB/DELAY/MASTER). */
+    /** Mixer channel index (0..31 track slot, MIX_RETURN0/DELAY/MASTER). */
     channel: number;
     /** Clip threshold, dBFS. */
     ceilingDb?: number;

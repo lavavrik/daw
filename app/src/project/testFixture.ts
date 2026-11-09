@@ -6,7 +6,7 @@
 import { moduleDef, paramIndex } from '../audio/catalog';
 import {
   BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_CLIP_GAIN, MAX_MODULES, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS,
-  MAX_SAMPLE_FLOATS, MAX_SONG_TICKS, MIX_CHANNELS, MIX_DELAY, MIX_REVERB, Op, PORT_STRIDE,
+  MAX_SAMPLE_FLOATS, MAX_SONG_TICKS, MAX_RETURNS, MIX_CHANNELS, MIX_RETURN0, Op, PORT_STRIDE,
 } from '../audio/protocol';
 import { addLane, addPoint, setLaneEnabled } from '../state/automation-actions';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
@@ -352,8 +352,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         const def = MIX_PARAMS[id];
         if (!def || def.integer || !int(ch, 0, MIX_CHANNELS - 1)) return null;
         if (ch < MAX_TRACKS && (kind === 1 && st.kinds[ch] === 'empty')) return null;
-        const ok = def.group === 'reverb' ? ch === MIX_REVERB : def.group === 'delay' ? ch === MIX_DELAY
-          : def.appliesTo.includes(ch < MAX_TRACKS ? 'track' : ch === MIX_REVERB || ch === MIX_DELAY ? 'return' : 'master');
+        const ok = def.appliesTo.includes(ch < MAX_TRACKS ? 'track' : ch < MIX_RETURN0 + MAX_RETURNS ? 'return' : 'master');
         return ok ? def : null;
       }
       if (kind !== 2 || kind === 2 && st.kinds[ch] !== 'synth') return null;
@@ -499,8 +498,7 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         const def = MIX_PARAMS[b];
         if (!int(a, 0, MIX_CHANNELS - 1) || !def) { bad('mix index'); break; }
         if (a < MAX_TRACKS) need(a, 'any');
-        const ok = def.group === 'reverb' ? a === MIX_REVERB : def.group === 'delay' ? a === MIX_DELAY
-          : def.appliesTo.includes(a < MAX_TRACKS ? 'track' : a === MIX_REVERB || a === MIX_DELAY ? 'return' : 'master');
+        const ok = def.appliesTo.includes(a < MAX_TRACKS ? 'track' : a < MIX_RETURN0 + MAX_RETURNS ? 'return' : 'master');
         if (!ok) bad(`${def.name} not on channel ${a}`);
         if (!inR(c, def.min, def.max)) bad('mix value');
         break;

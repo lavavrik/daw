@@ -15,7 +15,7 @@ import { libraryJson, libraryState, savePatternToLibrary } from '../state/patter
 import { addAudioFixture, addAutomationFixture, buildFixture, checkLog, fakeAudio, fakeDecoder, fakeEngine, nullSink } from './testFixture';
 import { readFileSync } from 'node:fs';
 import type { ProjectJson } from './schema';
-import { withAppendedParams } from './testdata/appendedParams';
+import { withAppendedMixer, withAppendedParams } from './testdata/appendedParams';
 import { learnMidi } from '../state/midiMap';
 import { laneValueAt } from '../state/automation';
 import { mixParam } from '../audio/mixerCatalog';
@@ -428,7 +428,7 @@ describe('loadProject', () => {
       ...v2,
       schemaVersion: 6,
       tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
-      mixer: { ...v2.mixer, automation: [] },
+      mixer: { ...withAppendedMixer(v2.mixer), automation: [] },
       midiMap: [],
       patternLibrary: [],
       key: { root: 9, scale: 'minor' },

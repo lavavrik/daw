@@ -77,8 +77,8 @@ export const Op = {
   SET_LOOP: 39,
   /** a=song ticks 0..MAX_SONG_TICKS (Song mode only; ignored in Pattern mode). */
   SEEK: 40,
-  // Mixer (engine/src/mixer). Channels: 0..31 track strips, MIX_REVERB,
-  // MIX_DELAY, MIX_MASTER. Params, ranges and which channels take them:
+  // Mixer (engine/src/mixer). Channels: 0..31 track strips, MIX_RETURN0..+7,
+  // MIX_MASTER. Params, ranges and which channels take them:
   // engine/mixer_catalog.json.
   /** a=channel 0..MIX_CHANNELS-1 b=param id c=value (catalog range; flags 0/1).
    *  BAD_INDEX for an unknown param or one the channel does not take. */
@@ -118,7 +118,7 @@ export const Op = {
   // lane*MAX_AUTO_POINTS+idx. A lane applies in Song mode only (playing or
   // stopped); otherwise its target plays its base value (the last MIX_SET /
   // RACK_SET_PARAM, which on an automated target only stores the base).
-  /** a=lane b=AUTO_KIND (0 none, 1 mix, 2 rack) c=mix channel 0..34 or rack
+  /** a=lane b=AUTO_KIND (0 none, 1 mix, 2 rack) c=mix channel 0..40 or rack
    *  slot d=mix param id or packAutoParam(module, param). The target must
    *  exist and be a non-integer param (else BAD_VALUE; a bad lane, channel or
    *  slot is BAD_INDEX); a second lane on the same target is BAD_VALUE.
@@ -141,7 +141,7 @@ export const Op = {
    *  seek). Not an edit (NON_EDIT_OPS): sent right before a manual move's own
    *  MIX_SET / RACK_SET_PARAM, so that edit is heard at once. */
   AUTO_OVERRIDE: 54,
-  /** a=mixer channel 0..MIX_DELAY (track strips, returns) or -1 = off: the
+  /** a=mixer channel 0..MIX_MASTER-1 (track strips, returns) or -1 = off: the
    *  strip the engine taps for the visuals (visCopy.ts); the master is
    *  BAD_VALUE (the worklet taps the output itself). Not an edit
    *  (NON_EDIT_OPS), never in projectCommands; re-sent after a restart. */
@@ -239,11 +239,17 @@ export const MAX_CLIPS = 256;
 export const MAX_SONG_TICKS = 999 * 3840;
 /** Distinct drum rows usable as sidechain keys at once (lib.rs MAX_KEYS). */
 export const MAX_KEYS = 8;
-/** Mixer channels (lib.rs MIX_*): 0..31 are the track strips. */
-export const MIX_REVERB = 32;
-export const MIX_DELAY = 33;
-export const MIX_MASTER = 34;
-export const MIX_CHANNELS = 35;
+/** Return slots (lib.rs MAX_RETURNS): each holds a Reverb or a Delay, or is off. */
+export const MAX_RETURNS = 8;
+/** Mixer channels (lib.rs MIX_*): 0..31 are the track strips, then the return slots, then the master. */
+export const MIX_RETURN0 = 32;
+export const MIX_MASTER = 40;
+export const MIX_CHANNELS = 41;
+const SEND_NAMES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+/** Catalog name of the send level to return slot `slot` ('send_a' .. 'send_h'). */
+export const sendParam = (slot: number): string => `send_${SEND_NAMES[slot]}`;
+/** Catalog name of slot `slot`'s pre-fader flag ('send_a_pre' ..). */
+export const sendPreParam = (slot: number): string => `${sendParam(slot)}_pre`;
 /** Floats per channel in the meters array: peak L, peak R, gain reduction dB. */
 export const MIX_METER_STRIDE = 3;
 /** Sidechain key code (Op.MIX_SET_KEY b): none, a whole track, or a drum row. */

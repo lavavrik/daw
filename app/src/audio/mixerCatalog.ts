@@ -35,7 +35,7 @@ export interface MixParamDef {
 
 export interface MixerCatalog {
   version: number;
-  channels: { tracks: number; reverb: number; delay: number; master: number };
+  channels: { tracks: number; returns: number; maxReturns: number; master: number };
   params: MixParamDef[];
   /**
    * The fader law (engine `mixer::catalog::FADER_LAW`): (dB, position)

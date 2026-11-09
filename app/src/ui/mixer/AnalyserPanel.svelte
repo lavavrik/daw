@@ -10,7 +10,7 @@
   //   stereo   120 × 120 goniometer + correlation bar: the Master only
   //
   // Everything per frame is drawn by the views straight from the bus.
-  import { MIX_DELAY, MIX_REVERB } from '../../audio/protocol';
+  import { MIX_RETURN0 } from '../../audio/protocol';
   import type { Project } from '../../state/project.svelte';
   import { analyserBus, type AnalyserSource } from '../vis/analyserBus';
   import Goniometer from '../vis/Goniometer.svelte';
@@ -24,8 +24,8 @@
 
   const source = $derived.by(() => {
     if (shown === 'master') return { name: 'Master', color: null };
-    if (shown === MIX_REVERB) return { name: 'Reverb', color: null };
-    if (shown === MIX_DELAY) return { name: 'Delay', color: null };
+    if (shown === MIX_RETURN0) return { name: 'Reverb', color: null };
+    if (shown === (MIX_RETURN0 + 1)) return { name: 'Delay', color: null };
     const t = p.tracks.find((tr) => tr.slot === shown);
     return { name: t?.name ?? `Channel ${shown}`, color: t?.color ?? null };
   });

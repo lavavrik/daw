@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "channels": {"tracks": 32, "reverb": 32, "delay": 33, "master": 34},
+  "channels": {"tracks": 32, "returns": 32, "maxReturns": 8, "master": 40},
   "params": [
     {"id":0,"name":"fader","label":"Volume","min":-60,"max":6,"default":0,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track","return","master"],"group":"fader","choices":[],"minLabel":"-inf"},
     {"id":1,"name":"pan","label":"Pan","min":-1,"max":1,"default":0,"unit":"","curve":"lin","integer":false,"appliesTo":["track","return"],"group":"fader","choices":[],"minLabel":""},
@@ -31,7 +31,19 @@
     {"id":26,"name":"delay_feedback","label":"Feedback","min":0,"max":0.95,"default":0.35,"unit":"","curve":"lin","integer":false,"appliesTo":["return"],"group":"delay","choices":[],"minLabel":""},
     {"id":27,"name":"delay_ping_pong","label":"Ping-pong","min":0,"max":1,"default":1,"unit":"","curve":"lin","integer":true,"appliesTo":["return"],"group":"delay","choices":[],"minLabel":""},
     {"id":28,"name":"delay_high_cut","label":"High cut","min":1000,"max":20000,"default":6000,"unit":"Hz","curve":"exp","integer":false,"appliesTo":["return"],"group":"delay","choices":[],"minLabel":""},
-    {"id":29,"name":"limiter_ceiling","label":"Ceiling","min":-6,"max":0,"default":-0.3,"unit":"dB","curve":"lin","integer":false,"appliesTo":["master"],"group":"limiter","choices":[],"minLabel":""}
+    {"id":29,"name":"limiter_ceiling","label":"Ceiling","min":-6,"max":0,"default":-0.3,"unit":"dB","curve":"lin","integer":false,"appliesTo":["master"],"group":"limiter","choices":[],"minLabel":""},
+    {"id":30,"name":"send_c","label":"Send 3","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":31,"name":"send_c_pre","label":"Send 3 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""},
+    {"id":32,"name":"send_d","label":"Send 4","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":33,"name":"send_d_pre","label":"Send 4 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""},
+    {"id":34,"name":"send_e","label":"Send 5","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":35,"name":"send_e_pre","label":"Send 5 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""},
+    {"id":36,"name":"send_f","label":"Send 6","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":37,"name":"send_f_pre","label":"Send 6 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""},
+    {"id":38,"name":"send_g","label":"Send 7","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":39,"name":"send_g_pre","label":"Send 7 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""},
+    {"id":40,"name":"send_h","label":"Send 8","min":-60,"max":6,"default":-60,"unit":"dB","curve":"fader","integer":false,"appliesTo":["track"],"group":"send","choices":[],"minLabel":"Off"},
+    {"id":41,"name":"send_h_pre","label":"Send 8 pre","min":0,"max":1,"default":0,"unit":"","curve":"lin","integer":true,"appliesTo":["track"],"group":"send","choices":[],"minLabel":""}
   ],
   "faderLaw": [[-60,0],[-40,0.14],[-30,0.25],[-20,0.38],[-10,0.55],[0,0.75],[6,1]],
   "delay": {"divisionBeats": [0.125,0.16666667,0.25,0.375,0.33333334,0.5,0.75,0.6666667,1,1.5,2,4], "maxSeconds": 2}

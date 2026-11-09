@@ -7,7 +7,7 @@ use crate::mixer::catalog::{
 use crate::protocol::*;
 use crate::rack::catalog::ModuleKind;
 use crate::rack::fx_pool::FxKind;
-use crate::{MIX_CHANNELS, MIX_DELAY, MIX_MASTER, MIX_REVERB};
+use crate::{MIX_CHANNELS, MIX_MASTER, MIX_RETURN0};
 
 const SR: f32 = 48000.0;
 
@@ -230,9 +230,9 @@ fn reset_all_clears_mixer_tails_and_master() {
     };
     let mut e = Engine::new(SR);
     setup(&mut e);
-    ok(e.command(OP_MIX_SET, MIX_REVERB as f64, P_REV_DECAY as f64, 20.0, 0.0));
-    ok(e.command(OP_MIX_SET, MIX_REVERB as f64, P_REV_SIZE as f64, 1.0, 0.0));
-    ok(e.command(OP_MIX_SET, MIX_DELAY as f64, P_DELAY_FEEDBACK as f64, 0.9, 0.0));
+    ok(e.command(OP_MIX_SET, MIX_RETURN0 as f64, P_REV_DECAY as f64, 20.0, 0.0));
+    ok(e.command(OP_MIX_SET, MIX_RETURN0 as f64, P_REV_SIZE as f64, 1.0, 0.0));
+    ok(e.command(OP_MIX_SET, (MIX_RETURN0 + 1) as f64, P_DELAY_FEEDBACK as f64, 0.9, 0.0));
     ok(e.command(OP_MIX_SET, MIX_MASTER as f64, P_FADER as f64, 6.0, 0.0));
     ok(e.command(OP_MIX_SET, MIX_MASTER as f64, P_LIMITER_CEILING as f64, -3.0, 0.0));
     ok(e.command(OP_SET_MASTER_GAIN, 2.0, 0.0, 0.0, 0.0));

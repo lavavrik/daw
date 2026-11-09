@@ -73,7 +73,7 @@ export interface LiveStrip {
 
 export interface AnalyserBus {
   subscribe(v: AnalyserView): () => void;
-  /** Show the Master or one strip (mixer channel 0..MIX_DELAY; `key` identifies its owner). */
+  /** Show the Master or one strip (mixer channel 0..(MIX_RETURN0 + 1); `key` identifies its owner). */
   select(src: AnalyserSource, key?: string): void;
   /** A strip's ∿ button: show it, or back to the Master if it is shown. */
   toggle(ch: number, key: string): void;

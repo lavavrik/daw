@@ -851,7 +851,7 @@ fn automation_does_not_allocate() {
             n += 1;
         }
     }
-    for (ch, id) in [(daw_engine::MIX_REVERB, P_REV_DECAY), (daw_engine::MIX_MASTER, P_LIMITER_CEILING)] {
+    for (ch, id) in [(daw_engine::MIX_RETURN0, P_REV_DECAY), (daw_engine::MIX_MASTER, P_LIMITER_CEILING)] {
         let p = param(id).unwrap();
         targets[n] = (1.0, ch as f64, id as f64, p.min, p.max);
         n += 1;

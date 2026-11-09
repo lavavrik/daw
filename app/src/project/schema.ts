@@ -24,7 +24,7 @@
 //     placed (bad slot, unknown kind, dangling reference) is dropped. Each of
 //     these adds a warning (a missing optional field silently gets its
 //     default). Only a missing/newer schemaVersion is an error.
-import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_DELAY, MIX_MASTER, MIX_REVERB, BAR_TICKS } from '../audio/protocol';
+import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIPS, MAX_NOTES, MAX_PATTERN_BARS, MAX_PATTERNS, MAX_SONG_TICKS, MIX_RETURN0, MIX_MASTER, BAR_TICKS } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import type { ParamDef } from '../audio/catalog';
 import type { MixParamDef } from '../audio/mixerCatalog';
@@ -740,14 +740,14 @@ function readMixer(r: Reader, v: unknown, tracks: TrackJson[], lanes: Lanes): Mi
   }
   return {
     tracks: strips,
-    reverb: readMixParams(r, o.reverb, 'return', MIX_REVERB, 'Mixer Reverb'),
-    delay: readMixParams(r, o.delay, 'return', MIX_DELAY, 'Mixer Delay'),
+    reverb: readMixParams(r, o.reverb, 'return', MIX_RETURN0, 'Mixer Reverb'),
+    delay: readMixParams(r, o.delay, 'return', MIX_RETURN0 + 1, 'Mixer Delay'),
     master: readMixParams(r, o.master, 'master', MIX_MASTER, 'Mixer Master'),
     automation: readMasterLanes(r, o.automation, lanes),
   };
 }
 
-const MASTER_CHANNELS = { reverb: ['return', MIX_REVERB], delay: ['return', MIX_DELAY], master: ['master', MIX_MASTER] } as const;
+const MASTER_CHANNELS = { reverb: ['return', MIX_RETURN0], delay: ['return', MIX_RETURN0 + 1], master: ['master', MIX_MASTER] } as const;
 
 /** The Master row's lanes: each names its channel; one of another channel is dropped. */
 function readMasterLanes(r: Reader, v: unknown, lanes: Lanes): MasterLaneJson[] {

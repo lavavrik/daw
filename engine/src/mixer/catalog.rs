@@ -13,9 +13,9 @@
 //! append new params, never renumber or reuse one.
 //!
 //! * `applies_to` says which channel kinds accept the param (`Track` =
-//!   channels 0..31, `Return` = 32/33, `Master` = 34). The `reverb` group
-//!   applies to the Reverb return only and the `delay` group to the Delay
-//!   return only (see [`MixParam::accepts`]).
+//!   channels 0..31, `Return` = 32..39, `Master` = 40). The `reverb` and
+//!   `delay` groups apply to any return channel (a slot can hold either
+//!   effect; see [`MixParam::accepts`]).
 //! * Flags are integer params 0..1; choice params (`choices` non-empty) are
 //!   integers `0..=choices.len()-1`.
 //! * `min_label` names the minimum when it means something special: the
@@ -23,10 +23,10 @@
 //!   the EQ high-pass at its 20 Hz minimum is off (the DSP parks it at 5 Hz,
 //!   see `dsp/eq.rs`). The UI shows that label instead of the number.
 //! * `curve` is the param's knob space: `lin`, `exp`, or `fader` (the fader
-//!   and both sends, plan 19), the mixer's [`FADER_LAW`], which is exported
+//!   and all eight sends, plans 19 and 29), the mixer's [`FADER_LAW`], which is exported
 //!   as `"faderLaw"` alongside the params.
 
-use crate::{MAX_TRACKS, MIX_DELAY, MIX_MASTER, MIX_REVERB};
+use crate::{MAX_RETURNS, MAX_TRACKS, MIX_MASTER, MIX_RETURN0};
 #[cfg(test)]
 use crate::MIX_CHANNELS;
 
@@ -43,7 +43,7 @@ impl ChannelKind {
     pub fn of(ch: usize) -> Option<ChannelKind> {
         match ch {
             c if c < MAX_TRACKS => Some(ChannelKind::Track),
-            MIX_REVERB | MIX_DELAY => Some(ChannelKind::Return),
+            c if (MIX_RETURN0..MIX_RETURN0 + MAX_RETURNS).contains(&c) => Some(ChannelKind::Return),
             MIX_MASTER => Some(ChannelKind::Master),
             _ => None,
         }
@@ -126,8 +126,9 @@ impl MixParam {
     pub fn accepts(&self, ch: usize) -> bool {
         let Some(kind) = ChannelKind::of(ch) else { return false };
         match self.group {
-            Group::Reverb => ch == MIX_REVERB,
-            Group::Delay => ch == MIX_DELAY,
+            // Every return slot can hold either effect, so both groups
+            // accept any return channel.
+            Group::Reverb | Group::Delay => kind == ChannelKind::Return,
             _ => self.applies_to.contains(&kind),
         }
     }
@@ -204,8 +205,37 @@ pub const P_DELAY_FEEDBACK: u32 = 26;
 pub const P_DELAY_PING_PONG: u32 = 27;
 pub const P_DELAY_HIGH_CUT: u32 = 28;
 pub const P_LIMITER_CEILING: u32 = 29;
+// Sends C..H (slots 2..7) were appended after the limiter to keep ids stable.
+pub const P_SEND_C: u32 = 30;
+pub const P_SEND_C_PRE: u32 = 31;
+pub const P_SEND_D: u32 = 32;
+pub const P_SEND_D_PRE: u32 = 33;
+pub const P_SEND_E: u32 = 34;
+pub const P_SEND_E_PRE: u32 = 35;
+pub const P_SEND_F: u32 = 36;
+pub const P_SEND_F_PRE: u32 = 37;
+pub const P_SEND_G: u32 = 38;
+pub const P_SEND_G_PRE: u32 = 39;
+pub const P_SEND_H: u32 = 40;
+pub const P_SEND_H_PRE: u32 = 41;
 /// Number of params (ids are `0..MIX_PARAMS`).
-pub const MIX_PARAMS: usize = 30;
+pub const MIX_PARAMS: usize = 42;
+
+/// Param id of the send level to return slot `slot` (0 -> `send_a` = 17,
+/// 1 -> `send_b` = 19, k >= 2 -> 30 + 2 (k - 2)). Slots 0/1 keep the ids they
+/// had before there were more returns.
+pub const fn send_id(slot: usize) -> usize {
+    match slot {
+        0 => 17,
+        1 => 19,
+        k => 30 + 2 * (k - 2),
+    }
+}
+
+/// Param id of slot `slot`'s pre-fader flag (`send_id + 1`).
+pub const fn send_pre_id(slot: usize) -> usize {
+    send_id(slot) + 1
+}
 
 #[allow(clippy::too_many_arguments)]
 const fn p(
@@ -298,6 +328,18 @@ pub static PARAMS: [MixParam; MIX_PARAMS] = [
     flag(P_DELAY_PING_PONG, "delay_ping_pong", "Ping-pong", 1.0, RETURN, Group::Delay),
     p(P_DELAY_HIGH_CUT, "delay_high_cut", "High cut", 1000.0, 20000.0, 6000.0, "Hz", E, RETURN, Group::Delay),
     p(P_LIMITER_CEILING, "limiter_ceiling", "Ceiling", -6.0, 0.0, -0.3, "dB", L, MASTER, Group::Limiter),
+    with_min_label(p(P_SEND_C, "send_c", "Send 3", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_C_PRE, "send_c_pre", "Send 3 pre", 0.0, TRACK, Group::Send),
+    with_min_label(p(P_SEND_D, "send_d", "Send 4", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_D_PRE, "send_d_pre", "Send 4 pre", 0.0, TRACK, Group::Send),
+    with_min_label(p(P_SEND_E, "send_e", "Send 5", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_E_PRE, "send_e_pre", "Send 5 pre", 0.0, TRACK, Group::Send),
+    with_min_label(p(P_SEND_F, "send_f", "Send 6", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_F_PRE, "send_f_pre", "Send 6 pre", 0.0, TRACK, Group::Send),
+    with_min_label(p(P_SEND_G, "send_g", "Send 7", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_G_PRE, "send_g_pre", "Send 7 pre", 0.0, TRACK, Group::Send),
+    with_min_label(p(P_SEND_H, "send_h", "Send 8", FADER_MIN_DB, FADER_MAX_DB, FADER_MIN_DB, "dB", F, TRACK, Group::Send), "Off"),
+    flag(P_SEND_H_PRE, "send_h_pre", "Send 8 pre", 0.0, TRACK, Group::Send),
 ];
 
 /// The param with wire id `id`, if any.
@@ -360,7 +402,7 @@ fn param_json(p: &MixParam) -> String {
 /// allocates.
 pub fn mixer_catalog_json() -> String {
     let mut o = format!(
-        "{{\n  \"version\": 1,\n  \"channels\": {{\"tracks\": {MAX_TRACKS}, \"reverb\": {MIX_REVERB}, \"delay\": {MIX_DELAY}, \"master\": {MIX_MASTER}}},\n  \"params\": ["
+        "{{\n  \"version\": 1,\n  \"channels\": {{\"tracks\": {MAX_TRACKS}, \"returns\": {MIX_RETURN0}, \"maxReturns\": {MAX_RETURNS}, \"master\": {MIX_MASTER}}},\n  \"params\": ["
     );
     for (i, p) in PARAMS.iter().enumerate() {
         o.push_str(if i == 0 { "\n    " } else { ",\n    " });
@@ -395,6 +437,8 @@ mod tests {
         assert_eq!(PARAMS[0].name, "fader");
         assert_eq!(PARAMS[17].name, "send_a");
         assert_eq!(PARAMS[29].name, "limiter_ceiling");
+        assert_eq!(PARAMS[30].name, "send_c");
+        assert_eq!(PARAMS[41].name, "send_h_pre");
     }
 
     #[test]
@@ -423,14 +467,39 @@ mod tests {
     #[test]
     fn accepts_follows_channel_kind_and_return_group() {
         let fader = param(P_FADER).unwrap();
-        assert!(fader.accepts(0) && fader.accepts(31) && fader.accepts(MIX_REVERB) && fader.accepts(MIX_MASTER));
+        assert!(fader.accepts(0) && fader.accepts(31) && fader.accepts(MIX_RETURN0) && fader.accepts(MIX_MASTER));
         assert!(!fader.accepts(MIX_CHANNELS));
-        assert!(param(P_SOLO).unwrap().accepts(5) && !param(P_SOLO).unwrap().accepts(MIX_DELAY));
+        assert!(param(P_SOLO).unwrap().accepts(5) && !param(P_SOLO).unwrap().accepts(MIX_RETURN0 + 1));
         assert!(!param(P_COMP_ON).unwrap().accepts(MIX_MASTER));
-        assert!(param(P_REV_SIZE).unwrap().accepts(MIX_REVERB) && !param(P_REV_SIZE).unwrap().accepts(MIX_DELAY));
-        assert!(param(P_DELAY_TIME).unwrap().accepts(MIX_DELAY) && !param(P_DELAY_TIME).unwrap().accepts(MIX_REVERB));
+        assert!(param(P_REV_SIZE).unwrap().accepts(MIX_RETURN0));
+        assert!(param(P_DELAY_TIME).unwrap().accepts(MIX_RETURN0 + 1) && param(P_DELAY_TIME).unwrap().accepts(MIX_RETURN0));
         assert!(param(P_LIMITER_CEILING).unwrap().accepts(MIX_MASTER) && !param(P_LIMITER_CEILING).unwrap().accepts(0));
         assert!(!param(P_PAN).unwrap().accepts(MIX_MASTER));
+    }
+
+    #[test]
+    fn send_ids_cover_8_slots() {
+        assert_eq!((send_id(0), send_id(1), send_id(2), send_id(7)), (17, 19, 30, 40));
+        assert_eq!(send_pre_id(7), 41);
+        let names = ["send_a", "send_b", "send_c", "send_d", "send_e", "send_f", "send_g", "send_h"];
+        for (k, n) in names.iter().enumerate() {
+            assert_eq!(PARAMS[send_id(k)].name, *n);
+            assert_eq!(PARAMS[send_pre_id(k)].name, format!("{n}_pre"));
+        }
+        assert_eq!(MIX_PARAMS, 42);
+    }
+
+    #[test]
+    fn return_groups_accept_every_return_channel() {
+        for id in [P_REV_SIZE, P_DELAY_TIME] {
+            let p = param(id).unwrap();
+            assert!(p.accepts(32) && p.accepts(39), "{}", p.name);
+            assert!(!p.accepts(31) && !p.accepts(40), "{}", p.name);
+        }
+        assert_eq!(ChannelKind::of(32), Some(ChannelKind::Return));
+        assert_eq!(ChannelKind::of(39), Some(ChannelKind::Return));
+        assert_eq!(ChannelKind::of(40), Some(ChannelKind::Master));
+        assert_eq!(ChannelKind::of(41), None);
     }
 
     #[test]
@@ -457,14 +526,14 @@ mod tests {
             "faderLaw export: {json}"
         );
         for p in &PARAMS {
-            let fader = matches!(p.name, "fader" | "send_a" | "send_b");
+            let fader = p.name == "fader" || (p.name.starts_with("send_") && !p.name.ends_with("_pre"));
             assert_eq!(p.curve == Curve::Fader, fader, "{}", p.name);
             if fader {
                 assert_eq!((p.min, p.max), (FADER_LAW[0].0, FADER_LAW[6].0), "{}: the law spans the range", p.name);
                 assert!(json.contains(&format!("\"name\":\"{}\",", p.name)));
             }
         }
-        assert_eq!(json.matches("\"curve\":\"fader\"").count(), 3);
+        assert_eq!(json.matches("\"curve\":\"fader\"").count(), 9, "the fader and 8 sends");
     }
 
     #[test]

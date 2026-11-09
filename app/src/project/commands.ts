@@ -29,7 +29,7 @@
 // rack lane or MIDI mapping whose module was one of those dropped effects
 // goes too; the returned `project` is the normalized one the commands
 // realize. MIDI mappings send no commands (they are UI state: midiMapState).
-import { MAX_CLIPS, MAX_KEYS, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, autoPoint, keyCode } from '../audio/protocol';
+import { MAX_CLIPS, MAX_KEYS, MIX_RETURN0, MIX_MASTER, Op, autoPoint, keyCode } from '../audio/protocol';
 import { fxPoolSlots, moduleDef } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
 import { validatePatch } from '../state/patches';
@@ -155,8 +155,8 @@ function mixerCommands(project: ProjectJson): EngineCommand[] {
     }
   };
   for (const s of project.mixer.tracks) params(s.slot, s.params);
-  params(MIX_REVERB, project.mixer.reverb);
-  params(MIX_DELAY, project.mixer.delay);
+  params(MIX_RETURN0, project.mixer.reverb);
+  params((MIX_RETURN0 + 1), project.mixer.delay);
   params(MIX_MASTER, project.mixer.master);
   for (const s of project.mixer.tracks) {
     if (s.key) out.push([Op.MIX_SET_KEY, s.slot, keyCode(s.key.row === null ? { slot: s.key.track } : { slot: s.key.track, row: s.key.row })]);

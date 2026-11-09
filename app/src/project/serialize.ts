@@ -1,7 +1,7 @@
 // Project -> project.json (schema.ts). Pure: reads the project, changes
 // nothing, same input -> same output. Plan 7's undo snapshots and autosave
 // (Task 4) build on this, and App's "● unsaved" mark compares fingerprints.
-import { MIX_DELAY, MIX_MASTER, MIX_REVERB } from '../audio/protocol';
+import { MIX_RETURN0, MIX_MASTER } from '../audio/protocol';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
 import { accepts } from '../state/mixer-actions';
@@ -125,8 +125,8 @@ export function serialize(p: Project): ProjectJson {
         key: ch?.key && keySlot !== null ? { track: keySlot, row: ch.key.row } : null,
       };
     }),
-    reverb: mixParams(p.mixer.reverb, 'return', MIX_REVERB),
-    delay: mixParams(p.mixer.delay, 'return', MIX_DELAY),
+    reverb: mixParams(p.mixer.reverb, 'return', MIX_RETURN0),
+    delay: mixParams(p.mixer.delay, 'return', (MIX_RETURN0 + 1)),
     master: mixParams(p.mixer.master, 'master', MIX_MASTER),
     automation: p.mixer.automation.map((x) => ({ channel: x.channel, ...laneJson(x.lane) })),
   };

@@ -3808,7 +3808,7 @@ mod tests {
     // ---- visual data path (plan 12) -----------------------------------------
 
     use crate::protocol::{OP_MIX_SET, OP_VIS_TAP};
-    use crate::{MIX_DELAY, MIX_REVERB};
+    use crate::MIX_RETURN0;
 
     fn max_abs(s: &[f32]) -> f32 {
         s.iter().fold(0.0f32, |m, x| m.max(x.abs()))
@@ -3858,13 +3858,13 @@ mod tests {
         load_const(&mut e, 1, 4800, 0.5);
         drum_setup(&mut e, 0.0, 1.0, &[0.0, 8.0]);
         assert_eq!(e.command(OP_MIX_SET, 0.0, 17.0, 0.0, 0.0), OK); // send A 0 dB
-        assert_eq!(e.command(OP_VIS_TAP, MIX_REVERB as f64, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_VIS_TAP, MIX_RETURN0 as f64, 0.0, 0.0, 0.0), OK);
         play(&mut e, 0.0);
         let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
         let mut loud = false;
         for _ in 0..200 {
             e.process(&mut l, &mut r);
-            let m = &e.meters()[MIX_REVERB * MIX_METER_STRIDE..];
+            let m = &e.meters()[MIX_RETURN0 * MIX_METER_STRIDE..];
             assert_eq!(max_abs(&e.vis().tap_l[..128]), m[0]);
             assert_eq!(max_abs(&e.vis().tap_r[..128]), m[1]);
             loud |= m[0] > 0.0;
@@ -3875,15 +3875,15 @@ mod tests {
     #[test]
     fn vis_tap_validates() {
         let mut e = test_engine();
-        for ch in [-1.0, 0.0, 33.0] {
+        for ch in [-1.0, 0.0, 39.0, 33.0] {
             assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), OK, "tap {ch}");
             assert_eq!(e.vis().tap_ch, ch as f32);
         }
-        for ch in [34.0, 35.0, 1.5, -2.0, f64::NAN, f64::INFINITY] {
+        for ch in [40.0, 41.0, 1.5, -2.0, f64::NAN, f64::INFINITY] {
             assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), ERR_BAD_VALUE, "tap {ch}");
             assert_eq!(e.vis().tap_ch, 33.0, "a refused tap keeps the old one");
         }
-        assert_eq!(MIX_DELAY, 33);
+        assert_eq!(MIX_RETURN0 + 1, 33);
     }
 
     /// The export fixture job (tests/fixtures/export_render.txt) on a native
@@ -3934,9 +3934,9 @@ mod tests {
             let ch = match b {
                 50 => 0.0,
                 250 => 1.0,
-                450 => MIX_REVERB as f64,
+                450 => MIX_RETURN0 as f64,
                 650 => -1.0,
-                700 => MIX_DELAY as f64,
+                700 => (MIX_RETURN0 + 1) as f64,
                 _ => return,
             };
             assert_eq!(e.command(OP_VIS_TAP, ch, 0.0, 0.0, 0.0), OK);

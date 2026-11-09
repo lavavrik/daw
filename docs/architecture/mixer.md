@@ -49,7 +49,7 @@ below 120 bpm, 1/2 below 60 bpm) is clamped to 2 s; the Delay strip then shows
 ## Channel numbering
 
 `MIX_CHANNELS = 35`: 0..31 are the track slots (the engine's slot, shared by
-drum and synth tracks), `MIX_REVERB = 32`, `MIX_DELAY = 33`, `MIX_MASTER = 34`.
+drum and synth tracks), `MIX_RETURN0 = 32` (return slots 32..39), `MIX_MASTER = 40`.
 Mirrored in `app/src/audio/protocol.ts`. Wire commands: `MIX_SET ch id value`,
 `MIX_SET_KEY ch key`, `MIX_RESET ch`. Parameter ids are the index into
 `mixer_catalog.json`; a param sent to a channel kind that does not take it is

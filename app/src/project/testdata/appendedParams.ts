@@ -32,3 +32,13 @@ export function withAppendedParams<T extends object>(track: T): T {
     },
   };
 }
+
+/** Mixer params appended after the fixtures were frozen (plan 29: sends C..H, Off and post-fader). */
+export const APPENDED_TRACK_MIX_PARAMS: Record<string, number> = Object.fromEntries(
+  ['c', 'd', 'e', 'f', 'g', 'h'].flatMap((x) => [[`send_${x}`, -60], [`send_${x}_pre`, 0]]),
+);
+
+/** A fixture's `mixer` as a save writes it today: every track strip gains the appended params. */
+export function withAppendedMixer<T extends { tracks: { params: Record<string, number> }[] }>(mixer: T): T {
+  return { ...mixer, tracks: mixer.tracks.map((t) => ({ ...t, params: { ...t.params, ...APPENDED_TRACK_MIX_PARAMS } })) };
+}

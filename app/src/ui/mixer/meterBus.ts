@@ -4,7 +4,7 @@
 // the mixer is off screen or the tab is hidden. Each tick reads
 // engine.meters() once and hands the live array to every subscriber (meters,
 // GR readouts). Subscribers update their DOM directly instead of through
-// reactive state, so 35 meters at 60 fps cost no Svelte re-renders.
+// reactive state, so 41 meters at 60 fps cost no Svelte re-renders.
 //
 // The consumer is an idle driver (idleDriver.ts): once the transport is
 // stopped and every subscriber has reported nothing moving (all bars at 0,

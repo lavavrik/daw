@@ -47,7 +47,7 @@
 //      the key (plan 26: state/key-actions.ts applyKey, which also sends the
 //      engine's key command, keyCommands).
 // The project name is not restored (a Save As names the project, not an edit).
-import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort } from '../audio/protocol';
+import { MAX_CLIPS, MAX_NOTES, MIX_RETURN0, MIX_MASTER, Op, packPort } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
 import { MIX_PARAMS } from '../audio/mixerCatalog';
 import type { MixTarget } from '../audio/mixerCatalog';
@@ -147,8 +147,8 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   };
   const strips = new Map(to.mixer.tracks.map((s) => [s.slot, s]));
   for (const t of order) params(t.id, p.mixer.channels[t.id], 'track', t.slot, strips.get(t.slot)?.params ?? {});
-  params('reverb', p.mixer.reverb, 'return', MIX_REVERB, to.mixer.reverb);
-  params('delay', p.mixer.delay, 'return', MIX_DELAY, to.mixer.delay);
+  params('reverb', p.mixer.reverb, 'return', MIX_RETURN0, to.mixer.reverb);
+  params('delay', p.mixer.delay, 'return', MIX_RETURN0 + 1, to.mixer.delay);
   params('master', p.mixer.master, 'master', MIX_MASTER, to.mixer.master);
   const keyOf = (t: Track): SidechainKey | null => {
     const k = strips.get(t.slot)?.key;

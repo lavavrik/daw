@@ -4,16 +4,21 @@
 // One user action, one undo entry, although the samples load asynchronously
 // (fetch, decode, upload: state/sampleImport.ts). The mechanism is "prepare,
 // then commit":
-//   1. prepare (async, no state change a user can see or undo): fetch every
-//      sound of the kit at once, import them one at a time in role order
-//      (ids follow the rows). Each import uploads the sample into the
-//      engine under a fresh id and keeps its bytes (p.sampleFiles), but
-//      nothing references it yet. A sound that fails reports its error
-//      (deps.onError) and is left out. A sound the engine defers (dropped
-//      while playing: Err.DEFERRED) is waited for until it settles at Stop
-//      (sampleLoads.ts deferSampleAssign; its notice says so).
-//   2. commit (synchronous, ONE edit(): one undo entry): put every imported
-//      sample on its row, adding rows for roles the track lacks.
+//   1. prepare (async, no state change a user can see or undo): every sound
+//      already loaded in this session (state/kitSamples.ts, by kit and
+//      file) is reused under its id, so auditioning kits costs no new
+//      sample ids or memory. The rest are fetched at once and imported one
+//      at a time in role order (ids follow the rows): each upload goes into
+//      the engine under a fresh id with its bytes kept (p.sampleFiles), but
+//      nothing references it yet. Sounds that fail are left out and
+//      reported together, in one message naming the kit. A sound the engine
+//      defers (dropped while playing: Err.DEFERRED) is waited for until it
+//      settles at Stop (sampleLoads.ts deferSampleAssign; its notice says
+//      so). A load onto a track whose default kit is still landing
+//      (loadDefaultKit) waits for that first, so the starter samples are in
+//      the "before" this load's undo restores.
+//   2. commit (synchronous, ONE edit(): one undo entry): put every sample on
+//      its row, adding rows for roles the track lacks.
 // So undo restores exactly what the rows held before (the previous sample
 // ids: diffApply sends SET_ROW_SAMPLE back, removes the added rows), and
 // redo puts the kit back (its samples stay uploaded under their ids; sample
@@ -21,10 +26,13 @@
 // attachKitSample (state/defaultKit.ts), nothing here is a starting point:
 // it is an ordinary edit, so it marks the project unsaved.
 //
-// The commit is dropped when the session was replaced meanwhile (New / Open
-// / restore: Project.generation; a reset also drops a deferred load, whose
-// wait then never ends — that load's session is gone) or the target track
-// was removed. Edits made while the kit loads stay their own undo entries,
+// Every wait ends: the commit is dropped (the promise resolves false / null)
+// when the session was replaced meanwhile (New / Open / restore:
+// Project.generation; each wait races idle.ts whenSessionEnds, since a
+// replaced session's whenIdle never resolves), when a deferred load is
+// dropped unanswered (a reset or an audio restart that lost it: onDrop), or
+// when the target track was removed. So a caller's "loading" state always
+// clears. Edits made while the kit loads stay their own undo entries,
 // before this one.
 import { MAX_ROWS, MAX_TRACKS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
@@ -32,7 +40,8 @@ import { addDrumTrack, addRow, setRowSample, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { banners } from './banners.svelte';
 import { edit } from './edits';
-import { whenIdle } from './idle';
+import { whenIdle, whenSessionEnds } from './idle';
+import { defaultKitLoad, knownKitSample, rememberKitSample } from './kitSamples';
 import { STARTER_KIT_ID, kitById, rowHasRole } from './kits';
 import type { Kit, KitRole, KitSound } from './kits';
 import { importSample } from './sampleImport';
@@ -53,54 +62,85 @@ export const appKitFileDeps: KitFileDeps = {
 };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** importSample's text without its own `Couldn't load "<file>" — ` lead (the kit message names the sound). */
+const reason = (e: string) => e.replace(/^Couldn't load "[^"]*" — /, '');
+
+/** `x`, or null once session `gen` is gone (whichever comes first). */
+const orEnded = <T>(p: Project, gen: number, x: Promise<T>): Promise<T | null> =>
+  Promise.race([x, whenSessionEnds(p, gen).then(() => null)]);
+
+/** Every sound that didn't load, in one message naming the kit (null: none). */
+export function kitFailureText(kit: Kit, failed: { role: KitRole; why: string }[]): string | null {
+  if (!failed.length) return null;
+  const n = failed.length;
+  return `${kit.name} kit: ${n} sound${n === 1 ? '' : 's'} didn't load — ${failed.map((f) => `${f.role}: ${f.why}`).join('; ')}`;
+}
 
 /**
- * Step 1 ("prepare", see the header): every sound of `kit` imported, as
- * role -> sample id (a failed sound is missing; its error is reported).
- * Null when `stillThere` turns false (the target or the session went).
+ * Step 1 ("prepare", see the header): role -> sample id for every sound of
+ * `kit` (reused or imported), plus the sounds that failed. Null when
+ * `stillThere` turns false or the session ends (the target or the session
+ * went).
  */
 async function importKit(
   p: Project, engine: ImportEngine, kit: Kit, stillThere: () => boolean, deps: KitFileDeps,
-): Promise<Map<KitRole, number> | null> {
-  const files = kit.rows.map((s) => deps.fetchFile(kit, s).then((file) => ({ file }), (error: unknown) => ({ error })));
+): Promise<{ ids: Map<KitRole, number>; failed: { role: KitRole; why: string }[] } | null> {
+  const gen = p.generation;
   const ids = new Map<KitRole, number>();
+  const failed: { role: KitRole; why: string }[] = [];
+  const todo = kit.rows.filter((s) => {
+    const id = knownKitSample(p, kit.id, s.file);
+    if (id !== null) ids.set(s.role, id);
+    return id === null;
+  });
+  const files = todo.map((s) => deps.fetchFile(kit, s).then((file) => ({ file }), (error: unknown) => ({ error })));
   const deferred: Promise<void>[] = [];
-  for (const [i, s] of kit.rows.entries()) {
-    const got = await files[i];
-    if (!stillThere()) return null;
+  const loaded = (s: KitSound, id: number) => {
+    ids.set(s.role, id);
+    rememberKitSample(p, kit.id, s.file, id);
+  };
+  for (const [i, s] of todo.entries()) {
+    const got = await orEnded(p, gen, files[i]);
+    if (!got || !stillThere()) return null;
     if ('error' in got) {
-      deps.onError(`Couldn't load "${s.file}" from the ${kit.name} kit — ${message(got.error)}`);
+      failed.push({ role: s.role, why: message(got.error) });
       continue;
     }
-    let r = await importSample(p, engine, got.file, stillThere);
-    if (!r.ok && r.busy) {
+    let r = await orEnded(p, gen, importSample(p, engine, got.file, stillThere));
+    if (r && !r.ok && r.busy) {
       // An audio restart or an autosave restore's read (as loadDefaultKit):
-      // try once more when it is over. A replaced session never signals.
-      await whenIdle(p);
-      if (!stillThere()) return null;
-      r = await importSample(p, engine, got.file, stillThere);
+      // try once more when it is over (a replaced session never signals: the
+      // race ends the wait).
+      if ((await orEnded(p, gen, whenIdle(p).then(() => true))) === null || !stillThere()) return null;
+      r = await orEnded(p, gen, importSample(p, engine, got.file, stillThere));
     }
-    if (!stillThere()) return null;
+    if (!r || !stillThere()) return null;
     if (!r.ok) {
-      if (r.error) deps.onError(r.error);
+      if (r.error) failed.push({ role: s.role, why: reason(r.error) });
       continue;
     }
-    if (!r.deferred) ids.set(s.role, r.id);
+    if (!r.deferred) loaded(s, r.id);
     else {
       const id = r.id;
       // Registered before the next await, so a Stop meanwhile still finds it.
+      // Settles on OK (attach), a failure (onFail: the generic banner says
+      // why) or a drop (onDrop: a reset, whose session is gone, so the load
+      // ends below; or an audio restart that lost it: reported as failed).
       deferred.push(
         new Promise<void>((resolve) =>
           deferSampleAssign(id, s.name, () => {
-            ids.set(s.role, id);
+            loaded(s, id);
             resolve();
-          }, () => resolve()),
+          }, () => resolve(), () => {
+            failed.push({ role: s.role, why: 'dropped before it loaded (audio restarted)' });
+            resolve();
+          }),
         ),
       );
     }
   }
-  await Promise.all(deferred);
-  return stillThere() ? ids : null;
+  if ((await orEnded(p, gen, Promise.all(deferred))) === null) return null;
+  return stillThere() ? { ids, failed } : null;
 }
 
 const drumTrack = (p: Project, trackId: string) => {
@@ -142,31 +182,41 @@ export async function loadKitOntoTrack(
   if (!kit || !drumTrack(p, trackId) || p.loading) return false;
   const gen = p.generation;
   const there = () => p.generation === gen && !p.loading && drumTrack(p, trackId) !== null;
-  const ids = await importKit(p, sink, kit, there, deps);
-  if (!ids || !there()) return false;
+  const got = await importKit(p, sink, kit, there, deps);
+  // The track's default kit still landing: let it finish first (see the header).
+  const landing = defaultKitLoad(p, trackId);
+  if (got && landing) await orEnded(p, gen, landing);
+  if (!got || !there()) return false;
+  const { ids, failed } = got;
   const loaded = kit.rows.filter((s) => ids.has(s.role));
-  if (!loaded.length) return false;
-  return edit(p, `Load kit ${kit.name}`, () => {
+  let skipped: KitRole[] = [];
+  const done = loaded.length > 0 && edit(p, `Load kit ${kit.name}`, () => {
     const t = drumTrack(p, trackId)!;
     const plan = kitRowPlan(t.rows.map((r) => r.name), { ...kit, rows: loaded });
     for (const { role, row } of plan.rows) {
       const r = row === null ? addRow(p, sink, t.id) : t.rows[row];
       if (r) setRowSample(p, sink, t.id, r.id, ids.get(role)!, role);
     }
-    if (plan.skipped.length) {
-      deps.onError(`No room for ${plan.skipped.join(', ')} from the ${kit.name} kit: ${MAX_ROWS} rows is the maximum`);
-    }
+    skipped = plan.skipped;
     return true;
   });
+  const problems = [
+    kitFailureText(kit, failed),
+    skipped.length ? `No room for ${skipped.join(', ')} from the ${kit.name} kit: ${MAX_ROWS} rows is the maximum` : null,
+  ].filter((m): m is string => m !== null);
+  if (problems.length) deps.onError(problems.join('. '));
+  return done;
 }
 
 /**
- * A new drum track made of kit `kitId` (Add track ▸ Drum track ▸ <kit>): its
+ * A new drum track made of kit `kitId` (Add track ▸ Drum track: the starter
+ * kit; its kit choice / the menu bar's Drum track ▸ <kit>: any kit): its
  * rows are the kit's roles, each with its sound (a sound that failed leaves
  * its row empty). Named after the kit ("Drums" for the starter kit). One
  * undo entry ("Add drum track"), made when the samples are in, so the track
- * appears then (see the header). Null when no track slot is free or the
- * session was replaced meanwhile.
+ * appears then (see the header; a second add of a kit reuses its samples, so
+ * it is immediate). Null when no track slot is free or the session was
+ * replaced meanwhile.
  */
 export async function addKitDrumTrack(
   p: Project, engine: CommandSink & ImportEngine, kitId: string, deps: KitFileDeps = appKitFileDeps,
@@ -175,8 +225,11 @@ export async function addKitDrumTrack(
   if (!kit || p.tracks.length >= MAX_TRACKS || p.loading) return null;
   const gen = p.generation;
   const there = () => p.generation === gen && !p.loading;
-  const ids = await importKit(p, engine, kit, there, deps);
-  if (!ids || !there()) return null;
+  const got = await importKit(p, engine, kit, there, deps);
+  if (!got || !there()) return null;
+  const { ids, failed } = got;
+  const failure = kitFailureText(kit, failed);
+  if (failure) deps.onError(failure);
   return edit(p, 'Add drum track', () => {
     const name = uniqueTrackName(p, kit.id === STARTER_KIT_ID ? 'Drums' : kit.name);
     const t = addDrumTrack(p, engine, name, kit.rows.map((s) => s.role));

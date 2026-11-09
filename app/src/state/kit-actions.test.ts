@@ -3,6 +3,7 @@
 // load asynchronously ("prepare, then commit").
 import { describe, expect, it } from 'vitest';
 import { Err } from '../audio/protocol';
+import type { KitDeps } from './defaultKit';
 import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { serialize } from '../project/serialize';
@@ -17,6 +18,9 @@ import type { KitFileDeps } from './kit-actions';
 import { MAX_ROWS, MAX_TRACKS, Project, currentPattern } from './project.svelte';
 import type { DrumTrack } from './project.svelte';
 import { installSampleLoads } from './sampleLoads';
+import { markBusy, markIdle } from './idle';
+import { HostErr } from '../audio/protocol';
+import { loadDefaultKit } from './defaultKit';
 import { sampleFile } from './sampleFiles';
 
 const ROLES = [...KIT_ROLES];
@@ -50,8 +54,10 @@ async function fresh(o: { sampleCode?: (id: number) => number } = {}) {
 function deps(o: { fail?: string[]; hold?: boolean } = {}) {
   const errors: string[] = [];
   const waiting: (() => void)[] = [];
+  const fetched: string[] = [];
   const d: KitFileDeps = {
     fetchFile: (kit: Kit, s: KitSound) => {
+      fetched.push(`${kit.id}/${s.file}`);
       const go = () => {
         if (o.fail?.includes(s.file)) throw new Error('HTTP 404');
         return new File([fakeAudio(10 + ROLES.indexOf(s.role))], `${kit.id}-${s.file}`, { type: 'audio/wav' });
@@ -61,7 +67,7 @@ function deps(o: { fail?: string[]; hold?: boolean } = {}) {
     },
     onError: (m) => errors.push(m),
   };
-  return { d, errors, release: () => waiting.splice(0).forEach((f) => f()) };
+  return { d, errors, fetched, release: () => waiting.splice(0).forEach((f) => f()) };
 }
 
 const rows = (p: Project, i = 0) => (p.tracks[i] as DrumTrack).rows;
@@ -135,9 +141,10 @@ describe('loadKitOntoTrack', () => {
 
   it('a sound that fails is reported and keeps its row\'s sample; the rest load', async () => {
     const { p, engine, t } = await fresh();
-    const { d, errors } = deps({ fail: ['clap.wav'] });
+    const { d, errors } = deps({ fail: ['clap.wav', 'rim.wav'] });
     await loadKitOntoTrack(p, engine, t.id, 'drum-machine', d);
-    expect(errors).toEqual(['Couldn\'t load "clap.wav" from the Drum Machine kit — HTTP 404']);
+    // One message naming the kit and every sound that failed.
+    expect(errors).toEqual(['Drum Machine kit: 2 sounds didn\'t load — Clap: HTTP 404; Rim: HTTP 404']);
     expect(rows(p)[1].sampleId).toBe(101);
     expect(fileOf(p, rows(p)[0].sampleId)).toBe('drum-machine-kick.wav');
   });
@@ -223,5 +230,131 @@ describe('addKitDrumTrack', () => {
     expect(fileOf(p, t.rows[0].sampleId)).toBe('starter-kick-punch.wav'); // (the fake deps name files "<kit>-<file>")
     while (p.tracks.length < MAX_TRACKS) addDrumTrack(p, engine);
     expect(await addKitDrumTrack(p, engine, 'garage', d)).toBeNull();
+  });
+});
+
+describe('kit samples are reused within a session (review round 1 #2)', () => {
+  it('loading the same kit again imports nothing new: same ids, no fetch, still one undo entry each', async () => {
+    const { p, engine, t, h } = await fresh();
+    const { d, fetched } = deps();
+    await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+    const first = rows(p).map((r) => r.sampleId);
+    const next = p.nextSampleId;
+    await loadKitOntoTrack(p, engine, t.id, 'deep', d);
+    await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+    expect(rows(p).map((r) => r.sampleId)).toEqual(first);
+    expect(p.nextSampleId).toBe(next + 8); // only Deep's 8 were new
+    expect(fetched.filter((f) => f.startsWith('garage/'))).toHaveLength(8);
+    expect(h.labels.undo).toBe('Load kit Garage');
+    h.undo();
+    expect(rows(p).map((r) => fileOf(p, r.sampleId))[0]).toBe('deep-kick.wav');
+    // A kit track of a kit already loaded reuses its samples too.
+    const added = (await addKitDrumTrack(p, engine, 'garage', d))!;
+    expect(added.rows.map((r) => r.sampleId)).toEqual(first);
+    expect(p.nextSampleId).toBe(next + 8);
+  });
+
+  it('a new session (generation) starts over: ids are imported again', async () => {
+    const { p, engine, t } = await fresh();
+    const { d, fetched } = deps();
+    await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+    p.generation++; // as a load does (ids start over)
+    await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+    expect(fetched).toHaveLength(16);
+  });
+
+  it('the default kit\'s samples are reused by a Starter kit load', async () => {
+    const { p, engine, t } = await fresh();
+    const kick = (await addKitDrumTrack(p, engine, 'starter', deps().d))!; // imports the starter's 8
+    const n = p.nextSampleId;
+    const { d, fetched } = deps();
+    await loadKitOntoTrack(p, engine, t.id, 'starter', d);
+    expect(fetched).toEqual([]);
+    expect(p.nextSampleId).toBe(n);
+    expect(rows(p).map((r) => r.sampleId)).toEqual(kick.rows.map((r) => r.sampleId));
+  });
+});
+
+describe('a kit load always ends (review round 1 #3)', () => {
+  it('a deferred sound whose load is reset: the load resolves false, nothing committed', async () => {
+    const { p, engine, t, h } = await fresh({ sampleCode: (id) => (id === 3 ? Err.DEFERRED : Err.OK) });
+    const uninstall = installSampleLoads(p, engine);
+    try {
+      const loading = loadKitOntoTrack(p, engine, t.id, 'garage', deps().d);
+      await new Promise((r) => setTimeout(r, 20));
+      // A load replaces the session: the engine reset drops the deferred load.
+      markBusy(p);
+      p.generation++;
+      engine.onSampleLoaded!(3, HostErr.RESET);
+      markIdle(p);
+      expect(await loading).toBe(false);
+      expect(rows(p)[3].sampleId).toBe(103);
+      expect(h.canUndo).toBe(false);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it('a deferred sound that an audio restart lost: the load ends, the rest land, the lost one is reported', async () => {
+    const { p, engine, t } = await fresh({ sampleCode: (id) => (id === 0 ? Err.DEFERRED : Err.OK) });
+    const uninstall = installSampleLoads(p, engine);
+    try {
+      const { d, errors } = deps();
+      const loading = loadKitOntoTrack(p, engine, t.id, 'deep', d);
+      await new Promise((r) => setTimeout(r, 20));
+      installSampleLoads(p, engine)(); // pending loads dropped unanswered
+      expect(await loading).toBe(true);
+      expect(rows(p)[0].sampleId).toBe(100); // the lost kick: the row keeps its sample
+      expect(fileOf(p, rows(p)[1].sampleId)).toBe('deep-clap.wav');
+      expect(errors).toEqual(['Deep kit: 1 sound didn\'t load — Kick: dropped before it loaded (audio restarted)']);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it('a busy import whose session is replaced before idle: resolves false (whenIdle alone would never)', async () => {
+    const { p, engine, t } = await fresh();
+    const held = deps({ hold: true });
+    const loading = addKitDrumTrack(p, engine, 'dusty', held.d);
+    markBusy(p); // an autosave restore's read: imports come back busy
+    held.release();
+    await new Promise((r) => setTimeout(r, 20));
+    p.generation++; // the restore replaced the session
+    markIdle(p);
+    expect(await loading).toBeNull();
+    void t;
+  });
+});
+
+describe('a kit load during the default kit\'s load (review round 1 #11)', () => {
+  it('waits for the starter samples to land, so one undo restores them', async () => {
+    const p = new Project();
+    const engine = {
+      sampleRate: 48000, context: fakeDecoder, send(op: number) { commandEdits(p, op); return true; },
+      loadSample: async () => Err.OK,
+    };
+    const t = addDefaultDrumTrack(p, engine)!;
+    const h = createHistory({ snapshot: () => serialize(p), apply: (from, to) => diffApply(p, engine, from, to) });
+    p.history = h;
+    h.clear();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const kitDeps: KitDeps = {
+      fetchFile: async (file) => {
+        await gate;
+        return new File([fakeAudio(60)], file, { type: 'audio/wav' });
+      },
+      onError: () => {},
+    };
+    const starting = loadDefaultKit(p, engine, t.id, kitDeps);
+    const loading = loadKitOntoTrack(p, engine, t.id, 'garage', deps().d);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(rows(p)[0].sampleId).toBeNull(); // the kit waits for the default kit
+    release();
+    await starting;
+    expect(await loading).toBe(true);
+    expect(fileOf(p, rows(p)[0].sampleId)).toBe('garage-kick.wav');
+    h.undo();
+    expect(rows(p).map((r) => fileOf(p, r.sampleId))).toEqual(KITS[0].rows.map((s) => s.file));
   });
 });

@@ -1,7 +1,7 @@
 // The project's busy / idle signal (state/idle.ts): what a default-kit
 // import waiting out a load or an audio restart awaits instead of polling.
 import { describe, expect, it } from 'vitest';
-import { markBusy, markIdle, whenIdle } from './idle';
+import { markBusy, markIdle, whenIdle, whenSessionEnds } from './idle';
 import { Project } from './project.svelte';
 
 const settled = async (pr: Promise<void>) => {
@@ -46,5 +46,20 @@ describe('idle signal', () => {
     markIdle(p);
     expect(await settled(next)).toBe(true);
     expect(await settled(w)).toBe(false);
+  });
+
+  it('whenSessionEnds resolves at the idle after a load replaced the session, never for the live one', async () => {
+    const p = new Project();
+    const end = whenSessionEnds(p, p.generation);
+    expect(whenSessionEnds(p, p.generation)).toBe(end); // one shared promise per session
+    markBusy(p, { restarting: true }); // an audio restart keeps the session
+    markIdle(p);
+    expect(await settled(end)).toBe(false);
+    markBusy(p);
+    p.generation++; // a load replaces it
+    expect(await settled(end)).toBe(false); // still loading
+    markIdle(p);
+    expect(await settled(end)).toBe(true);
+    expect(await settled(whenSessionEnds(p, 0))).toBe(true); // already gone: at once
   });
 });

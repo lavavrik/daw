@@ -5,7 +5,9 @@
 import type { Project } from '../state/project.svelte';
 import { MAX_TRACKS } from '../state/project.svelte';
 import type { CommandSink } from '../state/actions';
-import { TRACKS_FULL_TEXT, addDrumTrack } from '../state/actions';
+import { TRACKS_FULL_TEXT } from '../state/actions';
+import { addKitDrumTrack } from '../state/kit-actions';
+import { STARTER_KIT_ID } from '../state/kits';
 import { addSynthTrack } from '../state/rack-actions';
 import { addSamplerTrack } from '../state/sampler-actions';
 import { addAudioTrack } from '../state/audio-actions';
@@ -20,7 +22,7 @@ export type AddKind = 'drum' | 'synth' | 'sampler' | 'audio' | 'master';
 const DEEP_BASS = STARTER_PATCHES.find((x) => x.name === 'Deep Bass') ?? STARTER_PATCHES[0];
 
 export const ADD_ITEMS: { kind: AddKind; label: string; title: string }[] = [
-  { kind: 'drum', label: 'Drum track', title: 'Add a drum track' },
+  { kind: 'drum', label: 'Drum track', title: 'Add a drum track with the starter kit (as a new project has)' },
   { kind: 'synth', label: 'Synth track', title: 'Add a synth track (Deep Bass)' },
   { kind: 'sampler', label: 'Sampler track', title: 'Add a sampler track (drop a sample on its Sample Player)' },
   { kind: 'audio', label: 'Audio track', title: 'Add an audio track: drop audio files on its lane' },
@@ -36,9 +38,20 @@ export function addBlocked(p: Project, kind: AddKind): string | null {
   return p.tracks.length >= MAX_TRACKS ? TRACKS_FULL_TEXT : null;
 }
 
+/**
+ * A drum track made of a built-in kit (state/kit-actions.ts addKitDrumTrack:
+ * one undo entry; the track appears once its samples are in). "Drum track"
+ * is the starter kit's (plan 25 review: like a new project's default track);
+ * the kit choices name another.
+ */
+export function addKitTrack(p: Project, engine: CommandSink & ImportEngine, kitId = STARTER_KIT_ID) {
+  if (addBlocked(p, 'drum')) return Promise.resolve(null);
+  return addKitDrumTrack(p, engine, kitId);
+}
+
 export function addTrack(p: Project, engine: CommandSink & ImportEngine, kind: AddKind) {
   if (addBlocked(p, kind)) return;
-  if (kind === 'drum') addDrumTrack(p, engine);
+  if (kind === 'drum') void addKitTrack(p, engine);
   else if (kind === 'synth') addSynthTrack(p, engine, undefined, DEEP_BASS);
   else if (kind === 'sampler') void addSamplerTrack(p, engine);
   else if (kind === 'audio') {

@@ -32,7 +32,7 @@
   // are the roles (Kick, Clap, …), each with the kit's sound, named after
   // the kit (state/kit-actions.ts addKitDrumTrack: one undo entry; the track
   // appears once its samples are in, a moment later). "Drum track" itself
-  // still adds the plain track with four empty rows.
+  // is the starter kit's track, like a new project's default one.
   //
   // Dropping a sample (a Finder file or a library sample) on the button makes
   // a Sampler track with it, as the old "+ Sampler track" button did.
@@ -50,10 +50,9 @@
   import type { ImportEngine } from '../../state/sampleImport';
   import { addSamplerTrack } from '../../state/sampler-actions';
   import { KITS, STARTER_KIT_ID } from '../../state/kits';
-  import { addKitDrumTrack } from '../../state/kit-actions';
   import { banners } from '../../state/banners.svelte';
   import { droppedFiles, isSampleDrag } from '../../library/drag';
-  import { ADD_ITEMS, addBlocked, addTrack } from '../addTrack';
+  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack } from '../addTrack';
   import type { AddKind } from '../addTrack';
 
   let { p, engine, onhint }: { p: Project; engine: CommandSink & ImportEngine; onhint: (text: string) => void } = $props();
@@ -107,16 +106,21 @@
     if (refocus) btn?.focus();
   }
   function pick(kind: AddKind) {
+    if (kind === 'drum') return void pickKit(STARTER_KIT_ID);
     close(false);
     addTrack(p, engine, kind);
   }
-  /** A kit's drum track is being made (its samples load first): no second one meanwhile. */
+  /**
+   * A kit's drum track is being made (its samples load first): no second one
+   * meanwhile. The add always settles (a replaced session or a dropped load
+   * ends it: kit-actions.ts), so this never sticks.
+   */
   let addingKit = $state(false);
   async function pickKit(kitId: string) {
     close(false);
     addingKit = true;
     try {
-      await addKitDrumTrack(p, engine, kitId);
+      await addKitTrack(p, engine, kitId);
     } finally {
       addingKit = false;
     }
@@ -208,7 +212,7 @@
   <div class="list" bind:this={list} data-testid="add-track-menu" style:left="{at.left}px" style:bottom={at.below ? null : `${at.bottom}px`} style:top={at.below ? `${at.top}px` : null} style:--room="{at.below ? window.innerHeight - at.top : window.innerHeight - at.bottom}px" onkeydown={listKey}>
     {#each items as it (it.kind)}
       {@const why = addBlocked(p, it.kind)}
-      <button data-testid={ITEM[it.kind].testid} disabled={!!why} title={why ?? it.title} onclick={() => pick(it.kind)}>
+      <button data-testid={ITEM[it.kind].testid} disabled={!!why || (it.kind === 'drum' && addingKit)} title={why ?? it.title} onclick={() => pick(it.kind)}>
         <Icon icon={ITEM[it.kind].icon} />{it.label}
       </button>
       {#if it.kind === 'drum'}

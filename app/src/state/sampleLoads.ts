@@ -44,6 +44,12 @@ interface Waiting {
   floats: number;
   /** Runs after a failure (not a reset), after the generic banner is set. */
   onFail?: (id: number) => void;
+  /**
+   * Runs when the load is dropped without an answer: an engine reset (its
+   * session is gone), an audio restart whose new engine never got it, or a
+   * new installSampleLoads. Lets a waiter (a kit load) stop waiting.
+   */
+  onDrop?: () => void;
 }
 
 /** Sample id -> the Project.generation in which its deferred load failed. */
@@ -60,17 +66,24 @@ let sink: SampleLoadEngine | null = null;
  * an uninstall function (forgets pending loads too).
  */
 export function installSampleLoads(p: Project, engine: SampleLoadEngine): () => void {
-  pending.clear();
+  dropAll();
   failed.clear();
   project = p;
   bind(engine);
   return () => {
     if (sink) sink.onSampleLoaded = undefined;
-    pending.clear();
+    dropAll();
     failed.clear();
     project = null;
     sink = null;
   };
+}
+
+/** Forget every waiting load, telling each one's onDrop. */
+function dropAll() {
+  const ws = [...pending.values()];
+  pending.clear();
+  for (const w of ws) w.onDrop?.();
 }
 
 /** The settle handler on `engine` (and row attaches through it). */
@@ -92,7 +105,8 @@ function settle(id: number, code: number, sampleRate: number) {
   // The track or row may have been removed meanwhile; setRowSample is a no-op then.
   // RESET: dropped by an engine reset (project load); its session is gone.
   if (code === Err.OK) w.attach(id);
-  else if (code !== HostErr.RESET && project) project.arenaFloats = Math.max(0, project.arenaFloats - w.floats);
+  else if (code === HostErr.RESET) w.onDrop?.();
+  else if (project) project.arenaFloats = Math.max(0, project.arenaFloats - w.floats);
   if (code !== Err.OK && code !== HostErr.RESET) {
     if (project) failed.set(id, project.generation);
     banners.error = `Couldn't load "${w.name}" — ${loadErrorText(code, sampleRate)}`;
@@ -122,8 +136,10 @@ export function rebindSampleLoads(engine: SampleLoadEngine, codes: Map<number, n
     const code = codes.get(id);
     // The restart counted only the uploads its engine took (OK / DEFERRED).
     w.floats = code === Err.DEFERRED ? floatsOf(id, engine.sampleRate) : 0;
-    if (code === undefined) pending.delete(id);
-    else if (code !== Err.DEFERRED) settle(id, code, engine.sampleRate); // DEFERRED: the new engine settles it
+    if (code === undefined) {
+      pending.delete(id);
+      w.onDrop?.();
+    } else if (code !== Err.DEFERRED) settle(id, code, engine.sampleRate); // DEFERRED: the new engine settles it
   }
   if (pending.size === 0) banners.notice = null;
 }
@@ -140,12 +156,15 @@ export function deferSampleLoad(id: number, tid: string, rowId: string, name: st
 
 /**
  * Same, for any target: `attach(id)` runs once the load succeeded, `onFail(id)`
- * once it failed (not for a reset). Register it as soon as importSample
+ * once it failed (not for a reset), `onDrop()` when it is dropped unanswered
+ * (a reset, an audio restart that lost it, a new session's install). Register it as soon as importSample
  * returns: a Stop before that would settle the load with no one waiting.
  */
-export function deferSampleAssign(id: number, name: string, attach: (id: number) => void, onFail?: (id: number) => void) {
+export function deferSampleAssign(
+  id: number, name: string, attach: (id: number) => void, onFail?: (id: number) => void, onDrop?: () => void,
+) {
   failed.delete(id);
-  pending.set(id, { name, attach, floats: sink ? floatsOf(id, sink.sampleRate) : 0, onFail });
+  pending.set(id, { name, attach, floats: sink ? floatsOf(id, sink.sampleRate) : 0, onFail, onDrop });
   banners.notice = `"${name}" will load when playback stops`;
 }
 

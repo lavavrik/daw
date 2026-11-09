@@ -45,7 +45,8 @@
   // (View ▸ Performance). The pills' own octave − / + merged into the menu's
   // (menu-octave-down / -up).
   //
-  // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names): one open
+  // SUBMENUS (Patterns ▸ Load from library, Options ▸ Note names, Add ▸ Drum
+  // track ▸ one item per built-in kit, menu-add-drum-kit-<id>): one open
   // at a time (`sub`), flying out to the right of their item.
   //   Keys: → or Enter / Space on the item opens it on its first entry;
   //   ↑ ↓ Home End move inside; → inside does nothing. While one is open,
@@ -133,7 +134,8 @@
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
   import { wheelOctaveSteps } from '../input/qwertyPiano';
-  import { ADD_ITEMS, addBlocked, addTrack } from './addTrack';
+  import { ADD_ITEMS, addBlocked, addKitTrack, addTrack } from './addTrack';
+  import { KITS } from '../state/kits';
   import type { AddKind } from './addTrack';
   import { laneView } from './song/laneView.svelte';
   import { noteNames, setNoteNames } from './noteNames.svelte';
@@ -458,6 +460,11 @@
     closeToOpener();
     addTrack(p, engine, kind);
   }
+  /** Add ▸ Drum track ▸ <kit> (plan 25): a drum track made of that kit. */
+  function addKit(kitId: string) {
+    closeToOpener();
+    void addKitTrack(p, engine, kitId);
+  }
 
   // ---- Patterns ------------------------------------------------------------
   const selected = $derived(p.tracks.find((t) => t.id === p.selectedTrackId) ?? null);
@@ -522,7 +529,7 @@
     }
   }
   // ---- submenus (SUBMENUS above) --------------------------------------------
-  type SubName = 'lib' | 'notes';
+  type SubName = 'lib' | 'notes' | 'kits';
   /** The open submenu (one at a time). */
   let sub = $state<SubName | null>(null);
   const subBtns: Partial<Record<SubName, HTMLButtonElement>> = $state({});
@@ -754,9 +761,30 @@
           {#each ADD_ITEMS as a (a.kind)}
             {@const why = addBlocked(p, a.kind)}
             {#if a.kind === 'master'}<hr />{/if}
-            <button class="it" data-testid={`menu-add-${a.kind}`} use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? a.title} onclick={() => add(a.kind)}>
-              <Icon icon={ADD_ICONS[a.kind]} /><span class="l">{a.label}</span>
-            </button>
+            {#if a.kind === 'drum'}
+              <!-- Drum track ▸ a kit (plan 25): Starter (what the playlist's "Drum track" adds) and the others. -->
+              <div class="subwrap" data-sub="kits">
+                <button
+                  class="it" data-testid="menu-add-drum" bind:this={subBtns.kits} aria-expanded={sub === 'kits'} aria-controls="menu-add-kits"
+                  use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? 'Add a drum track made of a built-in kit'}
+                  onclick={(e) => subClick('kits', e)} onkeydown={(e) => subBtnKey(e, 'kits')}
+                ><Icon icon={ADD_ICONS.drum} /><span class="l">{a.label}</span><span class="chev"><Icon icon={CaretRight} size={12} /></span></button>
+                {#if sub === 'kits'}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <div class="sub" id="menu-add-kits" role="group" aria-label="Drum kits" bind:this={subEl} onkeydown={subKey}>
+                    {#each KITS as k (k.id)}
+                      <button class="it" data-testid="menu-add-drum-kit-{k.id}" title={k.blurb} onclick={() => addKit(k.id)}>
+                        <span class="l">{k.name}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <button class="it" data-testid={`menu-add-${a.kind}`} use:inertItem={why ?? (p.loading ? LOADING : null)} title={why ?? a.title} onclick={() => add(a.kind)}>
+                <Icon icon={ADD_ICONS[a.kind]} /><span class="l">{a.label}</span>
+              </button>
+            {/if}
           {/each}
         {:else if m === 'Patterns'}
           {#if renaming}

@@ -282,9 +282,25 @@ Browser's per-kit "Load" and the kit header's context menu, on the
 selected drum track): each row named after a role (`rowHasRole`: case and
 outer spaces ignored) gets the kit's sound, roles the track lacks get new
 rows (up to `MAX_ROWS`; the rest are reported), other rows and all steps are
-kept. **Add track ▸ Drum track ▸ <kit>** (`addKitDrumTrack`): a new track
-named after the kit ("Drums" for the starter kit) whose rows are the roles
-with the kit's sounds. "Drum track" itself still adds the plain empty track.
+kept. **Add track ▸ Drum track** (`addKitDrumTrack`, via ui/addTrack.ts
+`addKitTrack`): a new track whose rows are the roles with a kit's sounds,
+named after the kit. The plain "Drum track" item (the playlist's menu) is
+the **starter kit's** track ("Drums 2"…), exactly like a new project's
+default track; the playlist menu's kit chips and the menu bar's **Add ▸ Drum
+track ▸** submenu (Starter, Drum Machine, Deep, Garage, Dusty) name a kit.
+
+**Samples are reused within a session** (`state/kitSamples.ts`): each kit
+file's sample id is remembered once its load succeeded (keyed
+`<kit id>/<file>`, the default kit's starter files included), and a later
+kit load or kit track reuses it while the project keeps its bytes and its
+deferred load never failed. Auditioning kits therefore costs no new sample
+ids (the session has `MAX_SAMPLES`) and no new sample memory. The table is
+per session: a new `p.generation` starts an empty one (ids start over); an
+audio restart keeps ids, so it keeps the table.
+
+Failures are reported **once per load**, naming the kit and every sound that
+didn't load ("Garage kit: 2 sounds didn't load — Clap: HTTP 404; Rim: …"),
+plus any roles with no room.
 
 **One undo entry for an async action — prepare, then commit.** The samples
 load asynchronously (fetch, decode, upload), but the user action must be one
@@ -303,6 +319,20 @@ keyed by id). Unlike `attachKitSample` this is an ordinary edit, not a
 starting point: it marks the project unsaved. A session replaced meanwhile
 (`p.generation`), a load starting, or the target track removed drops the
 commit; edits made while the kit loads stay their own entries, before it.
+
+**Every load ends.** The UI's "Loading…" state clears only when the load's
+promise settles, so no wait may hang: each wait (a fetch, an import, the
+`busy` retry's `whenIdle`, a deferred load) races `idle.ts whenSessionEnds`
+(resolves at the first `markIdle` after a load replaced the session; a
+replaced session's `whenIdle` never resolves), and a deferred load dropped
+unanswered calls its `onDrop` (`sampleLoads.ts`: an engine reset, an audio
+restart whose new engine never got it, a new install). A dropped sound
+counts as failed.
+
+**A load racing the default kit.** If the track's default kit
+(`loadDefaultKit`) is still landing, the kit load waits for it before
+committing (`kitSamples.ts trackDefaultKitLoad` / `defaultKitLoad`), so the
+starter samples are part of the "before" and one undo restores them.
 ## Validation (`validate`)
 
 Never throws, never lets an out-of-range value through. Unknown fields are

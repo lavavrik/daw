@@ -5,8 +5,10 @@
 // rebuilding the session) and `p.restarting` (an audio restart; `loading`
 // is set too) are only ever changed through markBusy / markIdle, so work
 // that has to wait for the project to be free can await whenIdle instead of
-// polling the flags on a timer. The one user today: a default-kit import
-// refused as `busy` (state/defaultKit.ts) retries once on the signal.
+// polling the flags on a timer. Users: a default-kit or kit import refused
+// as `busy` (state/defaultKit.ts, state/kit-actions.ts) retries once on the
+// signal; a kit load also awaits whenSessionEnds, so a wait whose session is
+// gone (whenIdle never resolves for it) still ends.
 //
 // Callers that set the flags: project/load.ts loadProject, the restore read
 // in project/session.ts, audio/restart.ts restartAudio. Tests may still set
@@ -21,6 +23,9 @@ interface Waiter {
 
 /** Per project: who waits for the next idle transition. */
 const waiters = new WeakMap<Project, Waiter[]>();
+
+/** Per project: the end of one session (its generation) that someone awaits. */
+const enders = new WeakMap<Project, { gen: number; promise: Promise<void>; resolve: () => void }>();
 
 /** The project is busy: a load / restore read (`loading`), or an audio restart (both flags). */
 export function markBusy(p: Project, opts: { restarting?: boolean } = {}) {
@@ -37,6 +42,11 @@ export function markBusy(p: Project, opts: { restarting?: boolean } = {}) {
 export function markIdle(p: Project) {
   p.loading = false;
   p.restarting = false;
+  const e = enders.get(p);
+  if (e && e.gen !== p.generation) {
+    enders.delete(p);
+    e.resolve();
+  }
   const ws = waiters.get(p);
   if (!ws) return;
   waiters.delete(p);
@@ -55,4 +65,21 @@ export function whenIdle(p: Project): Promise<void> {
     ws.push({ gen, resolve });
     waiters.set(p, ws);
   });
+}
+
+/**
+ * Resolves once session `gen` is gone: at the first markIdle after a load
+ * replaced it (p.generation moved), or at once if it already has. Never for
+ * the session still running. One shared promise per session, so racing it
+ * against many waits keeps nothing per wait.
+ */
+export function whenSessionEnds(p: Project, gen: number): Promise<void> {
+  if (p.generation !== gen) return Promise.resolve();
+  let e = enders.get(p);
+  if (!e || e.gen !== gen) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => (resolve = r));
+    enders.set(p, (e = { gen, promise, resolve }));
+  }
+  return e.promise;
 }

@@ -130,7 +130,11 @@
     const t = p.tracks.find((x) => x.id === p.selectedTrackId);
     return t?.kind === 'drum' ? t : null;
   });
-  /** The kit loading now (its button says so; one load at a time). */
+  /**
+   * The kit loading now (its button says so; one load at a time). The load
+   * always settles (a replaced session or a dropped load ends it:
+   * kit-actions.ts), so this never sticks.
+   */
   let loadingKit = $state<string | null>(null);
   const loadTitle = (k: Kit) =>
     target
@@ -146,24 +150,31 @@
       loadingKit = null;
     }
   }
-  // A kit header's context menu: "Load onto <track>".
-  let kitMenu = $state<{ x: number; y: number; kit: Kit } | null>(null);
+  // A kit header's context menu: "Load onto <track>". It takes the focus (its
+  // item, or the menu itself when the item is disabled: no drum track), so
+  // Escape always closes it; Escape and a pick give the focus back to the
+  // kit's header (its fold button). A press outside just closes it.
+  let kitMenu = $state<{ x: number; y: number; kit: Kit; from: HTMLElement | null } | null>(null);
   let kitMenuEl = $state<HTMLDivElement | null>(null);
   function openKitMenu(e: MouseEvent, k: Kit) {
     e.preventDefault();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const head = e.currentTarget as HTMLElement;
+    const r = head.getBoundingClientRect();
     // A keyboard-made contextmenu event has no pointer position: open it under the header.
     const kbd = e.clientX === 0 && e.clientY === 0;
-    kitMenu = { x: kbd ? r.left : e.clientX, y: kbd ? r.bottom : e.clientY, kit: k };
+    kitMenu = { x: kbd ? r.left : e.clientX, y: kbd ? r.bottom : e.clientY, kit: k, from: head.querySelector<HTMLElement>('.fold') };
   }
-  function closeKitMenu() {
+  function closeKitMenu(refocus = true) {
+    const from = kitMenu?.from;
     kitMenu = null;
+    if (refocus) from?.focus({ preventScroll: true });
   }
   $effect(() => {
     if (!kitMenu || !kitMenuEl) return;
-    kitMenuEl.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    const me = kitMenuEl;
+    (me.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? me).focus();
     const outside = (e: PointerEvent) => {
-      if (!kitMenuEl?.contains(e.target as Node)) closeKitMenu();
+      if (!me.contains(e.target as Node)) closeKitMenu(false);
     };
     window.addEventListener('pointerdown', outside, true);
     return () => window.removeEventListener('pointerdown', outside, true);
@@ -388,7 +399,7 @@
   {#if kitMenu}
     {@const k = kitMenu.kit}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="menu" bind:this={kitMenuEl} data-testid="kit-menu" style:left="{kitMenu.x}px" style:top="{kitMenu.y}px" onkeydown={kitMenuKey}>
+    <div class="menu" bind:this={kitMenuEl} tabindex="-1" data-testid="kit-menu" style:left="{kitMenu.x}px" style:top="{kitMenu.y}px" onkeydown={kitMenuKey}>
       <div class="menu-ttl">{k.name}</div>
       <button data-testid="kit-menu-load" disabled={!target || loadingKit !== null} title={loadTitle(k)} onclick={() => { const kit = k; closeKitMenu(); void loadKit(kit); }}>
         {target ? `Load onto "${target.name}"` : 'Load onto track (select a drum track)'}
@@ -447,7 +458,7 @@
   .load:hover:not(:disabled), .load:focus-visible { color: var(--text); border-color: var(--accent); outline: none; }
   .load:disabled { opacity: 0.45; cursor: default; }
   .snd { margin-left: auto; padding-left: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); font-size: var(--fs-ctl); }
-  .menu { position: fixed; z-index: 50; min-width: 150px; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .menu { position: fixed; z-index: 50; min-width: 150px; outline: none; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
   .menu-ttl { font-size: var(--fs-lbl); color: var(--text-2); padding: 2px 6px 4px; }
   .menu button { font: var(--fs-ctl) var(--font-ui); text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .menu button:hover:not(:disabled), .menu button:focus-visible { background: var(--raised); outline: none; }

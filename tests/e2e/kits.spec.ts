@@ -138,6 +138,12 @@ test('Load is off until a drum track is selected', async ({ page }) => {
   await page.getByTestId('add-synth-track').click();
   await expect(page.getByTestId('kit-load-garage')).toBeDisabled();
   await expect(page.getByTestId('kit-load-garage')).toHaveAttribute('title', 'Select a drum track to load a kit onto');
+  // The context menu still opens (its item off) and Escape closes it, focus back on the kit's header.
+  await page.getByTestId('kit-garage').locator('.khead').click({ button: 'right' });
+  await expect(page.getByTestId('kit-menu-load')).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('kit-menu')).toHaveCount(0);
+  await expect(page.getByTestId('kit-garage-toggle')).toBeFocused();
   await page.getByTestId('track-0').click();
   await expect(page.getByTestId('kit-load-garage')).toBeEnabled();
 });
@@ -152,6 +158,27 @@ test('Add track ▸ Drum track ▸ Deep makes a track of the Deep sounds', async
   await expect(page.getByTestId('track-1')).toContainText('Deep');
   await expect.poll(() => rowFiles(page, 1)).toEqual(expected(KITS[2].files));
   await expect(page.getByTestId('undo')).toHaveAttribute('title', /^Undo Add drum track/);
+});
+
+test('the plain Drum track is the starter kit; the menu bar\'s Add ▸ Drum track ▸ Garage adds a Garage track; reloading a kit imports nothing', async ({ page }) => {
+  await start(page);
+  await openAddTrack(page);
+  await page.getByTestId('add-drum-track').click();
+  await expect.poll(() => rowFiles(page, 1)).toEqual(expected(STARTER));
+  await expect(page.getByTestId('track-1')).toContainText('Drums 2');
+
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByTestId('menu-add-drum').click();
+  await page.getByTestId('menu-add-drum-kit-garage').click();
+  await expect.poll(() => rowFiles(page, 2)).toEqual(expected(KITS[3].files));
+
+  // Garage's samples are in the session now: loading Garage again takes no new sample ids.
+  const next = () => page.evaluate(() => (window as unknown as { __daw: { project: { nextSampleId: number } } }).__daw.project.nextSampleId);
+  const before = await next();
+  await page.getByTestId('track-0').click();
+  await page.getByTestId('kit-load-garage').click();
+  await expect.poll(() => rowFiles(page)).toEqual(expected(KITS[3].files));
+  expect(await next()).toBe(before);
 });
 
 test('sound check: the Kick row of every kit peaks above 0.1', async ({ page }) => {

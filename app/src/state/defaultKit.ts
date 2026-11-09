@@ -52,7 +52,8 @@ import { whenIdle } from './idle';
 import { MAX_ROWS } from './project.svelte';
 import type { DrumTrack, Project } from './project.svelte';
 import { importSample } from './sampleImport';
-import { KITS } from './kits';
+import { KITS, STARTER_KIT_ID } from './kits';
+import { rememberKitSample, trackDefaultKitLoad } from './kitSamples';
 import type { ImportEngine } from './sampleImport';
 import { deferSampleAssign } from './sampleLoads';
 
@@ -122,7 +123,15 @@ function emptyRow(p: Project, trackId: string, rowId: string): boolean {
  * addDefaultDrumTrack) from the kit. Resolves when every row is done
  * (loaded, failed, deferred until Stop, or skipped).
  */
-export async function loadDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps = appKitDeps) {
+export function loadDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps = appKitDeps): Promise<void> {
+  // Registered so a kit loaded onto this track meanwhile waits for it
+  // (state/kitSamples.ts, kit-actions.ts loadKitOntoTrack).
+  const done = fillDefaultKit(p, engine, trackId, deps);
+  trackDefaultKitLoad(p, trackId, done);
+  return done;
+}
+
+async function fillDefaultKit(p: Project, engine: ImportEngine & CommandSink, trackId: string, deps: KitDeps) {
   const gen = p.generation;
   const v0 = p.version; // the session as it started: any change of it is a user edit
   const t = p.tracks.find((x) => x.id === trackId);
@@ -156,6 +165,7 @@ export async function loadDefaultKit(p: Project, engine: ImportEngine & CommandS
       continue;
     }
     const attach = (id: number) => {
+      rememberKitSample(p, STARTER_KIT_ID, j.kit.file, id); // a starter-kit load reuses it (kitSamples.ts)
       if (attachKitSample(p, engine, trackId, j.rowId, id) && p.version !== v0) deps.landedAfterEdit?.();
     };
     if (r.deferred) deferSampleAssign(r.id, j.kit.name, attach);

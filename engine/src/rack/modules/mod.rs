@@ -519,6 +519,20 @@ impl Smooth {
         self.value
     }
 
+    /// Would `next(target)` leave the value as it is? (At the target, or
+    /// at a float fixed point of the glide: `value + d·coef == value`.)
+    pub fn settled(&self, target: f32) -> bool {
+        if self.snap {
+            return false; // `next` would clear the flag
+        }
+        let d = target - self.value;
+        if d.abs() < 1e-6 || !d.is_finite() {
+            !target.is_finite() || self.value == target
+        } else {
+            self.value + d * self.coef == self.value
+        }
+    }
+
     /// Skip the glide: the next `next(target)` returns `target`.
     pub fn snap(&mut self) {
         self.snap = true;

@@ -130,6 +130,11 @@ impl Biquad {
         self.c
     }
 
+    /// Is the state exactly zero (so zero input gives zero output)?
+    pub fn is_zero(&self) -> bool {
+        self.s1 == 0.0 && self.s2 == 0.0
+    }
+
     /// Clear the state.
     pub fn reset(&mut self) {
         self.s1 = 0.0;

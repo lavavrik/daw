@@ -914,3 +914,231 @@ fn render_is_call_size_independent() {
     assert_eq!(first, None, "128- vs 1024-frame calls differ");
     assert!(peak(&la) > 0.05);
 }
+
+// ---- Plan 29: return slots with kinds, RETURN_KIND, sleeping returns ----
+
+use super::ReturnKind;
+use crate::MAX_RETURNS;
+
+/// Delay division index of a quarter note (`DELAY_DIVISIONS[8] == "1/4"`).
+const QUARTER: f64 = 8.0;
+
+fn return_kind(e: &mut Engine, slot: usize, kind: ReturnKind) {
+    assert_eq!(e.command(OP_RETURN_KIND, slot as f64, kind as u8 as f64, 0.0, 0.0), OK, "slot {slot} kind {kind:?}");
+}
+
+/// Drum track 0 hitting a one-frame impulse of 0.5 on beat 1, heard only
+/// through return `slot` (track fader off, pre-fader send at 0 dB), at 120
+/// bpm (a quarter note is 24000 samples).
+fn impulse_into(e: &mut Engine, slot: usize) {
+    ok(e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0));
+    load(e, 0, 1, |_| 0.5);
+    drums(e, 0, 0, 0, &[0]);
+    mix(e, 0, P_FADER, -60.0);
+    mix(e, 0, send_id(slot) as u32, 0.0);
+    mix(e, 0, send_pre_id(slot) as u32, 1.0);
+}
+
+/// Indices of the samples above `th` in magnitude.
+fn hits(xs: &[f32], th: f32) -> Vec<usize> {
+    xs.iter().enumerate().filter(|(_, x)| x.abs() > th).map(|(i, _)| i).collect()
+}
+
+#[test]
+fn return_kind_switches_dsp() {
+    let ch = MIX_RETURN0 + 3;
+    let run = |kind: ReturnKind| {
+        let mut e = Engine::new(SR);
+        return_kind(&mut e, 3, kind);
+        assert_eq!(e.mixer().return_kind(3), kind);
+        impulse_into(&mut e, 3);
+        mix(&mut e, ch, P_DELAY_TIME, QUARTER);
+        mix(&mut e, ch, P_DELAY_PING_PONG, 0.0);
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (l, _) = render(&mut e, 60000);
+        (l, e.latency())
+    };
+    // Delay: the impulse repeats every quarter note (24000 samples at 120
+    // bpm), and nothing sounds in between.
+    let (l, lat) = run(ReturnKind::Delay);
+    let echo = 24000 + lat;
+    assert!(l[..echo].iter().all(|&x| x == 0.0), "silent before the first echo");
+    assert!(l[echo].abs() > 0.1, "first echo at {echo}: {}", l[echo]);
+    assert!(l[echo + 1..2 * 24000 + lat].iter().all(|&x| x == 0.0), "silent between echoes");
+    assert!(l[2 * 24000 + lat].abs() > 0.01, "second echo (feedback)");
+    // Reverb: a diffuse tail, dense rather than discrete repeats.
+    let (l, _) = run(ReturnKind::Reverb);
+    let tail = &l[4800..24000];
+    assert!(peak(tail) > 1e-3, "reverb tail: {}", peak(tail));
+    assert!(hits(tail, 1e-6).len() > tail.len() / 2, "the tail is dense");
+    // Off: channel 35 is silent.
+    let (l, _) = run(ReturnKind::Off);
+    assert!(l.iter().all(|&x| x == 0.0), "an Off slot sounded: {}", peak(&l));
+}
+
+#[test]
+fn delay_on_slot_5_is_tempo_synced() {
+    for (bpm, at) in [(120.0, 24000), (96.0, 30000)] {
+        let mut e = Engine::new(SR);
+        return_kind(&mut e, 5, ReturnKind::Delay);
+        impulse_into(&mut e, 5);
+        mix(&mut e, MIX_RETURN0 + 5, P_DELAY_TIME, QUARTER);
+        ok(e.command(OP_SET_TEMPO, bpm, 0.0, 0.0, 0.0));
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        let (l, _) = render(&mut e, at + 1000);
+        assert_eq!(hits(&l, 1e-3).first().copied(), Some(at + e.latency()), "bpm {bpm}");
+    }
+}
+
+#[test]
+fn return_off_fades_without_click() {
+    for (slot, kind) in [(0, ReturnKind::Reverb), (4, ReturnKind::Delay)] {
+        let mut e = Engine::new(SR);
+        return_kind(&mut e, slot, kind);
+        sine_patch(&mut e, 0, 0.8);
+        mix(&mut e, 0, P_FADER, -60.0);
+        mix(&mut e, 0, send_id(slot) as u32, 0.0);
+        mix(&mut e, 0, send_pre_id(slot) as u32, 1.0);
+        hold(&mut e, 0, 57.0);
+        let (l, _) = render(&mut e, 24000);
+        assert!(peak(&l[12000..]) > 0.1, "{kind:?} rings: {}", peak(&l[12000..]));
+        let last = l[l.len() - 1];
+        return_kind(&mut e, slot, ReturnKind::Off);
+        let (mut l2, r2) = render(&mut e, 4800);
+        let first_step = (l2[0] - last).abs();
+        l2.insert(0, last);
+        assert!(max_step(&l2) <= 0.05 && first_step <= 0.05, "{kind:?}: step {}", max_step(&l2));
+        let zero = 240 + BLOCK + 1; // 5 ms + one block (+ the inserted sample)
+        assert!(l2[zero..].iter().chain(&r2[zero - 1..]).all(|&x| x == 0.0), "{kind:?}: not silent after 5 ms");
+        assert_eq!(e.mixer().return_kind(slot), ReturnKind::Off);
+    }
+}
+
+#[test]
+fn sleeping_return_wakes_bit_exact() {
+    // A burst into the Reverb (short decay) and the Delay (no feedback),
+    // a long gap in which both tails reach exact zero and the slots sleep
+    // (a return param and the tempo move meanwhile), then another burst.
+    // The sleeping mixer renders bit for bit what a never-sleeping one does.
+    let run = |sleep: bool| {
+        let mut e = Engine::new(SR);
+        e.mixer_mut().set_sleep(sleep);
+        sine_patch(&mut e, 0, 0.8);
+        mix(&mut e, 0, P_SEND_A, -3.0);
+        mix(&mut e, 0, P_SEND_B, -3.0);
+        mix(&mut e, MIX_RETURN0, P_REV_DECAY, 0.2);
+        mix(&mut e, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.0);
+        ok(e.command(OP_SET_INPUT_TRACK, 0.0, 0.0, 0.0, 0.0));
+        let (mut l, mut r) = render(&mut e, 24000);
+        let mut slept = e.mixer().awake_slots() == 0;
+        ok(e.command(OP_NOTE_ON, 57.0, 100.0, 0.0, 0.0));
+        let (l2, r2) = render(&mut e, 4800);
+        l.extend(l2);
+        r.extend(r2);
+        assert!(e.mixer().awake_slots() == 2 || !sleep, "both returns woke");
+        ok(e.command(OP_NOTE_OFF, 57.0, 0.0, 0.0, 0.0));
+        let (l2, r2) = render(&mut e, 6 * 48000);
+        l.extend(l2);
+        r.extend(r2);
+        slept &= e.mixer().awake_slots() == 0;
+        // Moves while asleep: the slots wake and glide exactly as running
+        // ones do (the reverb's read lengths settle within ~1.2 s), then
+        // sleep again.
+        mix(&mut e, MIX_RETURN0, P_REV_SIZE, 0.2);
+        ok(e.command(OP_SET_TEMPO, 97.0, 0.0, 0.0, 0.0));
+        let woke = e.mixer().awake_slots();
+        let (l2, r2) = render(&mut e, BLOCK);
+        l.extend(l2);
+        r.extend(r2);
+        slept &= woke == 0 && e.mixer().awake_slots() == 2;
+        let (l2, r2) = render(&mut e, 3 * 48000);
+        l.extend(l2);
+        r.extend(r2);
+        slept &= e.mixer().awake_slots() == 0;
+        ok(e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0));
+        let (l2, r2) = render(&mut e, 4800);
+        l.extend(l2);
+        r.extend(r2);
+        ok(e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0));
+        let (l2, r2) = render(&mut e, 2 * 48000);
+        l.extend(l2);
+        r.extend(r2);
+        (l, r, slept)
+    };
+    let (la, ra, slept) = run(true);
+    let (lb, rb, _) = run(false);
+    assert!(slept, "the returns slept through the silences");
+    assert!(peak(&la[la.len() - 96000..]) > 1e-3, "the second burst reached the returns");
+    let first = la.iter().zip(&lb).chain(ra.iter().zip(&rb)).position(|(x, y)| x.to_bits() != y.to_bits());
+    assert_eq!(first, None, "sleeping vs never-sleeping differ");
+}
+
+#[test]
+fn idle_slots_skip_dsp() {
+    let mut e = Engine::new(SR);
+    for slot in 2..MAX_RETURNS {
+        return_kind(&mut e, slot, if slot % 2 == 0 { ReturnKind::Reverb } else { ReturnKind::Delay });
+    }
+    sine_patch(&mut e, 0, 0.5);
+    render(&mut e, 4800);
+    assert_eq!(e.mixer().awake_slots(), 0, "silence: every slot sleeps");
+    mix(&mut e, 0, send_id(6) as u32, -6.0);
+    hold(&mut e, 0, 57.0);
+    render(&mut e, 4800);
+    assert_eq!(e.mixer().awake_slots(), 1, "one send wakes one slot");
+    assert!(meter(&e, MIX_RETURN0 + 6).0 > 0.0);
+}
+
+#[test]
+fn reset_all_restores_default_layout() {
+    let mut e = Engine::new(SR);
+    let defaults = |e: &Engine| (0..MAX_RETURNS).map(|k| e.mixer().return_kind(k)).collect::<Vec<_>>();
+    let mut want = vec![ReturnKind::Off; MAX_RETURNS];
+    want[0] = ReturnKind::Reverb;
+    want[1] = ReturnKind::Delay;
+    assert_eq!(defaults(&e), want, "a new mixer");
+    return_kind(&mut e, 0, ReturnKind::Delay);
+    return_kind(&mut e, 4, ReturnKind::Reverb);
+    render(&mut e, BLOCK);
+    ok(e.command(OP_RESET_ALL, 0.0, 0.0, 0.0, 0.0));
+    assert_eq!(defaults(&e), want, "after RESET_ALL");
+}
+
+#[test]
+fn return_params_and_resets_are_per_slot() {
+    // Slot 1's Delay at a quarter note: its echo must not move when slot 0
+    // (a Reverb, which also stores delay params) gets a delay time or a
+    // MIX_RESET, and MIX_RESET keeps slot 0's kind.
+    let run = |touch_slot_0: bool| {
+        let mut e = Engine::new(SR);
+        impulse_into(&mut e, 1);
+        mix(&mut e, MIX_RETURN0 + 1, P_DELAY_TIME, QUARTER);
+        mix(&mut e, MIX_RETURN0 + 1, P_DELAY_FEEDBACK, 0.6);
+        if touch_slot_0 {
+            mix(&mut e, MIX_RETURN0, P_DELAY_TIME, 2.0);
+            mix(&mut e, MIX_RETURN0, P_DELAY_FEEDBACK, 0.0);
+            ok(e.command(OP_MIX_RESET, MIX_RETURN0 as f64, 0.0, 0.0, 0.0));
+            assert_eq!(e.mixer().return_kind(0), ReturnKind::Reverb, "MIX_RESET keeps the kind");
+            assert_eq!(e.mixer().param(MIX_RETURN0 + 1, P_DELAY_TIME), QUARTER as f32);
+        }
+        ok(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0));
+        render(&mut e, 50000).0
+    };
+    let base = run(false);
+    let touched = run(true);
+    assert_eq!(hits(&base, 1e-3).first().copied(), Some(24000 + 72), "slot 1 echoes at a quarter note");
+    assert!(base.iter().zip(&touched).all(|(a, b)| a.to_bits() == b.to_bits()), "slot 0's params reached slot 1");
+}
+
+#[test]
+fn return_kind_same_kind_is_a_no_op_and_change_resets_params() {
+    let mut e = Engine::new(SR);
+    mix(&mut e, MIX_RETURN0, P_REV_DECAY, 9.0);
+    mix(&mut e, MIX_RETURN0, P_FADER, -6.0);
+    return_kind(&mut e, 0, ReturnKind::Reverb);
+    assert_eq!(e.mixer().param(MIX_RETURN0, P_REV_DECAY), 9.0, "same kind: no-op");
+    return_kind(&mut e, 0, ReturnKind::Delay);
+    assert_eq!(e.mixer().param(MIX_RETURN0, P_REV_DECAY), 2.2, "a new kind resets the slot");
+    assert_eq!(e.mixer().param(MIX_RETURN0, P_FADER), 0.0);
+    assert_eq!(e.mixer().return_kind(0), ReturnKind::Delay);
+}

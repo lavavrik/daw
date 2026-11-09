@@ -25,6 +25,14 @@
 //!   but share the same tail.
 //! * **Predelay** 0..200 ms: a stereo ring read at a gliding position
 //!   (same glide as the lines).
+//! * **Sleep helpers** (the mixer's idle returns): every value written to the
+//!   rings is `flush`ed, so a tail reaches exact zero. The core counts the
+//!   samples since a non-zero write; once that covers every ring, the memory
+//!   is provably all zero ([`is_silent`](ReverbCore::is_silent)), and once no
+//!   glide moves ([`settled`](ReverbCore::settled)) a block of zero input
+//!   would only advance the ring positions. Skipping such blocks is then bit
+//!   exact: with all-zero memory the output depends only on positions
+//!   *relative* to the write head.
 
 use super::{clampf, finite, flush, pole, valid_sr, Glide, SMOOTH_SECONDS, SUB_BLOCK};
 
@@ -73,6 +81,9 @@ pub struct ReverbCore {
     pre_len: f32,
     glide_coef: f32,
     fresh: bool,
+    /// Samples since a non-zero value was written to a ring (lines or
+    /// predelay), counted per sub-block (saturating). See "Sleep helpers".
+    quiet: usize,
 }
 
 impl ReverbCore {
@@ -115,6 +126,8 @@ impl ReverbCore {
             pre_len: 0.0,
             glide_coef: 1.0 - pole(GLIDE_SECONDS, sr),
             fresh: true,
+            // The memory is the caller's: nothing is known about it yet.
+            quiet: 0,
         };
         r.set_size(0.6);
         r
@@ -159,6 +172,40 @@ impl ReverbCore {
         self.fresh = true;
     }
 
+    /// The predelay read length the settings ask for (whole samples).
+    fn pre_target(&self) -> f32 {
+        (self.predelay_ms * 1e-3 * self.sr).round().min((self.pre_cap - 2) as f32)
+    }
+
+    /// Is the whole memory exactly zero? True once no non-zero value was
+    /// written for as long as the longest ring (every cell has been
+    /// overwritten with zero since) and the damping state is zero. Then the
+    /// output of zero input is exactly zero.
+    pub fn is_silent(&self) -> bool {
+        self.quiet >= self.cap.max(self.pre_cap) && self.damp_state.iter().all(|&s| s == 0.0)
+    }
+
+    /// Would a block change nothing but the ring positions? True when no
+    /// `fresh` jump is pending, decay and damping rest on their targets,
+    /// and the read-length glides (predelay, lines) are at a fixed point:
+    /// on the target, or stalled just short of it where a glide step no
+    /// longer changes the float (a slow one-pole ends there; the reads
+    /// then interpolate). While the lines are off target `process`
+    /// recomputes the gains every sub-block, so they must already be the
+    /// ones it would compute.
+    pub fn settled(&self) -> bool {
+        let c = self.glide_coef;
+        if self.fresh
+            || self.decay_s.value != self.decay
+            || self.damp_s.value != self.damping
+            || glide(self.pre_len, self.pre_target(), c) != self.pre_len
+        {
+            return false;
+        }
+        self.len == self.len_target
+            || (self.len.iter().zip(self.len_target).all(|(&l, t)| glide(l, t, c) == l) && self.gains() == self.gain)
+    }
+
     /// Process a stereo block in place through the memory `buf` (at least
     /// [`buffer_len`](ReverbCore::buffer_len) floats, else the output is
     /// silence): the input is replaced by the wet signal.
@@ -170,7 +217,7 @@ impl ReverbCore {
             return;
         };
         let (lines, pre) = buf.split_at_mut(N * self.cap);
-        let pre_target = (self.predelay_ms * 1e-3 * self.sr).round().min((self.pre_cap - 2) as f32);
+        let pre_target = self.pre_target();
         if self.fresh {
             self.fresh = false;
             self.len = self.len_target;
@@ -189,9 +236,12 @@ impl ReverbCore {
                 self.update_gains();
             }
             let p = 0.85 * self.damp_s.value;
+            // Any non-zero write this sub-block (see "Sleep helpers").
+            let mut wrote = false;
             for i in start..end {
                 // Predelay: write, then read `pre_len` back (0 = this sample).
                 let (xl, xr) = (finite(l[i]), finite(r[i]));
+                wrote |= (xl != 0.0) | (xr != 0.0);
                 pre[self.pre_pos] = xl;
                 pre[self.pre_cap + self.pre_pos] = xr;
                 self.pre_len = glide(self.pre_len, pre_target, self.glide_coef);
@@ -222,7 +272,9 @@ impl ReverbCore {
                 for k in 0..N {
                     let inject = if k % 2 == 0 { il } else { ir };
                     let sign = if k % 4 < 2 { 1.0 } else { -1.0 };
-                    lines[k * self.cap + self.pos] = flush(d[k] - sum + IN_GAIN * sign * inject);
+                    let w = flush(d[k] - sum + IN_GAIN * sign * inject);
+                    wrote |= w != 0.0;
+                    lines[k * self.cap + self.pos] = w;
                     ol += TAP_L[k] * y[k];
                     or += TAP_R[k] * y[k];
                 }
@@ -230,6 +282,7 @@ impl ReverbCore {
                 l[i] = finite(ol * OUT_GAIN);
                 r[i] = finite(or * OUT_GAIN);
             }
+            self.quiet = if wrote { 0 } else { self.quiet.saturating_add(end - start) };
             start = end;
         }
     }
@@ -237,10 +290,13 @@ impl ReverbCore {
     /// RT60 gains from the current lengths and decay:
     /// `g_i = 10^(−3·L_i / (sr·decay))`.
     fn update_gains(&mut self) {
+        self.gain = self.gains();
+    }
+
+    /// The gains [`update_gains`](ReverbCore::update_gains) sets.
+    fn gains(&self) -> [f32; N] {
         let k = -3.0 * std::f32::consts::LN_10 / (self.sr * self.decay_s.value);
-        for (g, len) in self.gain.iter_mut().zip(self.len) {
-            *g = (k * len).exp();
-        }
+        self.len.map(|len| (k * len).exp())
     }
 }
 
@@ -257,7 +313,9 @@ impl Reverb {
     /// predelay 20 ms). Allocates the lines for size 1 and the 200 ms
     /// predelay at `sr`.
     pub fn new(sr: f32) -> Reverb {
-        Reverb { core: ReverbCore::new(sr), buf: vec![0.0; ReverbCore::buffer_len(sr)] }
+        let mut core = ReverbCore::new(sr);
+        core.quiet = usize::MAX; // fresh zeroed memory
+        Reverb { core, buf: vec![0.0; ReverbCore::buffer_len(sr)] }
     }
 
     /// See [`ReverbCore::set_size`].
@@ -280,10 +338,24 @@ impl Reverb {
         self.core.set_predelay_ms(ms);
     }
 
-    /// Silence the tail and jump to the targets (no allocation).
+    /// Silence the tail and jump to the targets (no allocation). Memory
+    /// already proven zero is not rewritten.
     pub fn reset(&mut self) {
-        self.buf.fill(0.0);
+        if !self.core.is_silent() {
+            self.buf.fill(0.0);
+        }
+        self.core.quiet = usize::MAX;
         self.core.reset();
+    }
+
+    /// See [`ReverbCore::is_silent`].
+    pub fn is_silent(&self) -> bool {
+        self.core.is_silent()
+    }
+
+    /// See [`ReverbCore::settled`].
+    pub fn settled(&self) -> bool {
+        self.core.settled()
     }
 
     /// Process a stereo block in place: the input is replaced by the wet

@@ -160,7 +160,8 @@
 //!   clips; then every FX-pool slot is freed (`Synths::reset_all`);
 //! * the input track, cached controllers and live-key state are cleared;
 //! * the whole mixer is a new one: strips, sends, keys, return params, the
-//!   reverb and delay tails, the limiter and the legacy master gain (0.8)
+//!   default return layout (slot 0 Reverb, slot 1 Delay, the rest Off) with
+//!   every tail zeroed, the limiter and the legacy master gain (0.8)
 //!   (`Mixer::reset_all`);
 //! * the transport (tempo, mode, loop, playhead) and the metronome are at
 //!   their defaults, and the click delay line is empty;
@@ -420,6 +421,12 @@ impl Engine {
     /// The mixer (params, keys, meters).
     pub fn mixer(&self) -> &Mixer {
         &self.mixer
+    }
+
+    /// The mixer, mutably (tests that flip its test-only switches).
+    #[cfg(test)]
+    pub(crate) fn mixer_mut(&mut self) -> &mut Mixer {
+        &mut self.mixer
     }
 
     /// `[MIX_CHANNELS × (peakL, peakR, gr_db)]`, refreshed every block (see
@@ -1045,6 +1052,19 @@ impl Engine {
                     }
                 }
                 self.mixer.reset_channel(channel)
+            }
+            // A new kind resets the slot's params like MIX_RESET (the lanes'
+            // bases follow); the same kind changes nothing.
+            Command::ReturnKind { slot, kind } => {
+                if self.mixer.return_kind(slot) != kind {
+                    let channel = crate::MIX_RETURN0 + slot;
+                    for p in crate::mixer::catalog::PARAMS.iter().filter(|p| p.accepts(channel)) {
+                        if let Some(lane) = self.automation.find(Target::Mix { ch: channel as u8, id: p.id as u8 }) {
+                            self.automation.set_base(lane, p.default);
+                        }
+                    }
+                    self.mixer.set_return_kind(slot, kind);
+                }
             }
             Command::ResetAll => self.reset_all()?,
             Command::Seek { ticks } => {

@@ -2,23 +2,39 @@
 //! and the meters.
 //!
 //! # Channels (`MIX_CHANNELS = 41`)
-//! 0..31 are the track strips (one per slot), 32..39 the return slots (slot
-//! 0 = Reverb, slot 1 = Delay until plan 29 task 2 makes them configurable)
-//! and 40 the master. Every param lives in
-//! [`catalog::PARAMS`] (ids, ranges, defaults, which channels accept it).
+//! 0..31 are the track strips (one per slot), 32..39 the `MAX_RETURNS`
+//! return slots (channel `MIX_RETURN0 + k` is slot `k`) and 40 the master.
+//! Every param lives in [`catalog::PARAMS`] (ids, ranges, defaults, which
+//! channels accept it).
+//!
+//! # Return slots (plan 29)
+//! Each slot has a kind, [`ReturnKind`] Off, Reverb or Delay
+//! (`OP_RETURN_KIND`, [`Mixer::set_return_kind`]). A new mixer and
+//! `OP_RESET_ALL` give [`DEFAULT_RETURNS`]: slot 0 Reverb, slot 1 Delay, the
+//! rest Off. Every slot owns a Reverb *and* a Delay, built in [`Mixer::new`],
+//! and stores the params of both (both groups are accepted on every return
+//! channel; a param drives only its own slot's DSP); only the current
+//! kind's effect runs. Changing the kind resets the slot's strip and both
+//! effects' params to the defaults and zeroes the tails; a sounding slot
+//! first fades its old effect out over 5 ms while its strip holds its old
+//! gains (as a removed track's does). The same kind is a no-op, and
+//! `OP_MIX_RESET` on a return resets its params but keeps its kind.
+//! Track strip sends: slot `k`'s level is catalog param `send_id(k)`
+//! (`send_a` = slot 0, `send_b` = slot 1, `send_c..send_h` = 2..7).
 //!
 //! # Signal flow (once per whole block, after every Song-mode piece rendered)
 //! * **Track strip:** the slot's track buffer (rendered by `Drums`/`Synths`,
 //!   pre-fader, never modified here) is copied into a work buffer, then
 //!   EQ (if on) → compressor (if on; keyed by the key source's *raw* track
 //!   buffer, a drum row's key buffer, or itself) → fader·pan → mute/solo
-//!   gate → master bus. Send A (Reverb) and B (Delay) tap post-fader (after
-//!   fader and pan) or, with their "pre" flag, pre-fader (after EQ and
-//!   compressor). The gate applies to the sends too, so a muted (or
-//!   solo-muted) track feeds no new signal into the returns; the return tails
-//!   ring on.
-//! * **Return:** its send bus → Reverb / Delay (100% wet) → EQ → fader·pan →
-//!   mute gate → master bus. Solo never mutes a return.
+//!   gate → master bus. Each of the 8 sends (one per return slot) taps
+//!   post-fader (after fader and pan) or, with its "pre" flag, pre-fader
+//!   (after EQ and compressor); a send resting at off costs nothing. The
+//!   gate applies to the sends too, so a muted (or solo-muted) track feeds
+//!   no new signal into the returns; the return tails ring on.
+//! * **Return:** its send bus → its Reverb or Delay (100% wet) → EQ →
+//!   fader·pan → mute gate → master bus, slot 0..7 after the tracks (the
+//!   master-bus add order). Solo never mutes a return.
 //! * **Master:** bus × the legacy master gain (`SET_MASTER_GAIN`, default
 //!   0.8) → EQ → fader → [`Limiter`] (lookahead 1.5 ms, release 50 ms,
 //!   ceiling −0.3 dBFS by default) → output. The engine adds the metronome
@@ -61,8 +77,26 @@
 //! # Which strips run
 //! The engine passes a mask of slots that hold a track or rendered audio
 //! this block; a strip keeps running for [`TAIL_SECONDS`] after that (EQ
-//! ringing, gate ramps), then idles at zero cost. Returns and master always
-//! run (their tails never stop abruptly).
+//! ringing, gate ramps), then idles at zero cost. The master always runs;
+//! an Off return never does, and the others sleep when idle (below).
+//!
+//! # Sleeping returns (idle returns cost nothing)
+//! After a chunk, a return slot falls asleep when its effect's memory is
+//! provably all zero (`is_silent`: no non-zero value was written to any
+//! ring for a whole ring length, and the filter states are zero; every
+//! write is `flush`ed, so tails do reach exact zero), the effect is
+//! `settled` (no fresh jump pending, every glide, smoother and crossfade at
+//! a fixed point), and its strip is at rest (no hold, gain ramps at rest,
+//! EQ off or quiet: [`Eq3::is_quiet`]). While asleep it skips the effect,
+//! EQ and fader/pan (meter 0, nothing added to the master). It wakes on the
+//! first non-zero sample of its send bus in a chunk, or when a param, the
+//! tempo or its strip moves (the effect then glides exactly as a running
+//! one would, and sleeps again once settled). This is bit exact: in a
+//! settled effect with all-zero memory a block of zero input only advances
+//! the ring positions, and with all-zero rings the output depends only on
+//! positions relative to the write head; skipping a zero add leaves the
+//! master bus as it is (it never holds −0.0). `sleeping_return_wakes_bit_exact`
+//! pins this against a mixer that never sleeps.
 //!
 //! # Automation
 //! A lane on a mixer param (`automation.rs`) drives it through
@@ -106,7 +140,7 @@ mod tests;
 use crate::automation::{AutoFrame, Target};
 use crate::dsp::{db_to_lin, Compressor, Delay, Eq3, Limiter, Reverb};
 use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE};
-use crate::{MAX_BLOCK, MAX_KEYS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER, MIX_METER_STRIDE, MIX_RETURN0};
+use crate::{MAX_BLOCK, MAX_KEYS, MAX_RETURNS, RACK_BLOCK, MAX_ROWS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER, MIX_METER_STRIDE, MIX_RETURN0};
 use catalog::*;
 
 /// A strip keeps running this long after its slot last held a track or
@@ -328,8 +362,9 @@ pub(crate) struct Strip {
     gl: Ramp,
     gr: Ramp,
     gate: Ramp,
-    send_a: Ramp,
-    send_b: Ramp,
+    /// Send level to each return slot (track strips only; slot `k` is
+    /// catalog param `send_id(k)`).
+    sends: [Ramp; MAX_RETURNS],
     /// Samples this strip keeps running after its slot went quiet.
     tail: usize,
     /// Samples the gains, gate and inserts keep their old targets after the
@@ -361,8 +396,7 @@ impl Strip {
             gl: Ramp::new(1.0, gain_len),
             gr: Ramp::new(1.0, gain_len),
             gate: Ramp::new(1.0, gate_len),
-            send_a: Ramp::new(0.0, gain_len),
-            send_b: Ramp::new(0.0, gain_len),
+            sends: [Ramp::new(0.0, gain_len); MAX_RETURNS],
             tail: 0,
             hold: 0,
             fresh: false,
@@ -453,15 +487,14 @@ impl Strip {
                 go(&mut self.gl, l);
                 go(&mut self.gr, r);
             }
-            P_SEND_A => {
-                let g = send_gain(self.ev(P_SEND_A));
-                go(&mut self.send_a, g);
+            _ => {
+                if let Some(k) = send_slot(id) {
+                    let g = send_gain(self.ev(id));
+                    if let Some(r) = self.sends.get_mut(k) {
+                        go(r, g);
+                    }
+                }
             }
-            P_SEND_B => {
-                let g = send_gain(self.ev(P_SEND_B));
-                go(&mut self.send_b, g);
-            }
-            _ => {}
         }
     }
 
@@ -469,19 +502,22 @@ impl Strip {
     /// (`Ramp::set` ignores an unchanged target).
     fn retarget(&mut self) {
         let (l, r) = pan_gains(self.ev(P_FADER), self.ev(P_PAN));
+        let sends: [f32; MAX_RETURNS] = std::array::from_fn(|k| send_gain(self.ev(send_id(k) as u32)));
         if self.fresh {
             self.gl.snap(l);
             self.gr.snap(r);
-            self.send_a.snap(send_gain(self.ev(P_SEND_A)));
-            self.send_b.snap(send_gain(self.ev(P_SEND_B)));
+            for (ramp, g) in self.sends.iter_mut().zip(sends) {
+                ramp.snap(g);
+            }
             self.eq_ins.snap(self.flag(P_EQ_ON), &mut self.eq, Eq3::reset);
             self.comp_ins.snap(self.flag(P_COMP_ON), &mut self.comp, Compressor::reset);
             return;
         }
         self.gl.set(l);
         self.gr.set(r);
-        self.send_a.set(send_gain(self.ev(P_SEND_A)));
-        self.send_b.set(send_gain(self.ev(P_SEND_B)));
+        for (ramp, g) in self.sends.iter_mut().zip(sends) {
+            ramp.set(g);
+        }
         self.eq_ins.set(self.flag(P_EQ_ON));
         self.comp_ins.set(self.flag(P_COMP_ON));
     }
@@ -494,6 +530,150 @@ impl Strip {
             if self.hold == 0 {
                 self.retarget();
             }
+        }
+    }
+
+    /// A return strip that a block of zero input would leave exactly as it
+    /// is, adding nothing: no hold, every gain ramp at rest, and the EQ
+    /// either fully off (and reset) or fully on with zero state and no
+    /// glide.
+    fn at_rest(&self) -> bool {
+        let eq = &self.eq_ins;
+        self.hold == 0
+            && self.gl.left == 0
+            && self.gr.left == 0
+            && self.gate.left == 0
+            && eq.mix.left == 0
+            && (eq.idle || (eq.mix.value == 1.0 && self.eq.is_quiet()))
+    }
+
+    /// Return strip only: every gain, the mute gate and the EQ insert jump
+    /// to the current settings (nothing sounds through it, see
+    /// [`Mixer::set_return_kind`]).
+    fn snap_return(&mut self) {
+        self.hold = 0;
+        for r in [&mut self.gl, &mut self.gr] {
+            r.snap(r.target);
+        }
+        self.gate.snap(if self.flag(P_MUTE) { 0.0 } else { 1.0 });
+        self.eq_ins.snap(self.flag(P_EQ_ON), &mut self.eq, Eq3::reset);
+    }
+}
+
+/// Catalog param id `id` -> the return slot whose send level it is.
+fn send_slot(id: u32) -> Option<usize> {
+    (0..MAX_RETURNS).find(|&k| send_id(k) == id as usize)
+}
+
+/// What a return slot runs (`OP_RETURN_KIND`'s wire code).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReturnKind {
+    Off = 0,
+    Reverb = 1,
+    Delay = 2,
+}
+
+impl ReturnKind {
+    /// Wire code -> kind (`None` for anything but 0, 1, 2).
+    pub fn from_code(code: u32) -> Option<ReturnKind> {
+        match code {
+            0 => Some(ReturnKind::Off),
+            1 => Some(ReturnKind::Reverb),
+            2 => Some(ReturnKind::Delay),
+            _ => None,
+        }
+    }
+}
+
+/// The return layout of a new mixer and of `OP_RESET_ALL`: slot 0 Reverb,
+/// slot 1 Delay, the rest Off.
+pub const DEFAULT_RETURNS: [ReturnKind; MAX_RETURNS] = {
+    let mut k = [ReturnKind::Off; MAX_RETURNS];
+    k[0] = ReturnKind::Reverb;
+    k[1] = ReturnKind::Delay;
+    k
+};
+
+/// One return slot's effect side (its strip is `strips[MIX_RETURN0 + k]`).
+/// Both effects are built up front, so a kind change never allocates; only
+/// the running one is processed.
+struct ReturnSlot {
+    /// The kind the slot was set to (what `Mixer::return_kind` reports).
+    kind: ReturnKind,
+    /// The effect that runs now: `kind`, or the old one while `switching`.
+    running: ReturnKind,
+    /// A kind change on a sounding slot: `running` keeps playing under
+    /// `fade` (1 -> 0 over 5 ms); at 0 both effects are reset and `running`
+    /// becomes `kind`.
+    switching: bool,
+    fade: Ramp,
+    /// Skipped this block (see "Sleeping returns" in the module docs).
+    asleep: bool,
+    reverb: Reverb,
+    delay: Delay,
+}
+
+impl ReturnSlot {
+    fn new(sr: f32, gain_len: u32, kind: ReturnKind) -> ReturnSlot {
+        ReturnSlot {
+            kind,
+            running: kind,
+            switching: false,
+            fade: Ramp::new(1.0, gain_len),
+            asleep: false,
+            reverb: Reverb::new(sr),
+            delay: Delay::new(sr),
+        }
+    }
+
+    /// Both effects back to silence, jumping to their targets.
+    fn reset_dsp(&mut self) {
+        self.reverb.reset();
+        self.delay.reset();
+    }
+
+    /// Would a block of zero input change nothing but ring positions?
+    fn settled(&self) -> bool {
+        match self.running {
+            ReturnKind::Off => true,
+            ReturnKind::Reverb => self.reverb.settled(),
+            ReturnKind::Delay => self.delay.settled(),
+        }
+    }
+
+    /// Is the running effect's memory exactly zero?
+    fn silent(&self) -> bool {
+        match self.running {
+            ReturnKind::Off => true,
+            ReturnKind::Reverb => self.reverb.is_silent(),
+            ReturnKind::Delay => self.delay.is_silent(),
+        }
+    }
+
+    /// The running effect on the work buffer (100% wet), under the
+    /// switch fade; the fade's end completes the switch.
+    fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        match self.running {
+            ReturnKind::Off => {
+                l.fill(0.0);
+                r.fill(0.0);
+            }
+            ReturnKind::Reverb => self.reverb.process(l, r),
+            ReturnKind::Delay => self.delay.process(l, r),
+        }
+        if !self.switching {
+            return;
+        }
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let g = self.fade.next();
+            *a *= g;
+            *b *= g;
+        }
+        if self.fade.rests_at(0.0) {
+            self.switching = false;
+            self.running = self.kind;
+            self.reset_dsp();
         }
     }
 }
@@ -537,8 +717,8 @@ fn run_insert<D>(
 /// Mixer buses and scratch, each one stereo `MAX_BLOCK` pair.
 struct Buses {
     master: StereoBufs,
-    send_a: StereoBufs,
-    send_b: StereoBufs,
+    /// One send bus per return slot (pair `k` feeds slot `k`).
+    sends: StereoBufs,
     /// Where a strip is processed (a copy of its input).
     work: StereoBufs,
     /// The dry copy during an insert crossfade.
@@ -548,10 +728,11 @@ struct Buses {
 /// The mixer (see the module docs).
 pub struct Mixer {
     sr: f32,
-    /// `MIX_CHANNELS` strips (tracks, Reverb return, Delay return, master).
+    /// `MIX_CHANNELS` strips (tracks, return slots, master).
     strips: Vec<Strip>,
-    reverb: Reverb,
-    delay: Delay,
+    /// The `MAX_RETURNS` return slots' effects (their strips are in
+    /// `strips`).
+    returns: Vec<ReturnSlot>,
     limiter: Limiter,
     /// Legacy `SET_MASTER_GAIN`, applied at the master bus input.
     master_gain: Ramp,
@@ -569,6 +750,9 @@ pub struct Mixer {
     tap_ch: i32,
     /// The tap buffer may hold data from an earlier block (zero it once).
     tap_dirty: bool,
+    /// Idle returns may sleep (always, but for a test that compares with a
+    /// mixer that never sleeps).
+    sleep: bool,
 }
 
 impl Mixer {
@@ -581,15 +765,13 @@ impl Mixer {
         let mut m = Mixer {
             sr,
             strips: (0..MIX_CHANNELS).map(|_| Strip::new(sr, gain_len, gate_len)).collect(),
-            reverb: Reverb::new(sr),
-            delay: Delay::new(sr),
+            returns: DEFAULT_RETURNS.iter().map(|&k| ReturnSlot::new(sr, gain_len, k)).collect(),
             limiter: Limiter::with_lookahead(sr, lookahead),
             master_gain: Ramp::new(MASTER_GAIN, gain_len),
             row_keys: vec![[NO_KEY; MAX_ROWS]; MAX_TRACKS],
             buses: Buses {
                 master: StereoBufs::new(1),
-                send_a: StereoBufs::new(1),
-                send_b: StereoBufs::new(1),
+                sends: StereoBufs::new(MAX_RETURNS),
                 work: StereoBufs::new(1),
                 dry: StereoBufs::new(1),
             },
@@ -599,6 +781,7 @@ impl Mixer {
             auto_fresh: true,
             tap_ch: -1,
             tap_dirty: false,
+            sleep: true,
         };
         m.apply_defaults();
         m
@@ -611,7 +794,7 @@ impl Mixer {
             self.reset_channel(ch);
         }
         for s in self.strips.iter_mut() {
-            for r in [&mut s.gl, &mut s.gr, &mut s.gate, &mut s.send_a, &mut s.send_b] {
+            for r in [&mut s.gl, &mut s.gr, &mut s.gate].into_iter().chain(s.sends.iter_mut()) {
                 *r = Ramp::new(r.target, r.len);
             }
         }
@@ -619,10 +802,11 @@ impl Mixer {
 
     /// Engine reset (`OP_RESET_ALL`): back to exactly a new mixer's state,
     /// without allocating. Strips (params, keys, EQ/compressor state, insert
-    /// crossfades, tails and holds), the reverb and delay returns (their
-    /// tails are zeroed), the limiter (delay line and envelope), the legacy
-    /// master gain ([`MASTER_GAIN`], not ramped) and the meters. Nothing glides: the
-    /// engine fades its master output over the reset instead.
+    /// crossfades, tails and holds), the return slots (the default layout
+    /// [`DEFAULT_RETURNS`], every tail zeroed), the limiter (delay line and
+    /// envelope), the legacy master gain ([`MASTER_GAIN`], not ramped) and
+    /// the meters. Nothing glides: the engine fades its master output over
+    /// the reset instead.
     pub fn reset_all(&mut self) {
         let gain_len = self.master_gain.len;
         let gate_len = self.gate_len as u32;
@@ -630,10 +814,15 @@ impl Mixer {
             *s = Strip::new(self.sr, gain_len, gate_len);
         }
         self.master_gain = Ramp::new(MASTER_GAIN, gain_len);
+        for (rs, &kind) in self.returns.iter_mut().zip(DEFAULT_RETURNS.iter()) {
+            (rs.kind, rs.running, rs.switching, rs.asleep) = (kind, kind, false, false);
+            rs.fade = Ramp::new(1.0, gain_len);
+        }
         self.apply_defaults();
         // After the defaults: the DSP jumps to its (default) targets.
-        self.reverb.reset();
-        self.delay.reset();
+        for rs in self.returns.iter_mut() {
+            rs.reset_dsp();
+        }
         self.limiter.reset();
         self.meters.fill(0.0);
         self.auto_fresh = true;
@@ -682,27 +871,90 @@ impl Mixer {
         let Some(s) = self.strips.get_mut(ch) else { return };
         s.apply(id, value);
         if !s.masked(id) {
-            self.push_global(id, value);
+            self.push_dsp(ch, id, value);
         }
     }
 
-    /// Push a return / master param into its DSP (reverb, delay, limiter).
-    fn push_global(&mut self, id: u32, value: f32) {
+    /// Push a return / master param of channel `ch` into its DSP: return
+    /// slot `ch - MIX_RETURN0`'s own Reverb and Delay (each slot keeps the
+    /// params of both kinds, whichever runs), or the master limiter.
+    fn push_dsp(&mut self, ch: usize, id: u32, value: f32) {
+        if ch == MIX_MASTER {
+            if id == P_LIMITER_CEILING {
+                self.limiter.set_ceiling(db_to_lin(value));
+            }
+            return;
+        }
+        let Some(rs) = ch.checked_sub(MIX_RETURN0).and_then(|k| self.returns.get_mut(k)) else { return };
         match id {
-            P_REV_SIZE => self.reverb.set_size(value),
-            P_REV_DECAY => self.reverb.set_decay(value),
-            P_REV_DAMPING => self.reverb.set_damping(value),
-            P_REV_PREDELAY => self.reverb.set_predelay_ms(value),
+            P_REV_SIZE => rs.reverb.set_size(value),
+            P_REV_DECAY => rs.reverb.set_decay(value),
+            P_REV_DAMPING => rs.reverb.set_damping(value),
+            P_REV_PREDELAY => rs.reverb.set_predelay_ms(value),
             P_DELAY_TIME => {
                 let beats = DELAY_DIVISION_BEATS.get(value as usize).copied().unwrap_or(0.75);
-                self.delay.set_time_beats(beats);
+                rs.delay.set_time_beats(beats);
             }
-            P_DELAY_FEEDBACK => self.delay.set_feedback(value),
-            P_DELAY_PING_PONG => self.delay.set_ping_pong(value != 0.0),
-            P_DELAY_HIGH_CUT => self.delay.set_high_cut(value),
-            P_LIMITER_CEILING => self.limiter.set_ceiling(db_to_lin(value)),
+            P_DELAY_FEEDBACK => rs.delay.set_feedback(value),
+            P_DELAY_PING_PONG => rs.delay.set_ping_pong(value != 0.0),
+            P_DELAY_HIGH_CUT => rs.delay.set_high_cut(value),
             _ => {}
         }
+    }
+
+    /// Return slot `slot`'s kind ([`ReturnKind::Off`] past the last slot).
+    pub fn return_kind(&self, slot: usize) -> ReturnKind {
+        self.returns.get(slot).map_or(ReturnKind::Off, |r| r.kind)
+    }
+
+    /// `OP_RETURN_KIND`: set return slot `slot` to `kind`. The same kind is
+    /// a no-op. Otherwise the slot's strip and both effects' params go back
+    /// to their defaults (send its `MIX_SET`s after this) and its tail is
+    /// zeroed. A sounding slot first fades its old effect out over 5 ms
+    /// (its strip holds its old gains meanwhile, like a removed track's);
+    /// a sleeping or Off one switches at once. Allocation-free.
+    pub fn set_return_kind(&mut self, slot: usize, kind: ReturnKind) {
+        let ch = MIX_RETURN0 + slot;
+        let Some(rs) = self.returns.get_mut(slot) else { return };
+        if rs.kind == kind {
+            return;
+        }
+        rs.kind = kind;
+        let sounding = rs.switching || (rs.running != ReturnKind::Off && !rs.asleep);
+        if sounding {
+            if !rs.switching {
+                rs.switching = true;
+                rs.fade = Ramp::new(1.0, rs.fade.len);
+                rs.fade.set(0.0);
+            }
+            let left = rs.fade.left as usize;
+            if let Some(st) = self.strips.get_mut(ch) {
+                st.hold = st.hold.max(left);
+            }
+            self.reset_channel(ch);
+        } else {
+            rs.running = kind;
+            rs.asleep = false;
+            rs.reset_dsp();
+            self.reset_channel(ch);
+            if let Some(st) = self.strips.get_mut(ch) {
+                st.snap_return();
+            }
+        }
+    }
+
+    /// How many return slots run their effect this block (not Off and not
+    /// asleep; tests and the perf check).
+    #[doc(hidden)]
+    pub fn awake_slots(&self) -> usize {
+        self.returns.iter().filter(|r| r.running != ReturnKind::Off && !r.asleep).count()
+    }
+
+    /// Let idle returns sleep (the default) or never (a test compares the
+    /// two bit for bit).
+    #[cfg(test)]
+    pub(crate) fn set_sleep(&mut self, on: bool) {
+        self.sleep = on;
     }
 
     /// Param `id` of channel `ch` (its catalog default if it does not
@@ -721,7 +973,7 @@ impl Mixer {
     /// (tests).
     #[doc(hidden)]
     pub fn ramps(&self, ch: usize) -> [f32; 4] {
-        self.strips.get(ch).map_or([0.0; 4], |s| [s.gl.value, s.gr.value, s.send_a.value, s.send_b.value])
+        self.strips.get(ch).map_or([0.0; 4], |s| [s.gl.value, s.gr.value, s.sends[0].value, s.sends[1].value])
     }
 
     /// Automation: drive continuous param `id` of channel `ch` to `value`.
@@ -741,17 +993,14 @@ impl Mixer {
         if let Some(x) = s.auto_vals.get_mut(id as usize) {
             *x = v;
         }
-        match id {
-            P_FADER | P_PAN | P_SEND_A | P_SEND_B => {
-                if s.hold == 0 {
-                    let snap = ramp == 0 && (s.fresh || fresh_bus);
-                    s.drive(id, ramp, snap);
-                }
+        if id == P_FADER || id == P_PAN || send_slot(id).is_some() {
+            if s.hold == 0 {
+                let snap = ramp == 0 && (s.fresh || fresh_bus);
+                s.drive(id, ramp, snap);
             }
-            _ => {
-                s.push(id);
-                self.push_global(id, v);
-            }
+        } else {
+            s.push(id);
+            self.push_dsp(ch, id, v);
         }
     }
 
@@ -975,8 +1224,7 @@ impl Mixer {
         let tap_n = if self.tap_ch >= 0 { n.min(tap_l.len()).min(tap_r.len()) } else { 0 };
         let mut tap = Tap { ch: self.tap_ch, l: &mut tap_l[..tap_n], r: &mut tap_r[..tap_n] };
         self.buses.master.clear(n);
-        self.buses.send_a.clear(n);
-        self.buses.send_b.clear(n);
+        self.buses.sends.clear(n);
         self.meters.fill(0.0);
         let solo = self.strips.iter().take(MAX_TRACKS).any(|s| s.flag(P_SOLO));
         // Which track strips run this block: those whose slot holds a track
@@ -992,7 +1240,11 @@ impl Mixer {
                 runs |= 1 << ch;
             }
         }
-        self.delay.set_tempo(bpm);
+        // Every slot's Delay follows the tempo, whatever it runs now (a
+        // sleeping one wakes to glide to the new time).
+        for rs in self.returns.iter_mut() {
+            rs.delay.set_tempo(bpm);
+        }
         let blk = Block { tracks, keys, runs, solo };
         if !auto.has_mix() {
             // The whole block at once: exactly the mix without automation.
@@ -1028,7 +1280,7 @@ impl Mixer {
     fn chunk(&mut self, blk: &Block, from: usize, to: usize, out_l: &mut [f32], out_r: &mut [f32], tap: &mut Tap) {
         let Block { tracks, keys, runs, solo } = *blk;
         let len = to - from;
-        let Mixer { strips, reverb, delay, limiter, master_gain, row_keys, buses, meters, .. } = self;
+        let Mixer { strips, returns, limiter, master_gain, row_keys, buses, meters, sleep, .. } = self;
 
         // Track strips: raw buffer -> work copy -> EQ -> comp -> fader/pan/gate.
         for (ch, st) in strips.iter_mut().enumerate().take(MAX_TRACKS) {
@@ -1063,24 +1315,39 @@ impl Mixer {
             st.fresh = false;
         }
 
-        // Returns: send bus -> effect (100% wet) -> EQ -> fader/pan/mute.
-        for ch in [MIX_RETURN0, MIX_RETURN0 + 1] {
+        // Returns, slot 0..7 (the master-bus add order): send bus -> effect
+        // (100% wet) -> EQ -> fader/pan/mute. An Off slot and a sleeping
+        // one with nothing to do are skipped (meter 0, nothing added).
+        for (k, rs) in returns.iter_mut().enumerate() {
+            let ch = MIX_RETURN0 + k;
             let Some(st) = strips.get_mut(ch) else { continue };
-            let bus = if ch == MIX_RETURN0 { &buses.send_a } else { &buses.send_b };
-            let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, from, to), bus.span(0, from, to)) else {
+            if st.hold == 0 {
+                st.gate.set(if st.flag(P_MUTE) { 0.0 } else { 1.0 });
+            }
+            let (Some((wl, wr)), Some((bl, br))) = (buses.work.pair_mut(0, from, to), buses.sends.span(k, from, to)) else {
                 continue;
             };
+            if rs.running == ReturnKind::Off {
+                st.count_hold(len);
+                continue;
+            }
+            if rs.asleep {
+                // Wake on input, or when a param, the tempo or the strip
+                // moved (it glides exactly as if it had never slept).
+                let input = bl.iter().chain(br.iter()).any(|&x| x != 0.0);
+                if !input && rs.settled() && st.at_rest() {
+                    continue;
+                }
+                rs.asleep = false;
+            }
             wl.copy_from_slice(bl);
             wr.copy_from_slice(br);
-            if ch == MIX_RETURN0 {
-                reverb.process(wl, wr);
-            } else {
-                delay.process(wl, wr);
-            }
-            st.gate.set(if st.flag(P_MUTE) { 0.0 } else { 1.0 });
+            rs.process(wl, wr);
             buses.eq(st, from, to);
             let (pl, pr) = buses.mix_out(st, from, to, false, tap.span(ch, from, to));
             write_meter(meters, ch, pl, pr, 0.0);
+            st.count_hold(len);
+            rs.asleep = *sleep && !rs.switching && rs.running != ReturnKind::Off && rs.silent() && rs.settled() && st.at_rest();
         }
 
         // Master: bus x legacy gain -> EQ -> fader -> limiter -> out.
@@ -1271,20 +1538,28 @@ impl Buses {
         sends: bool,
         mut tap: Option<(&mut [f32], &mut [f32])>,
     ) -> (f32, f32) {
-        let pre_a = st.flag(P_SEND_A_PRE);
-        let pre_b = st.flag(P_SEND_B_PRE);
-        let Buses { master, send_a, send_b, work, .. } = self;
-        let (Some((wl, wr)), Some((ml, mr)), Some((al, ar)), Some((bl, br))) = (
-            work.span(0, from, to),
-            master.pair_mut(0, from, to),
-            send_a.pair_mut(0, from, to),
-            send_b.pair_mut(0, from, to),
-        ) else {
+        let Buses { master, sends: send_bufs, work, .. } = self;
+        let (Some((wl, wr)), Some((ml, mr))) = (work.span(0, from, to), master.pair_mut(0, from, to)) else {
             return (0.0, 0.0);
         };
-        let n = to - from;
-        let use_a = sends && !st.send_a.rests_at(0.0);
-        let use_b = sends && !st.send_b.rests_at(0.0);
+        let n = to - from; // `span` checked from <= to <= MAX_BLOCK
+        // The sends this strip feeds (slot, pre-fader): those whose ramp
+        // does not rest at 0; an off send costs nothing.
+        let mut used = [(0usize, false); MAX_RETURNS];
+        let mut nu = 0;
+        if sends {
+            for (k, ramp) in st.sends.iter().enumerate() {
+                if !ramp.rests_at(0.0) {
+                    used[nu] = (k, st.flag(send_pre_id(k) as u32));
+                    nu += 1;
+                }
+            }
+        }
+        let used = &used[..nu];
+        // Frames `from..to` of every send bus channel: `[2k]` = slot k's L,
+        // `[2k + 1]` its R.
+        let mut chans = send_bufs.data.chunks_exact_mut(MAX_BLOCK).map(|c| &mut c[from..to]);
+        let mut bus: [&mut [f32]; 2 * MAX_RETURNS] = std::array::from_fn(|_| chans.next().unwrap_or_default());
         let (mut pl, mut pr) = (0.0f32, 0.0f32);
         for i in 0..n {
             let (x, y) = (wl[i], wr[i]);
@@ -1303,17 +1578,13 @@ impl Buses {
             }
             // Post-fader taps `l`/`r`, which already carry the gate; a
             // pre-fader tap applies the gate itself (once either way).
-            if use_a {
-                let s = st.send_a.next();
-                let (u, v) = if pre_a { (x * g, y * g) } else { (l, r) };
-                al[i] += u * s;
-                ar[i] += v * s;
-            }
-            if use_b {
-                let s = st.send_b.next();
-                let (u, v) = if pre_b { (x * g, y * g) } else { (l, r) };
-                bl[i] += u * s;
-                br[i] += v * s;
+            for &(k, pre) in used {
+                let s = st.sends[k].next();
+                let (u, v) = if pre { (x * g, y * g) } else { (l, r) };
+                if let [bl, br] = &mut bus[2 * k..2 * k + 2] {
+                    bl[i] += u * s;
+                    br[i] += v * s;
+                }
             }
         }
         (pl, pr)

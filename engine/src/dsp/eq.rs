@@ -123,6 +123,15 @@ impl Eq3 {
         self.fresh = true;
     }
 
+    /// Would a block of zero input be a no-op? True when no `fresh` jump is
+    /// pending, every glide rests on its target and every filter state is
+    /// zero (the mixer's sleeping returns skip their EQ then).
+    pub fn is_quiet(&self) -> bool {
+        !self.fresh
+            && self.cur.iter().zip(self.target).all(|(g, t)| g.value == t)
+            && self.bands.iter().flatten().all(|b| b.is_zero())
+    }
+
     /// Recompute the coefficients of the bands flagged in `dirty`.
     fn update(&mut self, dirty: &[bool; 4]) {
         let v = self.cur.map(|g| g.value);

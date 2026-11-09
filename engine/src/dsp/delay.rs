@@ -20,6 +20,16 @@
 //!   with a 5 ms glide instead of switching, so the written signal stays
 //!   continuous. The first echo is the unfiltered input; each repeat passes
 //!   the high-cut once more.
+//! * **Tails reach exact zero.** Feedback is at most 0.95 and `sat` is the
+//!   identity near zero, so a tail decays geometrically, and every ring
+//!   write and filter state is `flush`ed: below 1e-20 it is exactly 0.
+//! * **Sleep helpers** (the mixer's idle returns): the core counts the
+//!   samples since a non-zero ring write. Once that covers the ring, the
+//!   ring is provably all zero ([`is_silent`](DelayCore::is_silent)), and
+//!   once no smoother, glide or crossfade moves
+//!   ([`settled`](DelayCore::settled)) a block of zero input would only
+//!   advance the write position, so skipping it is bit exact (with an
+//!   all-zero ring only positions relative to the write head matter).
 
 use super::{clampf, finite, flush, valid_sr, Glide, SMOOTH_SECONDS, SUB_BLOCK};
 use crate::rack::modules::Smooth;
@@ -63,6 +73,9 @@ pub struct DelayCore {
     lp_a: f32,
     lp: [f32; 2],
     fresh: bool,
+    /// Samples since a non-zero ring write, counted per sub-block
+    /// (saturating). See "Sleep helpers".
+    quiet: usize,
 }
 
 impl DelayCore {
@@ -101,6 +114,8 @@ impl DelayCore {
             lp_a: 0.0,
             lp: [0.0; 2],
             fresh: true,
+            // The ring is the caller's: nothing is known about it yet.
+            quiet: 0,
         };
         d.time = d.target_time();
         d.next_time = d.time;
@@ -154,6 +169,40 @@ impl DelayCore {
         self.fresh = true;
     }
 
+    /// Ping-pong routing target (0 straight, 1 ping-pong).
+    fn pp_target(&self) -> f32 {
+        if self.ping_pong {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// High-cut glide target (log2 Hz).
+    fn cut_target(&self) -> f32 {
+        self.high_cut.min(0.45 * self.sr).log2()
+    }
+
+    /// Is the ring exactly zero? True once no non-zero value was written for
+    /// a whole ring length (every cell was overwritten with zero since) and
+    /// the high-cut state is zero. Then zero input gives exactly zero output.
+    pub fn is_silent(&self) -> bool {
+        self.quiet >= self.cap && self.lp == [0.0; 2]
+    }
+
+    /// Would a block change nothing but the write position? True when no
+    /// `fresh` jump is pending, no time crossfade runs or would start, and
+    /// the feedback / ping-pong smoothers and the high-cut glide rest on
+    /// their targets.
+    pub fn settled(&self) -> bool {
+        !self.fresh
+            && !self.fading
+            && (self.target_time() - self.time).abs() <= 1e-3
+            && self.fb_s.settled(self.feedback)
+            && self.pp_s.settled(self.pp_target())
+            && self.cut_s.value == self.cut_target()
+    }
+
     /// Process a stereo block in place through the ring `buf` (at least
     /// [`buffer_len`](DelayCore::buffer_len) floats, else the output is
     /// silence): the input is replaced by the wet signal.
@@ -165,8 +214,8 @@ impl DelayCore {
             return;
         };
         let target = self.target_time();
-        let pp_target = if self.ping_pong { 1.0 } else { 0.0 };
-        let cut_target = self.high_cut.min(0.45 * self.sr).log2();
+        let pp_target = self.pp_target();
+        let cut_target = self.cut_target();
         if self.fresh {
             self.fresh = false;
             self.time = target;
@@ -191,6 +240,8 @@ impl DelayCore {
                 self.fade = 0.0;
                 self.fading = true;
             }
+            // Any non-zero ring write this sub-block (see "Sleep helpers").
+            let mut wrote = false;
             for i in start..end {
                 let (xl, xr) = (finite(l[i]), finite(r[i]));
                 let (bl, br) = buf.split_at(self.cap);
@@ -218,12 +269,15 @@ impl DelayCore {
                 let mono = 0.5 * (xl + xr);
                 let wl = (xl + fl) + pp * ((mono + fr) - (xl + fl));
                 let wr = (xr + fr) + pp * (fl - (xr + fr));
-                buf[self.pos] = flush(wl);
-                buf[self.cap + self.pos] = flush(wr);
+                let (wl, wr) = (flush(wl), flush(wr));
+                wrote |= (wl != 0.0) | (wr != 0.0);
+                buf[self.pos] = wl;
+                buf[self.cap + self.pos] = wr;
                 self.pos = (self.pos + 1) & mask;
                 l[i] = finite(yl);
                 r[i] = finite(yr);
             }
+            self.quiet = if wrote { 0 } else { self.quiet.saturating_add(end - start) };
             start = end;
         }
     }
@@ -246,7 +300,9 @@ impl Delay {
     /// A delay at the mixer defaults: 3/16 note at 120 BPM, feedback 0.35,
     /// ping-pong on, high-cut 6 kHz. Allocates 2 s of stereo ring at `sr`.
     pub fn new(sr: f32) -> Delay {
-        Delay { core: DelayCore::new(sr), buf: vec![0.0; DelayCore::buffer_len(sr)] }
+        let mut core = DelayCore::new(sr);
+        core.quiet = usize::MAX; // fresh zeroed ring
+        Delay { core, buf: vec![0.0; DelayCore::buffer_len(sr)] }
     }
 
     /// See [`DelayCore::set_time_beats`].
@@ -274,10 +330,24 @@ impl Delay {
         self.core.set_high_cut(hz);
     }
 
-    /// Silence the tail and jump to the targets (no allocation).
+    /// Silence the tail and jump to the targets (no allocation). A ring
+    /// already proven zero is not rewritten.
     pub fn reset(&mut self) {
-        self.buf.fill(0.0);
+        if !self.core.is_silent() {
+            self.buf.fill(0.0);
+        }
+        self.core.quiet = usize::MAX;
         self.core.reset();
+    }
+
+    /// See [`DelayCore::is_silent`].
+    pub fn is_silent(&self) -> bool {
+        self.core.is_silent()
+    }
+
+    /// See [`DelayCore::settled`].
+    pub fn settled(&self) -> bool {
+        self.core.settled()
     }
 
     /// Process a stereo block in place: the input is replaced by the wet

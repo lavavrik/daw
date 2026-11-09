@@ -10,13 +10,13 @@
 use crate::arrangement::Clip;
 use crate::automation::Target;
 use crate::mixer::catalog;
-use crate::mixer::Key;
+use crate::mixer::{Key, ReturnKind};
 use crate::rack::catalog::ModuleKind;
 use crate::rack::modules::theory::{Key as MusicKey, SCALES};
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
     BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
-    MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER,
+    MAX_RETURNS, MAX_SONG_TICKS, MAX_TRACKS, MIX_CHANNELS, MIX_MASTER,
 };
 
 /// Ports per module in the packed `module * PORT_STRIDE + port` encoding.
@@ -71,11 +71,11 @@ pub const OP_CLIP_CLEAR: u32 = 37; // a=slot
 pub const OP_SET_MODE: u32 = 38; // a=0 pattern / 1 song
 pub const OP_SET_LOOP: u32 = 39; // a=start ticks b=end ticks (b <= a disables the loop)
 pub const OP_SEEK: u32 = 40; // a=song ticks (Song mode; ignored in Pattern mode)
-// Mixer (mixer/mod.rs). Channels: 0..31 tracks, 32 Reverb return, 33 Delay
-// return, 34 master. Params and their ranges: mixer/catalog.rs.
-pub const OP_MIX_SET: u32 = 41; // a=channel 0..34 b=param id c=value (catalog range; flags 0/1)
+// Mixer (mixer/mod.rs). Channels: 0..31 tracks, 32..39 return slots 0..7,
+// 40 master. Params and their ranges: mixer/catalog.rs.
+pub const OP_MIX_SET: u32 = 41; // a=channel 0..40 b=param id c=value (catalog range; flags 0/1)
 pub const OP_MIX_SET_KEY: u32 = 42; // a=track channel 0..31 b=key: -1 none, slot*32 track, slot*32+row+1 drum row
-pub const OP_MIX_RESET: u32 = 43; // a=channel 0..34: every param to its default, key none
+pub const OP_MIX_RESET: u32 = 43; // a=channel 0..40: every param to its default, key none (a return keeps its kind)
 // Engine reset (project load): stopped only (ERR_BAD_VALUE while playing).
 pub const OP_RESET_ALL: u32 = 44; // no args: every track, sample, mixer setting and FX slot back to a blank session
 // Audio tracks (audio_track.rs). An audio clip is addressed like a clip,
@@ -106,6 +106,10 @@ pub const OP_REMOVE_ROW: u32 = 58; // a=slot b=row: rows below move up one, the 
 pub const OP_INSERT_ROW: u32 = 59; // a=slot b=row: an empty row there, rows from it move down one (the last one is dropped)
 // The song key (plan 26 Task 3): what a Chord module set to In key follows.
 pub const OP_SET_KEY: u32 = 60; // a=root pitch class 0..11 (C = 0) b=scale index 0..7 (scales.ts SCALE_IDS order)
+// Return slots (plan 29): what slot `a` runs. A change resets the slot's strip
+// and params to the defaults and zeroes its tail (a sounding slot fades out
+// over 5 ms first); the same kind is a no-op.
+pub const OP_RETURN_KIND: u32 = 61; // a=slot 0..MAX_RETURNS-1 b=kind 0 off / 1 reverb / 2 delay
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -220,6 +224,8 @@ pub enum Command {
     InsertRow { slot: usize, row: usize },
     /// The song key (`theory::Key`): Chord modules set to In key follow it.
     SetKey { key: MusicKey },
+    /// What return slot `slot` runs (`Mixer::set_return_kind`).
+    ReturnKind { slot: usize, kind: ReturnKind },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -616,6 +622,10 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         }
         OP_REMOVE_ROW => Command::RemoveRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
         OP_INSERT_ROW => Command::InsertRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
+        OP_RETURN_KIND => Command::ReturnKind {
+            slot: index(a, MAX_RETURNS)?,
+            kind: ReturnKind::from_code(int_in(b, 0, 2)?).ok_or(ERR_BAD_VALUE)?,
+        },
         OP_SET_KEY => Command::SetKey { key: MusicKey::new(index(a, 12)?, index(b, SCALES.len())?).ok_or(ERR_BAD_INDEX)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
@@ -1033,6 +1043,20 @@ mod tests {
         assert_eq!(decode(OP_SET_KEY, 11., 7., 0., 0.), Ok(Command::SetKey { key: MusicKey { root: 11, scale: 7 } }));
         for (a, b) in [(12., 0.), (-1., 0.), (0., 8.), (0.5, 0.), (0., f64::NAN)] {
             assert_eq!(decode(OP_SET_KEY, a, b, 0., 0.), Err(ERR_BAD_INDEX), "[{a}, {b}]");
+        }
+    }
+    #[test]
+    fn return_kind_rejects_bad_slot_and_kind() {
+        use crate::mixer::ReturnKind;
+        assert_eq!(OP_RETURN_KIND, 61);
+        assert_eq!(decode(OP_RETURN_KIND, 0., 0., 0., 0.), Ok(Command::ReturnKind { slot: 0, kind: ReturnKind::Off }));
+        assert_eq!(decode(OP_RETURN_KIND, 3., 1., 0., 0.), Ok(Command::ReturnKind { slot: 3, kind: ReturnKind::Reverb }));
+        assert_eq!(decode(OP_RETURN_KIND, 7., 2., 0., 0.), Ok(Command::ReturnKind { slot: 7, kind: ReturnKind::Delay }));
+        for a in [8., -1., 0.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(decode(OP_RETURN_KIND, a, 1., 0., 0.), Err(ERR_BAD_INDEX), "slot {a}");
+        }
+        for b in [3., -1., 1.5, f64::NAN] {
+            assert_eq!(decode(OP_RETURN_KIND, 0., b, 0., 0.), Err(ERR_BAD_VALUE), "kind {b}");
         }
     }
     #[test]

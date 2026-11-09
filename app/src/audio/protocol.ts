@@ -178,6 +178,12 @@ export const Op = {
    *  keyCommands (setKey, undo/redo, and projectCommands on load, restart
    *  and export). RESET_ALL puts it back to A minor. */
   SET_KEY: 60,
+  /** a=return slot 0..MAX_RETURNS-1 b=kind 0 off / 1 reverb / 2 delay (plan
+   *  29). A new kind resets the slot's strip and params to the defaults and
+   *  zeroes its tail (a sounding slot fades out over 5 ms first), so send
+   *  the slot's MIX_SETs after it; the same kind is a no-op. RESET_ALL gives
+   *  slot 0 Reverb, slot 1 Delay, the rest Off. */
+  RETURN_KIND: 61,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 

@@ -22,7 +22,7 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   for (const [k, v] of Object.entries(Err)) ts[k === 'OK' ? 'OK' : `ERR_${k}`] = v;
 
   it('parsed a sane number of constants', () => {
-    expect(Object.keys(rust).length).toBe(66); // + REMOVE_ROW, INSERT_ROW (plan 21); + SET_PATTERN_FOCUS (plan 20 task 12); + SET_KEY (plan 26)
+    expect(Object.keys(rust).length).toBe(67); // + REMOVE_ROW, INSERT_ROW (plan 21); + SET_PATTERN_FOCUS (plan 20 task 12); + SET_KEY (plan 26); + RETURN_KIND (plan 29)
   });
   it('Rust and TS have identical names and values', () => {
     expect(ts).toEqual(rust);
@@ -54,6 +54,10 @@ describe('protocol parity with engine/src/protocol.rs', () => {
   it('SET_KEY is 60: a=root 0..11 b=scale index (plan 26)', () => {
     expect(Op.SET_KEY).toBe(60);
     expect(src).toMatch(/OP_SET_KEY: u32 = 60; \/\/ a=root pitch class 0\.\.11 \(C = 0\) b=scale index 0\.\.7/);
+  });
+  it('RETURN_KIND is 61: a=slot b=kind 0 off / 1 reverb / 2 delay (plan 29)', () => {
+    expect(Op.RETURN_KIND).toBe(61);
+    expect(src).toMatch(/OP_RETURN_KIND: u32 = 61; \/\/ a=slot 0\.\.MAX_RETURNS-1 b=kind 0 off \/ 1 reverb \/ 2 delay/);
   });
 });
 

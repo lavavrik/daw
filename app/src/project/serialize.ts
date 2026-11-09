@@ -153,6 +153,7 @@ export function serialize(p: Project): ProjectJson {
       return [{ cc: m.cc, track: slot, target: t.kind === 'mix' ? { mix: t.param } : { rack: [t.module, t.param] } }];
     }),
     patternLibrary: p.patternLibrary.map(libraryJson),
+    key: { root: p.key.root, scale: p.key.scale },
   };
 }
 

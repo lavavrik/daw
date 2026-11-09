@@ -4,6 +4,8 @@ import { BAR_TICKS, STEP_TICKS } from '../audio/protocol';
 import { defaultMixParams } from '../audio/mixerCatalog';
 import type { History } from '../history/history';
 import type { MidiMapping } from './midiMap';
+import { DEFAULT_KEY } from '../music/scales';
+import type { MusicKey } from '../music/scales';
 
 /** Must match engine/src/lib.rs (parity-checked by audio/protocol.test.ts). */
 export const MAX_STEPS = 64;
@@ -423,6 +425,14 @@ export class Project {
    * edit; edited only through state/pattern-library.ts.
    */
   patternLibrary = $state<LibraryPattern[]>([]);
+  /**
+   * The song's key (plan 26; music/scales.ts, docs/architecture/theory.md):
+   * the piano roll's scale highlight, Snap to key, Fit to key and the chord
+   * stamp follow it. Saved with the project (schema 6), undone like any
+   * edit; changed only through state/key-actions.ts setKey (replaced whole,
+   * never mutated in place).
+   */
+  key = $state<MusicKey>({ ...DEFAULT_KEY });
   /** 'pattern': the shown track loops its current pattern (pattern focus); 'song': clips play on the timeline. */
   mode = $state<'pattern' | 'song'>('pattern');
   /**

@@ -14,6 +14,11 @@ const v3Fixture = () => JSON.parse(readFileSync(new URL('./testdata/v3-fixture.j
  * v3 one plus its mapping list) with three mappings. No pattern library.
  */
 const v4Fixture = () => JSON.parse(readFileSync(new URL('./testdata/v4-fixture.json', import.meta.url), 'utf8'));
+/**
+ * A schema-5 save (plan 26 Task 1): the v4 fixture as the plan-21 app saved
+ * it (v4 -> v5 adds only `patternLibrary`) with two library patterns. No key.
+ */
+const v5Fixture = () => JSON.parse(readFileSync(new URL('./testdata/v5-fixture.json', import.meta.url), 'utf8'));
 
 type J = Record<string, unknown>;
 /** What v2 -> v3 must make of a v2 project: every track and the mixer get an empty `automation`, nothing else changes. */
@@ -28,8 +33,12 @@ const withEmptyAutomation = (v2: J): J => ({
 const withEmptyMidiMap = (v3: J): J => ({ ...v3, schemaVersion: 4, midiMap: [] });
 /** What v4 -> v5 must make of a v4 project: an empty top-level `patternLibrary`, nothing else changes. */
 const withEmptyLibrary = (v4: J): J => ({ ...v4, schemaVersion: 5, patternLibrary: [] });
+/** What v5 -> v6 must make of a v5 project: the key A minor, nothing else changes. */
+const withAMinor = (v5: J): J => ({ ...v5, schemaVersion: 6, key: { root: 9, scale: 'minor' } });
+/** v4 -> current. */
+const fromV4 = (v4: J): J => withAMinor(withEmptyLibrary(v4));
 /** v3 -> current. */
-const fromV3 = (v3: J): J => withEmptyLibrary(withEmptyMidiMap(v3));
+const fromV3 = (v3: J): J => fromV4(withEmptyMidiMap(v3));
 /** v2 -> current. */
 const fromV2 = (v2: J): J => fromV3(withEmptyAutomation(v2));
 
@@ -43,30 +52,31 @@ const V1 = (): Record<string, unknown>[] => [
 ];
 
 describe('schema migration', () => {
-  it('migrates v1 to v2 losslessly (and on to v5)', () => {
-    expect(SCHEMA_VERSION).toBe(5);
+  it('migrates v1 to v2 losslessly (and on to v6)', () => {
+    expect(SCHEMA_VERSION).toBe(6);
     for (const v1 of V1()) {
       const before = JSON.stringify(v1);
-      const v5 = migrate(v1) as Record<string, unknown>;
+      const v6 = migrate(v1) as Record<string, unknown>;
       expect(JSON.stringify(v1)).toBe(before); // the input is not changed
-      // v1 had no Audio tracks, automation, MIDI mappings or library: everything else is carried over as is.
-      expect(v5).toEqual(fromV2({ ...v1, schemaVersion: 2 }));
-      // validate migrates by itself: a v1 file reads like the same file saved as v2, v3, v4 or v5.
+      // v1 had no Audio tracks, automation, MIDI mappings, library or key: everything else is carried over as is.
+      expect(v6).toEqual(fromV2({ ...v1, schemaVersion: 2 }));
+      // validate migrates by itself: a v1 file reads like the same file saved as v2, v3, v4, v5 or v6.
       const a = validate(v1);
       const b = validate({ ...v1, schemaVersion: 2 });
       expect(a).toEqual(b);
       expect(a).toEqual(validate(withEmptyAutomation({ ...v1, schemaVersion: 2 })));
       expect(a).toEqual(validate(fromV2({ ...v1, schemaVersion: 2 })));
       if ('error' in a) throw new Error(a.error);
-      expect(a.project.schemaVersion).toBe(5);
+      expect(a.project.schemaVersion).toBe(6);
       expect(a.project.patternLibrary).toEqual([]);
+      expect(a.project.key).toEqual({ root: 9, scale: 'minor' });
     }
     // The frozen v1 fixture reads with no warnings.
     const r = validate(v1Fixture());
     expect('warnings' in r && r.warnings).toEqual([]);
   });
 
-  it('migrates v2 to v3 losslessly (and on to v5)', () => {
+  it('migrates v2 to v3 losslessly (and on to v6)', () => {
     const v2s: J[] = [
       v2Fixture(),
       { schemaVersion: 2, name: 'A', tracks: [{ kind: 'audio', slot: 0, clips: [] }, 'junk'], mixer: { tracks: [] } },
@@ -77,20 +87,20 @@ describe('schema migration', () => {
     expect((v2s[0].tracks as { kind: string }[]).map((t) => t.kind)).toEqual(['drum', 'synth', 'synth', 'audio', 'audio']);
     for (const v2 of v2s) {
       const before = JSON.stringify(v2);
-      const v5 = migrate(v2);
+      const v6 = migrate(v2);
       expect(JSON.stringify(v2)).toBe(before);
-      expect(v5).toEqual(fromV2(v2));
+      expect(v6).toEqual(fromV2(v2));
       expect(validate(v2)).toEqual(validate(withEmptyAutomation(v2)));
     }
     // The frozen v2 fixture reads with no warnings, and saves (serialize of
     // the loaded state) as itself plus the empty lanes: checked by
-    // load.test.ts 'a v2 project loads and saves as v5'.
+    // load.test.ts 'a v2 project loads and saves as v6'.
     const r = validate(v2Fixture());
     expect('warnings' in r && r.warnings).toEqual([]);
     expect('project' in r && r.project).toEqual(fromV2(v2Fixture()));
   });
 
-  it('migrates v3 to v4 losslessly (and on to v5)', () => {
+  it('migrates v3 to v4 losslessly (and on to v6)', () => {
     const v3s: J[] = [
       v3Fixture(),
       { schemaVersion: 3, name: 'A', tracks: [{ kind: 'audio', slot: 0, clips: [], automation: [] }] },
@@ -101,9 +111,9 @@ describe('schema migration', () => {
     expect((v3s[0].tracks as { automation: unknown[] }[]).some((t) => t.automation.length > 0)).toBe(true);
     for (const v3 of v3s) {
       const before = JSON.stringify(v3);
-      const v5 = migrate(v3);
+      const v6 = migrate(v3);
       expect(JSON.stringify(v3)).toBe(before);
-      expect(v5).toEqual(fromV3(v3));
+      expect(v6).toEqual(fromV3(v3));
       expect(validate(v3)).toEqual(validate(withEmptyMidiMap(v3)));
     }
     // The frozen v3 fixture reads with no warnings, as itself plus the empty mapping list.
@@ -112,7 +122,7 @@ describe('schema migration', () => {
     expect('project' in r && r.project).toEqual(fromV3(v3Fixture()));
   });
 
-  it('migrates v4 to v5 losslessly: an old project opens with an empty pattern library', () => {
+  it('migrates v4 to v5 losslessly: an old project opens with an empty pattern library (and on to v6)', () => {
     const v4s: J[] = [
       v4Fixture(),
       { schemaVersion: 4, name: 'A', midiMap: [] },
@@ -123,22 +133,47 @@ describe('schema migration', () => {
     expect((v4s[0].midiMap as unknown[]).length).toBe(3);
     for (const v4 of v4s) {
       const before = JSON.stringify(v4);
-      const v5 = migrate(v4);
+      const v6 = migrate(v4);
       expect(JSON.stringify(v4)).toBe(before);
-      expect(v5).toEqual(withEmptyLibrary(v4));
+      expect(v6).toEqual(fromV4(v4));
       expect(validate(v4)).toEqual(validate(withEmptyLibrary(v4)));
     }
-    // The v4 fixture reads with no warnings, as itself plus the empty library.
+    // The v4 fixture reads with no warnings, as itself plus the empty library (and the key).
     const r = validate(v4Fixture());
     expect('warnings' in r && r.warnings).toEqual([]);
-    expect('project' in r && r.project).toEqual(withEmptyLibrary(v4Fixture()));
+    expect('project' in r && r.project).toEqual(fromV4(v4Fixture()));
+  });
+
+  it('migrates v5 to v6 losslessly: an old project opens in A minor', () => {
+    const v5s: J[] = [
+      v5Fixture(),
+      { schemaVersion: 5, name: 'A', patternLibrary: [] },
+      { schemaVersion: 5, key: { root: 2, scale: 'major' } }, // never written by v5: replaced
+      { schemaVersion: 5 },
+    ];
+    expect(v5s[0].schemaVersion).toBe(5);
+    expect((v5s[0].patternLibrary as unknown[]).length).toBe(2);
+    expect(v5s[0].key).toBeUndefined();
+    for (const v5 of v5s) {
+      const before = JSON.stringify(v5);
+      const v6 = migrate(v5);
+      expect(JSON.stringify(v5)).toBe(before);
+      expect(v6).toEqual(withAMinor(v5));
+      expect(validate(v5)).toEqual(validate(withAMinor(v5)));
+      const r = validate(v5);
+      expect('project' in r && r.project.key).toEqual({ root: 9, scale: 'minor' });
+    }
+    // The v5 fixture reads with no warnings, as itself plus A minor.
+    const r = validate(v5Fixture());
+    expect('warnings' in r && r.warnings).toEqual([]);
+    expect('project' in r && r.project).toEqual(withAMinor(v5Fixture()));
   });
 
   it('leaves current, newer and non-project input to validate', () => {
-    const v5 = { schemaVersion: 5, name: 'x' };
-    expect(migrate(v5)).toBe(v5);
-    const v6 = { schemaVersion: 6 };
+    const v6 = { schemaVersion: 6, name: 'x' };
     expect(migrate(v6)).toBe(v6);
+    const v7 = { schemaVersion: 7 };
+    expect(migrate(v7)).toBe(v7);
     for (const x of [null, 'x', [], { tracks: [] }]) expect(migrate(x)).toBe(x);
   });
 });

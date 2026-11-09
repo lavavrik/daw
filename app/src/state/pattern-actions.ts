@@ -15,6 +15,7 @@ import { MAX_ROWS, MAX_STEPS, currentPattern, isPatternTrack, synthTrack } from 
 import type { DrumPattern, Note, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
+import { nearestInKey } from '../music/scales';
 import { humanizeAmount, humanizeSeed, humanizedStart, humanizedVel, nextHumanizeCounter, peekHumanizeCounter } from './groove';
 
 export const MAX_NOTE_LEN = 61440;
@@ -219,6 +220,53 @@ export function humanizeNotes(p: Project, sink: CommandSink, trackId: string, am
   if (!changes.length) return 0; // nothing to change: no entry, no counter used
   nextHumanizeCounter(pat.id);
   edit(p, 'Humanize', () => updateNotes(p, sink, trackId, changes));
+  return changes.length;
+}
+
+// ---- key helpers (plan 26; docs/architecture/theory.md) ----------------------
+
+/** Transpose… range: ±1 octave. */
+export const MAX_TRANSPOSE = 12;
+
+/**
+ * Transpose… (plan 26 Task 1): move the pitch of `ids` (empty = every note
+ * of the current pattern, past-the-end ones too) by `semitones`, rounded and
+ * clamped to ±MAX_TRANSPOSE, then clamped for the whole group so no note
+ * leaves 0..127 (the shape is kept, as prMath.clampMove does for a drag).
+ * A plain semitone shift: Snap to key does not apply (Fit to key is the
+ * in-key fix). One "Transpose" undo entry. Returns the semitones applied; 0 changes nothing
+ * and adds no entry.
+ */
+export function transposeNotes(p: Project, sink: CommandSink, trackId: string, ids: string[], semitones: number): number {
+  const tp = target(p, trackId);
+  if (!tp) return 0;
+  const want = ids.length ? new Set(ids) : null;
+  const notes = tp.pat.notes.filter((n) => !want || want.has(n.id));
+  if (!notes.length) return 0;
+  const lo = -Math.min(...notes.map((n) => n.pitch));
+  const hi = 127 - Math.max(...notes.map((n) => n.pitch));
+  const dp = Math.min(hi, Math.max(lo, clampInt(semitones, -MAX_TRANSPOSE, MAX_TRANSPOSE))) + 0;
+  if (dp === 0) return 0;
+  edit(p, 'Transpose', () => updateNotes(p, sink, trackId, notes.map((n) => ({ id: n.id, pitch: n.pitch + dp }))));
+  return dp;
+}
+
+/**
+ * Fit to key (plan 26 Task 1): every note of the current pattern (past-the-end
+ * ones too) to nearestInKey(pitch, p.key) -- the nearest in-key pitch, ties
+ * up; starts, lengths and velocities stay. One "Fit to key" undo entry.
+ * Returns how many notes moved; 0 (everything already in key, or a chromatic
+ * key) changes nothing and adds no entry.
+ */
+export function fitNotesToKey(p: Project, sink: CommandSink, trackId: string): number {
+  const tp = target(p, trackId);
+  if (!tp) return 0;
+  const changes = tp.pat.notes
+    .map((n) => ({ id: n.id, from: n.pitch, pitch: nearestInKey(n.pitch, p.key) }))
+    .filter((c) => c.pitch !== c.from)
+    .map(({ id, pitch }) => ({ id, pitch }));
+  if (!changes.length) return 0;
+  edit(p, 'Fit to key', () => updateNotes(p, sink, trackId, changes));
   return changes.length;
 }
 

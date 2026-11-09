@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clampMove, formatLen, formatPos, hitTest, initialView, noteName, pitchToY, readout, snap, snapFloor,
+  clampMove, formatLen, formatPos, hitTest, initialView, keyRow, movedPitch, noteName, pitchToY, readout, snap, snapFloor,
   tickToX, xToTick, yToPitch, zoomAt,
 } from './prMath';
 import type { View } from './prMath';
@@ -162,5 +162,27 @@ describe('view', () => {
     const v = initialView(1000, 200, 15360, [{ pitch: 90 }, { pitch: 94 }]);
     const mid = v.topPitch - 200 / v.rowH / 2;
     expect(Math.abs(mid - 92)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('the key (plan 26)', () => {
+  const amin = { root: 9, scale: 'minor' } as const;
+  it('keyRow: A rows are the root, C# rows are out of key, chromatic shows nothing', () => {
+    expect([57, 69, 45].map((p) => keyRow(p, amin))).toEqual(['root', 'root', 'root']);
+    expect([61, 49, 66, 68].map((p) => keyRow(p, amin))).toEqual(['out', 'out', 'out', 'out']);
+    expect([60, 62, 64, 65, 67, 71].map((p) => keyRow(p, amin))).toEqual(['in', 'in', 'in', 'in', 'in', 'in']);
+    const dmaj = { root: 2, scale: 'major' } as const;
+    expect([61, 66, 60, 65, 62].map((p) => keyRow(p, dmaj))).toEqual(['in', 'in', 'out', 'out', 'root']);
+    for (let p = 0; p < 128; p++) expect(keyRow(p, { root: 9, scale: 'chromatic' })).toBeNull();
+  });
+
+  it('movedPitch: no key = plain; with a key, snaps in the direction of the move, ties up when still', () => {
+    expect(movedPitch(60, 1, null)).toBe(61);
+    expect(movedPitch(60, 1, amin)).toBe(62); // C -> C#: up to D
+    expect(movedPitch(62, -1, amin)).toBe(60); // D -> C#: down to C (never back to D)
+    expect(movedPitch(61, 0, amin)).toBe(62); // drawn on C#: the tie goes up
+    expect(movedPitch(64, 1, amin)).toBe(65); // E -> F: in key
+    expect(movedPitch(60, 12, amin)).toBe(72);
+    expect(movedPitch(127, 3, amin)).toBe(127);
   });
 });

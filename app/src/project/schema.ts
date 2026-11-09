@@ -1,9 +1,9 @@
-// project.json: the saved form of a Project (schemaVersion 5) and its
+// project.json: the saved form of a Project (schemaVersion 6) and its
 // validator. See docs/architecture/projects.md. An older file is migrated
 // first (migrate.ts: v1 -> v2 adds Audio tracks, which v1 never had; v2 -> v3
 // adds automation lanes, which v2 never had; v3 -> v4 adds the MIDI CC
 // mappings, which v3 never had; v4 -> v5 adds the pattern library, which v4
-// never had).
+// never had; v5 -> v6 adds the key, A minor for older files).
 //
 // Design rules:
 //   - Everything the engine needs is by catalog NAME (rack module ids, rack
@@ -40,12 +40,15 @@ import {
 } from '../state/project.svelte';
 import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
+import { DEFAULT_KEY, isScaleId } from '../music/scales';
+import type { MusicKey } from '../music/scales';
 
 /**
  * Plan 9: 2 (Audio tracks); plan 10: 3 (automation); plan 14: 4 (MIDI
- * mappings); plan 21: 5 (the pattern library). Older files are migrated (migrate.ts).
+ * mappings); plan 21: 5 (the pattern library); plan 26: 6 (the key). Older
+ * files are migrated (migrate.ts).
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 /** Largest clip offset / note start (16 bars - 1 tick) and longest note. */
 const MAX_OFFSET = MAX_PATTERN_BARS * BAR_TICKS - 1;
 const MAX_NOTE_LEN = MAX_PATTERN_BARS * BAR_TICKS;
@@ -70,6 +73,8 @@ export interface ProjectJson {
   midiMap: MidiMapJson[];
   /** The pattern library (plan 21, state/pattern-library.ts), in saving order. */
   patternLibrary: LibraryPatternJson[];
+  /** The song's key (plan 26, music/scales.ts): root pitch class 0..11 (C = 0) and scale id. */
+  key: MusicKey;
 }
 
 /**
@@ -390,15 +395,34 @@ export function validate(input: unknown): Validated {
   const mixer = readMixer(r, json.mixer, tracks, lanes);
   const midiMap = readMidiMap(r, json.midiMap, tracks);
   const patternLibrary = readLibrary(r, json.patternLibrary);
+  const key = readKey(r, json.key);
   const sel = isObj(json.selection) ? json.selection : {};
   const slotOf = (v: unknown, synthOnly: boolean) =>
     tracks.find((t) => t.slot === v && (!synthOnly || t.kind === 'synth'))?.slot ?? null;
   const selection = { track: slotOf(sel.track, false), synth: slotOf(sel.synth, true) };
 
   return {
-    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection, midiMap, patternLibrary },
+    project: { schemaVersion: SCHEMA_VERSION, name, tempo, metronome, mode, loop, tracks, mixer, samples, selection, midiMap, patternLibrary, key },
     warnings: r.warnings,
   };
+}
+
+/**
+ * The key (plan 26). Missing: A minor, silently (migrate gives older files
+ * that; a v6 file always has one). A root that is not an integer 0..11 or an
+ * unknown scale falls back to A minor's, with a warning.
+ */
+function readKey(r: Reader, v: unknown): MusicKey {
+  if (v === undefined) return { ...DEFAULT_KEY };
+  const o = isObj(v) ? v : {};
+  if (!isObj(v)) r.warn('Key: malformed (using A minor)');
+  let root = DEFAULT_KEY.root;
+  if (typeof o.root === 'number' && Number.isInteger(o.root) && o.root >= 0 && o.root <= 11) root = o.root;
+  else if (isObj(v)) r.warn(`Key root "${String(o.root)}" is not 0..11 (using ${DEFAULT_KEY.root}: A)`);
+  let scale = DEFAULT_KEY.scale;
+  if (isScaleId(o.scale)) scale = o.scale;
+  else if (isObj(v)) r.warn(`Key scale "${String(o.scale)}" is unknown (using ${DEFAULT_KEY.scale})`);
+  return { root, scale };
 }
 
 function readLoop(r: Reader, v: unknown): ProjectJson['loop'] {

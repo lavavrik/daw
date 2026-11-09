@@ -16,6 +16,10 @@
 //   v4 -> v5 (plan 21): the pattern library. A v4 project has none: the step
 //                      adds a top-level `patternLibrary: []` (replacing
 //                      anything under that name, which v4 never wrote).
+//   v5 -> v6 (plan 26): the key. A v5 project has none: the step adds a
+//                      top-level `key: { root: 9, scale: 'minor' }` (A minor,
+//                      the house default; replacing anything under that
+//                      name, which v5 never wrote). Nothing else changes.
 //
 // Anything that is not a v1..current project object (no or a bad
 // schemaVersion, a NEWER version than this build knows) is returned as is
@@ -36,6 +40,7 @@ const STEPS = new Map<unknown, (json: Json) => Json>([
   })],
   [3, (json) => ({ ...json, schemaVersion: 4, midiMap: [] })],
   [4, (json) => ({ ...json, schemaVersion: 5, patternLibrary: [] })],
+  [5, (json) => ({ ...json, schemaVersion: 6, key: { root: 9, scale: 'minor' } })],
 ]);
 
 /** `json` brought up to the current schema version (see above). */

@@ -4,7 +4,7 @@ import { moduleDef, paramIndex } from '../audio/catalog';
 import { liveInputTrack } from '../state/actions';
 import { Project } from '../state/project.svelte';
 import type { SynthTrack } from '../state/project.svelte';
-import { bindingCommands, loadProject, ProjectLoadError, units } from './load';
+import { bindingCommands, blankState, loadProject, ProjectLoadError, units } from './load';
 import { addLane, addPoint } from '../state/automation-actions';
 import { projectCommands } from './commands';
 import { createHistory } from '../history/history';
@@ -410,7 +410,7 @@ describe('loadProject', () => {
     expect(p.tracks[2].automation.map((l) => l.lane)).toEqual([6]);
   });
 
-  it('a v2 project loads and saves as v5', async () => {
+  it('a v2 project loads and saves as v6', async () => {
     const v2 = JSON.parse(readFileSync(new URL('./testdata/v2-fixture.json', import.meta.url), 'utf8'));
     const { p: src } = await buildFixture();
     const { ids } = await addAudioFixture(src);
@@ -422,15 +422,16 @@ describe('loadProject', () => {
     expect(await loadProject(p, e, v2, files, fakeDecoder)).toEqual([]);
     expect(checkLog(e.log).errors).toEqual([]);
     const out = serialize(p);
-    expect(out.schemaVersion).toBe(5);
+    expect(out.schemaVersion).toBe(6);
     // Params appended to the catalog since are written with their defaults.
     expect(out).toEqual({
       ...v2,
-      schemaVersion: 5,
+      schemaVersion: 6,
       tracks: v2.tracks.map((t: object) => ({ ...withAppendedParams(t), automation: [] })),
       mixer: { ...v2.mixer, automation: [] },
       midiMap: [],
       patternLibrary: [],
+      key: { root: 9, scale: 'minor' },
     });
   });
 
@@ -444,6 +445,20 @@ describe('loadProject', () => {
     expect(await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder)).toEqual([]);
     expect(p.patternLibrary.map(libraryJson)).toEqual(src.patternLibrary.map(libraryJson));
     expect(roundJson(serialize(p)).patternLibrary).toEqual(json.patternLibrary);
+  });
+
+  it('the key survives a save and reopen; a load replaces the old session\'s; New resets it to A minor', async () => {
+    const { p: src } = await buildFixture();
+    src.key = { root: 2, scale: 'dorian' };
+    const json = roundJson(serialize(src));
+    expect(json.key).toEqual({ root: 2, scale: 'dorian' });
+    const p = new Project();
+    p.key = { root: 5, scale: 'majorPentatonic' };
+    expect(await loadProject(p, fakeEngine(), json, filesOf(json, src), fakeDecoder)).toEqual([]);
+    expect(p.key).toEqual({ root: 2, scale: 'dorian' });
+    expect(roundJson(serialize(p))).toEqual(json);
+    blankState(p);
+    expect(p.key).toEqual({ root: 9, scale: 'minor' });
   });
 
   it('MIDI mappings survive a save and reopen (by slot, onto the new track ids)', async () => {

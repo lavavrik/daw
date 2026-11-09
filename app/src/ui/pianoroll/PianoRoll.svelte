@@ -5,6 +5,10 @@
   import Eraser from 'phosphor-svelte/lib/Eraser';
   import BookOpen from 'phosphor-svelte/lib/BookOpen';
   import DiceFive from 'phosphor-svelte/lib/DiceFive';
+  import PianoKeys from 'phosphor-svelte/lib/PianoKeys';
+  import Magnet from 'phosphor-svelte/lib/Magnet';
+  import ArrowsDownUp from 'phosphor-svelte/lib/ArrowsDownUp';
+  import MagicWand from 'phosphor-svelte/lib/MagicWand';
   import Icon from '../Icon.svelte';
   /** Grid size survives track switches for the session (the roll remounts per track). */
   let lastGrid: GridKey = '1/16';
@@ -46,6 +50,17 @@
   // Every other key bubbles on: letters keep playing the QWERTY piano, Z/X
   // change octave, R arms recording, Space toggles the transport.
   //
+  // The key (plan 26 Task 1; docs/architecture/theory.md): "Key: A min ▾"
+  // opens KeyCard (root + scale: setKey, one "Key" undo entry). Out-of-key
+  // rows are dimmed and root rows tinted in the track colour, replacing the
+  // black/white-key shading (a chromatic key keeps the classic shading and
+  // no highlight). Snap to key (a saved UI pref, snapToKey.svelte.ts): notes
+  // drawn, dragged or nudged land on in-key pitches (prMath.movedPitch: a
+  // drawn note on the nearest, ties up; a moved one in the direction of the
+  // move); Alt still turns off the TIME snap only. Transpose… (TransposeCard,
+  // ±12 semitones) acts on the selection or every note; Fit to key moves
+  // every note to the nearest in-key pitch. Each is one undo entry.
+  //
   // Humanize… (plan 25 Task 3; docs/architecture/sequencer.md "Humanize"):
   // an amount card (HumanizeCard) whose Apply is humanizeNotes on the
   // selection, or every note (like Quantize): starts and velocities jittered,
@@ -68,6 +83,12 @@
   import InlineConfirm from '../InlineConfirm.svelte';
   import PopButton from '../PopButton.svelte';
   import HumanizeCard from '../HumanizeCard.svelte';
+  import KeyCard from './KeyCard.svelte';
+  import TransposeCard from './TransposeCard.svelte';
+  import { snapToKey, setSnapToKey } from './snapToKey.svelte';
+  import { SCALES, inKey } from '../../music/scales';
+  import { pitchClassName } from '../noteName';
+  import { setKey } from '../../state/key-actions';
   import { HUMANIZE_TICKS, HUMANIZE_VEL } from '../../state/groove';
   import { THEME } from '../theme';
   import { MAX_PATTERNS } from '../../audio/protocol';
@@ -77,15 +98,15 @@
   import type { ExampleRoll } from '../../state/houseExamples';
   import { HOUSE_GROUPS } from '../../state/housePatches';
   import {
-    GRID_TICKS, MAX_NOTE_LEN, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, humanizeNotes, quantizeNotes,
-    setPatternBars, updateNotes,
+    GRID_TICKS, MAX_NOTE_LEN, MAX_TRANSPOSE, PATTERNS_FULL_TEXT, addNote, clearPattern, deleteNotes, fitNotesToKey, humanizeNotes,
+    quantizeNotes, setPatternBars, transposeNotes, updateNotes,
   } from '../../state/pattern-actions';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import { MAX_TRACKS, currentPattern } from '../../state/project.svelte';
   import { clearPatternText } from '../../state/confirmText';
   import {
-    BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, noteName, pitchToY, readout,
-    snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
+    BAR, BEAT, KEYS_W, MIN_ROW_H, clampMove, formatPos, hitTest, initialView, isBlack, keyRow, movedPitch, noteName, pitchToY,
+    readout, snap, snapFloor, tickToX, xToTick, yToPitch, zoomAt,
   } from './prMath';
   import type { View } from './prMath';
 
@@ -136,6 +157,11 @@
   const noteH = $derived(Math.max(0, size.h - RULER_H - VEL_H - SEP));
   const velTop = $derived(size.h - VEL_H);
   const lengths = $derived(LENGTHS.includes(pat.bars) ? LENGTHS : [...LENGTHS, pat.bars].sort((a, b) => a - b));
+  /** The key pitches snap to (Snap to key on), or null (plain semitones). */
+  const snapKey = $derived(snapToKey.on ? p.key : null);
+  /** "Key: A min" (the Note names style applies to the root). */
+  const keyText = $derived(`${pitchClassName(p.key.root)} ${SCALES[p.key.scale].short}`);
+  const outOfKey = $derived(notes.filter((n) => !inKey(n.pitch, p.key)).length);
 
   const readoutText = $derived.by(() => {
     if (hint) return hint;
@@ -205,6 +231,9 @@
   // drawn at a low globalAlpha (the `*A` numbers), never a new literal.
   const C = {
     bg: THEME.work, rowBlack: THEME.well, rowBlackA: 0.45, octave: THEME.line,
+    // The key highlight (plan 26): out-of-key rows a deeper --well than a
+    // black key's, root rows the track colour at a tint.
+    rowOutA: 0.6, rowRootA: 0.16,
     // Line contrast against --work (at least the old palette's): bar lines
     // --text-dim at 65 % (~2.5:1), beat lines --line (~1.7:1), the grid a hint.
     gridLine: THEME.grid, beatLine: THEME.line, barLine: THEME.textDim, barA: 0.65, ruler: THEME.panel,
@@ -251,9 +280,13 @@
     ctx.beginPath();
     ctx.rect(KEYS_W, top, W - KEYS_W, noteH);
     ctx.clip();
+    const key = p.key;
     for (let pt = v.topPitch; pt >= lowPitch; pt--) {
       const y = top + pitchToY(pt, v);
-      if (isBlack(pt)) fillA(ctx, C.rowBlack, C.rowBlackA, KEYS_W, y, W - KEYS_W, v.rowH);
+      const kr = keyRow(pt, key);
+      if (kr === 'out') fillA(ctx, C.rowBlack, C.rowOutA, KEYS_W, y, W - KEYS_W, v.rowH);
+      else if (kr === 'root') fillA(ctx, color, C.rowRootA, KEYS_W, y, W - KEYS_W, v.rowH);
+      else if (kr === null && isBlack(pt)) fillA(ctx, C.rowBlack, C.rowBlackA, KEYS_W, y, W - KEYS_W, v.rowH);
       if (pt === hoverPitch || pt === auditionPitch) fillA(ctx, C.accent, 0.08, KEYS_W, y, W - KEYS_W, v.rowH);
       if (pt % 12 === 0) { // octave line under every C
         ctx.fillStyle = C.octave;
@@ -487,7 +520,12 @@
   });
 
   // ---- pointer ---------------------------------------------------------------
-  type Orig = { id: string; pitch: number; start: number; len: number; vel: number };
+  /**
+   * A note's values when the drag began. `from`: the pitch a move counts
+   * from when it is not `pitch` -- a note just drawn with Snap to key sits
+   * on the snapped pitch but moves from the row that was clicked.
+   */
+  type Orig = { id: string; pitch: number; start: number; len: number; vel: number; from?: number };
   type Drag =
     | {
         kind: 'move' | 'resize'; anchor: Orig; orig: Orig[]; x0: number; y0: number; moved: boolean;
@@ -611,14 +649,14 @@
           return;
         }
         const n = addNote(p, engine, track.id, {
-          pitch, start: e.altKey ? Math.round(tick) : snapFloor(tick, grid), len: grid, vel: 100,
+          pitch: movedPitch(pitch, 0, snapKey), start: e.altKey ? Math.round(tick) : snapFloor(tick, grid), len: grid, vel: 100,
         });
         if (!n) {
           flashHint('Pattern is full (1024 notes)');
           return;
         }
         selected = new Set([n.id]);
-        const orig = snapshot(selected);
+        const orig = snapshot(selected).map((o) => ({ ...o, from: pitch }));
         drag = { kind: 'move', anchor: orig[0], orig, x0: x, y0: ny, moved: false, last: '0,0', timeMoved: false };
       }
     }
@@ -668,7 +706,7 @@
         if (c.dt) drag.timeMoved = true;
         const withStart = drag.timeMoved;
         schedule(drag.orig.map((o) => ({
-          id: o.id, pitch: o.pitch + c.dp, ...(withStart ? { start: o.start + c.dt } : {}),
+          id: o.id, pitch: movedPitch(o.from ?? o.pitch, c.dp, snapKey), ...(withStart ? { start: o.start + c.dt } : {}),
         })));
       } else {
         const end = a.start + a.len;
@@ -772,7 +810,7 @@
     if (!c.dt && !c.dp) return;
     // Only the field that moves: a pitch nudge never touches `start`.
     updateNotes(p, engine, track.id, orig.map((o) => ({
-      id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp ? { pitch: o.pitch + c.dp } : {}),
+      id: o.id, ...(c.dt ? { start: o.start + c.dt } : {}), ...(c.dp ? { pitch: movedPitch(o.pitch, c.dp, snapKey) } : {}),
     })));
   }
   function key(e: KeyboardEvent) {
@@ -813,6 +851,13 @@
     gridKey = lastGrid = k;
     refocus();
   }
+  function fitToKey() {
+    const moved = fitNotesToKey(p, engine, track.id);
+    flashHint(moved ? `Moved ${moved} note${moved === 1 ? '' : 's'} into the key` : 'Every note is in key');
+    refocus();
+  }
+  /** What Humanize… / Transpose… act on (the selection, or every note), for their hints. */
+  const targetText = $derived(selNotes.length === 1 ? 'the selected note' : selNotes.length ? `the ${selNotes.length} selected notes` : 'every note');
   function setLength(bars: number) {
     setPatternBars(p, engine, track.id, bars);
     fitWidth();
@@ -951,8 +996,24 @@
         {#each lengths as b (b)}<option value={b}>{b} {b === 1 ? 'bar' : 'bars'}</option>{/each}
       </select>
     </label>
-    <button data-testid="pr-quantize" title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
-      <Icon icon={MagnetStraight} /> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}
+    <PopButton id="pr-key-pop-{track.id}" label="Key" testid="pr-key-pop">
+      {#snippet trigger(a)}
+        <button {...a} data-testid="pr-key" aria-label="Key: {keyText}" title="The song's key: the roll highlights it, Snap to key and Fit to key follow it">
+          <Icon icon={PianoKeys} /> Key: {keyText} ▾
+        </button>
+      {/snippet}
+      {#snippet children()}
+        <KeyCard value={p.key} onpick={(k) => setKey(p, engine, k)} />
+      {/snippet}
+    </PopButton>
+    <button data-testid="pr-snap-key" aria-pressed={snapToKey.on} aria-label="Snap to key" class:on={snapToKey.on}
+      title="Snap to key: drawn and moved notes land on the key's notes ({snapToKey.on ? 'on' : 'off'})"
+      onclick={() => { setSnapToKey(!snapToKey.on); refocus(); }}>
+      <Icon icon={Magnet} /><span class="t2"> Snap to key</span>
+    </button>
+    <button data-testid="pr-quantize" aria-label="Quantize {selNotes.length ? `${selNotes.length} selected` : 'all'}"
+      title="Snap note starts to the grid: the selection, or every note (Q)" onclick={() => { quantize(); refocus(); }}>
+      <Icon icon={MagnetStraight} /><span class="t"> Quantize {selNotes.length ? `${selNotes.length} sel.` : 'all'}</span>
     </button>
     <PopButton id="pr-humanize-pop-{track.id}" label="Humanize" testid="humanize-pop">
       {#snippet trigger(a)}
@@ -962,12 +1023,28 @@
       {/snippet}
       {#snippet children(close)}
         <HumanizeCard
-          hint="Moves {selNotes.length === 1 ? 'the selected note' : selNotes.length ? `the ${selNotes.length} selected notes` : 'every note'} by up to ±{HUMANIZE_TICKS} ticks and ±{HUMANIZE_VEL} velocity at 100 %, inside the pattern."
+          hint="Moves {targetText} by up to ±{HUMANIZE_TICKS} ticks and ±{HUMANIZE_VEL} velocity at 100 %, inside the pattern."
           onapply={(a) => humanizeNotes(p, engine, track.id, a, selectedIds())} {close}
         />
       {/snippet}
     </PopButton>
-    <button data-testid="pr-clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /> Clear</button>
+    <PopButton id="pr-transpose-pop-{track.id}" label="Transpose" testid="transpose-pop">
+      {#snippet trigger(a)}
+        <button {...a} data-testid="pr-transpose" aria-label="Transpose…" title="Transpose: move the selection or every note by up to ±{MAX_TRANSPOSE} semitones" disabled={!notes.length}>
+          <Icon icon={ArrowsDownUp} /><span class="t2"> Transpose…</span>
+        </button>
+      {/snippet}
+      {#snippet children(close)}
+        <TransposeCard hint="Moves {targetText} up or down, keeping the chord shapes (stops at the top and bottom of the keyboard)."
+          onapply={(st) => transposeNotes(p, engine, track.id, selectedIds(), st)} {close} />
+      {/snippet}
+    </PopButton>
+    <button data-testid="pr-fit-key" aria-label="Fit to key" disabled={!outOfKey}
+      title={outOfKey ? `Fit to key: move the ${outOfKey} out-of-key note${outOfKey === 1 ? '' : 's'} to the nearest note of ${keyText}` : `Every note is in ${keyText}`}
+      onclick={fitToKey}>
+      <Icon icon={MagicWand} /><span class="t2"> Fit to key</span>
+    </button>
+    <button data-testid="pr-clear" aria-label="Clear" title="Delete every note in this pattern" disabled={!notes.length} onclick={clearAll}><Icon icon={Eraser} /><span class="t"> Clear</span></button>
     {#if clearAsk}
       <InlineConfirm
         message={clearPatternText(track, notes.length)}
@@ -1004,7 +1081,7 @@
         </div>
       {/if}
     </div>
-    <output class="readout" data-testid="pr-readout" class:hint={!!hint}>{readoutText}</output>
+    <output class="readout" data-testid="pr-readout" class:hint={!!hint} title={readoutText}>{readoutText}</output>
   </div>
   <!-- Focusable so the roll keys (KEYBOARD FOCUS RULE) reach it. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -1066,12 +1143,21 @@
   .bar .exrow button:hover:not(:disabled), .bar .exrow button:focus-visible { background: var(--raised); color: var(--text); filter: none; outline: none; }
   .exmenu .full { margin: 0 0 4px; color: var(--accent); font-size: var(--fs-ctl); white-space: nowrap; }
   /* Room for the readout on the one-row toolbar at 1280 px (pianoroll.spec
-     "layout at 1280×720"): Humanize… is icon-only below 1440 px (its name
-     stays: aria-label, and the tooltip says what it does), like the pattern
+     "layout at 1280×720", theory.spec "layout at 1280"): Quantize,
+     Humanize… and Clear are icon-only below 1440 px, the key tools (Snap to
+     key, Transpose…, Fit to key: plan 26) below 1680 px (their names stay:
+     aria-label, and the tooltip says what each does), like the pattern
      picker's Duplicate. */
   @media (max-width: 1439px) { .t { display: none; } }
+  @media (max-width: 1679px) { .t2 { display: none; } }
+  /* Snap to key: a toggle; on = the accent, like a lit step. */
+  .bar button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
+  /* The readout takes what the row has left (at least 120 px before it
+     wraps: its flex-basis, which is what line breaking measures), up to its
+     text, and ellipsizes a long hint (the full text is its tooltip). */
   .readout {
-    margin-left: auto; padding: 2px 8px; border-radius: var(--r-sm); white-space: nowrap;
+    margin-left: auto; flex: 1 1 120px; max-width: max-content; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    padding: 2px 8px; border-radius: var(--r-sm); white-space: nowrap;
     background: var(--lcd); box-shadow: var(--well-shadow); color: var(--text); font: 500 var(--fs-ctl)/16px var(--font-mono);
   }
   .readout.hint { color: var(--accent); }

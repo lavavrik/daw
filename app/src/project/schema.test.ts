@@ -105,10 +105,10 @@ describe('project schema', () => {
   });
 
   it('rejects newer schema', async () => {
-    const json = { ...serialize(new Project()), schemaVersion: 6 };
+    const json = { ...serialize(new Project()), schemaVersion: 7 };
     const r = validate(json);
     expect('error' in r && r.error).toMatch(/newer/);
-    expect('error' in r && r.error).toMatch(/schema 6; this one reads up to 5/);
+    expect('error' in r && r.error).toMatch(/schema 7; this one reads up to 6/);
     expect('error' in validate(null)).toBe(true);
     expect('error' in validate({ tracks: [] })).toBe(true); // no schemaVersion
     expect('error' in validate('{}')).toBe(true);
@@ -431,5 +431,25 @@ describe('project schema', () => {
     const r4 = ok(validate({ ...base, patternLibrary: Array.from({ length: 300 }, (_, i) => syn(`P${i}`)) }));
     expect(r4.project.patternLibrary).toHaveLength(256);
     expect(r4.warnings.join('\n')).toMatch(/only the first 256/);
+  });
+  it('validates the key (plan 26): missing -> A minor silently; a bad root or scale -> A minor\'s, with a warning', () => {
+    const base = roundJson(serialize(new Project()));
+    expect(base.key).toEqual({ root: 9, scale: 'minor' });
+    const r0 = ok(validate({ ...base, key: { root: 2, scale: 'harmonicMinor' } }));
+    expect(r0.warnings).toEqual([]);
+    expect(r0.project.key).toEqual({ root: 2, scale: 'harmonicMinor' });
+    const { key: _key, ...noKey } = base;
+    const r1 = ok(validate(noKey));
+    expect(r1.warnings).toEqual([]);
+    expect(r1.project.key).toEqual({ root: 9, scale: 'minor' });
+    const r2 = ok(validate({ ...base, key: { root: 14, scale: 'lydian' } }));
+    expect(r2.project.key).toEqual({ root: 9, scale: 'minor' });
+    expect(r2.warnings.join('\n')).toMatch(/Key root "14"/);
+    expect(r2.warnings.join('\n')).toMatch(/Key scale "lydian"/);
+    const r3 = ok(validate({ ...base, key: { root: 0.5, scale: 'major' } }));
+    expect(r3.project.key).toEqual({ root: 9, scale: 'major' });
+    const r4 = ok(validate({ ...base, key: 'C major' }));
+    expect(r4.project.key).toEqual({ root: 9, scale: 'minor' });
+    expect(r4.warnings.join('\n')).toMatch(/Key: malformed/);
   });
 });

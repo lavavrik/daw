@@ -8,6 +8,8 @@
 // The component subtracts the ruler height from pointer y before calling these.
 import { GRID_TICKS } from '../../state/pattern-actions';
 import { NOTE_NAMES, noteName } from '../noteName';
+import { inKey, isKeyRoot, nearestInKey } from '../../music/scales';
+import type { MusicKey } from '../../music/scales';
 
 export interface View {
   /** Horizontal zoom: ticks per CSS pixel (960 PPQ). */
@@ -134,6 +136,31 @@ export function clampMove(
     dt: clamp(dt, lo, hi) + 0,
     dp: clamp(dp, -Math.min(...pitches), 127 - Math.max(...pitches)) + 0,
   };
+}
+
+// ---- the key (plan 26; docs/architecture/theory.md) ----------------------------
+
+/**
+ * How the note grid shades pitch `p`'s row for `key`: 'root' rows are
+ * tinted, 'out' (of key) rows dimmed, 'in' rows plain. null for a chromatic
+ * key: no highlight at all, the classic black/white-key shading instead.
+ */
+export function keyRow(p: number, key: MusicKey): 'root' | 'in' | 'out' | null {
+  if (key.scale === 'chromatic') return null;
+  if (isKeyRoot(p, key)) return 'root';
+  return inKey(p, key) ? 'in' : 'out';
+}
+
+/**
+ * The pitch a note moved by `dp` semitones from `from` lands on. `key` null
+ * (Snap to key off): from + dp. With a key, the nearest in-key pitch in the
+ * direction of the move (nearestInKey 'up' / 'down'), so a one-row move
+ * never snaps back to where it started; dp 0: the nearest, ties up (a time-
+ * only move, or a note just drawn on an off-key row).
+ */
+export function movedPitch(from: number, dp: number, key: MusicKey | null): number {
+  if (!key) return from + dp;
+  return nearestInKey(from + dp, key, dp > 0 ? 'up' : dp < 0 ? 'down' : undefined);
 }
 
 // ---- view --------------------------------------------------------------------

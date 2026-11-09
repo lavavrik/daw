@@ -216,7 +216,7 @@ test('audio clips round-trip through save, undo, restart and export', async ({ p
     const json = JSON.parse(await (await (await dir.getFileHandle('project.json')).getFile()).text());
     return { version: json.schemaVersion, clips: json.tracks.filter((t: { kind: string }) => t.kind === 'audio').map((t: { clips: unknown[] }) => t.clips) };
   }, dirName);
-  expect(saved.version).toBe(5);
+  expect(saved.version).toBe(6);
   expect(saved.clips).toHaveLength(1);
   expect(saved.clips[0]).toHaveLength(1);
   expect(saved.clips[0][0]).toMatchObject(want);
@@ -410,7 +410,7 @@ test('automation round-trips through save, undo, restart and export', async ({ p
     },
     { n: dirName, slot },
   );
-  expect(saved.version).toBe(5);
+  expect(saved.version).toBe(6);
   expect(saved.lanes.map((l: SavedLane) => ({ ...l, points: [...l.points].sort((x, y) => x[0] - y[0]) }))).toEqual(want);
 
   // 2. Remove each lane with its header's ×, then undo: both come back as they were.

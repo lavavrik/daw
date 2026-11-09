@@ -10,7 +10,7 @@ I/O), `session.ts` (Project menu: New / Open… / Save / Save As…, banners),
 
 ```
 My Song/
-  project.json            schemaVersion 5
+  project.json            schemaVersion 6
   samples/0-1a2b3c4d-kick.wav   original bytes, never re-encoded
   samples/1-9f8e7d6c-snare.wav  ("<id>-<content hash>-<name>")
 ```
@@ -19,11 +19,11 @@ Any `FileSystemDirectoryHandle` works: a folder from `showDirectoryPicker`
 (Project menu, Cmd/Ctrl+S, Shift for Save As, Cmd/Ctrl+O) or OPFS (the e2e
 tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
 
-## project.json (schemaVersion 5)
+## project.json (schemaVersion 6)
 
 ```jsonc
 {
-  "schemaVersion": 5, "name": "My Song", "tempo": 124, "metronome": false,
+  "schemaVersion": 6, "name": "My Song", "tempo": 124, "metronome": false,
   "mode": "pattern",                       // or "song"
   "loop": { "on": false, "start": 0, "end": 15360 },
   "tracks": [                              // track-list order
@@ -72,7 +72,8 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
     { "kind": "drum", "name": "Groove", "stepCount": 16, "swing": 0,
       "rows": [{ "name": "Kick", "sampleName": "kick.wav", "steps": [100, 0, 0, 0, ...] }] },  // 64 velocities
     { "kind": "synth", "name": "Bassline", "bars": 2,
-      "notes": [{ "pitch": 36, "vel": 100, "start": 0, "len": 480 }] } ]
+      "notes": [{ "pitch": 36, "vel": 100, "start": 0, "len": 480 }] } ],
+  "key": { "root": 9, "scale": "minor" }   // plan 26: root pitch class 0..11 (C = 0), scale id
 }
 ```
 
@@ -129,6 +130,14 @@ tests through `__daw.saveTo(dir)` / `__daw.openFrom(dir)`; the autosave).
   velocities; a synth entry its bars and notes (no idx). A load turns it
   into the live list with fresh UI ids (`state/pattern-library.ts`
   `libraryState`); no engine command until an entry is loaded into a track.
+- **Key** (plan 26; theory.md): top-level `key`, `{ root, scale }` with the
+  root a pitch class 0..11 (C = 0) and the scale one of `music/scales.ts`
+  `SCALE_IDS` by name (`major`, `minor`, `dorian`, `mixolydian`,
+  `harmonicMinor`, `minorPentatonic`, `majorPentatonic`, `chromatic`). A new
+  project, New, and every file older than schema 6 are in A minor. The
+  engine gets it through `state/key-actions.ts` `keyCommands`, appended by
+  `projectCommands` after the transport (none until plan 26 Task 3's
+  `SET_KEY`).
 - **Not saved:** the master headroom gain (a fixed engine constant, see
   mixer.md), the song position, panel/tab state.
 - `serialize` is pure. `projectFingerprint` (the JSON minus `selection`) is
@@ -152,18 +161,21 @@ folder's sample list all get it). It is pure (the input is not changed).
 | 2 → 3 | 10 | Automation. A v2 project has none: every track object and the mixer object get an empty `automation`; nothing else changes, so it is lossless. |
 | 3 → 4 | 14 | MIDI CC mappings. A v3 project has none: a top-level `midiMap: []` is added; nothing else changes, so it is lossless. |
 | 4 → 5 | 21 | The pattern library. A v4 project has none: a top-level `patternLibrary: []` is added; nothing else changes, so it is lossless. |
+| 5 → 6 | 26 | The key. A v5 project has none: a top-level `key: { root: 9, scale: "minor" }` (A minor, the house default) is added; nothing else changes. |
 
 A version newer than the build knows stays an error ("saved by a newer
 version of the app"); a save always writes the current version.
-`migrate.test.ts` pins v1 → v5 (through v2, v3, v4) on a frozen genuine v1 save
+`migrate.test.ts` pins v1 → v6 (through v2, v3, v4, v5) on a frozen genuine v1 save
 (`project/testdata/v1-fixture.json`) and minimal v1 files, v2 → v4 on a
 frozen genuine v2 save with Audio tracks (`project/testdata/v2-fixture.json`,
 the plan-9 save of `buildFixture` + `addAudioFixture`), and v3 → v4 on a
 frozen genuine v3 save with lanes (`project/testdata/v3-fixture.json`, the
 plan-13 save of `buildFixture` + `addAudioFixture` + `addAutomationFixture`),
 and v4 → v5 on `project/testdata/v4-fixture.json` (the v3 fixture as schema
-4 saves it: plus three MIDI mappings; v3 → v4 adds nothing else);
-`load.test.ts` `a v2 project loads and saves as v5` opens the v2 one and
+4 saves it: plus three MIDI mappings; v3 → v4 adds nothing else),
+and v5 → v6 on `project/testdata/v5-fixture.json` (the v4 fixture as schema
+5 saves it: plus two library patterns; v4 → v5 adds nothing else);
+`load.test.ts` `a v2 project loads and saves as v6` opens the v2 one and
 checks the save.
 
 ## Sample memory (spec addendum §3.3)
@@ -342,7 +354,7 @@ starter samples are part of the "before" and one undo restores them.
 
 Never throws, never lets an out-of-range value through. Unknown fields are
 ignored. The file is migrated first (see above). A missing/non-integer
-`schemaVersion` or one greater than the current one (5) is an
+`schemaVersion` or one greater than the current one (6) is an
 **error** (nothing changes). Everything else becomes a **warning**, shown in a
 notice banner after the load (all of them in the console):
 
@@ -398,6 +410,9 @@ notice banner after the load (all of them in the console):
   characters ("Pattern" when nothing is left), unique (a repeat becomes
   "X 2", …), each change with a warning; at most 256 entries are kept (a
   save into a full library is refused).
+- the key (plan 26): missing → A minor, silently; a root that is not an
+  integer 0..11 → 9 (A), an unknown scale → `minor`, a `key` that is not an
+  object → A minor, each with a warning.
 
 ## Load order (`loadProject`)
 

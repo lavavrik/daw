@@ -43,7 +43,9 @@
 //      the MIDI mappings (UI state only, no command: rebuilt from `to` by
 //      slot, so a track rebuilt in step 2 under a fresh id keeps them); the
 //      pattern library (plan 21: project data, no command; an entry that
-//      did not change keeps its UI id, state/pattern-library.ts libraryState).
+//      did not change keeps its UI id, state/pattern-library.ts libraryState);
+//      the key (plan 26: state/key-actions.ts applyKey, which also sends the
+//      engine's key command, keyCommands).
 // The project name is not restored (a Save As names the project, not an edit).
 import { MAX_CLIPS, MAX_NOTES, MIX_DELAY, MIX_MASTER, MIX_REVERB, Op, packPort } from '../audio/protocol';
 import { moduleDef } from '../audio/catalog';
@@ -58,6 +60,7 @@ import { makeDrumPattern, makeNotePattern, sendNote } from '../state/pattern-act
 import { patchRack } from '../state/rack-actions';
 import { sendClip, setLoop } from '../state/song-actions';
 import { sendAudioClip } from '../state/audio-actions';
+import { applyKey } from '../state/key-actions';
 import { MAX_ROWS, MAX_STEPS, currentPattern, newChannel } from '../state/project.svelte';
 import type {
   AudioClip, AudioTrack, AutomationLane, ChannelState, Clip, DrumPattern, DrumRow, DrumTrack, MasterChannel, NotePatternState, PatternTrack,
@@ -172,6 +175,7 @@ export function diffApply(p: Project, sink: CommandSink, from: ProjectJson, to: 
   const midiMap = midiMapState(to.midiMap, (slot) => bySlot.get(slot)?.id);
   if (!same(p.midiMap, midiMap)) p.midiMap = midiMap;
   if (!same(p.patternLibrary.map(libraryJson), to.patternLibrary)) p.patternLibrary = libraryState(to.patternLibrary, p.patternLibrary);
+  applyKey(p, sink, to.key); // no-op when unchanged
   const input = liveInputTrack(p)?.slot ?? -1;
   if (input !== engineInput) sink.send(Op.SET_INPUT_TRACK, input);
   syncPatternFocus(p, sink); // the pattern transport (if it runs) follows the restored selection

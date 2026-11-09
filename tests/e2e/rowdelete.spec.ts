@@ -79,7 +79,8 @@ test('delete the Clap row: it is gone and stops playing; undo brings it back', a
   expect(await rowNames(page)).toEqual(KIT.filter((n) => n !== 'Clap'));
   await expect(page.getByTestId('row-delete-1')).toBeFocused();
   for (const s of [0, 4, 8, 12]) await expect(page.getByTestId(`step-1-${s}`)).toHaveAttribute('aria-pressed', 'false');
-  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.history?.labels.undo)).toBe('Delete row');
+  // The click's gesture commits a task after release: poll, don't read once.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.history?.labels.undo)).toBe('Delete row');
   // Still playing, but nothing has steps any more: silence.
   await page.waitForTimeout(200);
   expect(await maxPeak(page)).toBeLessThan(0.001);

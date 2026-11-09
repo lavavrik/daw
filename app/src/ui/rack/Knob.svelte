@@ -97,14 +97,19 @@
   // undoable. A drag and the arrow keys start from what is heard (the ring).
   // Escape mid-drag puts the old base back without a new override (the
   // drag's own overrides still hold until the next point: the engine has no
-  // "un-override"). Right-click, the ContextMenu key or Shift+F10 opens the
-  // "Automate" / "Show automation" menu (AutoMenu.svelte) on continuous
-  // params; integer ones don't register and don't offer *Automate* (they
-  // do offer MIDI learn, below).
+  // "un-override").
   //
-  // MIDI learn (plan 14 Task 3; ui/midiLearn.svelte.ts): the same menu also
-  // offers "MIDI learn" / "Forget MIDI (CC 74)" on continuous AND integer
-  // knobs (bus.canLearn), so an integer knob opens it too (learn only).
+  // Right-click, the ContextMenu key or Shift+F10 opens the precise-value
+  // popover (plan 24, ui/ValuePopover.svelte) on every knob: the name, a
+  // field with Set and Reset (it edits the base, one undo entry through
+  // change()), and below them the AutoMenu items: "Automate" / "Show
+  // automation" on continuous params (integer ones don't register and don't
+  // offer *Automate*) and MIDI learn (below). A knob with no `auto` target
+  // gets the value part only.
+  //
+  // MIDI learn (plan 14 Task 3; ui/midiLearn.svelte.ts): the popover's items
+  // also offer "MIDI learn" / "Forget MIDI (CC 74)" on continuous AND integer
+  // knobs (bus.canLearn).
   // While this knob is the learn target it pulses (class `learning`; a
   // static outline under prefers-reduced-motion). A mapped knob shows a
   // small "CC" tag (`<testid>-cc`) and its title (the accessible description) says
@@ -114,7 +119,7 @@
   import { registerDragCancel } from '../../history/gestures';
   import type { MixChannelTarget } from '../../state/mixer-actions';
   import type { AutoTarget } from '../../state/project.svelte';
-  import { menuItems, openAutoMenu } from '../AutoMenu.svelte';
+  import { closeValuePopover, openValuePopover } from '../ValuePopover.svelte';
   import { isLearning } from '../midiLearn.svelte';
   import { ariaThrottle, useAutoBus } from '../autoBus';
   import type { AutoStatus } from '../autoBus';
@@ -241,20 +246,26 @@
   const cc = $derived(bus && auto ? bus.midiCc(auto.owner, auto.target) : null);
   const ccNote = $derived(cc !== null ? ` — MIDI CC ${cc}` : '');
 
-  /** The control menu at (x, y), or under the knob (keyboard); false when it would have no item. */
-  function menuAt(x: number | null, y: number | null): boolean {
-    if (!bus || !auto) return false;
-    const items = menuItems(bus, auto.owner, auto.target);
-    if (!items.automate && !items.midi) return false;
+  /** The precise-value popover at (x, y), or under the knob (keyboard). */
+  function popoverAt(x: number | null, y: number | null) {
     const r = knobEl?.getBoundingClientRect();
-    openAutoMenu({ x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, owner: auto.owner, target: auto.target, label: name, from: knobEl });
-    return true;
+    openValuePopover({
+      x: x ?? r?.left ?? 0, y: y ?? r?.bottom ?? 0, label: name, def, value,
+      apply: change, from: knobEl, auto: bus && auto ? auto : null,
+    });
   }
   function context(e: MouseEvent) {
+    e.preventDefault();
+    if (dragging || editing) return;
     // A keyboard-made contextmenu event has no pointer position: place it at the knob.
     const kbd = e.clientX === 0 && e.clientY === 0;
-    if (menuAt(kbd ? null : e.clientX, kbd ? null : e.clientY)) e.preventDefault();
+    popoverAt(kbd ? null : e.clientX, kbd ? null : e.clientY);
   }
+  // A popover opened from this knob closes with it (its apply would edit a knob that is gone).
+  $effect(() => {
+    const el = knobEl;
+    return () => { if (el) closeValuePopover(el); };
+  });
 
   // ---- drag state ------------------------------------------------------
   let dragging = $state(false);
@@ -433,7 +444,8 @@
   function key(e: KeyboardEvent) {
     if (editing) return;
     if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
-      if (!dragging && menuAt(null, null)) e.preventDefault();
+      e.preventDefault(); // no native menu (nor a contextmenu event after it)
+      if (!dragging) popoverAt(null, null);
       return;
     }
     if (e.key === 'Enter') {
@@ -517,7 +529,7 @@
       : note ? `${readout} ${note}` : readout}
     title={(automated
       ? `${name}: base ${readout} — Automated — dragging overrides until the next point (right-click: Show automation)`
-      : `${name}: ${readout} — ${slider ? 'drag left/right (Shift = fine), click the track to jump' : vfader ? 'drag up/down (Shift = fine), click the slot to jump' : 'drag up/down (Shift = fine)'}, double-click = reset, click the value to type one${autoStatus ? ', right-click = Automate' : ''}`) + ccNote}
+      : `${name}: ${readout} — ${slider ? 'drag left/right (Shift = fine), click the track to jump' : vfader ? 'drag up/down (Shift = fine), click the slot to jump' : 'drag up/down (Shift = fine)'}, double-click = reset, click the value to type one, right-click = exact value${autoStatus ? ' / Automate' : ''}`) + ccNote}
     data-testid={testid}
     data-auto={autoStatus ?? undefined}
     class:auto-on={autoStatus === 'on'}

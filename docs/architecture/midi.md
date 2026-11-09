@@ -125,12 +125,13 @@ module the FX pool dropped. Slots become the new track ids in
 ## UI (`ui/midiLearn.svelte.ts`, AutoMenu, Knob, Fader)
 
 - **The menu.** Right-click (or the ContextMenu key / Shift+F10) on a knob
-  or fader opens `AutoMenu.svelte`: "Automate" / "Show automation" when
+  or fader opens `AutoMenu.svelte` (on a knob: its items inside the
+  precise-entry card, `ValuePopover.svelte`, plan 24): "Automate" / "Show automation" when
   `bus.canAutomate` (continuous params), then "MIDI learn", or "Forget MIDI
   (CC 74)" when the control has a CC, when `bus.canLearn` (continuous and
   integer: `canLearn` = `mappingDef` + `learnableDef`). The menu opens when
   either kind of item exists, so an integer knob (octave) opens it for learn
-  only. ArrowUp / ArrowDown move between the items, Escape closes it.
+  only (a knob always opens the card; its items part is there when one exists). ArrowUp / ArrowDown move between the items, Escape closes it.
   Controls without an `auto` identity (the scope's knobs) offer neither.
 - **Learn mode.** `startLearn(owner, target, label)` sets the one learn
   target (a second "MIDI learn" replaces it), shows the hint "Move a knob on

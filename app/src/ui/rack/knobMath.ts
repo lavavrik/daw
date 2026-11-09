@@ -331,7 +331,9 @@ export function parseNoteName(text: string): number | null {
  *   ms   "20", "20 ms", "0.02 s"
  *   dB / st / oct / ct / :1 — the number, unit optional; "−" or "-" alike
  *   0..1 "45%" or "45" (percent); a decimal ≤ 1 ("0.3") is the raw value
- *   pan  "C", "L30", "R 100"; minimum labels ("−∞", "-inf", "Off")
+ *   pan  "C", "L30", "R 100", or the raw -1..1 ("-0.25", "-25%");
+ *        minimum labels ("−∞", "-inf", "Off"), also with the unit ("-inf dB")
+ *   -1..1 amounts (unitless, bipolar): "-0.5" or "-50%"
  *   note "E4", "c#3", "Db4", "Mi4", "sol3" (or the MIDI number) for a note param (root)
  * A bare number is read in the unit the readout currently shows (`shown`):
  * with "1.2 kHz" on screen, "2" means 2 kHz; with "12 ms", "30" means 30 ms.
@@ -348,8 +350,12 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
     return Number.isInteger(n) ? done(n) : null;
   }
   if (d.minLabel) {
+    // The label alone or with the param's unit after it ("-inf dB", "−∞ dB":
+    // what a dB field with its unit suffix invites).
+    const u = d.unit.toLowerCase();
+    const bare = u && t.endsWith(u) ? t.slice(0, -u.length).trimEnd() : t;
     const ml = minLabelText(d.minLabel).toLowerCase();
-    if (t === ml || t === d.minLabel.toLowerCase() || (d.minLabel === '-inf' && (t === '-∞' || t === '-inf' || t === 'inf'))) return d.min;
+    if (bare === ml || bare === d.minLabel.toLowerCase() || (d.minLabel === '-inf' && (bare === '-∞' || bare === '∞' || bare === '-inf' || bare === 'inf'))) return d.min;
   }
   if (d.name === 'pan' && d.unit === '') {
     if (t === 'c' || t === 'center' || t === 'centre') return 0;
@@ -388,8 +394,33 @@ export function parseValue(d: KnobDef, text: string, shown = ''): number | null 
         if (suf !== '') return null;
         return done(m[1].includes('.') && n <= 1 ? n : n / 100);
       }
+      // A bipolar amount (the attenuator's -1..1) reads "-0.5"; "-50%" is
+      // the same value, as on the unipolar percent params.
+      if (suf === '%' && !d.integer && d.min < 0) return done(n / 100);
       return suf === '' ? done(n) : null;
     default:
       return suf === '' || suf === d.unit.toLowerCase() ? done(n) : null;
   }
+}
+
+/**
+ * The precise-value popover's field (ui/ValuePopover.svelte): the readout
+ * split into the text to edit and the unit shown as the field's suffix.
+ * "1.2 kHz" -> "1.2" + "kHz", "-6.0 dB" -> "-6.0" + "dB" (ASCII minus, easy
+ * to edit), "45%" -> "45" + "%", "4:1" -> "4" + ":1". A readout with no unit
+ * after a number (a note name "C4", pan "L50", "−∞", "off", an integer) is
+ * the text whole; its suffix is the unit the maximum reads in, so a bare
+ * number still has a visible unit ("−∞" + "dB", "off" + "s"), and none when
+ * the maximum has none either (pan, notes, plain counts). parseValue reads
+ * the text back with the readout as `shown`: a bare "2" next to "kHz" is 2 kHz.
+ */
+export function entryParts(d: KnobDef, v: number): { text: string; unit: string } {
+  const split = (s: string) => {
+    const a = s.replace(/−/g, '-');
+    const m = /^([+-]?(?:\d+\.?\d*|\.\d+)) ?([^\d\s].*)$/.exec(a);
+    return m ? { text: m[1], unit: m[2] } : { text: a, unit: '' };
+  };
+  const own = split(formatValue(d, v));
+  if (own.unit) return own;
+  return { text: own.text, unit: split(formatValue(d, d.max)).unit };
 }

@@ -246,7 +246,8 @@ of these class names keeps its own box when it sets its own padding and font.
   tray), not the board's 30 px: the header must stay one row under 40 px at
   1280 px beside the pattern transport (`layout.spec.ts`).
 - Menus come in two looks: a light one like the open select (`AutoMenu`,
-  the right-click Automate / MIDI learn menu: `--text`, dark text) and a
+  the floating right-click Automate / MIDI learn menu: `--text`, dark text;
+  knobs show its items inside the precise-entry card instead, below) and a
   `--panel` card with the lift for popovers with their own controls (the
   Rack's add-module menu, the piano roll's Examples, `InlineConfirm`). Both
   use `--r-menu` / `--r-md` and `--lift`.
@@ -425,3 +426,68 @@ tip. Timing and placement live in `ui/tooltip.ts` (pure, unit-tested).
 - **Hint line.** While hovered the `title` lives in `data-tip`, so
   `hintText` (bigTimer.ts) reads `title`, then `data-tip`, then `aria-label`.
   Anything else reading `title` of a hovered element must do the same.
+
+## Precise entry
+
+Plan 24: right-click a slider-like control (or press the ContextMenu key or
+Shift+F10 on it) for a small card that sets an exact value.
+`ui/ValuePopover.svelte` is the card, and its header documents the API.
+There is one card for the app, rendered by `App.svelte` next to `AutoMenu`.
+Callers call `openValuePopover`; opening another replaces the open one.
+
+- **Anatomy.** A `--panel` card with `--lift`, `--r-lg` (12 px) and 12 px
+  padding. It holds:
+  - the control's name (`.lbl`, uppercase, 10 px);
+  - a text field (`value-input`) with the value in display units and the
+    unit as a suffix inside its right end ("-6.0" + dB, "220" + ms, "C4");
+  - **Set** (`.btn.primary`, `value-set`; Enter does the same);
+  - a quiet **Reset** to the default (`.btn.quiet`, `value-reset`);
+  - the dim mono range hint "min … max".
+
+  Under a `--line` rule come the control's AutoMenu items: `AutoMenu` with
+  `inline`, which keeps `auto-ctl-menu`, `auto-ctl-automate`,
+  `auto-ctl-midi` and the arrow keys. With no items, the value part shows
+  alone.
+- **Text.** `knobMath.entryParts(def, v)` splits the readout into the field
+  text and the suffix, with an ASCII minus so the text is easy to edit. A
+  readout with no unit ("−∞", "off") borrows the unit its maximum reads in.
+  `parseValue(def, text, readout)` reads the text back:
+  - a bare number is in the unit shown, so "2" next to kHz is 2 kHz;
+  - it accepts "1.2k", "-6 dB", "C3", "50%", "L25", and "-inf" / "-∞" (also
+    followed by the unit);
+  - a bipolar unitless amount (pan, the attenuator) also takes "-0.25" or
+    "-25%".
+
+  The result is clamped, and an integer def rounds.
+- **Behaviour.**
+  - The field opens focused with its text selected.
+  - Set or Enter calls the caller's `apply` once, only when the value
+    changed. Knob passes its `change`, so the edit is one undo entry with
+    the knob's usual label. A field left as it opened changes nothing.
+  - Text that doesn't parse gets a `--rec` outline and "Not a value"
+    (`value-error`), and the card stays open.
+  - Esc, a press outside, a wheel outside or a resize closes the card with
+    no change.
+  - Focus returns to the control, except on an outside press, where the
+    press keeps its own focus.
+  - It closes on a wheel, not on every `scroll` event, because the
+    playhead's follow scrolls the timeline by itself.
+  - Keys in the card stop there (MenuBar's `keepKey`): Space presses a
+    button and never starts the song. Only Cmd and Ctrl chords go on, and
+    in the field the shortcuts already leave Cmd+Z to the text.
+- **Placement.** The card sits beside the pointer. Near the right or bottom
+  edge it flips to the pointer's other side, and it is clamped 8 px inside
+  the window. The keyboard opens it under the control.
+- **Layering.** `position: fixed`, z-index 60 (AutoMenu's), not the top
+  layer. The global tooltip is in the top layer, so tips for Set, Reset and
+  the items show above the card. A press or focus moving into the card
+  releases the control's own tip, so that tip never covers the field.
+- **Who uses it.** Every `Knob` variant (knob, slider, mech, vfader): the
+  rack, the mixer strips' knobs and the top bar's Master. The knob's own
+  click-the-readout typed entry stays.
+  - Plan 24 Task 2 moves the mixer `Fader`, the song `TrackVol` and the
+    step grid's native ranges onto it. Until then the Fader and TrackVol
+    keep the floating AutoMenu.
+  - A caller with no catalog param builds a `KnobDef`: label, min, max,
+    default, `integer`, unit, `curve: 'lin'`, `choices: []`, plus `name:
+    'pan'` for an L/C/R readout.

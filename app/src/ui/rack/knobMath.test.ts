@@ -4,7 +4,7 @@ import type { ParamDef } from '../../audio/catalog';
 import { MIX_PARAMS, mixParam } from '../../audio/mixerCatalog';
 import { FADER_LAW, faderDb, faderKeyStep, faderPos, formatDb } from '../mixer/mixMath';
 import {
-  CLICK_SLOP_PX, DRAG_PX, MECH_DIAL_PX, MECH_TICKS, isClickTravel, dragPos, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY,
+  CLICK_SLOP_PX, DRAG_PX, MECH_DIAL_PX, MECH_TICKS, isClickTravel, dragPos, entryParts, fillSpan, formatValue, fromPos, keyStep, parseValue, sliderDrag, sliderPosFromX, sliderPosFromY,
   toPos, widestValue, ZERO_ZONE,
 } from './knobMath';
 
@@ -390,6 +390,70 @@ describe('parseValue (typed entry)', () => {
       for (const pos of [0, 0.13, 0.5, 0.77, 1]) {
         const v = fromPos(d, pos);
         const back = parseValue(d, formatValue(d, v), formatValue(d, v));
+        expect(back, `${d.label} ${formatValue(d, v)}`).not.toBeNull();
+        expect(formatValue(d, back!)).toBe(formatValue(d, v));
+      }
+    }
+  });
+});
+
+describe('parseValue: the precise popover\'s inputs (plan 24)', () => {
+  const amount = param('attenuator', 'amount'); // -1..1 lin, unitless
+  it('the spec\'s examples: "1.2k", "-6 dB", "C3", "50%"', () => {
+    expect(parseValue(cutoff, '1.2k')).toBeCloseTo(1200);
+    expect(parseValue(mixParam('fader'), '-6 dB')).toBe(-6);
+    expect(parseValue(reso, '50%')).toBeCloseTo(0.5);
+    const root = param('sample_player', 'root');
+    expect(parseValue(root, 'C3')).toBe(48);
+  });
+  it('the minimum label with the unit after it ("-inf dB", "−∞ dB")', () => {
+    const fader = mixParam('fader');
+    for (const t of ['-inf', '-∞', '−∞', '-inf dB', '−∞ dB', '-∞dB', ' -INF DB ']) expect(parseValue(fader, t), t).toBe(fader.min);
+    expect(parseValue(mixParam('send_a'), 'Off dB')).toBe(mixParam('send_a').min);
+    expect(parseValue(fader, '-inf Hz')).toBeNull();
+  });
+  it('a bipolar amount takes percent too; pan takes the raw -1..1 and percent', () => {
+    expect(parseValue(amount, '-0.5')).toBe(-0.5);
+    expect(parseValue(amount, '-50%')).toBe(-0.5);
+    expect(parseValue(amount, '250%')).toBe(1); // clamped
+    expect(parseValue(mixParam('pan'), '-0.25')).toBe(-0.25);
+    expect(parseValue(mixParam('pan'), '-25%')).toBe(-0.25);
+    expect(parseValue(mixParam('pan'), 'L25')).toBe(-0.25);
+    // Not on integer params, nor unipolar ones past 0..1 (ambiguous).
+    expect(parseValue(octave, '50%')).toBeNull();
+  });
+  it('the suffix-less field text reads in the unit beside it', () => {
+    // What the popover does: entryParts' text, parsed with the readout as `shown`.
+    expect(parseValue(cutoff, '2', formatValue(cutoff, 1200))).toBe(2000);
+    expect(parseValue(attack, '15', formatValue(attack, 0.005))).toBeCloseTo(0.015);
+    expect(parseValue(mixParam('fader'), '-6.0', formatValue(mixParam('fader'), 0))).toBe(-6);
+  });
+});
+
+describe('entryParts (the popover field: text + unit suffix)', () => {
+  it('splits the number from its unit, with an ASCII minus', () => {
+    expect(entryParts(cutoff, 1200)).toEqual({ text: '1.2', unit: 'kHz' });
+    expect(entryParts(cutoff, 300)).toEqual({ text: '300', unit: 'Hz' });
+    expect(entryParts(attack, 0.22)).toEqual({ text: '220', unit: 'ms' });
+    expect(entryParts(attack, 1.5)).toEqual({ text: '1.5', unit: 's' });
+    expect(entryParts(mixParam('fader'), -6)).toEqual({ text: '-6.0', unit: 'dB' });
+    expect(entryParts(mixParam('eq_low'), 3)).toEqual({ text: '+3.0', unit: 'dB' });
+    expect(entryParts(reso, 0.45)).toEqual({ text: '45', unit: '%' });
+    expect(entryParts(mixParam('comp_ratio'), 4)).toEqual({ text: '4', unit: ':1' });
+    expect(entryParts(octave, -2)).toEqual({ text: '-2', unit: 'oct' });
+  });
+  it('no unit in the readout: the text whole, the maximum\'s unit as the suffix', () => {
+    expect(entryParts(mixParam('fader'), -60)).toEqual({ text: '-∞', unit: 'dB' });
+    expect(entryParts(glide, 0)).toEqual({ text: 'off', unit: 's' });
+    expect(entryParts(mixParam('pan'), -0.5)).toEqual({ text: 'L50', unit: '' });
+    expect(entryParts(mixParam('pan'), 0)).toEqual({ text: 'C', unit: '' });
+    expect(entryParts(param('sample_player', 'root'), 60)).toEqual({ text: 'C4', unit: '' });
+  });
+  it('round-trips: the text parsed back (readout as shown) gives the same readout', () => {
+    for (const d of [cutoff, glide, reso, octave, attack, mixParam('fader'), mixParam('send_a'), mixParam('pan'), mixParam('comp_ratio')]) {
+      for (const pos of [0, 0.13, 0.5, 0.77, 1]) {
+        const v = fromPos(d, pos);
+        const back = parseValue(d, entryParts(d, v).text, formatValue(d, v));
         expect(back, `${d.label} ${formatValue(d, v)}`).not.toBeNull();
         expect(formatValue(d, back!)).toBe(formatValue(d, v));
       }

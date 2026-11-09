@@ -35,7 +35,9 @@ import { learnableDef } from '../state/midiMap';
 import { accepts } from '../state/mixer-actions';
 import { validatePatch } from '../state/patches';
 import type { Patch } from '../state/patches';
-import { DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, TRACK_COLORS } from '../state/project.svelte';
+import {
+  DEFAULT_LOOP_END, DEFAULT_PATTERN_BARS, LIBRARY_NAME_MAX, MAX_LIBRARY_PATTERNS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, TRACK_COLORS,
+} from '../state/project.svelte';
 import { CLIP_GAIN_MAX_DB, CLIP_GAIN_MIN_DB, MAX_SAVED_OFFSET } from '../state/audio-actions';
 import { migrate } from './migrate';
 
@@ -522,7 +524,10 @@ function readNotePattern(r: Reader, x: Record<string, unknown>, w: string): Omit
  * warning; inside a kept entry the usual rules apply (wrong type ->
  * default, out of range -> clamped, a malformed note dropped). Drum rows
  * are positional (a load falls back to the row index), so a malformed row
- * becomes an empty one, as in readRows.
+ * becomes an empty one, as in readRows. Names follow the app's rules
+ * (state/pattern-library.ts): trimmed to LIBRARY_NAME_MAX ("Pattern" if
+ * that leaves nothing) and unique (a repeat is numbered "X 2", …), each
+ * change with a warning; at most MAX_LIBRARY_PATTERNS entries are kept.
  */
 function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
   if (v === undefined) return [];
@@ -531,7 +536,22 @@ function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
     return [];
   }
   const out: LibraryPatternJson[] = [];
+  const names = new Set<string>();
+  /** The entry's name, trimmed and unique (the first one keeps it). */
+  const nameOf = (raw: string) => {
+    let base = raw.trim().slice(0, LIBRARY_NAME_MAX);
+    if (!base) base = 'Pattern';
+    let name = base;
+    for (let n = 2; names.has(name); n++) name = `${base} ${n}`;
+    if (name !== raw) r.warn(`Library pattern "${raw}" renamed "${name}"`);
+    names.add(name);
+    return name;
+  };
   for (const x of v) {
+    if (out.length >= MAX_LIBRARY_PATTERNS) {
+      r.warn(`Pattern library: only the first ${MAX_LIBRARY_PATTERNS} patterns were kept`);
+      break;
+    }
     const kind = isObj(x) ? x.kind : undefined;
     const list = isObj(x) ? (kind === 'drum' ? x.rows : x.notes) : undefined;
     if (!isObj(x) || (kind !== 'drum' && kind !== 'synth') || typeof x.name !== 'string' || !Array.isArray(list)) {
@@ -539,6 +559,7 @@ function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
       continue;
     }
     const w = `Library pattern "${x.name}"`;
+    const name = nameOf(x.name);
     if (kind === 'drum') {
       let stepCount: 16 | 32 | 64 = 16;
       if (x.stepCount === 16 || x.stepCount === 32 || x.stepCount === 64) stepCount = x.stepCount;
@@ -560,7 +581,7 @@ function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
         const name = r.str(row.name, `Row ${i + 1}`, `${rw} name`);
         return sampleName === undefined ? { name, steps } : { name, sampleName, steps };
       });
-      out.push({ kind, name: x.name, stepCount, swing: r.num(x.swing, 0, 0, 1, `${w} swing`), rows });
+      out.push({ kind, name, stepCount, swing: r.num(x.swing, 0, 0, 1, `${w} swing`), rows });
     } else {
       if (list.length > MAX_NOTES) r.warn(`${w}: only the first ${MAX_NOTES} notes were kept`);
       const notes: { pitch: number; vel: number; start: number; len: number }[] = [];
@@ -576,7 +597,7 @@ function readLibrary(r: Reader, v: unknown): LibraryPatternJson[] {
           len: r.num(n.len, 240, 1, MAX_NOTE_LEN, `${w} note length`, true),
         });
       }
-      out.push({ kind, name: x.name, bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true), notes });
+      out.push({ kind, name, bars: r.num(x.bars, DEFAULT_PATTERN_BARS, 1, MAX_PATTERN_BARS, `${w} bars`, true), notes });
     }
   }
   return out;

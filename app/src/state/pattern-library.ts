@@ -39,7 +39,7 @@ import { setStepCount, setSwing } from './actions';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
 import { freeName, newPattern, patternOf, renamePattern, sendNote, setPatternBars } from './pattern-actions';
-import { MAX_STEPS, currentPattern, isPatternTrack } from './project.svelte';
+import { LIBRARY_NAME_MAX, MAX_LIBRARY_PATTERNS, MAX_STEPS, currentPattern, isPatternTrack } from './project.svelte';
 import type { DrumPattern, DrumTrack, LibraryPattern, NotePatternState, PatternTrack, Project, SynthTrack } from './project.svelte';
 
 // ---- saved form ---------------------------------------------------------------
@@ -84,8 +84,10 @@ export function freeLibraryName(lib: LibraryPattern[], base: string, except?: st
   return name();
 }
 
-/** Longest entry name (the name fields' maxlength; room for a " 2"). */
-export const LIBRARY_NAME_MAX = 60;
+export { LIBRARY_NAME_MAX, MAX_LIBRARY_PATTERNS };
+
+/** Why Save is refused when the library is full. */
+export const LIBRARY_FULL_TEXT = `The pattern library holds at most ${MAX_LIBRARY_PATTERNS} patterns`;
 
 /** What Save proposes: "<track> · <pattern>". */
 export const defaultLibraryName = (t: PatternTrack, patternName: string) => `${t.name} · ${patternName}`;
@@ -101,11 +103,13 @@ export const kindText = (kind: 'drum' | 'synth') => `${kind} pattern`;
 /**
  * Where each of `rows` (an entry's) lands in a track whose rows have the
  * sample file names `target` (null: no sample): a target row index, or
- * null (dropped). `dropped`: how many rows WITH steps found no place. See
- * DRUM ROW MAPPING above. Pure.
+ * null (dropped). `dropped`: how many rows WITH steps found no place. A row
+ * "has steps" when one of its first `stepCount` steps is on: steps past the
+ * pattern's length are kept (and copied) but neither claim a row by index
+ * nor count as dropped. See DRUM ROW MAPPING above. Pure.
  */
 export function mapLibraryRows(
-  rows: { sampleName?: string; steps: number[] }[], target: (string | null)[],
+  rows: { sampleName?: string; steps: number[] }[], target: (string | null)[], stepCount = MAX_STEPS,
 ): { to: (number | null)[]; dropped: number } {
   const to: (number | null)[] = rows.map(() => null);
   const taken = new Set<number>();
@@ -119,7 +123,7 @@ export function mapLibraryRows(
   });
   let dropped = 0;
   rows.forEach((r, i) => {
-    if (to[i] !== null || !r.steps.some((v) => v > 0)) return;
+    if (to[i] !== null || !r.steps.slice(0, stepCount).some((v) => v > 0)) return;
     if (i < target.length && !taken.has(i)) {
       to[i] = i;
       taken.add(i);
@@ -137,14 +141,14 @@ const rowSampleNames = (p: Project, t: DrumTrack) =>
 /**
  * Saves a copy of pattern `patternId` of track `trackId` as a new library
  * entry named `name` (trimmed; numbered when taken). Null (nothing changed)
- * for an empty name, an unknown track or pattern.
+ * for an empty name, an unknown track or pattern, or a full library.
  */
 export function savePatternToLibrary(p: Project, trackId: string, patternId: string, name: string): LibraryPattern | null {
   return edit(p, 'Save pattern to library', () => {
     const t = p.tracks.find((x) => x.id === trackId);
     const pat = t && isPatternTrack(t) ? patternOf(t, patternId) : null;
     const base = name.trim().slice(0, LIBRARY_NAME_MAX);
-    if (!t || !pat || !base) return null;
+    if (!t || !pat || !base || p.patternLibrary.length >= MAX_LIBRARY_PATTERNS) return null;
     const id = crypto.randomUUID();
     const entryName = freeLibraryName(p.patternLibrary, base);
     if (t.kind === 'drum') {
@@ -169,6 +173,9 @@ export function savePatternToLibrary(p: Project, trackId: string, patternId: str
     return p.patternLibrary[p.patternLibrary.length - 1];
   });
 }
+
+/** Why nothing can be saved to the library now (null: it can). */
+export const saveBlocked = (p: Project): string | null => (p.patternLibrary.length >= MAX_LIBRARY_PATTERNS ? LIBRARY_FULL_TEXT : null);
 
 /** Why entry `e` can't be loaded into `t` now (null: it can). */
 export function loadBlocked(t: PatternTrack | null, e: LibraryPattern): string | null {
@@ -208,7 +215,7 @@ function fillDrum(p: Project, sink: CommandSink, t: DrumTrack, e: Extract<Librar
   setStepCount(p, sink, t.id, e.stepCount);
   setSwing(p, sink, t.id, e.swing);
   const pat = currentPattern(t);
-  const { to, dropped } = mapLibraryRows(e.rows, rowSampleNames(p, t));
+  const { to, dropped } = mapLibraryRows(e.rows, rowSampleNames(p, t), e.stepCount);
   e.rows.forEach((r, i) => {
     const row = to[i];
     if (row === null) return;

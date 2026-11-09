@@ -55,8 +55,9 @@
   // An item that can't run now is INERT, not disabled (ui/inertItem.ts):
   // aria-disabled, still focusable and in the arrow-key list, its reason
   // read out through aria-describedby (and shown as its tooltip).
-  // Keys typed on a menu button or in an open menu stay there (keepKey):
-  // only Escape and Cmd / Ctrl chords reach the global shortcuts.
+  // While a menu is open, keys typed in it or on a menu button stay there
+  // (keepKey): only Escape and Cmd / Ctrl chords reach the global shortcuts.
+  // A closed menu button keeps only its arrow keys.
   //
   // ESC LAYERING (Review focus 2). The Esc listener is on `document`
   // (bubble): it runs after any control inside (an Esc a field used itself,
@@ -88,7 +89,7 @@
   import { discardWarning } from '../project/discard';
   import { runExport } from '../export/exportFlow';
   import { banners, flashHint } from '../state/banners.svelte';
-  import { LIBRARY_NAME_MAX, defaultLibraryName, savePatternToLibrary } from '../state/pattern-library';
+  import { LIBRARY_NAME_MAX, defaultLibraryName, saveBlocked, savePatternToLibrary } from '../state/pattern-library';
   import { tabFor } from '../input/shortcuts';
   import type { PanelTab } from '../input/shortcuts';
   import { IS_MAC, formatKeys } from '../input/shortcutList';
@@ -247,7 +248,13 @@
   const neighbour = (m: MenuName, d: 1 | -1) => MENUS[(MENUS.indexOf(m) + d + MENUS.length) % MENUS.length];
 
   function buttonKey(e: KeyboardEvent, m: MenuName) {
-    keepKey(e);
+    // While a menu is open its keys stay with the menu bar (keepKey). On a
+    // CLOSED menu button only the keys it handles itself (the arrows) stop
+    // here: focus comes back to the button after every command, so Space,
+    // the piano keys, R, Z / X and Alt+digit must still reach the global
+    // shortcuts (Space never also presses the button: the shortcut prevents it).
+    if (open) keepKey(e);
+    if (e.key.startsWith('Arrow')) e.stopPropagation();
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (open !== m) show(m);
@@ -260,8 +267,8 @@
     }
   }
   /**
-   * Keys typed on a menu button or inside an open menu stay there: Space
-   * presses the focused item (never also starts the song), letters never
+   * Keys typed inside an open menu (or on a menu button while one is open)
+   * stay there: Space presses the focused item (never also starts the song), letters never
    * play notes, arm recording or move the octave (the global shortcuts
    * listen on window). Escape still bubbles to the document listener below
    * (it closes the menu), and Cmd / Ctrl chords (⌘S, ⌘O, ⌘Z) still work.
@@ -416,6 +423,8 @@
   // The library: Save asks for a name (as Rename); Load is a submenu.
   let saving = $state(false);
   let saveInput = $state<HTMLInputElement | null>(null);
+  /** Why Save to project library… can't run (no pattern track, a full library). */
+  const saveWhy = $derived(ptrack ? saveBlocked(p) : NO_PATTERNS);
   let libOpen = $state(false);
   let libBtn = $state<HTMLButtonElement | null>(null);
   let libSub = $state<HTMLElement | null>(null);
@@ -612,7 +621,7 @@
               <Icon icon={Trash} /><span class="l">Delete</span>
             </button>
             <hr />
-            <button class="it" data-testid="menu-pattern-save" use:inertItem={ptrack ? null : NO_PATTERNS} title={ptrack ? 'Store a copy of this pattern in the project' : NO_PATTERNS} onclick={() => void startSave()}>
+            <button class="it" data-testid="menu-pattern-save" use:inertItem={saveWhy} title={saveWhy ?? 'Store a copy of this pattern in the project'} onclick={() => void startSave()}>
               <Icon icon={FloppyDisk} /><span class="l">Save to project library…</span>
             </button>
             <div class="subwrap">

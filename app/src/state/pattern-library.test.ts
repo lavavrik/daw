@@ -66,6 +66,11 @@ describe('mapLibraryRows', () => {
     expect(mapLibraryRows([row('q', false), row(undefined, true)], ['z', 'y'])).toEqual({ to: [null, 1], dropped: 0 });
     // No samples on either side: by index.
     expect(mapLibraryRows([row(undefined, true)], [null])).toEqual({ to: [0], dropped: 0 });
+    // Only the first stepCount steps count as steps: a row whose hits are all past the length
+    // claims no row by index and is not counted as dropped (it is still copied where it maps).
+    const late = { sampleName: 'q', steps: [0, 0, 0, 0, 100] };
+    expect(mapLibraryRows([late], ['z'], 4)).toEqual({ to: [null], dropped: 0 });
+    expect(mapLibraryRows([late], ['z'], 16)).toEqual({ to: [0], dropped: 0 });
     // Two rows with one sample: the first free one each.
     expect(mapLibraryRows([row('a', true), row('a', true)], ['a', 'a'])).toEqual({ to: [0, 1], dropped: 0 });
   });

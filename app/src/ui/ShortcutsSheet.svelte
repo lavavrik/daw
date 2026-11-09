@@ -39,7 +39,8 @@
   }
   function key(e: KeyboardEvent) {
     e.stopPropagation();
-    if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'o')) e.preventDefault();
+    // By code, as shortcuts.ts does: the physical key, whatever the layout.
+    if ((e.metaKey || e.ctrlKey) && (e.code === 'KeyS' || e.code === 'KeyO')) e.preventDefault();
     if (e.key === 'Escape') {
       e.preventDefault();
       close();

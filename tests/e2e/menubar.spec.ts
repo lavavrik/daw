@@ -177,13 +177,9 @@ test('Options ▸ Keyboard: octave − / + change the octave; Keys play names th
   await page.getByTestId('menu-octave-down').click();
   await page.getByTestId('menu-octave-down').click();
   await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct - 1}`);
-  // The Z / X keys play on the new octave (the shortcuts were told). Not
-  // while the focus is on the menu button Esc returned it to: keys typed
-  // there stay with the menu bar.
+  // The Z / X keys play on the new octave (the shortcuts were told), also
+  // with the focus on the menu button Esc returned it to.
   await page.keyboard.press('Escape');
-  await page.keyboard.press('KeyX');
-  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct - 1}`);
-  await page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await page.keyboard.press('KeyX');
   await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct}`);
 });
@@ -254,15 +250,25 @@ test('keys typed in an open menu stay there: Space presses the item, not the son
   await page.keyboard.press('KeyZ');
   await expect(page.getByTestId('rec-button')).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByTestId('menu-octave')).toHaveText(octave!);
-  // On a closed menu's button too.
-  await page.keyboard.press('Escape');
-  await expect(btn(page, 'Options')).toBeFocused();
-  await page.keyboard.press('Space'); // presses the button: Options opens
-  await expect(btn(page, 'Options')).toHaveAttribute('aria-expanded', 'true');
-  expect(await daw(page, (d) => d.project.playing)).toBe(false);
   // Escape still closes it (it reaches the document listener).
   await page.keyboard.press('Escape');
   await expect(panel(page, 'Options')).toBeHidden();
+  await expect(btn(page, 'Options')).toBeFocused();
+});
+
+test('after a command chosen with the mouse, the shortcuts work again: Space starts the song, X moves the octave', async ({ page }) => {
+  await start(page);
+  await openMenu(page, 'View');
+  await page.getByTestId('menu-view-mixer').click(); // closes the menu, the focus back on View
+  await expect(btn(page, 'View')).toBeFocused();
+  const oct = Number((await page.getByTestId('octave').textContent())!.replace(/\D/g, ''));
+  await page.keyboard.press('KeyX');
+  await expect(page.getByTestId('octave')).toHaveText(`Oct ${oct + 1}`);
+  await page.keyboard.press('Space');
+  await expect.poll(() => daw(page, (d) => d.project.playing)).toBe(true);
+  await expect(panel(page, 'View')).toBeHidden(); // Space did not also press the button
+  await page.keyboard.press('Space');
+  await expect.poll(() => daw(page, (d) => d.project.playing)).toBe(false);
 });
 
 test('an item that cannot run is inert, not disabled: focusable, with its reason as description', async ({ page }) => {

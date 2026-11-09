@@ -300,7 +300,10 @@ notice banner after the load (all of them in the console):
   and 1024 notes kept; a malformed row becomes an empty "Row N" (rows are
   positional: a load falls back to the index); a `sampleName` that is not
   text → none; a malformed note dropped. A `patternLibrary` that is not a
-  list is emptied.
+  list is emptied. Names follow the app's rules: trimmed, at most 60
+  characters ("Pattern" when nothing is left), unique (a repeat becomes
+  "X 2", …), each change with a warning; at most 256 entries are kept (a
+  save into a full library is refused).
 
 ## Load order (`loadProject`)
 

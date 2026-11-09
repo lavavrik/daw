@@ -32,7 +32,7 @@
   import FolderOpen from 'phosphor-svelte/lib/FolderOpen';
   import LibraryList from './LibraryList.svelte';
   import { flashHint } from '../state/banners.svelte';
-  import { LIBRARY_NAME_MAX, defaultLibraryName, savePatternToLibrary } from '../state/pattern-library';
+  import { LIBRARY_NAME_MAX, defaultLibraryName, saveBlocked, savePatternToLibrary } from '../state/pattern-library';
   import {
     PATTERNS_FULL_TEXT, deletePattern, duplicatePattern, newPattern, renamePattern, selectPattern,
   } from '../state/pattern-actions';
@@ -90,12 +90,20 @@
       e.preventDefault();
       const entry = savePatternToLibrary(p, track.id, cur.id, draft);
       if (!entry) return void saveInput?.focus(); // empty: rejected, keep editing
-      saving = false;
+      void endSave();
       flashHint(`Saved “${entry.name}” to the pattern library`);
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      saving = false;
+      void endSave();
     }
+  }
+  let saveBtn = $state<HTMLButtonElement | null>(null);
+  const saveWhy = $derived(saveBlocked(p));
+  /** Back from the name field to the Save button (Enter or Esc; not a blur, which moved the focus already). */
+  async function endSave() {
+    saving = false;
+    await tick();
+    saveBtn?.focus();
   }
 
   let libOpen = $state(false);
@@ -105,7 +113,8 @@
     libOpen = !libOpen;
     if (!libOpen) return;
     await tick();
-    pop?.querySelector<HTMLElement>('button:not([aria-disabled="true"])')?.focus();
+    // The first usable button; an empty (or all-inert) list: the list itself, so Esc still reaches popKey.
+    (pop?.querySelector<HTMLElement>('button:not([aria-disabled="true"])') ?? pop?.querySelector<HTMLElement>('[data-testid="pattern-library"]'))?.focus();
   }
   function closeLib(refocus: boolean) {
     libOpen = false;
@@ -164,7 +173,8 @@
   <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}><Icon icon={PencilSimple} /> Rename</button>
   <button class="btn" data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
     onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /> Delete</button>
-  <button class="btn ic" data-testid="pattern-save" aria-label="Save to library" title="Save a copy of this pattern to the project's pattern library"
+  <button class="btn ic" data-testid="pattern-save" bind:this={saveBtn} aria-label="Save to library" disabled={!!saveWhy}
+    title={saveWhy ?? "Save a copy of this pattern to the project's pattern library"}
     onmousedown={(e) => e.preventDefault()} onclick={startSave}><Icon icon={FloppyDisk} /></button>
   <span class="lib">
     <button class="btn ic" data-testid="pattern-load" bind:this={loadBtn} aria-label="Load from library" aria-expanded={libOpen}

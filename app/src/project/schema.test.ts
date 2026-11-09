@@ -421,5 +421,15 @@ describe('project schema', () => {
     const r2 = ok(validate({ ...base, patternLibrary: { kind: 'drum' } }));
     expect(r2.project.patternLibrary).toEqual([]);
     expect(r2.warnings.join('\n')).toMatch(/Pattern library/);
+
+    // Names as the app makes them: trimmed, at most 60 characters, never empty, unique.
+    const syn = (name: string) => ({ kind: 'synth', name, bars: 1, notes: [] });
+    const r3 = ok(validate({ ...base, patternLibrary: [syn('A'), syn(' A '), syn('   '), syn('x'.repeat(70)), syn('A')] }));
+    expect(r3.project.patternLibrary.map((e) => e.name)).toEqual(['A', 'A 2', 'Pattern', 'x'.repeat(60), 'A 3']);
+    expect(r3.warnings.filter((x) => /renamed/.test(x))).toHaveLength(4);
+    // At most 256 entries.
+    const r4 = ok(validate({ ...base, patternLibrary: Array.from({ length: 300 }, (_, i) => syn(`P${i}`)) }));
+    expect(r4.project.patternLibrary).toHaveLength(256);
+    expect(r4.warnings.join('\n')).toMatch(/only the first 256/);
   });
 });

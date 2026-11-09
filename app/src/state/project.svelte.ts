@@ -129,6 +129,11 @@ export interface LibraryNote {
   len: number;
 }
 
+/** Most entries a pattern library holds (a save beyond it is refused; validate keeps the first ones). */
+export const MAX_LIBRARY_PATTERNS = 256;
+/** Longest library entry name (the name fields' maxlength; validate trims longer ones). */
+export const LIBRARY_NAME_MAX = 60;
+
 /**
  * A pattern saved in the project's pattern library (plan 21 Task 4; edit
  * only through state/pattern-library.ts). A copy BY VALUE, not a reference:

@@ -182,7 +182,8 @@ Patterns ▸ *Save to project library…* / *Load from library ▸* (a submenu,
   the target row with the **same index** if that one is still free, else
   nowhere: its steps are dropped and the UI flashes "*N* rows not in this
   kit". A row without steps maps by name only (it never takes an index
-  another row needs). Row names are not compared: they are labels the user
+  another row needs); "steps" means steps within the entry's step count
+  (hits past it are copied where the row lands but claim nothing). Row names are not compared: they are labels the user
   may change; the sample is what plays. So a kit with reordered, deleted or
   added rows gets every step on the same sound, and a kit of other sounds
   gets them by position.

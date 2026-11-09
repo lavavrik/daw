@@ -175,6 +175,27 @@ test('library entries are renamed and deleted from the submenu, one undo entry e
   expect(await daw(page, (d) => d.project.patternLibrary.map((e: Any) => e.name))).toEqual(['Groove']);
 });
 
+test('header: an empty library popover still closes on Esc; after a save the focus is back on Save', async ({ page }) => {
+  await start(page);
+  const load = page.getByTestId('pattern-load');
+  await load.click();
+  const pop = page.getByTestId('pattern-library-pop');
+  await expect(pop.getByTestId('library-empty')).toBeVisible();
+  await expect(pop.getByTestId('pattern-library')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(pop).toBeHidden();
+  await expect(load).toBeFocused();
+
+  const save = page.getByTestId('pattern-save');
+  await save.click();
+  await page.getByTestId('pattern-save-input').press('Enter');
+  await expect(save).toBeFocused();
+  await save.click();
+  await page.getByTestId('pattern-save-input').press('Escape');
+  await expect(save).toBeFocused();
+  expect(await daw(page, (d) => d.project.patternLibrary.length)).toBe(1);
+});
+
 test('keyboard: → opens the library submenu on its first entry, ← goes back', async ({ page }) => {
   await start(page);
   await page.getByTestId('pattern-save').click();

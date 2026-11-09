@@ -957,7 +957,7 @@
     {/if}
     <div class="exwrap">
       <button data-testid="examples-menu" bind:this={exBtn} aria-haspopup="true" aria-expanded={exOpen}
-        title="Example rolls for the house patches" onclick={toggleExamples}><Icon icon={BookOpen} /> Examples ▾</button>
+        title="Example rolls for the house patches" onclick={toggleExamples}><Icon icon={BookOpen} /> Examples</button>
       {#if exOpen}
         <!-- A plain popover (like the Rack add-menu's container, minus role=menu: its
              children are headers and rows, not only menuitems). The container takes
@@ -1025,7 +1025,8 @@
   .bar button:hover:not(:disabled) { filter: brightness(1.08); }
   .bar button:disabled { opacity: 0.45; cursor: not-allowed; }
   .bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .exwrap { position: relative; }
+  /* flex, not block: a block around the inline-flex button adds a line-box strut (+2 px toolbar). */
+  .exwrap { position: relative; display: flex; }
   /* The examples popover: a --panel card with the lift, like the Rack's add menu. */
   .exmenu {
     box-sizing: border-box; position: absolute; z-index: 10; top: calc(100% + 6px); left: 0;

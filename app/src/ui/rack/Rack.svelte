@@ -74,6 +74,19 @@
   // spots only (coalesced, history/sweep.ts) and announce where the module
   // went; Tidy drops every pos.
   //
+  // Cables under a hovered panel (plan 22 final fix D; the owner: "when
+  // hovering over the patch, can we put cables underneath it?"): while the
+  // pointer is over a panel, or focus is inside it (`want`), that panel rises
+  // above the cable layer (`raised` -> ModulePanel's `raised`, z 5). Its OWN
+  // cables are drawn by a second SVG above it (`.cables.own`, z 7; hidden in
+  // the main one, which keeps every cable in track order), so what is
+  // plugged into it stays visible; the other cables stay under it. The change fades over RAISE_MS: a "veil" SVG (z 6) the size of
+  // the panel redraws the foreign cables over it and fades out on hover
+  // (and back in on leave, the panel staying raised until it has), so the
+  // cables seem to sink under the panel. prefers-reduced-motion: no veil, no
+  // delay. A cable drag or a module drag lowers it at once: every cable on
+  // top, as before.
+  //
   // Cables: the SVG has `pointer-events: none` everywhere, so it never steals
   // clicks from knobs. Cables are grabbed by their INPUT jack instead (VCV
   // style): pressing a connected input lifts that cable's plug and carries
@@ -606,12 +619,73 @@
       .filter((c) => !(drag?.carry && drag.carry.m === c.to.m && drag.carry.port === c.to.port))
       .map((c) => ({
         id: key(c.to.m, 'in', c.to.port),
+        /** The two modules it connects (raising a panel lifts its own cables with it). */
+        from: c.from.m,
+        to: c.to.m,
         a: pos[key(c.from.m, 'out', c.from.port)],
         b: pos[key(c.to.m, 'in', c.to.port)],
         color: colorOf(c.from.m, 'out', c.from.port),
       }))
       .filter((c) => c.a && c.b),
   );
+
+  // ---- a hovered / focused panel draws over the other cables (final fix D) ----
+  /** The fade (ms) of the cables sinking under a raised panel, and back. */
+  const RAISE_MS = 120;
+  /** The panel under the pointer, and the one focus is inside (`.content`'s pointerover / focusin). */
+  let hoverIdx = $state<number | null>(null);
+  let focusIdx = $state<number | null>(null);
+  /** The panel that should be raised: none during a cable or module drag (every cable on top, as before). */
+  const want = $derived(drag || mdrag ? null : (hoverIdx ?? focusIdx));
+  /** The raised panel; `leaving` while the veil fades back in (RAISE_MS), then null. */
+  let raised = $state<{ idx: number; leaving: boolean } | null>(null);
+  let raiseTimer: ReturnType<typeof setTimeout> | undefined;
+  const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  $effect(() => {
+    const w = want;
+    untrack(() => {
+      clearTimeout(raiseTimer);
+      if (w !== null) {
+        if (raised?.idx !== w || raised.leaving) raised = { idx: w, leaving: false };
+        return;
+      }
+      if (!raised) return;
+      if (drag || mdrag || reducedMotion()) {
+        raised = null;
+        return;
+      }
+      if (!raised.leaving) raised = { idx: raised.idx, leaving: true };
+      raiseTimer = setTimeout(() => (raised = null), RAISE_MS);
+    });
+  });
+  onDestroy(() => clearTimeout(raiseTimer));
+  /** The module idx of the panel `t` is in, or null. */
+  function panelOf(t: EventTarget | null): number | null {
+    const el = t instanceof Element ? t.closest<HTMLElement>('.mech-panel[data-testid]') : null;
+    const m = el && /^module-(\d+)$/.exec(el.dataset.testid ?? '');
+    return m ? Number(m[1]) : null;
+  }
+  function focusOut(e: FocusEvent) {
+    // Focus moving to another element of the same panel keeps it (its focusin sets the same idx).
+    if (panelOf(e.relatedTarget) === null) focusIdx = null;
+  }
+  /**
+   * The raised panel's box (`.content` px) and the cables split for it:
+   * `under` (every cable not plugged into it: the main SVG, under the panel,
+   * and the veil) and `own` (`mine`: the overlay above it; the main SVG keeps
+   * them hidden). null: nothing raised (or not laid out yet: the CSS flow).
+   */
+  const lift = $derived.by(() => {
+    const at = raised && geometry?.at.get(raised.idx);
+    const w = raised && dims.get(raised.idx)?.w;
+    if (!raised || !at || !w) return null;
+    const idx = raised.idx;
+    const mine = (c: { from: number; to: number }) => c.from === idx || c.to === idx;
+    return {
+      idx, leaving: raised.leaving, left: at.left, top: at.top, w, h: at.height, mine,
+      under: drawn.filter((c) => !mine(c)), own: drawn.filter(mine),
+    };
+  });
   const dragA = $derived(drag ? pos[key(drag.fixed.m, drag.fixed.dir, drag.fixed.port)] : null);
   /**
    * The SVG (absolutely positioned inside the scrolled `.content`, so it
@@ -1172,9 +1246,13 @@
   <!-- Keyboard patching / module move status (screen readers; the picked jack is ringed). -->
   <p class="sr-only" data-testid="jack-status" aria-live="polite">{pickedText || rackStatus}</p>
   <div class="rail" data-testid="rail" bind:this={rail}>
+    <!-- pointerover / focusin only note which panel is under the pointer or holds focus (lift): no interaction of their own. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="content" bind:this={content}
       style:width={geometry ? `max(100%, ${geometry.w}px)` : undefined} style:height={geometry ? `${geometry.h}px` : undefined}
+      onpointerover={(e) => (hoverIdx = panelOf(e.target))} onpointerleave={() => (hoverIdx = null)}
+      onfocusin={(e) => (focusIdx = panelOf(e.target))} onfocusout={focusOut}
     >
       {#if mdrag && landing && geometry}
         <!-- The grid while dragging (plan 22), behind the panels (first in .content): 10 px column ticks, every 50 px stronger, from PAD; the row bands. It reaches through the new-row band below the last row. -->
@@ -1207,6 +1285,7 @@
           lastNote={moduleDef(m.kind).id === 'sample_player' ? lastLive.note : null}
           scope={moduleDef(m.kind).id === 'scope' ? { track: track.slot, sampleRate: engine.sampleRate } : null}
           place={geometry?.at.get(m.idx) ?? null}
+          raised={lift?.idx === m.idx}
           shift={mdrag?.idx === m.idx ? { x: mdrag.at.x - mdrag.at0.x, y: mdrag.at.y - mdrag.at0.y } : null}
           onheaderdown={(e) => headerDown(e, m.idx)}
           onheaderkey={(e) => headerKey(e, m.idx)}
@@ -1226,17 +1305,34 @@
       {#if modules.length === 0}
         <p class="empty">Empty rack — pick a patch or add modules. A synth needs at least MIDI In → Oscillator → Out.</p>
       {/if}
-      <svg class="cables" data-testid="cables" width={size.w} height={svgH} aria-hidden="true">
-        {#each drawn as c (c.id)}
-          <path class="cable" d={cablePath(c.a, c.b)} stroke={c.color} />
-          <circle class="plug" cx={c.a.x} cy={c.a.y} r="3.5" fill={c.color} />
-          <circle class="plug" cx={c.b.x} cy={c.b.y} r="3.5" fill={c.color} />
+      {#snippet cableSet(list: typeof drawn, up: (c: (typeof drawn)[number]) => boolean)}
+        {#each list as c (c.id)}
+          <path class="cable" class:up={up(c)} d={cablePath(c.a, c.b)} stroke={c.color} data-cable={c.id} />
+          <circle class="plug" class:up={up(c)} cx={c.a.x} cy={c.a.y} r="3.5" fill={c.color} />
+          <circle class="plug" class:up={up(c)} cx={c.b.x} cy={c.b.y} r="3.5" fill={c.color} />
         {/each}
+      {/snippet}
+      <!-- Every cable, always (so it keeps its place in track order); a raised panel's own ones are hidden here
+           (`.up`) and drawn in `cables-own` instead. -->
+      <svg class="cables" data-testid="cables" width={size.w} height={svgH} aria-hidden="true">
+        {@render cableSet(drawn, (c) => !!lift?.mine(c))}
         {#if drag && dragA}
           <path class="drag" d={cablePath(dragA, drag.at)} stroke={drag.color} />
           <circle class="plug" cx={drag.at.x} cy={drag.at.y} r="4.5" fill={drag.color} />
         {/if}
       </svg>
+      {#if lift}
+        <!-- The veil: the other cables again, cut to the raised panel's box, fading out (in again on leave). Keyed by
+             the panel, so a new panel starts its own fade. -->
+        {#key lift.idx}
+          <svg
+            class="cables veil" class:back={lift.leaving} data-testid="cables-veil" aria-hidden="true"
+            style:left={`${lift.left}px`} style:top={`${lift.top}px`} width={lift.w} height={lift.h} viewBox={`${lift.left} ${lift.top} ${lift.w} ${lift.h}`}
+          >{@render cableSet(lift.under, () => false)}</svg>
+        {/key}
+        <!-- The raised panel's own cables, above it. -->
+        <svg class="cables own" data-testid="cables-own" width={size.w} height={svgH} aria-hidden="true">{@render cableSet(lift.own, () => false)}</svg>
+      {/if}
     </div>
   </div>
 </div>
@@ -1306,6 +1402,15 @@
   .newrow { left: 6px; right: 6px; padding: 4px 8px; border: 1px dashed var(--line); color: var(--text-2); font-size: var(--fs-lbl); }
   /* Above every panel, the lifted one (z-index 3) included: cables over modules, as in VCV. */
   .cables { position: absolute; z-index: 4; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  /* A hovered / focused panel (ModulePanel .raised, z 5) is over the main layer; the veil (the other cables, cut to
+     that panel) fades out over it, then back in on leave (RAISE_MS); the panel's own cables are above both. */
+  .cables.veil { z-index: 6; overflow: hidden; animation: veil-out 120ms ease-out forwards; }
+  .cables.veil.back { animation-name: veil-in; }
+  .cables.own { z-index: 7; }
+  .cables .up { visibility: hidden; }
+  @keyframes veil-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes veil-in { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .cables.veil { display: none; } }
   .cable, .drag { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0.9; }
   .drag { opacity: 1; stroke-dasharray: 6 4; }
   .plug { opacity: 0.95; }

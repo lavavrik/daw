@@ -246,6 +246,28 @@ no hex literals (`noHexColors.test.ts`).
   velocity ports are plain `cv` ports named `vel`, so the name gives them the
   vel colour. A cable takes its output's colour. `theme.test.ts` checks
   every catalog module, category and port gets one.
+- **Cables under a hovered panel (plan 22 final fix D).** The owner: "when
+  hovering over the patch (Mixer 2 for example), can we put cables
+  underneath it?" Cables are drawn over the panels (VCV style, the main
+  `cables` SVG at z 4), which hides a panel's controls behind cables
+  passing over it. So, in `Rack.svelte` (`want` / `raised` / `lift`):
+  - while the pointer is over a panel, or focus is inside it, that panel is
+    `raised` (ModulePanel `.raised`, z 5): above the main layer;
+  - the cables plugged into it are drawn by a second SVG above it
+    (`cables-own`, z 7), so what is plugged into it stays visible; the main
+    layer keeps every cable in track order but hides those (`.up`);
+  - the change fades over 120 ms (`RAISE_MS`): a "veil" SVG (`cables-veil`,
+    z 6) exactly the panel's box redraws the other cables over it and fades
+    out; on leave it fades back in and the panel stays raised until it has.
+    Under `prefers-reduced-motion` there is no veil and no delay;
+  - a cable drag or a module drag lowers it at once: every cable on top, as
+    before. All three SVGs are `pointer-events: none`, so jacks, cable
+    picks, knobs and the header drag are unchanged.
+  e2e (`rack.spec.ts`): with the cable strokes made hit-testable, the point
+  where a foreign cable crosses a panel hits the cable, then the panel once
+  it is hovered (or focused), and the cable again after leaving; its own
+  cables are in `cables-own` (and hidden in the main layer); a module drag
+  lowers it; reduced motion has no veil.
 - **Widths and heights.** Cards are at least 180 px and as wide as their
   knob grid, rounded up to the 10 px grid (see "Even spacing"); with the mech controls a row of
   modules is ~420–440 px tall, so the rail scrolls vertically sooner. The

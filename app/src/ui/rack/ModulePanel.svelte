@@ -69,7 +69,7 @@
 
   let {
     module, def, owner = null, title, isConnected, isPicked = () => false, onparam, onparams, onremove, onjackdown, onjackkey, onjackfocus, tempo = 120, samples = null, onsampledrop, onsamplesopen, scope = null,
-    sampleMeta = null, sampleRate = 48000, lastNote = null, place = null, shift = null, onheaderdown, onheaderkey,
+    sampleMeta = null, sampleRate = 48000, lastNote = null, place = null, shift = null, raised = false, onheaderdown, onheaderkey,
   }: {
     module: RackModule;
     def: ModuleDef;
@@ -107,6 +107,8 @@
     place?: { left: number; top: number; height: number } | null;
     /** While dragged: the translate (px) that keeps it under the pointer. */
     shift?: { x: number; y: number } | null;
+    /** Hovered / focus inside: drawn above the cables not plugged into it (Rack.svelte `lift`). */
+    raised?: boolean;
     /** A primary press on the header (not on its × button): Rack starts a module drag. */
     onheaderdown?: (e: PointerEvent) => void;
     /** A key on the focused header (Alt+arrows move the module). */
@@ -174,7 +176,7 @@
 </script>
 
 <div
-  class="panel mech-panel" class:dropping class:placed={!!place} class:lifted={!!shift} data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
+  class="panel mech-panel" class:dropping class:placed={!!place} class:lifted={!!shift} class:raised data-testid={`module-${module.idx}`} role="group" aria-label={title} style:--c={color}
   style:left={place ? `${place.left}px` : undefined} style:top={place ? `${place.top}px` : undefined}
   style:min-height={place?.height ? `${place.height}px` : undefined}
   style:transform={shift ? `translate(${shift.x}px, ${shift.y}px)` : undefined}
@@ -302,6 +304,8 @@
   /* Positioned rack: the same rounded max-content width as in flow (above), not shrink-to-fit (far right, the
      containing block's leftover width would squeeze the panel). border-box: the row's min-height is a measured offsetHeight. */
   .panel.placed { position: absolute; }
+  /* Hovered / focus inside (Rack's `lift`): over the cable layer (z 4), under its own cables (z 7). */
+  .panel.raised { z-index: 5; }
   .panel.lifted { z-index: 3; box-shadow: var(--mech-panel-shadow), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; white-space: nowrap; }

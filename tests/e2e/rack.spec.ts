@@ -1011,3 +1011,140 @@ test('a choice with more than 6 options is a select; the faceplate', async ({ pa
   const hole = (await panel.locator('[data-jack] .hole').first().boundingBox())!;
   expect(Math.round(hole.width)).toBe(18);
 });
+
+// ---- Plan 22 final fix D: cables under a hovered panel ------------------------
+
+/**
+ * A panel crossed by a cable that is not plugged into it, and a point (viewport
+ * px) on that cable inside the panel, clear of the panel's edges. Prefers
+ * `prefer` (aria-label), else the first panel that has one; the point is in
+ * the rail's visible part (scrolled panels are out of reach) and clear of the
+ * panel's own cables (those stay on top). Reads the main
+ * cable layer's paths (data-cable = the input end's key "m:in:port"; the
+ * cables in track order pair with the project's cables).
+ */
+async function crossedPanel(page: Page, prefer: string) {
+  return page.evaluate((prefer) => {
+    type Cable = { from: { m: number }; to: { m: number } };
+    const tracks = (window as unknown as { __daw: { project: { tracks: { cables?: Cable[] }[] } } }).__daw.project.tracks;
+    const cables = tracks[1].cables ?? [];
+    const paths = [...document.querySelectorAll<SVGPathElement>('[data-testid="cables"] path.cable')];
+    const panels = [...document.querySelectorAll<HTMLElement>('.mech-panel[data-testid^="module-"]')];
+    const rail = document.querySelector('[data-testid="rail"]')!.getBoundingClientRect(); // visible part only
+    panels.sort((a, b) => Number(b.getAttribute('aria-label') === prefer) - Number(a.getAttribute('aria-label') === prefer));
+    for (const el of panels) {
+      const idx = Number(el.dataset.testid!.slice('module-'.length));
+      const r = el.getBoundingClientRect();
+      // Points on its own cables (drawn above it when raised): the chosen point stays clear of them.
+      const ownPts = paths.flatMap((path, k) => {
+        const c = cables[k];
+        if (!c || (c.from.m !== idx && c.to.m !== idx)) return [];
+        const svg = path.ownerSVGElement!.getBoundingClientRect();
+        const pts: { x: number; y: number }[] = [];
+        for (let s = 0; s <= path.getTotalLength(); s += 2) {
+          const p = path.getPointAtLength(s);
+          pts.push({ x: svg.left + p.x, y: svg.top + p.y });
+        }
+        return pts;
+      });
+      for (const [k, path] of paths.entries()) {
+        const c = cables[k];
+        if (!c || c.from.m === idx || c.to.m === idx) continue;
+        const svg = path.ownerSVGElement!.getBoundingClientRect();
+        const len = path.getTotalLength();
+        for (let s = 0; s <= len; s += 4) {
+          const p = path.getPointAtLength(s);
+          const x = svg.left + p.x;
+          const y = svg.top + p.y;
+          const inPanel = x > r.left + 12 && x < r.right - 12 && y > r.top + 40 && y < r.bottom - 12;
+          const visible = x > rail.left + 4 && x < rail.right - 4 && y > rail.top + 4 && y < rail.bottom - 4;
+          if (inPanel && visible && ownPts.every((q) => Math.hypot(q.x - x, q.y - y) > 8)) {
+            return { idx, label: el.getAttribute('aria-label'), x, y, own: cables.filter((q) => q.from.m === idx || q.to.m === idx).length };
+          }
+        }
+      }
+    }
+    return null;
+  }, prefer);
+}
+
+/** What is hit at (x, y) with every cable stroke made hit-testable: a cable path, or the module panel the hit is in. */
+const hitAt = (page: Page, x: number, y: number) =>
+  page.evaluate(([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return 'nothing';
+    if (el.closest('svg')) return `cable in ${el.closest('svg')!.getAttribute('data-testid')}`;
+    return el.closest<HTMLElement>('.mech-panel[data-testid]')?.dataset.testid ?? el.tagName;
+  }, [x, y]);
+
+test('a hovered panel draws over the cables that are not plugged into it; its own stay on top', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+  await startApp(page);
+  await addTrack(page, 'synth');
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await page.getByTestId('patch-select').selectOption('Acid Line');
+  await expect.poll(() => page.locator('[data-testid="cables"] path.cable').count()).toBeGreaterThan(3);
+  // The cables are pointer-events: none (they never steal a click); to see what is DRAWN on top at a point, make
+  // the main and own layers' strokes hit-testable (the veil fades to transparent and is left out).
+  await page.addStyleTag({ content: '[data-testid="cables"] path, [data-testid="cables-own"] path { pointer-events: visibleStroke !important; }' });
+  await page.mouse.move(2, 2); // nothing hovered
+  const hit = await crossedPanel(page, 'Mixer 2');
+  expect(hit, 'a cable crosses some panel it is not plugged into').not.toBeNull();
+  const { idx, x, y, own, label } = hit!;
+  test.info().annotations.push({ type: 'panel', description: `${label} (module-${idx})` });
+  const panel = page.getByTestId(`module-${idx}`);
+  // Not hovered: the cable is drawn over the panel (as in VCV).
+  expect(await hitAt(page, x, y)).toBe('cable in cables');
+  await expect(page.getByTestId('cables-own')).toHaveCount(0);
+
+  // Hover the panel (its header, away from the point): the panel is over that cable now...
+  await page.getByTestId(`module-header-${idx}`).hover();
+  await expect.poll(() => hitAt(page, x, y)).toBe(`module-${idx}`);
+  await expect(panel).toHaveClass(/\braised\b/);
+  // ...the veil has faded out (120 ms)...
+  await expect.poll(() => page.getByTestId('cables-veil').evaluate((e) => getComputedStyle(e).opacity)).toBe('0');
+  // ...and its own cables are still drawn, above it, out of the main layer.
+  expect(own).toBeGreaterThan(0);
+  await expect(page.getByTestId('cables-own').locator('path.cable')).toHaveCount(own);
+  await expect(page.getByTestId('cables').locator('path.cable.up')).toHaveCount(own); // hidden there
+
+  // Leave: the cable is over the panel again once the fade back is done.
+  await page.mouse.move(2, 2);
+  await expect.poll(() => hitAt(page, x, y)).toBe('cable in cables');
+  await expect(page.getByTestId('cables-own')).toHaveCount(0);
+  await expect(page.getByTestId('cables').locator('path.cable.up')).toHaveCount(0);
+
+  // Keyboard focus inside the panel raises it too; focus leaving the rack lowers it.
+  await page.getByTestId(`module-header-${idx}`).focus();
+  await expect.poll(() => hitAt(page, x, y)).toBe(`module-${idx}`);
+  await page.getByTestId('patch-select').focus();
+  await expect.poll(() => hitAt(page, x, y)).toBe('cable in cables');
+
+  // A module drag keeps every cable on top (as before).
+  const hb = (await page.getByTestId(`module-header-${idx}`).boundingBox())!;
+  await page.mouse.move(hb.x + 30, hb.y + hb.height / 2);
+  await expect(panel).toHaveClass(/\braised\b/);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + 60, hb.y + hb.height / 2 + 20, { steps: 4 });
+  await expect(page.getByTestId('cables-own')).toHaveCount(0);
+  await expect(panel).not.toHaveClass(/\braised\b/);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+});
+
+test('reduced motion: a hovered panel rises at once, with no fading veil', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/');
+  await startApp(page);
+  await addTrack(page, 'synth');
+  await page.getByRole('button', { name: 'Instrument' }).click();
+  await page.getByTestId('patch-select').selectOption('Acid Line');
+  await expect.poll(() => page.locator('[data-testid="cables"] path.cable').count()).toBeGreaterThan(3);
+  await page.getByTestId('module-header-0').hover();
+  await expect(page.getByTestId('module-0')).toHaveClass(/\braised\b/);
+  await expect(page.getByTestId('cables-veil')).toBeHidden();
+  await page.mouse.move(2, 2);
+  await expect(page.getByTestId('module-0')).not.toHaveClass(/\braised\b/); // no fade back to wait for
+});

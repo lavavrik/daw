@@ -80,15 +80,17 @@ test('the Kits tab lists the five kits; each kit sample previews', async ({ page
   for (const k of KITS) {
     const starter = k.id === 'starter';
     if (!starter) await page.getByTestId(`kit-${k.id}-toggle`).click(); // the generated kits start closed
-    const sample = page.getByTestId(starter ? 'kit-sample-kick-punch.wav' : `kit-sample-${k.id}/clap.wav`);
-    await expect(sample).toBeVisible();
-    await expect(page.getByTestId('preview-stop')).toBeDisabled();
-    await sample.click();
-    await expect(page.getByTestId('preview-stop')).toBeEnabled();
-    await expect(sample).toHaveClass(/\bon\b/);
-    if (!starter) await expect(page.getByTestId('preview-bar')).toContainText(`${k.name} Clap`);
-    await page.getByTestId('preview-stop').click();
-    await expect(sample).not.toHaveClass(/\bon\b/);
+    // Every one of its 8 sounds previews (the starter's role files; it also holds stabs and a sub).
+    for (const [i, file] of (starter ? STARTER : FILES).entries()) {
+      const sample = page.getByTestId(starter ? `kit-sample-${file}` : `kit-sample-${k.id}/${file}`);
+      await expect(page.getByTestId('preview-stop')).toBeDisabled();
+      await sample.click();
+      await expect(page.getByTestId('preview-stop'), `${k.name} ${ROLES[i]}`).toBeEnabled();
+      await expect(sample).toHaveClass(/\bon\b/);
+      if (!starter) await expect(page.getByTestId('preview-bar')).toContainText(`${k.name} ${ROLES[i]}`);
+      await page.getByTestId('preview-stop').click();
+      await expect(sample).not.toHaveClass(/\bon\b/);
+    }
   }
   await page.screenshot({ path: 'test-results/kits-tab.png' });
 

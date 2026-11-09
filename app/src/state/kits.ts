@@ -72,13 +72,13 @@ export const KITS: readonly Kit[] = [
   {
     id: 'drum-machine',
     name: 'Drum Machine',
-    blurb: 'Tight and 909-ish: punchy kick, four-hand clap, bright metallic hats',
-    rows: generated(['Punchy kick', 'Four-hand clap', 'Tight hat', 'Bright open hat', 'Ringing snare', 'Rimshot', 'Shaker', 'Mid tom']),
+    blurb: '909-ish: a long-sweep kick, ringing metallic hats, a peaky clap, a body-led snare',
+    rows: generated(['Long-sweep kick', 'Four-hand clap', 'Ringing hat', 'Ringing open hat', 'Body snare', 'Rimshot', 'Mid shaker', 'Mid tom']),
   },
   {
     id: 'deep',
     name: 'Deep',
-    blurb: 'Round kick, soft clap, dusty hats, a conga',
+    blurb: 'A round clean boom, soft clap, dusty hats, a conga',
     rows: generated(['Round kick', 'Soft clap', 'Dusty hat', 'Dusty open hat', 'Soft snare', 'Side-stick', 'Soft shaker', 'Conga']),
   },
   {

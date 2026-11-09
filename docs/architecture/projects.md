@@ -264,9 +264,9 @@ The four generated kits are `samples/kits/<id>/<role file>.wav` (`kick.wav`,
 `scripts/make-kits.mjs` — 48 kHz 16-bit mono, seeded noise, so byte
 identical on every run. Its comments hold each sound's recipe and its
 measured peak / length / spectral centroid; it shares its building blocks
-with `make-starter-kit.mjs` (`scripts/lib/synth.mjs`). Each role has its own
-peak level (kick -1 dBFS … shaker -11 dBFS) so a kit is balanced at row gain
-1. `state/kits.test.ts` pins the output hashes (`node scripts/make-kits.mjs
+with `make-starter-kit.mjs` (`scripts/lib/synth.mjs`). Every sound is
+normalised to a -1 dBFS peak, like the starter kit, so loading a kit over a
+track keeps its balance (the row gains the user set mean the same thing). `state/kits.test.ts` pins the output hashes (`node scripts/make-kits.mjs
 --hashes`), checks the files on disk are that output, every kit has all
 eight roles and the kits stay under the 3 MB budget (about 0.9 MB).
 

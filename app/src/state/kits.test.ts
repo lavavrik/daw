@@ -17,38 +17,38 @@ const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
 /** scripts/make-kits.mjs output (sha256 per "<kit>/<file>"). Regenerate with `node scripts/make-kits.mjs --hashes` when a recipe changes on purpose. */
 const HASHES: Record<string, string> = {
-  'drum-machine/kick.wav': '673b11b76187859b9fb8f276f1608b51c97a5880a28fc950cc70bbdaa6e74f67',
-  'drum-machine/clap.wav': '781b1e0616afcba3f2432658e8b40223fa5d931f46d91f378d8067e5614a4ef7',
-  'drum-machine/closed-hat.wav': 'b2061a4edbe83a4c30238787f1e8dbbfcf229374477c90b069533cdd673273cf',
-  'drum-machine/open-hat.wav': 'b73d062e64a56ccf63ae4af394c3713da2280d9248bc9f057fbbdecab07a41af',
-  'drum-machine/snare.wav': '17354627d4115ce73a99ceebc309d1edffd96fb4fe4618b5228b58bbd872cd62',
-  'drum-machine/rim.wav': '9a8f566e4e6f9aa764102be98823c24c56afed3f60b3e81988952c7ce0e8f7de',
-  'drum-machine/shaker.wav': '4b46382651ec33f207b26c999dc239179bccf1c7134efc136b7cc4058d3664ae',
-  'drum-machine/perc.wav': '0f46ab4aeeba6ca280646bb55f1687b37ded5655b3dfa2d6a41836492d672bf2',
-  'deep/kick.wav': 'b8511d071e3a43bbd6ae695b87cd408dac0e4c2efbefbaa8f85c7c2e69571ce3',
-  'deep/clap.wav': 'c08ed1d9844754c1be1a5f21140b8007dcd8a53e0f239617a2f68e2ae2f35fcf',
-  'deep/closed-hat.wav': '3034bb25c26d479d736b1238c2c39dce61eb29c7af7ab3f8937d3c535469aca1',
-  'deep/open-hat.wav': 'b8d836df1053209526d013ae7d3f3ed8bed51b3c5f0ff64dd8bdfa17caf2d7b5',
-  'deep/snare.wav': 'f3bcc4b28aec1a24166c2b0b9dd571f1570190814f38c9d58e0ccd8dd97c9a58',
-  'deep/rim.wav': 'f0bd437a31796f04ca625abd1193e9b48d0f303518f80f9738a15a0fac34ea35',
-  'deep/shaker.wav': '040571bed583c5869130e01e874fb808d3dec7c9176759441566ca640a60de1f',
-  'deep/perc.wav': '3acb26adc0d7fff730ca288ec51f4696d36aa554624a2f42bc1ba294192f9494',
-  'garage/kick.wav': '364319a9bf6e239e123eb2e2a0bce1838935689b05dec7fa2f7660c68dc2e530',
-  'garage/clap.wav': '6c10ddda884ec64c7e74327cc5ca38fdd6e302132dff7fdb54783550e036397a',
-  'garage/closed-hat.wav': '94d4162751a33047e2559e75a79d0407842cadf100bbacae16b72e28489573ea',
-  'garage/open-hat.wav': '4b61ebb307e717e75cbc9b47d017d0b6ac2207ecd438aa5791b085c2ef5a9651',
-  'garage/snare.wav': '6f5ca27a7bb9e8800746f60e01c35323a4c30015f5c7747b614e9579e635137f',
-  'garage/rim.wav': '377b7b28b45045663f189de59491c45ab48d850ff2cd68dc4ea1db916a8981fc',
-  'garage/shaker.wav': 'b9b98e11badb155609f96c9dc80af543a7cf17b08da19370cf7e49d1c6360bc7',
-  'garage/perc.wav': '8b1a5239c2c6c049fdffaf34cf4f519a78a2e14698e10220e5f56ab562b0dd70',
-  'dusty/kick.wav': 'a2c0bf4453ed515125d3689ee8252081daf5ed6f6f65e7fbdf9c34b9f53426a3',
-  'dusty/clap.wav': '23f30f41f1b55466668986218187c7319f1e6859a9bd921bf930eeb0482d0660',
-  'dusty/closed-hat.wav': '4673c3e255702d531fd3fe535be7fe21bb107fdba680e4e17ba25c89ba325618',
-  'dusty/open-hat.wav': '129c6cc64e069684eb5501126e7b951869636e3f53d3a63af8bf0f2257671380',
-  'dusty/snare.wav': '1f7328fe8af819af5ace3688e91cba636fb2da858e8c96015dac4e1ed2dd6ba7',
-  'dusty/rim.wav': 'dc6c68791e67992da8155eaca8015a328c7df38091d1ca5cfba093968e174bd3',
-  'dusty/shaker.wav': '4b563b25eabc39d1198ba9d4c51c72cc96a1be62153182a5bff6ad2ea5767f5d',
-  'dusty/perc.wav': '981a2f169ad1a4e6186da5d322bf5a5c64634c83a962af72bfb882d4bd73f447',
+  'drum-machine/kick.wav': 'd766f14522ab7ccf9aecd35778d5adbade0d01c48b6bca35e8e98509c5571208',
+  'drum-machine/clap.wav': 'fbc47ae7fb9f710f6baa0f84aa7de7bf7fbda133b1a6ca4305d01b0a1ab5ef00',
+  'drum-machine/closed-hat.wav': '8516333099be43eda1b4e682c49a2c22e23bcc935de194986044c789a602bb70',
+  'drum-machine/open-hat.wav': 'ecbc47e10c95d36afccdaa148f1bfd59e70d54697ebdbccc0b63184de6b413f2',
+  'drum-machine/snare.wav': 'bad29b523eab9f58cabe0bc8b9f7ea1e6240dff1d0bc74c957a010ce8d444138',
+  'drum-machine/rim.wav': '0b7d9f84d2611029e1ba99927a4f62aaef421e1a39639ec326e697ca2939bafd',
+  'drum-machine/shaker.wav': 'cea487613ad324cd8a53247fd932c708987f68fcdcf8c5cbf9171f2a5d444374',
+  'drum-machine/perc.wav': '9bb379574975dff4fe1518d5be52eecd3a35433db6f1b70bd3401eed3cb7351b',
+  'deep/kick.wav': '8631898cfc55e433f7404cbd985bbd3124d1ad8a035239120ad0af28a0432eb3',
+  'deep/clap.wav': '740dc4814b1af78a2cf12007acd13653cde60b701308af6f237d9ec2a79c2be6',
+  'deep/closed-hat.wav': '46e3f2ed615110144d69e2feab9312d93d2dc2157a46fd6e921ebcd5813e2308',
+  'deep/open-hat.wav': '5d9d406898b7f0d64d78cd43841583c21fe8b4a3aaa762c22b600809540b4440',
+  'deep/snare.wav': '4c56c1b85f124961b0319331dfed7c7f6807c11a12b579cc536fe74a142c6d12',
+  'deep/rim.wav': '8d4836cee91c75403a70872ddb64638345b54065e0429276656215e79a54ef39',
+  'deep/shaker.wav': 'b85abb0cc4725a67a23a52ef964f2c3c776100056cd6546cf0691af772484ddb',
+  'deep/perc.wav': '358778e9c94e0a44648ed3dafd470012d4ff97c5bbb55a8f3d2f439067d43c17',
+  'garage/kick.wav': 'a06ee3fa3dba3ab1755480e0181767002f66ae81cafd821c72757aa95cc2ac15',
+  'garage/clap.wav': '41995d19e24a94747a0625a32df66c8d512449f646eb06421d53005a99719fea',
+  'garage/closed-hat.wav': 'ec5f53dbd7c6f9db7de3b5af764ba8265ec8a7c4aff420247c11adb0f89b8a02',
+  'garage/open-hat.wav': '650ed2bfddd68680a1fdb377f5a17018287f6d9b7debf4ccb6ea533de46a7c08',
+  'garage/snare.wav': '2ce7ba5657f7fc5ef70a688ceaf77f5282c2b9cdef609aa9027e41507d7391fa',
+  'garage/rim.wav': 'f804ec7e3c6d24a3450054f1cf67c189795016fd23a33adc9f980a79ad16928f',
+  'garage/shaker.wav': '76a60da1788204c90d09f602cf84dad2ba3af47e63a73a5f865711380cc384ab',
+  'garage/perc.wav': '45e66c4f2ff2849b7b7db726c92421accae1863c57a1ab53e5635e75015f4825',
+  'dusty/kick.wav': 'bd56bc0605e1f41b94448c8abeb322db79f2583fd7d822a0b5590acfed96efbe',
+  'dusty/clap.wav': '8a9f4e23abfc8cda30019076e1ea6103fa0d4db40b207305c4200e33ce8d7061',
+  'dusty/closed-hat.wav': 'aa7c70899dc93f1b3bf7b81d0009414a066eda8a4c405b6168b7f8714e51a7ce',
+  'dusty/open-hat.wav': 'c9bc88e6329059a89cef61662239c9b9f23ceea3d1997332465ee0416b37e53d',
+  'dusty/snare.wav': '944333f7e7f16708bbe3fc7576f7ca25f065d11a7b20a44104466b0aa76ff5ac',
+  'dusty/rim.wav': '66c46e75bca116ba5a4068f547568e5a0555790436421e4bbbc14599e1edfe5a',
+  'dusty/shaker.wav': 'd2f793c369c37a0cd304e7d4e28add430005569688416d13d20899aa6ac5a114',
+  'dusty/perc.wav': 'cc53f41fb736c05e93cc58cb8cb8bec4ebe5bad8606ce7852ba0c7bbc86b3322',
 };
 
 describe('KITS', () => {
@@ -105,14 +105,21 @@ describe('kit files (library/kitFiles.ts)', () => {
 });
 
 describe('scripts/make-kits.mjs', () => {
-  const generated = JSON.parse(execFileSync('node', [join(ROOT, 'scripts', 'make-kits.mjs'), '--hashes'], { encoding: 'utf8' })) as Record<string, string>;
+  // Run once, inside the tests (not at collection: a failing script then
+  // fails these two tests instead of dropping the whole file). The pinned
+  // hashes rely on V8's bit-exact Math.sin / exp / tanh; after a Node upgrade
+  // that changes one, regenerate (`node scripts/make-kits.mjs`, then
+  // `--hashes` into HASHES) and listen to the kits.
+  let generated: Record<string, string> | null = null;
+  const generate = () =>
+    (generated ??= JSON.parse(execFileSync('node', [join(ROOT, 'scripts', 'make-kits.mjs'), '--hashes'], { encoding: 'utf8' })) as Record<string, string>);
 
   it('is deterministic: its output matches the pinned hashes', () => {
-    expect(generated).toEqual(HASHES);
+    expect(generate()).toEqual(HASHES);
   });
 
   it('the files on disk are its output (re-run it after changing a recipe)', () => {
-    for (const [path, hash] of Object.entries(generated)) expect(sha(readFileSync(join(KITS_DIR, path))), path).toBe(hash);
+    for (const [path, hash] of Object.entries(generate())) expect(sha(readFileSync(join(KITS_DIR, path))), path).toBe(hash);
   });
 
   it('48 kHz 16-bit mono WAVs, all kits together under 3 MB, with a CC0 licence', () => {

@@ -194,9 +194,9 @@ grid size); chord mode itself starts off whenever the roll opens.
   existing note (same pitch and start) is skipped, not stacked; when
   that leaves nothing to add the readout says "That chord is already
   there" (no entry, no drag), and when every note is past 127, "No room on
-  the keyboard for this chord here". Dragging on stretches every note of
-  the chord together ("Draw and stretch" below); it never moves them, so
-  the voicing never bends.
+  the keyboard for this chord here". Dragging on stretches the notes the
+  press added, all together ("Draw and stretch" below); it never moves
+  them, so the voicing never bends.
 - **Pitches:** `prMath.chordStampPitches(row, type, inversion, key,
   snapKey)` = `voiceChord` in the project key. With **Snap to key** on, a
   fixed type's root first snaps to the key (`nearestInKey`, ties up: C#4 →
@@ -226,8 +226,10 @@ through its own path, `acid-actions.ts`, and is not affected).
   (`prMath.stretchLen`). The start never moves: a drag left of it keeps
   the one-step minimum. The pitch never changes: a vertical drag does
   nothing. (Before this, the drag after a draw *moved* the new note; to
-  move it now, release and drag its body.) A chord's notes that were
-  already there (skipped by `addNotes`) are stretched with the new ones.
+  move it now, release and drag its body.) Only the notes the press
+  added are stretched: a chord note that was already there (skipped by
+  `addNotes`) stays as it was, so the gesture never edits an existing
+  note (it is still selected with the chord).
   The length goes out through `updateNotes` once per animation frame like
   every roll drag; it may run past the pattern end, as a resize may.
 - The **readout** shows the notes and their length while the press is
@@ -238,8 +240,7 @@ through its own path, `acid-actions.ts`, and is not affected).
 - **Undo.** The whole press (create + stretch) is one entry, "Add note" /
   "Add chord": the gesture (`history/gestures.ts`) brackets it, and the
   first edit names it. No combined action was needed.
-- **Escape** mid-drag removes the notes the press created (a chord's
-  pre-existing notes get their length back); so does **Cmd/Ctrl+Z**
+- **Escape** mid-drag removes the notes the press created; so does **Cmd/Ctrl+Z**
   mid-drag (`registerDragCancel`, the same cancel). Both run inside the
   still-open gesture, so it ends where it began: no entry, nothing older
   undone. Escape then stays in chord mode (a second Escape leaves it).
@@ -279,7 +280,8 @@ select, right-click to delete").
   start, the cap; `stretchReadout`); e2e `tests/e2e/pianoroll-stretch.spec.ts`
   (3 steps in one undo with the live readout, a click's default length,
   left and vertical drags, Esc and Cmd+Z mid-drag, a chord stretched
-  together and its Esc, Snap to key).
+  together and its Esc, a chord note already there left untouched, Snap
+  to key).
 - e2e `tests/e2e/theory.spec.ts`: the highlight read off the canvas pixels
   (A minor, D major, chromatic), Snap to key drawing and dragging, the pref
   across a reload (and the Key button's badge), Transpose +3 with one undo,

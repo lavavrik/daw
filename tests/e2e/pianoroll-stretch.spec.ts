@@ -143,6 +143,22 @@ test('chord mode: the press places the chord and the drag stretches all its note
   await expect(page.getByTestId('pr-chord')).toHaveAttribute('aria-pressed', 'true');
 });
 
+test('chord mode: a note already there (skipped by the stamp) is never stretched', async ({ page }) => {
+  await openRoll(page);
+  const c4 = await at(page, 30, 60);
+  await page.mouse.click(c4.x, c4.y); // C4 at 1.1.1, one cell: Am7's C4 is already there
+  await expect.poll(() => shape(page)).toEqual([[60, 0, SIXTEENTH]]);
+  await page.getByTestId('pr-chord').click();
+  await pressAndDrag(page, 0, A3, 4 * SIXTEENTH);
+  await expect(readout(page)).toHaveText('In key · A3 E4 G4 · 1.1.1 · 1/4'); // the new notes only
+  await page.mouse.up();
+  const len = 4 * SIXTEENTH;
+  await expect.poll(() => shape(page)).toEqual([[57, 0, len], [60, 0, SIXTEENTH], [64, 0, len], [67, 0, len]]);
+  await expect.poll(() => undoLabel(page)).toBe('Add chord');
+  await page.keyboard.press('ControlOrMeta+z'); // one undo: the three new notes go, C4 stays
+  await expect.poll(() => shape(page)).toEqual([[60, 0, SIXTEENTH]]);
+});
+
 test('Snap to key: the pitch is snapped at the press and the length stretched', async ({ page }) => {
   await openRoll(page);
   await snapToKeyOn(page); // A minor: C#4 (61) is out of key, the tie goes up to D4

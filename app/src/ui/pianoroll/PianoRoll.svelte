@@ -625,11 +625,11 @@
       }
     | {
         /**
-         * DRAW AND STRETCH: the notes the press just drew, all at `start`.
-         * `orig`: every note it stretches (a chord's notes that were already
-         * there included); `created`: the ids it added (Escape removes them).
+         * DRAW AND STRETCH: the ids the press just added, all at `start`: the
+         * only notes it stretches (a chord note that was already there is
+         * never edited), and what Escape removes.
          */
-        kind: 'draw'; orig: Orig[]; created: string[]; start: number; x0: number; y0: number; moved: boolean;
+        kind: 'draw'; created: string[]; start: number; x0: number; y0: number; moved: boolean;
         /** Last length sent (-1: none yet). */
         last: number;
       }
@@ -775,11 +775,10 @@
     canvas.setPointerCapture(e.pointerId);
   }
 
-  /** DRAW AND STRETCH: the press at (x, ny) just added `created` (selected, all at `start`): a drag stretches the selection. */
+  /** DRAW AND STRETCH: the press at (x, ny) just added `created` (all at `start`): a drag stretches those notes only. */
   function startStretch(created: string[], start: number, x: number, ny: number) {
-    const orig = snapshot(selected);
-    drag = { kind: 'draw', orig, created, start, x0: x, y0: ny, moved: false, last: -1 };
-    stretch = { pitches: orig.map((o) => o.pitch).sort((a, b) => a - b), start, len: grid };
+    drag = { kind: 'draw', created, start, x0: x, y0: ny, moved: false, last: -1 };
+    stretch = { pitches: snapshot(new Set(created)).map((o) => o.pitch).sort((a, b) => a - b), start, len: grid };
   }
 
   /**
@@ -799,7 +798,7 @@
       return false;
     }
     // The whole chord is selected, notes that were already there included
-    // (a drag stretches them with the new ones; Escape puts their length back).
+    // (a drag stretches only the new ones: the gesture never edits a note it did not add).
     selected = new Set(pitches.map((pt) => noteAt(pat, pt, start)?.id).filter((id): id is string => !!id));
     if (!added.length) {
       flashHint('That chord is already there');
@@ -831,7 +830,7 @@
       if (len === drag.last) return;
       drag.last = len;
       stretch = { ...stretch!, len };
-      schedule(drag.orig.map((o) => ({ id: o.id, len })));
+      schedule(drag.created.map((id) => ({ id, len })));
     } else if (drag.kind === 'box') {
       box = { ...box!, x1: x, y1: y };
       const b = box;
@@ -935,12 +934,10 @@
       velShown = null;
       updateNotes(p, engine, track.id, d.orig.map((o) => ({ id: o.id, vel: o.vel })));
     } else if (d.kind === 'draw') {
-      // Remove what the press drew; a chord's notes that were already there
-      // get their length back. Inside the press's gesture: no undo entry.
+      // Remove what the press drew (nothing else was touched). Inside the
+      // press's gesture: no undo entry.
       stretch = null;
       const created = new Set(d.created);
-      const kept = d.orig.filter((o) => !created.has(o.id));
-      if (kept.length) updateNotes(p, engine, track.id, kept.map((o) => ({ id: o.id, len: o.len })));
       deleteNotes(p, engine, track.id, d.created);
       selected = new Set([...selected].filter((id) => !created.has(id)));
     } else if (d.moved) {

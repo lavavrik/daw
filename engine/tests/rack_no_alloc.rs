@@ -489,3 +489,73 @@ fn accent_and_diode_do_not_allocate() {
     assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
     assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
 }
+
+/// Plan 26: the note path (Chord -> Arp -> MIDI In) with chords, an
+/// arpeggio playing and stopped, every mode, rate and latch, the key moving,
+/// and both modules removed while holding notes.
+#[test]
+fn chord_and_arp_do_not_allocate() {
+    use daw_engine::rack::modules::theory::Key;
+    // MIDI In 0 (poly) -> Osc 1 -> Vca 2 <- Adsr 3; Vca -> Out 4; Chord 5; Arp 6.
+    let mut r = Rack::new(48000.0);
+    let mut fx = FxPool::new(48000.0);
+    let (mut l, mut rr) = ([0.0f32; 128], [0.0f32; 128]);
+    let mut ctx = Ctx { sr: 48000.0, bpm: 128.0, playing: true, ticks: 0.0, ticks_per_frame: 128.0 * 960.0 / 60.0 / 48000.0 };
+    let mut render = |r: &mut Rack, fx: &mut FxPool, blocks: usize, ctx: &mut Ctx| {
+        for _ in 0..blocks {
+            r.render_add(ctx, fx, SampleView::NONE, &mut l, &mut rr);
+            if ctx.playing {
+                ctx.ticks += 128.0 * ctx.ticks_per_frame;
+            }
+        }
+    };
+
+    ARMED.with(|a| a.set(true));
+    COUNT.with(|c| c.set(0));
+
+    for (m, k) in [
+        (0, ModuleKind::MidiIn),
+        (1, ModuleKind::Osc),
+        (2, ModuleKind::Vca),
+        (3, ModuleKind::Adsr),
+        (4, ModuleKind::Out),
+        (5, ModuleKind::Chord),
+        (6, ModuleKind::Arp),
+    ] {
+        assert_eq!(r.add_module(m, k, &mut fx), OK);
+    }
+    for (from, to) in [((0, 0), (1, 0)), ((1, 0), (2, 0)), ((0, 1), (3, 0)), ((3, 0), (2, 1)), ((2, 0), (4, 0))] {
+        assert_eq!(r.connect(from, to), OK);
+    }
+    for blk in 0..20u8 {
+        assert_eq!(r.set_param(6, 0, (blk % 6) as f32), OK); // rate
+        assert_eq!(r.set_param(6, 1, (blk % 5) as f32), OK); // mode
+        assert_eq!(r.set_param(6, 2, (1 + blk % 4) as f32), OK); // octaves
+        r.automate(6, 3, 10.0 + 4.5 * blk as f32); // gate
+        assert_eq!(r.set_param(6, 4, (blk % 2) as f32), OK); // latch
+        assert_eq!(r.set_param(5, 0, (blk % 10) as f32), OK); // type
+        assert_eq!(r.set_param(5, 1, (blk % 4) as f32), OK); // inversion
+        r.set_key(Key::new((blk % 12) as usize, (blk % 8) as usize).unwrap());
+        ctx.playing = blk % 7 != 3; // Stop / Play now and then
+        r.note(NoteEvent::On { note: 40 + blk, vel: 100 });
+        r.note(NoteEvent::On { note: 47 + blk, vel: 90 });
+        render(&mut r, &mut fx, 12, &mut ctx);
+        r.note(NoteEvent::Sustain(blk % 3 == 0));
+        r.note(NoteEvent::Off { note: 40 + blk });
+        render(&mut r, &mut fx, 6, &mut ctx);
+        r.note(NoteEvent::Off { note: 47 + blk });
+    }
+    r.note(NoteEvent::On { note: 60, vel: 100 });
+    render(&mut r, &mut fx, 10, &mut ctx);
+    assert_eq!(r.remove_module(5), OK);
+    render(&mut r, &mut fx, 10, &mut ctx);
+    assert_eq!(r.remove_module(6), OK);
+    render(&mut r, &mut fx, 10, &mut ctx);
+    r.note(NoteEvent::AllOff);
+    r.clear();
+    render(&mut r, &mut fx, 10, &mut ctx);
+
+    ARMED.with(|a| a.set(false));
+    assert_eq!(COUNT.with(|c| c.get()), 0, "rack allocated");
+    assert!(l.iter().chain(rr.iter()).all(|x| x.is_finite()));
+}

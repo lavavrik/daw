@@ -45,6 +45,8 @@ export interface EngineModel {
   mixer: number[][];
   keys: number[];
   tempo: number;
+  /** The song key (SET_KEY, plan 26): [root, scale index]; A minor after RESET_ALL. */
+  songKey: number[];
   metronome: number;
   mode: number;
   loop: number[];
@@ -72,7 +74,7 @@ export function blankModel(): EngineModel {
     autos: new Array(MAX_AUTO_LANES).fill(null),
     mixer: Array.from({ length: MIX_CHANNELS }, defaultMixParams),
     keys: new Array(MAX_TRACKS).fill(-1),
-    tempo: 124, metronome: 0, mode: 0, loop: [0, 0], input: -1, errors: [],
+    tempo: 124, songKey: [9, 1], metronome: 0, mode: 0, loop: [0, 0], input: -1, errors: [],
   };
 }
 
@@ -157,6 +159,10 @@ export function run(m: EngineModel, cmds: Cmd[]): EngineModel {
       case Op.AUTO_LANE_ENABLE: { const l = m.autos[a]; if (l) l.enabled = b; else m.autos[a] = { target: [], enabled: b, points: {} }; break; }
       case Op.AUTO_OVERRIDE: break;
       case Op.SET_TEMPO: m.tempo = a; break;
+      case Op.SET_KEY:
+        if (!Number.isInteger(a) || a < 0 || a > 11 || !Number.isInteger(b) || b < 0 || b > 7) bad('key');
+        else m.songKey = [a, b];
+        break;
       case Op.SET_METRONOME: m.metronome = a; break;
       case Op.SET_MODE: m.mode = a; break;
       case Op.SET_LOOP: m.loop = [a, b]; break;
@@ -352,5 +358,5 @@ export function view(m: EngineModel, json: ProjectJson) {
       : { kind: t.kind, current: t.current, patterns, modules: t.modules, cables: t.cables, clips: t.clips };
   });
   const autos = m.autos.map((l) => (l && (l.target.length || l.enabled !== 1) ? l : null));
-  return { slots, autos, mixer: m.mixer, keys: m.keys, tempo: m.tempo, metronome: m.metronome, mode: m.mode, loop: m.loop, input: m.input };
+  return { slots, autos, mixer: m.mixer, keys: m.keys, tempo: m.tempo, songKey: m.songKey, metronome: m.metronome, mode: m.mode, loop: m.loop, input: m.input };
 }

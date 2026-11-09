@@ -32,6 +32,11 @@
   // Rack passes `scope` = the track's engine slot (with the module idx it
   // finds its scope-bank slot) and the sample rate.
   //
+  // Note modules (plan 26: Chord, Arp; catalog category "notes"): no jacks,
+  // so no port rail; the header says where their notes go ("→ MIDI In": the
+  // engine runs them on the note stream before voice allocation, in the
+  // fixed order Chord → Arp → MIDI In; docs/architecture/modular.md).
+  //
   // ADSR / LFO (plan 12 Task 5): a shape preview (ShapePreview.svelte) above
   // the params, following the values shown (lanes included).
   //
@@ -169,6 +174,8 @@
   const noteFor = (name: string, v: number) => (def.id === 'delay' && name === 'division' ? delayClampNote(v, tempo) : '');
 
   const color = $derived(moduleColor(def));
+  /** Chord / Arp: on the note stream, no jacks. */
+  const noteModule = $derived(def.category === 'notes');
   /** Choices, faders and knobs (controlMap.ts), without the Sample Player's `sample` (its dropdown). */
   const controls = $derived(panelControls(def, sampleIdx));
   /** Continuous knobs follow their automation lanes (not a Scope's: its params only change the view). */
@@ -193,6 +200,7 @@
     aria-label={`${title}: drag to move, or Alt+arrow keys`} onpointerdown={headerDown} onkeydown={onheaderkey}
   >
     <span class="title">{title}</span>
+    {#if noteModule}<span class="route" data-testid={`module-route-${module.idx}`} title="Plays into MIDI In, before its voices">→ MIDI In</span>{/if}
     <button class="x" aria-label={`Remove ${title}`} title={`Remove ${title}`} onclick={onremove}><Icon icon={X} size={12} /></button>
   </header>
   <!-- No negative margins anywhere in the card: Chrome counts them differently
@@ -256,6 +264,7 @@
   </div>
   <div class="spacer" data-stretch></div>
   <!-- Under the engraved divider: inputs left, outputs right; side by side when they fit, keeps the rail short. -->
+  {#if def.inputs.length || def.outputs.length}
   <div class="ports">
     {#if def.inputs.length}
       <div class="group ins" role="group" aria-label={`${title} inputs`}>
@@ -280,6 +289,7 @@
       </div>
     {/if}
   </div>
+  {/if}
 </div>
 
 <style>
@@ -309,6 +319,7 @@
   .panel.lifted { z-index: 3; box-shadow: var(--mech-panel-shadow), var(--lift); opacity: 0.92; }
   .panel.lifted header { cursor: grabbing; }
   .title { flex: 1; white-space: nowrap; }
+  .route { white-space: nowrap; font-size: var(--fs-lbl); letter-spacing: 0.02em; text-transform: none; opacity: 0.85; }
   .x { display: inline-flex; align-items: center; padding: 2px 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
   .panel:hover .x, .x:focus-visible { opacity: 0.85; }
   .x:hover { opacity: 1; }

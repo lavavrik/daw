@@ -128,7 +128,7 @@
   import { synthTrack } from '../../state/project.svelte';
   import type { Project, SynthTrack } from '../../state/project.svelte';
   import {
-    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule, setParam, setParams, setRackLayout,
+    addModule, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, onePerRackNote, removeModule, setParam, setParams, setRackLayout,
   } from '../../state/rack-actions';
   import { deferSampleAssign } from '../../state/sampleLoads';
   import { importSample } from '../../state/sampleImport';
@@ -1066,7 +1066,8 @@
   };
 
   // ---- add-module menu ---------------------------------------------------------
-  const CATEGORY_ORDER = ['source', 'shaping', 'effect', 'utility'];
+  // Notes (plan 26: Chord, Arp) right after the sources: they feed MIDI In.
+  const CATEGORY_ORDER = ['source', 'notes', 'shaping', 'effect', 'utility'];
   const groups = $derived.by(() => {
     const cats = [...new Set(CATALOG.modules.map((m) => m.category))];
     const rank = (c: string) => (CATEGORY_ORDER.includes(c) ? CATEGORY_ORDER.indexOf(c) : 99);
@@ -1116,10 +1117,11 @@
 
   /**
    * Why `md` cannot be added right now: every engine FX-pool slot of its kind
-   * (shared by all tracks) is in use, e.g. "All 8 delays in use"; "" if it can.
+   * (shared by all tracks) is in use, e.g. "All 8 delays in use", or it is a
+   * note module (Chord, Arp) this rack already has (one per rack); "" if it can.
    */
   function poolFullNote(md: ModuleDef): string {
-    return fxSlotsFree(p, md.id) > 0 ? '' : fxPoolFullText(md);
+    return (fxSlotsFree(p, md.id) > 0 ? '' : fxPoolFullText(md)) || onePerRackNote(track, md.id);
   }
 
   async function add(id: string) {

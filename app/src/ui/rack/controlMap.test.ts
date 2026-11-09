@@ -62,4 +62,12 @@ describe('rack control map (plan 21 Task 10)', () => {
     // Indices are the catalog's.
     expect(filter.knobs[0].i).toBe(mod('filter').params.findIndex((pd) => pd.name === 'cutoff'));
   });
+
+  it('note modules (plan 26): Arp rate/mode/latch are LED buttons, octaves and gate knobs; Chord type a select', () => {
+    expect(kinds('arp')).toEqual({ rate: 'led', mode: 'led', octaves: 'knob', gate: 'knob', latch: 'led' });
+    expect(kinds('chord')).toEqual({ type: 'select', inversion: 'knob' }); // 10 types
+    const arp = panelControls(mod('arp'));
+    expect(arp.knobs.map((x) => [x.pd.name, x.size])).toEqual([['octaves', 'md'], ['gate', 'md']]);
+    expect(mod('arp').inputs.length + mod('arp').outputs.length + mod('chord').inputs.length + mod('chord').outputs.length).toBe(0);
+  });
 });

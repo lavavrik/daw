@@ -172,6 +172,12 @@ export const Op = {
    *  their keys move down one; the last row is dropped, so only insert while
    *  it is unused). diffApply sends it when an undo brings a row back. */
   INSERT_ROW: 59,
+  /** a=root pitch class 0..11 (C = 0) b=scale index 0..7 (music/scales.ts
+   *  SCALE_IDS, wire order): the song key, which Chord modules set to In key
+   *  follow (plan 26 Task 3). An edit: sent by state/key-actions.ts
+   *  keyCommands (setKey, undo/redo, and projectCommands on load, restart
+   *  and export). RESET_ALL puts it back to A minor. */
+  SET_KEY: 60,
 } as const;
 export type OpCode = (typeof Op)[keyof typeof Op];
 

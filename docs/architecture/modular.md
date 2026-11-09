@@ -887,6 +887,86 @@ back). Inline (no FX pool); one store per `gate` channel.
   is used instead: a single accent peaks at 0.6 ± 0.01 at any decay and
   sample rate (`short_decay_96k`).
 
+## Note modules: Chord (20), Arp (21)
+
+Plan 26 Task 3 (spec `2026-11-19-builtin-content.md` §2). Two module kinds of
+the catalog category **notes** that work on the MIDI note stream, not on
+signals: they have **no jacks** and render nothing
+(`rack/modules/chord.rs`, `arp.rs`; the scale maths in `theory.rs`, a mirror
+of `app/src/music/scales.ts` pinned by `engine/tests/fixtures/scales.json`).
+
+**The note path** (`Rack::note`). Every note event reaching a rack (live
+keys, the sequencer's Ons and Offs, the releases on Stop, seek, pattern and
+clip edits) goes **Chord → Arp → every MIDI In**, in that fixed order
+whatever the module indices; a missing stage is skipped (no note module:
+straight to MIDI In, as before). Each stage writes a fixed `NoteBuf` (48
+events), so nothing allocates. Only the lowest-index Chord and Arp are used;
+the UI allows one of each per rack (`state/patches.ts` `ONE_PER_RACK`:
+`addModule` refuses a second, `validatePatch` drops it, the add menu greys it
+"Already in this rack").
+
+**Chord.** `type` (maj, min, 7, maj7, m7, m9, sus2, sus4, dim, **In key**:
+the diatonic seventh of the root's degree in the song key; default In key)
+and `inversion` 0..3. A note-on becomes the chord's notes at its velocity; the
+note-off releases exactly the notes that note-on made, even after `type`,
+`inversion` or the key changed. Overlapping chords share pitches by count: an
+Off goes out only when the last chord holding that pitch lets go. The key
+comes from `SET_KEY` (op 60: a = root 0..11, b = scale index; sent by
+`state/key-actions.ts` `keyCommands` on every key change, undo, load, restart
+and export), stored per rack (`Rack::set_key`); `RESET_ALL` sets A minor.
+
+**Arp.** `rate` 1/4, 1/8, 1/16, 1/32, 1/8T, 1/16T (960, 480, 240, 120, 320,
+160 ticks at 960 PPQ), `mode` Up, Down, Up-down (no repeated top or bottom),
+Random, As played; `octaves` 1..4; `gate` 10..100 % of a step (continuous, so
+automatable); `latch`. The rack calls `Arp::tick` at the start of every
+sub-block, before any module renders, so its notes reach MIDI In in that
+sub-block.
+
+- **Timing.** Steps are exact ticks on the song grid (multiples of the
+  step from tick 0) while the transport plays, Pattern or Song mode. A step
+  or gate end at tick T applies at the first sub-block boundary at or after
+  frame `round(frame(T))`: exactly where the sequencer's own note at T
+  applies (`tick_to_offset` rounds; the rack applies notes at its next
+  sub-block). So a held note arpeggiated at 1/16, gate 50 % renders **bit for
+  bit** like sixteen 120-tick notes drawn in the pattern, at 120 and 128 BPM
+  and across a Song loop wrap (`synth.rs` `arp_renders_like_drawn_notes_*`).
+  The clock never accumulates: it is the transport tick, or (stopped) a
+  tick count advanced by exactly one sub-block of ticks per sub-block.
+- **Stopped** (live playing) it runs its own clock at the project tempo: the
+  first key from silence plays at once, then every step.
+- **Starting.** The first key from silence while playing waits for the next
+  grid step (a step inside the sub-block the key arrived in counts, so a
+  pattern note on the grid plays at once). A transport jump (Play, Stop,
+  loop wrap, seek) or a switch of clock ends the sounding note and restarts
+  the pattern from its first note on the new grid.
+- **Random** is an xorshift re-seeded whenever the pattern restarts (first
+  key from silence, i.e. every pattern pass or clip that plays the chord
+  again, and every jump), so playback, replays and the export pick the same
+  notes; a pick never repeats the previous one.
+- **Latch, pedal, Stop.** With latch on, released keys keep playing; a key
+  pressed while none is down starts a new set; latch off drops them. The
+  sustain pedal holds released keys in the arp (it is not passed to MIDI In,
+  which would hold every step's Off). **Stop clears a latch** (keys still
+  held keep going on the free clock), so Stop always silences sequenced arps.
+- **Offs it does not own** (a key pressed before the module was added) pass
+  through; removing a Chord or Arp (`Edit::Remove`) first releases what it
+  holds (a Chord's Offs through the Arp), so no voice hangs.
+
+Param edits on note modules apply at once, never behind the 2 ms declick
+(`Rack::set_param`): they change no signal, and a fade would dip the output
+on every rate or mode click while an arpeggio plays. **Export** renders them
+identically: it replays the same commands through the same engine; the
+golden job `engine/tests/fixtures/export_theory.txt` (frozen from
+`project/testFixture.ts` `buildTheoryFixture` by `export/render.test.ts`) is
+checked natively and in WASM against `export_theory.hash`, and natively for
+call-size independence.
+
+**UI.** The panel header reads "→ MIDI In" (`ModulePanel.svelte`, test id
+`module-route-<idx>`) and has no port rail; the header wears MIDI In's source
+colour (`ui/theme.ts`: `notes` → source). Controls follow `controlMap.ts`:
+Arp rate/mode/latch LED buttons, octaves and gate knobs; Chord type a select,
+inversion a knob. The add menu lists them in a "Notes" group after Source.
+
 ## Adding a module
 
 Modules are enum-dispatched (no trait objects, no allocation):

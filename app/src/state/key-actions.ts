@@ -3,24 +3,25 @@
 // needs, as one undo entry.
 //
 // Engine side: the engine learns the key through keyCommands(), the ONE
-// place that builds its command(s). It is used by
+// place that builds its command: SET_KEY a=root b=scale index
+// (SCALE_IDS.indexOf(key.scale), the wire order pinned by
+// engine/tests/fixtures/scales.json). The engine's Chord modules set to
+// "In key" follow it (plan 26 Task 3; docs/architecture/modular.md "Note
+// modules"). It is used by
 //   - setKey (an edit) and applyKey (undo/redo: history/diffApply.ts), and
 //   - project/commands.ts projectCommands (load, audio restart, export), so
 //     every way a project reaches an engine sends the key.
-// PLAN 26 TASK 3 HOOK: keyCommands returns nothing until the engine has a
-// SET_KEY op; Task 3 adds the op and returns [[Op.SET_KEY, root, scale
-// index]] here (scale index = SCALE_IDS.indexOf(key.scale), the wire order
-// pinned by engine/tests/fixtures/scales.json). No other call site changes.
-import { isScaleId, sameKey } from '../music/scales';
+import { Op } from '../audio/protocol';
+import { isScaleId, sameKey, SCALE_IDS } from '../music/scales';
 import type { MusicKey } from '../music/scales';
 import type { CommandSink } from './actions';
 import type { EngineCommand } from './rack-actions';
 import type { Project } from './project.svelte';
 import { edit, markEdited } from './edits';
 
-/** The engine command(s) that set `key` (none yet: see PLAN 26 TASK 3 HOOK above). */
-export function keyCommands(_key: MusicKey): EngineCommand[] {
-  return [];
+/** The engine command that sets `key`: SET_KEY root, scale index. */
+export function keyCommands(key: MusicKey): EngineCommand[] {
+  return [[Op.SET_KEY, key.root, SCALE_IDS.indexOf(key.scale)]];
 }
 
 /** A valid copy of `key`, or null (root not an integer 0..11, or an unknown scale). */
@@ -39,7 +40,7 @@ export function applyKey(p: Project, sink: CommandSink, key: MusicKey): boolean 
   if (!k || sameKey(k, p.key)) return false;
   p.key = k;
   for (const c of keyCommands(k)) sink.send(c[0], c[1], c[2], c[3], c[4]);
-  markEdited(p); // no engine command yet (and the key is project data either way)
+  markEdited(p); // the key is project data (SET_KEY marks it too; be explicit)
   return true;
 }
 

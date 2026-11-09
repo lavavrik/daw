@@ -98,7 +98,7 @@ export const RADII = { xs: 3, sm: 6, md: 8, lg: 12, menu: 10 } as const;
 
 /**
  * Rack module header colour per category (spec §2), written verbatim. The
- * catalog has only four categories (source/shaping/utility/effect), so a
+ * catalog has its own categories (source/shaping/utility/effect/notes), so a
  * module's colour comes from `rackCategory` below, not from its catalog
  * category alone.
  */
@@ -124,16 +124,21 @@ export const SIGNAL_COLORS = {
 
 // ---- catalog -> spec colours (plan 20 Task 9) ------------------------------
 // The spec has six rack categories and four jack colours; the catalog
-// (engine/catalog.json) has four categories and the signal kinds
+// (engine/catalog.json) has five categories and the signal kinds
 // audio/cv/gate/pitch. theme.test.ts checks every catalog module, category
 // and port gets a colour.
 
 export type RackCategory = keyof typeof CATEGORY_COLORS;
 export type JackSignal = keyof typeof SIGNAL_COLORS;
 
-/** The catalog's categories onto the spec's: `shaping` is mostly filters (Filter, Formant). */
+/**
+ * The catalog's categories onto the spec's: `shaping` is mostly filters
+ * (Filter, Formant); `notes` (plan 26: Chord, Arp, which feed MIDI In) wear
+ * MIDI In's source colour, as part of the note source.
+ */
 export const CATALOG_CATEGORIES: Readonly<Record<string, RackCategory>> = {
   source: 'source',
+  notes: 'source',
   shaping: 'filter',
   utility: 'utility',
   effect: 'effect',

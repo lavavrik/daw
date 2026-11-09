@@ -16,6 +16,7 @@ import { addNote, newPattern, selectPattern, setPatternBars } from '../state/pat
 import { addModule, addSynthTrack, connect, setParam } from '../state/rack-actions';
 import { addClip, setLoop, setMode } from '../state/song-actions';
 import { addAudioClip, addAudioTrack, setAudioClip, trimAudioClipStart } from '../state/audio-actions';
+import { setKey } from '../state/key-actions';
 import { STARTER_PATCHES } from '../state/patches';
 import { sampleFile } from '../state/sampleFiles';
 import { MAX_ROWS, MAX_SAMPLES, MAX_STEPS, MAX_TRACKS, Project } from '../state/project.svelte';
@@ -190,6 +191,44 @@ export async function buildAutoFixture() {
   setLaneEnabled(p, s, lanes.ceiling.id, true);
   setMode(p, s, 'song');
   return { p, ids, drums, bass, lanes };
+}
+
+/**
+ * The export_theory.txt source (plan 26 Task 3): "Keys" (STARTER_PATCHES[1],
+ * Chord Stab, poly) with a Chord (In key, inversion 1) and an Arp (1/16T,
+ * Up-down, 2 octaves, gate 60 %) in its rack, in D dorian at 120 BPM: one
+ * held note per bar (D, G, A, C) in a 4-bar pattern, one clip over bars
+ * 0..4, Song mode (the export plays the song once, loop off). A second synth
+ * "Lead" (STARTER_PATCHES[3]) arpeggiates a held 4-note chord in Random mode
+ * (1/16, 1 octave) without a Chord, in two 2-bar clips, so the seeded random
+ * picks are pinned too (each clip start re-seeds: both clips play alike).
+ */
+export function buildTheoryFixture() {
+  const p = new Project();
+  const s = nullSink;
+  p.name = 'Theory fixture';
+  setTempo(p, s, 120);
+  setKey(p, s, { root: 2, scale: 'dorian' });
+  const keys = addSynthTrack(p, s, 'Keys', STARTER_PATCHES[1])!;
+  const lead = addSynthTrack(p, s, 'Lead', STARTER_PATCHES[3])!;
+  const chord = addModule(p, s, keys.id, 'chord')!;
+  setParam(p, s, keys.id, chord, paramIndex(moduleDef('chord'), 'inversion'), 1);
+  const arp = addModule(p, s, keys.id, 'arp')!;
+  const ap = (name: string) => paramIndex(moduleDef('arp'), name);
+  setParam(p, s, keys.id, arp, ap('rate'), 5); // 1/16T
+  setParam(p, s, keys.id, arp, ap('mode'), 2); // Up-down
+  setParam(p, s, keys.id, arp, ap('octaves'), 2);
+  setParam(p, s, keys.id, arp, ap('gate'), 60);
+  setPatternBars(p, s, keys.id, 4);
+  [50, 55, 57, 60].forEach((pitch, bar) => addNote(p, s, keys.id, { pitch, start: bar * BAR_TICKS, len: BAR_TICKS, vel: 100 }));
+  const larp = addModule(p, s, lead.id, 'arp')!;
+  setParam(p, s, lead.id, larp, ap('mode'), 3); // Random
+  setPatternBars(p, s, lead.id, 2);
+  for (const pitch of [62, 65, 69, 72]) addNote(p, s, lead.id, { pitch, start: 0, len: 2 * BAR_TICKS, vel: 90 });
+  addClip(p, s, keys.id, { start: 0, patternId: keys.patterns[0].id });
+  for (const bar of [0, 2]) addClip(p, s, lead.id, { start: bar * BAR_TICKS, patternId: lead.patterns[0].id });
+  setMode(p, s, 'song');
+  return { p, keys, lead };
 }
 
 export type LogEntry = { op: number; args: number[] } | { sample: number };
@@ -367,6 +406,8 @@ export function checkLog(log: LogEntry[]): { errors: string[]; state: ModelState
         else st.loop = b > a ? [a, b] : [0, 0];
         break;
       case Op.SEEK: if (!int(a, 0, MAX_SONG_TICKS)) bad('seek'); break;
+      // Plan 26: root 0..11, scale index 0..7 (protocol.rs decode).
+      case Op.SET_KEY: if (!int(a, 0, 11) || !int(b, 0, 7)) bad('key'); break;
       // A synth or (plan 15) drum track, or -1.
       case Op.SET_INPUT_TRACK: if (a !== -1) need(a, 'pattern'); st.input = a; break;
       case Op.ADD_DRUM_TRACK: case Op.ADD_SYNTH_TRACK: case Op.ADD_AUDIO_TRACK:

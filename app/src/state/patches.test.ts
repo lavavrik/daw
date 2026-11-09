@@ -228,6 +228,28 @@ describe('validatePatch', () => {
     });
   });
 
+  it('Chord and Arp save in a patch and load back; a second of either is dropped (plan 26)', () => {
+    const patch = {
+      name: 'Arp chords',
+      modules: [
+        { idx: 0, id: 'midi_in' },
+        { idx: 1, id: 'chord', params: { type: 4, inversion: 2 } },
+        { idx: 2, id: 'arp', params: { rate: 4, mode: 3, octaves: 2, gate: 75, latch: 1 } },
+        { idx: 3, id: 'out' },
+      ],
+      cables: [],
+    };
+    expect(validatePatch(patch).warnings).toEqual([]);
+    const p = new Project();
+    const t = addSynthTrack(p, { send: () => true }, 'S', validatePatch(patch).patch)!;
+    const out = trackPatch(t, () => -1);
+    expect(out.modules.map((m) => [m.id, m.params])).toEqual(patch.modules.map((m) => [m.id, expect.objectContaining(m.params ?? {})]));
+    expect(out.modules[2].params).toEqual({ rate: 4, mode: 3, octaves: 2, gate: 75, latch: 1 });
+    const twice = validatePatch({ ...patch, modules: [...patch.modules, { idx: 5, id: 'arp' }, { idx: 6, id: 'chord' }] });
+    expect(twice.patch.modules.map((m) => m.idx)).toEqual([0, 1, 2, 3]);
+    expect(twice.warnings).toEqual(['Dropped Arp (module 5): one per rack', 'Dropped Chord (module 6): one per rack']);
+  });
+
   it('drops pooled effects beyond the free FX-pool budget', () => {
     const modules = Array.from({ length: 5 }, (_, i) => ({ idx: i, id: 'delay' }));
     const r = validatePatch({ name: 'D', modules, cables: [] }, { fxFree: (id) => (id === 'delay' ? 3 : Infinity) });

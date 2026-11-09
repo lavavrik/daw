@@ -15,6 +15,8 @@ pub mod rack;
 pub mod samples;
 pub mod sequencer;
 pub mod synth;
+#[cfg(test)]
+mod test_json;
 pub mod transport;
 pub mod vis;
 

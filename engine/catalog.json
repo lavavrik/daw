@@ -199,6 +199,23 @@
         {"name":"threshold","label":"Threshold","min":0,"max":1,"default":0.86614174,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":false},
         {"name":"amount","label":"Amount","min":0,"max":1,"default":1,"integer":false,"curve":"lin","unit":"","choices":[],"smooth":true},
         {"name":"decay","label":"Decay","min":0.05,"max":2,"default":0.25,"integer":false,"curve":"exp","unit":"s","choices":[],"smooth":false}
+      ]},
+    {"kind":20,"id":"chord","name":"Chord","category":"notes",
+      "inputs":[],
+      "outputs":[],
+      "params":[
+        {"name":"type","label":"Type","min":0,"max":9,"default":9,"integer":true,"curve":"lin","unit":"","choices":["maj","min","7","maj7","m7","m9","sus2","sus4","dim","In key"],"smooth":false},
+        {"name":"inversion","label":"Inversion","min":0,"max":3,"default":0,"integer":true,"curve":"lin","unit":"","choices":[],"smooth":false}
+      ]},
+    {"kind":21,"id":"arp","name":"Arp","category":"notes",
+      "inputs":[],
+      "outputs":[],
+      "params":[
+        {"name":"rate","label":"Rate","min":0,"max":5,"default":2,"integer":true,"curve":"lin","unit":"","choices":["1/4","1/8","1/16","1/32","1/8T","1/16T"],"smooth":false},
+        {"name":"mode","label":"Mode","min":0,"max":4,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Up","Down","Up-down","Random","As played"],"smooth":false},
+        {"name":"octaves","label":"Octaves","min":1,"max":4,"default":1,"integer":true,"curve":"lin","unit":"","choices":[],"smooth":false},
+        {"name":"gate","label":"Gate","min":10,"max":100,"default":50,"integer":false,"curve":"lin","unit":"%","choices":[],"smooth":false},
+        {"name":"latch","label":"Latch","min":0,"max":1,"default":0,"integer":true,"curve":"lin","unit":"","choices":["Off","On"],"smooth":false}
       ]}
   ]
 }

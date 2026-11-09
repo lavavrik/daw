@@ -4,7 +4,7 @@ import { moduleDef, paramIndex } from '../audio/catalog';
 import { Project } from './project.svelte';
 import { addDrumTrack, liveInputTrack, removeTrack, selectTrack } from './actions';
 import {
-  addModule, addSynthTrack, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, removeModule,
+  addModule, addSynthTrack, connect, disconnect, fxPoolFullText, fxSlotsFree, loadPatch, onePerRackNote, removeModule,
   rollbackRefusedAdd, setParam, setParams, setRackLayout,
 } from './rack-actions';
 import { createHistory } from '../history/history';
@@ -92,6 +92,26 @@ describe('rack actions', () => {
     expect(addModule(p, sink, t.id, 'osc')).toBe(0);
     for (let i = 2; i < 32; i++) expect(addModule(p, sink, t.id, 'osc')).toBe(i);
     expect(addModule(p, sink, t.id, 'osc')).toBeNull();
+  });
+
+  it('a rack holds one Chord and one Arp at most (plan 26); other tracks have their own', () => {
+    const p = new Project();
+    const { sink, sent } = fake();
+    const empty = { name: 'e', modules: [], cables: [] };
+    const t = addSynthTrack(p, sink, 'S', empty)!;
+    const u = addSynthTrack(p, sink, 'T', empty)!;
+    expect(onePerRackNote(t, 'chord')).toBe('');
+    expect(addModule(p, sink, t.id, 'chord')).toBe(0);
+    expect(addModule(p, sink, t.id, 'arp')).toBe(1);
+    sent.length = 0;
+    expect(addModule(p, sink, t.id, 'chord')).toBeNull();
+    expect(addModule(p, sink, t.id, 'arp')).toBeNull();
+    expect(sent).toEqual([]);
+    expect(onePerRackNote(t, 'arp')).toMatch(/one per rack/);
+    expect(onePerRackNote(t, 'osc')).toBe('');
+    expect(addModule(p, sink, u.id, 'arp')).toBe(0);
+    removeModule(p, sink, t.id, 1);
+    expect(addModule(p, sink, t.id, 'arp')).toBe(1);
   });
 
   it('pooled effects share the engine FX pool across tracks (9th delay refused)', () => {

@@ -3,13 +3,13 @@ import { CATALOG, clampParam, fxPoolSlots, moduleDef, paramIndex, portIndex } fr
 import { MIXER_CATALOG } from './mixerCatalog';
 
 describe('catalog', () => {
-  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18, accent 19)', () => {
+  it('lists the modules in kind order (plan 6 effects are 9..15, sample player 16, formant 17, scope 18, accent 19, chord 20, arp 21)', () => {
     expect(CATALOG.modules.map((m) => m.id)).toEqual([
       'midi_in', 'osc', 'noise', 'filter', 'adsr', 'vca', 'lfo', 'mixer', 'out',
       'delay', 'reverb', 'chorus', 'eq', 'compressor', 'saturator', 'attenuator',
-      'sample_player', 'formant', 'scope', 'accent',
+      'sample_player', 'formant', 'scope', 'accent', 'chord', 'arp',
     ]);
-    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(20).keys()]);
+    expect(CATALOG.modules.map((m) => m.kind)).toEqual([...Array(22).keys()]);
   });
   it('the accent is an inline shaping module: gate/vel in, cv out (plan 17)', () => {
     const a = moduleDef('accent');

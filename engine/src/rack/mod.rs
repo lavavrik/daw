@@ -24,6 +24,13 @@
 //! cable) still holds the previous sub-block. So loops are allowed and cost
 //! exactly one sub-block of delay.
 //!
+//! # Note modules (plan 26)
+//! Chord and Arp have no jacks and render nothing: every note event goes
+//! Chord -> Arp -> every MIDI In ([`Rack::note`]), and the Arp's clock runs
+//! at the start of each sub-block before any module ([`Rack::render_sub`]).
+//! Their params apply at once (never faded); removing one releases what it
+//! holds. See docs/architecture/modular.md "Note modules".
+//!
 //! # Declicking
 //! * Params: modules smooth `smooth` params per sample (5 ms one-pole), so
 //!   `set_param` applies immediately. Continuous params that are not
@@ -121,7 +128,8 @@ use crate::protocol::{ERR_BAD_INDEX, ERR_BAD_VALUE, ERR_OUT_OF_MEMORY, OK};
 use crate::{MAX_MODULES, MAX_PARAMS, MAX_POLY, MAX_PORTS, RACK_BLOCK};
 use catalog::{spec, ModuleKind};
 use fx_pool::{FxKind, FxPool, FX_KINDS, NO_SLOT};
-use modules::{Ctx, Module, NoteEvent};
+use modules::theory::{Key, DEFAULT_KEY};
+use modules::{Ctx, Module, NoteBuf, NoteEvent};
 use port::PortBuf;
 
 use crate::automation::{AutoFrame, Target};
@@ -223,6 +231,8 @@ pub struct Rack {
     vis_level: [f32; MAX_POLY],
     vis_gate: [f32; MAX_POLY],
     vis_rendered: bool,
+    /// The song key (`SET_KEY`): what a Chord set to In key follows.
+    key: Key,
 }
 
 /// Is module `m` reachable from itself through modules in `within`?
@@ -274,6 +284,7 @@ impl Rack {
             vis_level: [0.0; MAX_POLY],
             vis_gate: [0.0; MAX_POLY],
             vis_rendered: false,
+            key: DEFAULT_KEY,
         }
     }
 
@@ -651,7 +662,11 @@ impl Rack {
         if !(value >= p.min && value <= p.max) || (p.integer && value.fract() != 0.0) {
             return ERR_BAD_VALUE;
         }
-        let class = self.sink_or(Some(kind), if p.integer { EditClass::Stepped } else { EditClass::Param });
+        // A note module's params (Chord, Arp) change no signal: they apply
+        // at once, never behind a fade (it would dip the output on every
+        // rate or mode click while an arpeggio plays).
+        let stepped = p.integer && !matches!(kind, ModuleKind::Chord | ModuleKind::Arp);
+        let class = self.sink_or(Some(kind), if stepped { EditClass::Stepped } else { EditClass::Param });
         if class == EditClass::Stepped && self.queued == 0 && self.param(idx, param) == Some(value) {
             return OK; // no-op: don't dip the output for a re-sent value
         }
@@ -659,13 +674,88 @@ impl Rack {
         OK
     }
 
-    /// Forward a note event to every MIDI In module (other modules ignore it).
+    /// The song key (`SET_KEY`, via `Synths::set_key`): a Chord set to In key
+    /// voices its next chords in it (held chords keep their notes).
+    pub fn set_key(&mut self, key: Key) {
+        self.key = key;
+    }
+
+    /// The running note module of `kind` (Chord or Arp) the note path uses:
+    /// the lowest-index one (the UI allows one of each per rack).
+    fn note_module(&self, kind: ModuleKind) -> Option<usize> {
+        self.slots.iter().position(|s| s.module.as_ref().map(Module::kind) == Some(kind))
+    }
+
+    /// A note event into the rack's note path (plan 26, "Note modules" in
+    /// docs/architecture/modular.md): through the Chord, then the Arp, then
+    /// to every MIDI In (other modules ignore notes). Without note modules
+    /// the event goes straight to MIDI In, as before. Allocation-free.
     pub fn note(&mut self, ev: NoteEvent) {
-        for slot in self.slots.iter_mut() {
-            if let Some(m) = slot.module.as_mut() {
-                m.note(ev, &slot.params);
+        let mut chorded = NoteBuf::new();
+        match self.note_module(ModuleKind::Chord).and_then(|i| self.slots.get_mut(i)) {
+            Some(Slot { module: Some(Module::Chord(c)), params, .. }) => c.input(ev, params, self.key, &mut chorded),
+            _ => chorded.push(ev),
+        }
+        self.arp_then_deliver(&chorded);
+    }
+
+    /// Events from the Chord stage: through the Arp (if any) to MIDI In.
+    fn arp_then_deliver(&mut self, evs: &NoteBuf) {
+        let out = match self.note_module(ModuleKind::Arp).and_then(|i| self.slots.get_mut(i)) {
+            Some(Slot { module: Some(Module::Arp(a)), params, .. }) => {
+                let mut out = NoteBuf::new();
+                for &e in evs.as_slice() {
+                    a.input(e, params, &mut out);
+                }
+                out
+            }
+            _ => *evs,
+        };
+        self.deliver(&out);
+    }
+
+    /// Hand events to every MIDI In module.
+    fn deliver(&mut self, evs: &NoteBuf) {
+        for &ev in evs.as_slice() {
+            for slot in self.slots.iter_mut() {
+                if let Some(m) = slot.module.as_mut() {
+                    m.note(ev, &slot.params);
+                }
             }
         }
+    }
+
+    /// Note module `i` is going away (removed): release what it still
+    /// holds, so no voice hangs. A Chord's Offs go on through the Arp (they
+    /// were its keys), an Arp's straight to MIDI In.
+    fn flush_note_module(&mut self, i: usize) {
+        let mut out = NoteBuf::new();
+        match self.slots.get_mut(i).and_then(|s| s.module.as_mut()) {
+            Some(Module::Chord(c)) => c.flush(&mut out),
+            Some(Module::Arp(a)) => {
+                a.flush(&mut out);
+                self.deliver(&out);
+                return;
+            }
+            _ => return,
+        }
+        if let Some(s) = self.slots.get_mut(i) {
+            s.module = None; // out of the path before its Offs go through the Arp
+        }
+        self.arp_then_deliver(&out);
+    }
+
+    /// The Arp's clock at a sub-block start (`Arp::tick`), its notes to MIDI In.
+    fn tick_arp(&mut self, ctx: &Ctx) {
+        let out = match self.note_module(ModuleKind::Arp).and_then(|i| self.slots.get_mut(i)) {
+            Some(Slot { module: Some(Module::Arp(a)), params, .. }) => {
+                let mut out = NoteBuf::new();
+                a.tick(ctx, params, &mut out);
+                out
+            }
+            _ => return,
+        };
+        self.deliver(&out);
     }
 
     /// Does `(module, port)` exist in the pending structure?
@@ -752,6 +842,7 @@ impl Rack {
                 self.silence_outputs(i);
             }
             Edit::Remove(i) => {
+                self.flush_note_module(i as usize);
                 self.release_module(i as usize);
                 if let Some(slot) = self.slots.get_mut(i as usize) {
                     *slot = Slot::EMPTY;
@@ -923,6 +1014,7 @@ impl Rack {
     /// `blk_l`/`blk_r`, apply the declick gain, and apply queued edits once
     /// the fade-out has reached 0.
     fn render_sub(&mut self, ctx: &Ctx, fx: &mut FxPool, smp: SampleView) {
+        self.tick_arp(ctx); // its due notes reach MIDI In before it renders
         for k in 0..self.order_len {
             let m = self.order[k] as usize;
             let Some(slot) = self.slots.get_mut(m) else { continue };
@@ -1047,6 +1139,60 @@ mod tests {
     /// it on the gate's rising sample. A note from silence must deliver its
     /// own velocity at once (not glide in from the previous note's); a
     /// legato note keeps the ADSR's latched velocity while MIDI `vel` glides.
+    /// MIDI In's held pitches (V/oct -> MIDI) after a render: the gate-high channels.
+    fn held_pitches(r: &Rack) -> Vec<i32> {
+        let (pitch, gate) = (&r.outs[0], &r.outs[1]);
+        let mut v: Vec<i32> = (0..gate.channels)
+            .filter(|&k| gate.data[k][RACK_BLOCK - 1] > 0.5)
+            .map(|k| (pitch.data[k][RACK_BLOCK - 1] * 12.0 + 60.0).round() as i32)
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn chord_follows_the_key_before_midi_in() {
+        use super::modules::theory::Key;
+        let fx = &mut FxPool::empty();
+        let mut r = Rack::new(SR);
+        assert_eq!(r.add_module(0, ModuleKind::MidiIn, fx), OK);
+        assert_eq!(r.add_module(1, ModuleKind::Chord, fx), OK);
+        r.note(NoteEvent::On { note: 57, vel: 100 });
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r), [57, 60, 64, 67], "A minor (the default): Am7");
+        // The key changes while the chord is held: the Off still releases what sounded.
+        r.set_key(Key::new(4, 0).unwrap()); // E major
+        r.note(NoteEvent::Off { note: 57 });
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r), [] as [i32; 0]);
+        r.note(NoteEvent::On { note: 57, vel: 100 });
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r), [57, 61, 64, 68], "E major degree 4: Amaj7");
+        // Chord type maj, inversion 2 on D3: D F# A -> A D F#; MIDI In re-presses the shared A.
+        assert_eq!(r.set_param(1, 0, 0.0), OK);
+        assert_eq!(r.set_param(1, 1, 2.0), OK);
+        r.note(NoteEvent::On { note: 50, vel: 100 });
+        render(&mut r, 256);
+        assert_eq!(held_pitches(&r), [57, 61, 62, 64, 66, 68], "D maj inv 2 joins the Amaj7");
+        // Releasing the Amaj7 keeps the A the D chord still holds.
+        r.note(NoteEvent::Off { note: 57 });
+        render(&mut r, 128);
+        assert_eq!(held_pitches(&r), [57, 62, 66]);
+    }
+
+    #[test]
+    fn note_module_params_never_dip_the_output() {
+        let (mut r, _) = sounding_square_osc();
+        assert_eq!(r.add_module(9, ModuleKind::Arp, &mut FxPool::empty()), OK);
+        assert_eq!(r.add_module(10, ModuleKind::Chord, &mut FxPool::empty()), OK);
+        render(&mut r, 256);
+        for (m, p, v) in [(9, 0, 3.0), (9, 1, 2.0), (9, 4, 1.0), (10, 0, 2.0), (10, 1, 3.0)] {
+            assert_eq!(r.set_param(m, p, v), OK);
+            assert_eq!(r.param(m, p), Some(v), "applied at once");
+        }
+        assert!(!dipped(&render(&mut r, 512)));
+    }
+
     #[test]
     fn mono_velocity_reaches_adsr_on_fresh_notes() {
         use super::modules::NoteEvent;

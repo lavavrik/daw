@@ -3,6 +3,7 @@ import { createHistory } from '../history/history';
 import { diffApply } from '../history/diffApply';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
+import { Op } from '../audio/protocol';
 import { applyKey, keyCommands, setKey } from './key-actions';
 import { addNote, fitNotesToKey, transposeNotes } from './pattern-actions';
 import { Project, currentPattern } from './project.svelte';
@@ -57,11 +58,18 @@ describe('setKey', () => {
     expect(old).toEqual({ root: 9, scale: 'minor' });
   });
 
-  it('engine hook: keyCommands is what setKey and projectCommands send (none until plan 26 Task 3)', () => {
+  it('the engine hears SET_KEY root, scale index from setKey, undo/redo and projectCommands (plan 26 Task 3)', () => {
     const x = setup();
-    expect(keyCommands({ root: 0, scale: 'major' })).toEqual([]);
+    expect(keyCommands({ root: 0, scale: 'major' })).toEqual([[Op.SET_KEY, 0, 0]]);
+    expect(keyCommands({ root: 11, scale: 'chromatic' })).toEqual([[Op.SET_KEY, 11, 7]]);
     setKey(x.p, x.sink, { root: 0, scale: 'major' });
-    expect(x.sent).toEqual(keyCommands({ root: 0, scale: 'major' }));
+    expect(x.sent).toEqual([[Op.SET_KEY, 0, 0, 0, 0]]);
+    x.sent.length = 0;
+    x.h.undo();
+    expect(x.sent).toEqual([[Op.SET_KEY, 9, 1, 0, 0]]);
+    x.sent.length = 0;
+    x.h.redo();
+    expect(x.sent).toEqual([[Op.SET_KEY, 0, 0, 0, 0]]);
     const cmds = projectCommands(serialize(x.p), new Map()).commands;
     const tail = keyCommands(x.p.key);
     expect(cmds.slice(cmds.length - tail.length)).toEqual(tail);

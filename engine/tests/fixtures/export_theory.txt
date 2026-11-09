@@ -1,0 +1,95 @@
+# Fixed render job shared by engine/tests/export_render.rs (native) and
+# app/src/export/render.test.ts (engine.wasm), like export_render.txt.
+# Frozen: the export command list (exportCommands) of the theory test
+# project (project/testFixture.ts buildTheoryFixture: D dorian, a Chord
+# (In key, inversion 1) into an Arp (1/16T up-down, 2 octaves) on a poly
+# synth, and a Random 1/16 Arp on a second synth, 120 BPM, Song mode).
+sample_rate 48000
+frames 480000
+cmd 17 0 0 0 0
+cmd 32 0 0 0 0
+cmd 31 0 4 0 0
+cmd 28 0 6500 0 3840
+cmd 28 1 7140 3840 3840
+cmd 28 2 7396 7680 3840
+cmd 28 3 7780 11520 3840
+cmd 32 0 0 0 0
+cmd 23 0 0 0 0
+cmd 18 0 0 0 0
+cmd 18 0 1 1 0
+cmd 18 0 2 3 0
+cmd 18 0 3 4 0
+cmd 18 0 4 5 0
+cmd 18 0 5 8 0
+cmd 18 0 6 20 0
+cmd 18 0 7 21 0
+cmd 22 0 1 6 2
+cmd 22 0 1 7 12
+cmd 22 0 2 1 500
+cmd 22 0 2 2 0.3
+cmd 22 0 2 3 4
+cmd 22 0 3 0 0.002
+cmd 22 0 3 1 0.18
+cmd 22 0 3 2 0
+cmd 22 0 3 3 0.15
+cmd 22 0 5 0 0.4
+cmd 22 0 6 1 1
+cmd 22 0 7 0 5
+cmd 22 0 7 1 2
+cmd 22 0 7 2 2
+cmd 22 0 7 3 60
+cmd 20 0 0 16 0
+cmd 20 0 1 48 0
+cmd 20 0 16 32 0
+cmd 20 0 48 33 0
+cmd 20 0 32 64 0
+cmd 20 0 48 65 0
+cmd 20 0 64 80 0
+cmd 20 0 64 81 0
+cmd 35 0 0 0 15360
+cmd 17 1 0 0 0
+cmd 32 1 0 0 0
+cmd 31 1 2 0 0
+cmd 28 1024 8026 0 7680
+cmd 28 1025 8410 0 7680
+cmd 28 1026 8922 0 7680
+cmd 28 1027 9306 0 7680
+cmd 32 1 0 0 0
+cmd 23 1 0 0 0
+cmd 18 1 0 0 0
+cmd 18 1 1 1 0
+cmd 18 1 2 6 0
+cmd 18 1 3 3 0
+cmd 18 1 4 4 0
+cmd 18 1 5 5 0
+cmd 18 1 6 8 0
+cmd 18 1 7 21 0
+cmd 22 1 0 1 1
+cmd 22 1 1 0 1
+cmd 22 1 2 0 1
+cmd 22 1 2 1 5
+cmd 22 1 2 4 0.3
+cmd 22 1 3 1 2500
+cmd 22 1 3 2 0.5
+cmd 22 1 4 1 0.3
+cmd 22 1 4 2 0.6
+cmd 22 1 4 3 0.2
+cmd 22 1 7 1 3
+cmd 20 1 0 16 0
+cmd 20 1 1 64 0
+cmd 20 1 32 18 0
+cmd 20 1 16 48 0
+cmd 20 1 48 80 0
+cmd 20 1 64 81 0
+cmd 20 1 80 96 0
+cmd 20 1 80 97 0
+cmd 35 256 0 0 7680
+cmd 35 257 0 7680 7680
+cmd 5 120 0 0 0
+cmd 6 0 0 0 0
+cmd 38 1 0 0 0
+cmd 39 0 0 0 0
+cmd 24 1 0 0 0
+cmd 60 2 2 0 0
+cmd 40 0 0 0 0
+cmd 3 0 0 0 0

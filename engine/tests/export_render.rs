@@ -190,6 +190,27 @@ fn export_auto_render_matches_golden() {
     matches_golden("export_auto");
 }
 
+/// Plan 26 Task 3: the export command list of a project with the note
+/// modules (a Chord in key into an up-down Arp on a poly synth in D dorian,
+/// a Random Arp on a second synth), frozen by app/src/export/render.test.ts;
+/// its own golden hash, asserted by the wasm side too (`theory render
+/// matches native`). The export replays the same commands as a live session,
+/// so the arpeggios render as they play.
+#[test]
+fn export_theory_render_matches_golden() {
+    matches_golden("export_theory");
+}
+
+/// The arp's clock is the transport tick, its notes land on rack
+/// sub-blocks: the render does not depend on the host's call size.
+#[test]
+fn export_theory_is_call_size_independent() {
+    let job = parse(&std::fs::read_to_string(fixture("export_theory.txt")).expect("fixture"));
+    let (l1, r1) = render(&job, QUANTUM);
+    let (l2, r2) = render(&job, daw_engine::MAX_BLOCK);
+    assert_eq!(hash(&l1, &r1), hash(&l2, &r2));
+}
+
 #[test]
 fn export_render_is_deterministic() {
     let job = parse(&std::fs::read_to_string(fixture("export_render.txt")).expect("fixture"));

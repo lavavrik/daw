@@ -22,7 +22,9 @@
 
 pub mod accent;
 pub mod adsr;
+pub mod arp;
 pub mod attenuator;
+pub mod chord;
 pub mod chorus;
 pub mod compressor;
 pub mod delay;
@@ -39,6 +41,7 @@ pub mod reverb;
 pub mod sample_player;
 pub mod saturator;
 pub mod scope;
+pub mod theory;
 pub mod vca;
 
 use super::catalog::{spec, ModuleKind};
@@ -72,6 +75,43 @@ pub enum NoteEvent {
     AllOff,
 }
 
+/// Capacity of a [`NoteBuf`]: one event through Chord makes at most 10
+/// (the old chord's 5 Offs, the new one's 5 Ons), Arp adds at most 2 per
+/// event and its tick a few.
+pub const NOTE_BUF: usize = 48;
+
+/// A fixed buffer of note events: what a note module (Chord, Arp) hands to
+/// the next stage of the rack's note path (`Rack::note`). Allocation-free;
+/// events past the capacity are dropped (never reached: see `NOTE_BUF`).
+#[derive(Clone, Copy)]
+pub struct NoteBuf {
+    evs: [NoteEvent; NOTE_BUF],
+    n: usize,
+}
+
+impl Default for NoteBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoteBuf {
+    pub const fn new() -> NoteBuf {
+        NoteBuf { evs: [NoteEvent::AllOff; NOTE_BUF], n: 0 }
+    }
+
+    pub fn push(&mut self, ev: NoteEvent) {
+        if let Some(e) = self.evs.get_mut(self.n) {
+            *e = ev;
+            self.n += 1;
+        }
+    }
+
+    pub fn as_slice(&self) -> &[NoteEvent] {
+        &self.evs[..self.n]
+    }
+}
+
 /// A module instance. Fixed-size (no heap), so racks store them inline in
 /// preallocated slots and adding a module never allocates. Variants differ in
 /// size by design: boxing the big ones would allocate on `add_module`. The
@@ -99,6 +139,10 @@ pub enum Module {
     Formant(formant::Formant),
     Scope(scope::Scope),
     Accent(accent::Accent),
+    /// Note modules (plan 26): no jacks, no audio; the rack routes the note
+    /// stream through them (`Rack::note`, `Rack::render_sub`).
+    Chord(chord::Chord),
+    Arp(arp::Arp),
 }
 
 impl Module {
@@ -133,6 +177,8 @@ impl Module {
             ModuleKind::Out => Module::Out(out::Out::new(sr)),
             ModuleKind::Scope => Module::Scope(scope::Scope::new(sr, slot)),
             ModuleKind::Accent => Module::Accent(accent::Accent::new(sr)),
+            ModuleKind::Chord => Module::Chord(chord::Chord::new()),
+            ModuleKind::Arp => Module::Arp(arp::Arp::new()),
         }
     }
 
@@ -140,7 +186,13 @@ impl Module {
     /// once (automation on a silent rack; see `Rack::automate`).
     pub fn snap(&mut self) {
         match self {
-            Module::MidiIn(_) | Module::Chorus(_) | Module::Eq(_) | Module::Compressor(_) | Module::Scope(_) => {}
+            Module::MidiIn(_)
+            | Module::Chorus(_)
+            | Module::Eq(_)
+            | Module::Compressor(_)
+            | Module::Scope(_)
+            | Module::Chord(_)
+            | Module::Arp(_) => {}
             Module::Osc(m) => m.snap(),
             Module::Noise(m) => m.snap(),
             Module::Filter(m) => m.snap(),
@@ -181,6 +233,8 @@ impl Module {
             Module::Formant(_) => ModuleKind::Formant,
             Module::Scope(_) => ModuleKind::Scope,
             Module::Accent(_) => ModuleKind::Accent,
+            Module::Chord(_) => ModuleKind::Chord,
+            Module::Arp(_) => ModuleKind::Arp,
         }
     }
 
@@ -227,12 +281,14 @@ impl Module {
             Module::Formant(m) => m.process(params, ins, outs),
             Module::Scope(m) => m.process(ctx, params, ins, fx),
             Module::Accent(m) => m.process(params, ins, outs),
+            // No outputs: their work is in the rack's note path.
+            Module::Chord(_) | Module::Arp(_) => {}
         }
     }
 
     /// Deliver a note event (with the module's current param values, which
     /// MIDI In needs for `voices`/`mode`). A no-op for everything except
-    /// MIDI In.
+    /// MIDI In (Chord and Arp get theirs from `Rack::note`, before this).
     pub fn note(&mut self, ev: NoteEvent, params: &[f32]) {
         if let Module::MidiIn(m) = self {
             m.note(ev, params);
@@ -268,6 +324,8 @@ impl Module {
             Module::Formant(m) => m.reset(),
             Module::Scope(m) => m.reset(),
             Module::Accent(m) => m.reset(),
+            Module::Chord(m) => m.reset(),
+            Module::Arp(m) => m.reset(),
         }
     }
 }

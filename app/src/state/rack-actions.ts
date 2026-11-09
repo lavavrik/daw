@@ -8,7 +8,7 @@ import { selectTrack, uniqueTrackName } from './actions';
 import type { CommandSink } from './actions';
 import { edit, markEdited } from './edits';
 import { dropModuleMappings, dropRackMappings } from './midiMap';
-import { STARTER_PATCHES, validatePatch } from './patches';
+import { ONE_PER_RACK, STARTER_PATCHES, validatePatch } from './patches';
 import { makeNotePattern } from './pattern-actions';
 import type { Patch } from './patches';
 
@@ -192,9 +192,17 @@ export function rollbackRefusedAdd(p: Project, slot: number, idx: number, kind: 
   return fxPoolFullText(moduleDef(kind)) || `No room for another ${moduleDef(kind).name}`;
 }
 
+/** "Already in this rack": why module `id` cannot be added to `t` again ("" if it can). */
+export function onePerRackNote(t: SynthTrack, id: string): string {
+  if (!ONE_PER_RACK.has(id)) return '';
+  const kind = moduleDef(id).kind;
+  return t.modules.some((m) => m.kind === kind) ? 'Already in this rack (one per rack)' : '';
+}
+
 /**
  * Lowest free idx; null when the rack is full, the kind's FX-pool slots are
- * all in use (the engine would refuse it), or the track/kind is unknown.
+ * all in use (the engine would refuse it), a note module (ONE_PER_RACK) is
+ * already there, or the track/kind is unknown.
  */
 export function addModule(p: Project, sink: CommandSink, trackId: string, kind: string | number): number | null {
   return edit(p, 'Add module', () => {
@@ -203,6 +211,7 @@ export function addModule(p: Project, sink: CommandSink, trackId: string, kind: 
     let def;
     try { def = moduleDef(kind); } catch { return null; }
     if (fxSlotsFree(p, def.kind) <= 0) return null;
+    if (onePerRackNote(t, def.id)) return null;
     const used = new Set(t.modules.map((m) => m.idx));
     let idx = 0;
     while (idx < MAX_MODULES && used.has(idx)) idx++;

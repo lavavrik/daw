@@ -73,6 +73,7 @@
 use crate::arrangement::{Clip, Timeline};
 use crate::automation::AutoFrame;
 use crate::mixer::StereoBufs;
+use crate::rack::modules::theory::{Key, DEFAULT_KEY};
 use crate::rack::modules::{Ctx, NoteEvent};
 use crate::rack::catalog::ModuleKind;
 use crate::rack::fx_pool::FxPool;
@@ -235,6 +236,13 @@ impl Synths {
         }
     }
 
+    /// The song key (`SET_KEY`) for every rack's Chord (In key).
+    pub fn set_key(&mut self, key: Key) {
+        for t in self.tracks.iter_mut() {
+            t.rack.set_key(key);
+        }
+    }
+
     /// Engine reset (`OP_RESET_ALL`): every track inactive with an empty
     /// patch and empty patterns, at once (no fade; the engine fades its
     /// master output instead). Each rack is hard-cleared first, dropping its
@@ -247,6 +255,7 @@ impl Synths {
             t.reset_patterns();
             *a = false;
         }
+        self.set_key(DEFAULT_KEY); // a blank session is in A minor
         self.fx.release_all();
     }
 
@@ -682,5 +691,140 @@ mod tests {
         let (level, gate) = voice(&e, 0, 0);
         assert!(level > 0.0 && gate == 1.0);
         assert!((1..MAX_POLY).all(|k| voice(&e, 0, k) == (0.0, 0.0)));
+    }
+
+    // ---- note modules (plan 26 Task 3) -------------------------------------
+
+    use crate::protocol::{
+        OP_CLIP_SET, OP_NOTE_SET, OP_PLAY, OP_RACK_REMOVE_MODULE, OP_SET_KEY, OP_SET_LOOP, OP_SET_MODE,
+        OP_SET_PATTERN_BARS, OP_SET_TEMPO,
+    };
+    use crate::MAX_NOTES;
+
+    const K_CHORD: f64 = 20.0;
+    const K_ARP: f64 = 21.0;
+
+    /// Note `idx` of track `slot`'s current pattern.
+    fn set_note(e: &mut Engine, slot: usize, idx: usize, pitch: u32, start: u32, len: u32) {
+        let a = (slot * MAX_NOTES + idx) as f64;
+        assert_eq!(e.command(OP_NOTE_SET, a, (pitch * 128 + 100) as f64, start as f64, len as f64), OK);
+    }
+
+    /// Play for `frames` and return the master output (left).
+    fn play(e: &mut Engine, frames: usize) -> Vec<f32> {
+        let (mut l, mut r) = ([0.0f32; 128], [0.0f32; 128]);
+        let mut out = Vec::with_capacity(frames);
+        for _ in 0..frames / 128 {
+            e.process(&mut l, &mut r);
+            out.extend_from_slice(&l);
+        }
+        out
+    }
+
+    /// Track 0 (`patch`, mono so every step retriggers one voice), 1-bar
+    /// patterns, at `bpm`; with `arp`: an Arp (1/16, Up, gate 50 %) and one
+    /// held C4 per bar; without: the same 1/16 notes drawn, 120 ticks long.
+    fn arp_or_drawn(bpm: f64, arp: bool) -> Engine {
+        let mut e = Engine::new(SR);
+        patch(&mut e, 0.0, 1.0);
+        assert_eq!(e.command(OP_SET_TEMPO, bpm, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_PATTERN_BARS, 0.0, 1.0, 0.0, 0.0), OK);
+        if arp {
+            assert_eq!(e.command(OP_RACK_ADD_MODULE, 0.0, 5.0, K_ARP, 0.0), OK);
+            set_note(&mut e, 0, 0, 60, 0, 3840);
+        } else {
+            for k in 0..16 {
+                set_note(&mut e, 0, k, 60, k as u32 * 240, 120);
+            }
+        }
+        e
+    }
+
+    #[test]
+    fn arp_renders_like_drawn_notes_in_pattern_mode() {
+        // 128 BPM: 23.4375 frames per tick, so steps fall between frames and
+        // between sub-blocks; three passes of the 1-bar pattern.
+        for bpm in [120.0, 128.0] {
+            let frames = (3.0 * 3840.0 * 48000.0 * 60.0 / (bpm * 960.0)) as usize;
+            let mut a = arp_or_drawn(bpm, true);
+            let mut d = arp_or_drawn(bpm, false);
+            assert_eq!(a.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0), OK);
+            assert_eq!(d.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0), OK);
+            let (x, y) = (play(&mut a, frames), play(&mut d, frames));
+            assert!(y.iter().any(|v| v.abs() > 0.01), "it sounds");
+            let first = x.iter().zip(&y).position(|(p, q)| p != q);
+            assert_eq!(first, None, "{bpm} BPM: the arp is bit-identical to the drawn notes");
+        }
+    }
+
+    #[test]
+    fn arp_renders_like_drawn_notes_in_song_mode_across_the_loop() {
+        let song = |e: &mut Engine| {
+            assert_eq!(e.command(OP_SET_MODE, 1.0, 0.0, 0.0, 0.0), OK);
+            // One clip of pattern 0, bars 0..2, and the loop over it.
+            assert_eq!(e.command(OP_CLIP_SET, 0.0, 0.0, 0.0, 7680.0), OK);
+            assert_eq!(e.command(OP_SET_LOOP, 0.0, 7680.0, 0.0, 0.0), OK);
+            assert_eq!(e.command(OP_PLAY, 0.0, 0.0, 0.0, 0.0), OK);
+        };
+        let mut a = arp_or_drawn(120.0, true);
+        let mut d = arp_or_drawn(120.0, false);
+        song(&mut a);
+        song(&mut d);
+        let frames = 2 * 7680 * 25 + 40_000; // twice round the loop and on
+        let (x, y) = (play(&mut a, frames), play(&mut d, frames));
+        assert!(y.iter().any(|v| v.abs() > 0.01));
+        assert_eq!(x.iter().zip(&y).position(|(p, q)| p != q), None);
+    }
+
+    #[test]
+    fn chord_in_key_turns_one_note_into_four_voices() {
+        let mut e = Engine::new(SR);
+        patch(&mut e, 0.0, 0.0);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 0.0, 5.0, K_CHORD, 0.0), OK); // default: In key
+        assert_eq!(e.command(OP_NOTE_ON, 57.0, 100.0, 0.0, 0.0), OK);
+        blocks(&mut e, 40);
+        let held = (0..MAX_POLY).filter(|&k| voice(&e, 0, k).1 == 1.0).count();
+        assert_eq!(held, 4, "A3 In key in A minor: Am7");
+        assert_eq!(e.command(OP_NOTE_OFF, 57.0, 0.0, 0.0, 0.0), OK);
+        blocks(&mut e, 2);
+        assert!((0..MAX_POLY).all(|k| voice(&e, 0, k).1 == 0.0), "the Off releases all four");
+        // Removing the Chord while a chord is held releases it (no stuck voice).
+        assert_eq!(e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0), OK);
+        blocks(&mut e, 10);
+        assert_eq!((0..MAX_POLY).filter(|&k| voice(&e, 0, k).1 == 1.0).count(), 4);
+        assert_eq!(e.command(OP_RACK_REMOVE_MODULE, 0.0, 5.0, 0.0, 0.0), OK);
+        blocks(&mut e, 4); // the removal waits for the 2 ms fade
+        assert!((0..MAX_POLY).all(|k| voice(&e, 0, k).1 == 0.0), "removal flushes the chord");
+        assert_eq!(e.command(OP_NOTE_OFF, 60.0, 0.0, 0.0, 0.0), OK); // harmless now
+        // SET_KEY is validated.
+        assert_eq!(e.command(OP_SET_KEY, 4.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_SET_KEY, 12.0, 0.0, 0.0, 0.0), crate::protocol::ERR_BAD_INDEX);
+    }
+
+    #[test]
+    fn arp_while_stopped_plays_live_keys_on_its_own_clock() {
+        let mut e = Engine::new(SR);
+        patch(&mut e, 0.0, 1.0);
+        assert_eq!(e.command(OP_SET_TEMPO, 120.0, 0.0, 0.0, 0.0), OK);
+        assert_eq!(e.command(OP_RACK_ADD_MODULE, 0.0, 5.0, K_ARP, 0.0), OK);
+        assert_eq!(e.command(OP_NOTE_ON, 60.0, 100.0, 0.0, 0.0), OK);
+        // 120 BPM 1/16 = 6000 frames, gate 50 %: the gate is high for the
+        // first half of every step.
+        let mut highs = 0;
+        let mut edges = 0;
+        let mut was = 0.0;
+        for _ in 0..(4 * 6000 / 128) {
+            blocks(&mut e, 1);
+            let g = voice(&e, 0, 0).1;
+            if g == 1.0 {
+                highs += 1;
+            }
+            if g == 1.0 && was == 0.0 {
+                edges += 1;
+            }
+            was = g;
+        }
+        assert_eq!(edges, 4, "four steps in four sixteenths");
+        assert!((80..=100).contains(&highs), "about half the blocks: {highs}");
     }
 }

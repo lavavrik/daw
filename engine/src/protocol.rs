@@ -12,6 +12,7 @@ use crate::automation::Target;
 use crate::mixer::catalog;
 use crate::mixer::Key;
 use crate::rack::catalog::ModuleKind;
+use crate::rack::modules::theory::{Key as MusicKey, SCALES};
 use crate::sequencer::{SeqNote, MAX_NOTE_TICKS};
 use crate::{
     BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_CLIP_GAIN, MAX_CLIPS, MAX_MODULES, MAX_NOTES, MAX_PARAMS, MAX_PATTERNS, MAX_PATTERN_BARS, MAX_PORTS, MAX_ROWS, MAX_SAMPLES, MAX_STEPS,
@@ -103,6 +104,8 @@ pub const OP_SET_PATTERN_FOCUS: u32 = 57; // a=slot 0..MAX_TRACKS-1 (only it pla
 // (settings, steps in every pattern, voices, sidechain keys) in one command.
 pub const OP_REMOVE_ROW: u32 = 58; // a=slot b=row: rows below move up one, the last row is empty
 pub const OP_INSERT_ROW: u32 = 59; // a=slot b=row: an empty row there, rows from it move down one (the last one is dropped)
+// The song key (plan 26 Task 3): what a Chord module set to In key follows.
+pub const OP_SET_KEY: u32 = 60; // a=root pitch class 0..11 (C = 0) b=scale index 0..7 (scales.ts SCALE_IDS order)
 
 pub const OK: i32 = 0;
 pub const ERR_UNKNOWN_OP: i32 = -1;
@@ -215,6 +218,8 @@ pub enum Command {
     /// Insert an empty drum row at `row`, moving it and every later row down
     /// one (the inverse of `RemoveRow`; `Drums::insert_row`).
     InsertRow { slot: usize, row: usize },
+    /// The song key (`theory::Key`): Chord modules set to In key follow it.
+    SetKey { key: MusicKey },
 }
 
 /// Finite, integral, in `0..max` -> index; otherwise `ERR_BAD_INDEX`.
@@ -611,6 +616,7 @@ pub fn decode(op: u32, a: f64, b: f64, c: f64, d: f64) -> Result<Command, i32> {
         }
         OP_REMOVE_ROW => Command::RemoveRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
         OP_INSERT_ROW => Command::InsertRow { slot: index(a, MAX_TRACKS)?, row: index(b, MAX_ROWS)? },
+        OP_SET_KEY => Command::SetKey { key: MusicKey::new(index(a, 12)?, index(b, SCALES.len())?).ok_or(ERR_BAD_INDEX)? },
         _ => return Err(ERR_UNKNOWN_OP),
     })
 }
@@ -693,7 +699,11 @@ mod tests {
             decode(OP_RACK_ADD_MODULE, 3., 0., 19., 0.),
             Ok(Command::RackAddModule { slot: 3, module: 0, kind: ModuleKind::Accent })
         );
-        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 20., 0.), Err(ERR_BAD_INDEX), "unknown kind");
+        assert_eq!(
+            decode(OP_RACK_ADD_MODULE, 3., 0., 21., 0.),
+            Ok(Command::RackAddModule { slot: 3, module: 0, kind: ModuleKind::Arp })
+        );
+        assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 0., 22., 0.), Err(ERR_BAD_INDEX), "unknown kind");
         assert_eq!(decode(OP_RACK_ADD_MODULE, 3., 32., 1., 0.), Err(ERR_BAD_INDEX));
         assert_eq!(decode(OP_RACK_REMOVE_MODULE, 3., 4., 0., 0.), Ok(Command::RackRemoveModule { slot: 3, module: 4 }));
         // Ports are packed module*16 + port.
@@ -1009,6 +1019,15 @@ mod tests {
             for (a, b) in [(-1., 0.), (MAX_TRACKS as f64, 0.), (0., MAX_ROWS as f64), (0., 0.5), (f64::NAN, 0.), (0., -1.)] {
                 assert_eq!(decode(op, a, b, 0., 0.), Err(ERR_BAD_INDEX), "op {op} [{a}, {b}]");
             }
+        }
+    }
+    #[test]
+    fn decode_set_key() {
+        assert_eq!(OP_SET_KEY, 60);
+        assert_eq!(decode(OP_SET_KEY, 9., 1., 0., 0.), Ok(Command::SetKey { key: MusicKey { root: 9, scale: 1 } }));
+        assert_eq!(decode(OP_SET_KEY, 11., 7., 0., 0.), Ok(Command::SetKey { key: MusicKey { root: 11, scale: 7 } }));
+        for (a, b) in [(12., 0.), (-1., 0.), (0., 8.), (0.5, 0.), (0., f64::NAN)] {
+            assert_eq!(decode(OP_SET_KEY, a, b, 0., 0.), Err(ERR_BAD_INDEX), "[{a}, {b}]");
         }
     }
     #[test]

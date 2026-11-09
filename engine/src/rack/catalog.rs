@@ -18,7 +18,7 @@ use crate::{MAX_MODULES, MAX_POLY, RACK_BLOCK, VIS_SCOPES};
 /// projects use them), so they never change: MidiIn=0, Osc=1, Noise=2,
 /// Filter=3, Adsr=4, Vca=5, Lfo=6, Mixer=7, Out=8, Delay=9, Reverb=10,
 /// Chorus=11, Eq=12, Compressor=13, Saturator=14, Attenuator=15,
-/// SamplePlayer=16, Formant=17, Scope=18, Accent=19.
+/// SamplePlayer=16, Formant=17, Scope=18, Accent=19, Chord=20, Arp=21.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
@@ -42,6 +42,8 @@ pub enum ModuleKind {
     Formant = 17,
     Scope = 18,
     Accent = 19,
+    Chord = 20,
+    Arp = 21,
 }
 
 impl ModuleKind {
@@ -67,6 +69,8 @@ impl ModuleKind {
         ModuleKind::Formant,
         ModuleKind::Scope,
         ModuleKind::Accent,
+        ModuleKind::Chord,
+        ModuleKind::Arp,
     ];
 
     /// Decode a wire id; unknown (or not yet implemented) ids give `None`.
@@ -151,7 +155,8 @@ pub struct ModuleSpec {
     pub id: &'static str,
     /// Display name ("VCA").
     pub name: &'static str,
-    /// "source" | "shaping" | "effect" | "utility" (UI grouping).
+    /// "source" | "shaping" | "effect" | "utility" | "notes" (UI grouping;
+    /// "notes": the note modules, which have no jacks).
     pub category: &'static str,
     pub inputs: &'static [PortSpec],
     pub outputs: &'static [PortSpec],
@@ -652,6 +657,44 @@ static ACCENT: ModuleSpec = ModuleSpec {
     ],
 };
 
+// ---- note modules (plan 26) ---------------------------------------------------
+// No jacks: the rack routes the MIDI In note stream through them, in the fixed
+// order Chord -> Arp -> voices (`Rack::note`; `modules::chord`, `modules::arp`).
+
+/// Chord `type` choices: `theory::CHORDS` / scales.ts `CHORD_TYPES` labels, wire order.
+pub const CHORD_TYPE_LABELS: &[&str] = &["maj", "min", "7", "maj7", "m7", "m9", "sus2", "sus4", "dim", "In key"];
+
+static CHORD: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Chord,
+    id: "chord",
+    name: "Chord",
+    category: "notes",
+    inputs: &[],
+    outputs: &[],
+    params: &[
+        // Default In key: the key's own seventh on each degree (plan 26).
+        choice("type", "Type", CHORD_TYPE_LABELS, 9.0),
+        int("inversion", "Inversion", 0.0, 3.0, 0.0, ""),
+    ],
+};
+
+static ARP: ModuleSpec = ModuleSpec {
+    kind: ModuleKind::Arp,
+    id: "arp",
+    name: "Arp",
+    category: "notes",
+    inputs: &[],
+    outputs: &[],
+    params: &[
+        // `arp::RATE_TICKS`: 960, 480, 240, 120, 320, 160 ticks.
+        choice("rate", "Rate", &["1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"], 2.0),
+        choice("mode", "Mode", &["Up", "Down", "Up-down", "Random", "As played"], 0.0),
+        int("octaves", "Octaves", 1.0, 4.0, 1.0, ""),
+        cont("gate", "Gate", 10.0, 100.0, 50.0, Curve::Lin, "%", false),
+        choice("latch", "Latch", &["Off", "On"], 0.0),
+    ],
+};
+
 /// The static spec of `kind`.
 pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
     match kind {
@@ -675,6 +718,8 @@ pub fn spec(kind: ModuleKind) -> &'static ModuleSpec {
         ModuleKind::Formant => &FORMANT,
         ModuleKind::Scope => &SCOPE,
         ModuleKind::Accent => &ACCENT,
+        ModuleKind::Chord => &CHORD,
+        ModuleKind::Arp => &ARP,
     }
 }
 
@@ -925,7 +970,6 @@ mod tests {
         let k = ModuleKind::Accent;
         assert_eq!(k as u8, 19);
         assert_eq!(ModuleKind::from_id(19), Some(k));
-        assert_eq!(ModuleKind::from_id(20), None);
         assert_eq!(k.fx_kind(), None, "inline: no FX pool");
         let s = spec(k);
         assert_eq!((s.id, s.name, s.category), ("accent", "Accent", "shaping"));
@@ -942,6 +986,42 @@ mod tests {
             ]
         );
         assert!(s.params.iter().all(|p| !p.integer));
+    }
+
+    #[test]
+    fn catalog_ids_20_21_note_modules() {
+        assert_eq!((ModuleKind::Chord as u8, ModuleKind::Arp as u8), (20, 21));
+        assert_eq!(ModuleKind::from_id(20), Some(ModuleKind::Chord));
+        assert_eq!(ModuleKind::from_id(21), Some(ModuleKind::Arp));
+        assert_eq!(ModuleKind::from_id(22), None);
+        for k in [ModuleKind::Chord, ModuleKind::Arp] {
+            let s = spec(k);
+            assert_eq!(s.category, "notes");
+            assert!(s.inputs.is_empty() && s.outputs.is_empty(), "{}: no jacks", s.id);
+            assert_eq!(k.fx_kind(), None);
+        }
+        let c = spec(ModuleKind::Chord);
+        assert_eq!((c.id, c.name), ("chord", "Chord"));
+        assert_eq!(c.params[0].choices.len(), super::super::modules::theory::CHORDS.len());
+        assert_eq!(c.params[0].default as usize, super::super::modules::theory::IN_KEY);
+        let ps: Vec<_> = c.params.iter().map(|p| (p.name, p.min, p.max, p.default, p.integer)).collect();
+        assert_eq!(ps, [("type", 0.0, 9.0, 9.0, true), ("inversion", 0.0, 3.0, 0.0, true)]);
+        let a = spec(ModuleKind::Arp);
+        assert_eq!((a.id, a.name), ("arp", "Arp"));
+        let ps: Vec<_> = a.params.iter().map(|p| (p.name, p.min, p.max, p.default, p.integer, p.unit)).collect();
+        assert_eq!(
+            ps,
+            [
+                ("rate", 0.0, 5.0, 2.0, true, ""),
+                ("mode", 0.0, 4.0, 0.0, true, ""),
+                ("octaves", 1.0, 4.0, 1.0, true, ""),
+                ("gate", 10.0, 100.0, 50.0, false, "%"),
+                ("latch", 0.0, 1.0, 0.0, true, ""),
+            ]
+        );
+        assert_eq!(a.params[0].choices, ["1/4", "1/8", "1/16", "1/32", "1/8T", "1/16T"]);
+        assert_eq!(a.params[0].choices.len(), super::super::modules::arp::RATE_TICKS.len());
+        assert_eq!(a.params[1].choices, ["Up", "Down", "Up-down", "Random", "As played"]);
     }
 
     #[test]

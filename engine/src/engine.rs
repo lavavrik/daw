@@ -730,6 +730,8 @@ impl Engine {
             }
             // Applies from the next block; the playhead position is unchanged.
             Command::SetTempo { bpm } => self.transport.bpm = bpm,
+            // Chord modules set to In key voice their next chords in it.
+            Command::SetKey { key } => self.synths.set_key(key),
             Command::SetMetronome { on } => self.metronome.on = on,
             // Resets the slot to defaults and silences its voices (a synth
             // track there fades out first).
@@ -2423,7 +2425,7 @@ mod tests {
         assert_eq!(e.command(OP_SET_STEP_COUNT, 1.0, 32.0, 0.0, 0.0), ERR_BAD_INDEX);
         assert_eq!(e.command(OP_SET_SWING, 1.0, 0.5, 0.0, 0.0), ERR_BAD_INDEX);
         // Bad kind ids / module indices / slots.
-        for kind in [99.0, 20.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
+        for kind in [99.0, 22.0, -1.0, 1.5, f64::NAN, f64::INFINITY, 1e300] {
             assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 0.0, kind, 0.0), ERR_BAD_INDEX, "kind {kind}");
         }
         assert_eq!(e.command(OP_RACK_ADD_MODULE, 1.0, 32.0, K_OSC, 0.0), ERR_BAD_INDEX);

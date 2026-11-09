@@ -19,8 +19,8 @@
 //     commands (AUTO_LANE_SET captures them).
 //   -> tempo, metronome, mode, loop, live input track (always sent: they
 //     must match the UI whatever the engine had)
-//   -> the key (plan 26: state/key-actions.ts keyCommands, the one builder
-//     of the engine's key command; none until Task 3's SET_KEY).
+//   -> the key (plan 26: SET_KEY from state/key-actions.ts keyCommands, the
+//     one builder of the engine's key command).
 //
 // Pure: no Project, no engine. A validated project (schema.ts validate) is
 // still checked against what only a whole project knows: the shared FX pool

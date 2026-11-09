@@ -46,9 +46,11 @@ gets a scale as its index (Task 3's `SET_KEY`). Append only.
 `state/key-actions.ts` `keyCommands(key)` is the only builder of the
 engine's key command. It is sent by `applyKey` (so `setKey` and undo) and
 appended by `project/commands.ts` `projectCommands` after the transport
-commands (so load, audio restart and export). It returns nothing until
-plan 26 Task 3 adds `SET_KEY` (a = root, b = `SCALE_IDS` index); then only
-that function changes.
+commands (so load, audio restart and export). It returns
+`[SET_KEY, root, SCALE_IDS index]` (plan 26 Task 3; op 60). The engine keeps
+the key per rack (`Synths::set_key` → `Rack::set_key`) for the Chord
+module's In key; `RESET_ALL` puts it back to A minor. See
+[modular.md](modular.md#note-modules-chord-20-arp-21).
 
 ## scales.ts
 
@@ -92,6 +94,13 @@ edges and a middle octave, every diatonic triad/seventh, and ~1900
 `voiceChord` cases) and fails when the committed file is stale.
 Regenerate after changing the maths:
 `UPDATE_FIXTURES=1 npx vitest run app/src/music/scales.fixture.test.ts`.
+The Rust side is `engine/src/rack/modules/theory.rs` (scales, harmony,
+chord tables, `nearest_in_key` without a direction, the diatonic seventh,
+`voice_chord`); its tests read the fixture (`include_bytes!`, so a
+regenerated file is picked up on the next `cargo test`) and check the tables
+and every `nearest`, `diatonic` and `voicings` row. In key snaps the root to
+the key's own scale (a chromatic key: to major), then stacks the seventh on
+that root's harmony-scale degree, as `voiceChord` does.
 
 ## Piano roll
 

@@ -135,7 +135,7 @@ fn catalog_ids_fixed() {
         assert_eq!(spec(k).id, name);
         assert_eq!(spec(k).category, category, "{name}");
     }
-    assert_eq!(ModuleKind::from_id(20), None);
+    assert_eq!(ModuleKind::from_id(22), None);
     // The stereo effects: l, r (+ sc), 1-channel l/r outs.
     for k in [ModuleKind::Delay, ModuleKind::Reverb, ModuleKind::Chorus, ModuleKind::Eq, ModuleKind::Compressor] {
         let s = spec(k);

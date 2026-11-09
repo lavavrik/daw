@@ -49,11 +49,20 @@ const isEnd = (v: unknown): v is [number, string] =>
   Array.isArray(v) && v.length === 2 && Number.isInteger(v[0]) && typeof v[1] === 'string';
 
 /**
+ * The note modules (plan 26; docs/architecture/modular.md "Note modules"):
+ * a rack holds at most one of each. The engine routes the note stream
+ * through the first Chord and the first Arp only, so a second would be dead
+ * (addModule refuses it, validatePatch drops it).
+ */
+export const ONE_PER_RACK: ReadonlySet<string> = new Set(['chord', 'arp']);
+
+/**
  * Check a patch from outside the program (project file, library, …) before
  * anything reaches the engine. Never throws; whatever is wrong is dropped or
  * clamped with a warning:
  *   - modules of unknown kind, or with an idx out of 0..MAX_MODULES-1 or
  *     already taken (first one wins);
+ *   - a second Chord or Arp (ONE_PER_RACK; the first one wins);
  *   - pooled effects (Delay, Reverb, Chorus) beyond `fxFree(id)`, the FX-pool
  *     slots the caller can still spend on that kind (default: the whole
  *     pool), with the "All 8 delays in use" text;
@@ -100,6 +109,10 @@ export function validatePatch(
     }
     if (byIdx.has(idx)) {
       warn(`Dropped ${def.name}: module idx ${idx} is already taken`);
+      continue;
+    }
+    if (ONE_PER_RACK.has(def.id) && [...byIdx.values()].some((d) => d.id === def.id)) {
+      warn(`Dropped ${def.name} (module ${idx}): one per rack`);
       continue;
     }
     const slots = fxPoolSlots(def);

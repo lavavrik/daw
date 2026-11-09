@@ -10,7 +10,8 @@ import { encodeWav24 } from './wav';
 import { engineWasmBytes as wasmBytes } from './testWasm';
 import { exportCommands, exportFrames } from './exportSong';
 import { serialize } from '../project/serialize';
-import { buildAudioFixture, buildAutoFixture } from '../project/testFixture';
+import { buildAudioFixture, buildAutoFixture, buildTheoryFixture } from '../project/testFixture';
+import { Op } from '../audio/protocol';
 
 const fixture = (f: string) => readFileSync(new URL(`../../../engine/tests/fixtures/${f}`, import.meta.url), 'utf8');
 
@@ -192,5 +193,43 @@ describe('export render core', () => {
     const text = `${lines.join('\n')}\n`;
     if (process.env.UPDATE_FIXTURE) writeFileSync(new URL('../../../engine/tests/fixtures/export_auto.txt', import.meta.url), text);
     expect(fixture('export_auto.txt')).toBe(text);
+  });
+
+  it('theory render matches native: Chord and Arp render as live (plan 26)', () => {
+    const j = parseJob(fixture('export_theory.txt'));
+    expect(j.commands.some((c) => c[0] === Op.SET_KEY && c[1] === 2 && c[2] === 2)).toBe(true); // D dorian
+    const { left, right } = renderSong(wasmBytes(), j);
+    expect(left.length).toBe(j.frames);
+    expect(left.some((x) => Math.abs(x) > 0.01)).toBe(true);
+    const golden = fixture('export_theory.hash').trim();
+    expect(fnv1a32(left, right).toString(16).padStart(8, '0')).toBe(golden);
+    // The key is heard (In key follows it): the same job in E major differs
+    // (not A minor: it has D dorian's notes, so its diatonic chords are the same).
+    const eMajor = renderSong(wasmBytes(), { ...j, commands: j.commands.map((c) => (c[0] === Op.SET_KEY ? [Op.SET_KEY, 4, 0, 0, 0] : c)) });
+    expect(fnv1a32(eMajor.left, eMajor.right)).not.toBe(fnv1a32(left, right));
+  });
+
+  it('export_theory.txt is the export command list of the theory test project, frozen', () => {
+    // engine/tests/export_render.rs renders this file natively
+    // (export_theory_render_matches_golden). Regenerate after an intended
+    // change with UPDATE_FIXTURE=1, then UPDATE_GOLDEN=1 cargo test -p
+    // daw-engine --test export_render.
+    const { p } = buildTheoryFixture();
+    const json = serialize(p);
+    const rate = 48000;
+    const lines = [
+      '# Fixed render job shared by engine/tests/export_render.rs (native) and',
+      '# app/src/export/render.test.ts (engine.wasm), like export_render.txt.',
+      '# Frozen: the export command list (exportCommands) of the theory test',
+      '# project (project/testFixture.ts buildTheoryFixture: D dorian, a Chord',
+      '# (In key, inversion 1) into an Arp (1/16T up-down, 2 octaves) on a poly',
+      '# synth, and a Random 1/16 Arp on a second synth, 120 BPM, Song mode).',
+      `sample_rate ${rate}`,
+      `frames ${exportFrames(json, rate)}`,
+      ...exportCommands(json, new Map()).commands.map(([op, a = 0, b = 0, c = 0, d = 0]) => `cmd ${op} ${a} ${b} ${c} ${d}`),
+    ];
+    const text = `${lines.join('\n')}\n`;
+    if (process.env.UPDATE_FIXTURE) writeFileSync(new URL('../../../engine/tests/fixtures/export_theory.txt', import.meta.url), text);
+    expect(fixture('export_theory.txt')).toBe(text);
   });
 });

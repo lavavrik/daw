@@ -42,7 +42,14 @@
   //   drawPoints thins it (Ramer–Douglas–Peucker, ½ % of the travel) and
   //   replaces the points in its tick range: one edit;
   // - double-click a point deletes it; right-click a point: Linear / Hold /
-  //   Delete (for the selection holding it);
+  //   Delete (for the selection holding it), then Insert shape ▸;
+  // - right-click anywhere on the lane: Insert shape ▸ (plan 28 Task 2), a
+  //   submenu of SHAPE_PRESETS (ramps, duck, sines, gates). It writes the
+  //   shape over the loop range while the loop is on, else over the 4 bars
+  //   from the playhead's bar (shapeRange; its title names the bars) and
+  //   replaces the lane's points there: one undo entry. A shape that would
+  //   pass the 512-point cap is refused with a hint. The submenu opens on
+  //   hover, click, → or Enter; ← or Escape goes back to its item;
   // - hovering shows the value (the param's units) under the pointer.
   // Drags apply at most once per animation frame; Escape or a lost pointer
   // capture puts the points back (a point placed by the press goes again).
@@ -61,7 +68,11 @@
   import type { AutoDef, AutoOwner } from '../../state/automation';
   import { MAX_AUTO_POINTS } from '../../audio/protocol';
   import { laneView } from './laneView.svelte';
-  import { addPoint, deletePoints, drawPoints, movePoints, setPointCurve, setPointShape } from '../../state/automation-actions';
+  import {
+    SHAPE_PRESETS, addPoint, deletePoints, drawPoints, insertShape, movePoints, setPointCurve, setPointShape, shapeRange,
+  } from '../../state/automation-actions';
+  import type { ShapeRange } from '../../state/automation-actions';
+  import { BAR_TICKS } from '../../audio/protocol';
   import type { AutomationLane, Project } from '../../state/project.svelte';
   import { releaseHeldKeys } from '../../input/shortcuts';
   import { formatValue, fromPos, toPos } from '../rack/knobMath';
@@ -73,6 +84,7 @@
 
   let {
     p, engine, lane, owner, def, color, view, width, dpr, top, h, testid, label, suspended = false, root = null, onhint,
+    playhead = () => p.songPosition,
   }: {
     p: Project;
     engine: CommandSink;
@@ -93,6 +105,8 @@
     /** The timeline's vertical scroll container: only lanes in (or near) its view draw. */
     root?: Element | null;
     onhint: (text: string) => void;
+    /** The song playhead in ticks (Timeline: the heard tick while the song plays, else the parked position): where a shape goes without a loop. */
+    playhead?: () => number;
   } = $props();
 
   /** A 1/16 note: the point grid. */
@@ -108,7 +122,13 @@
   /** The freehand stroke being drawn (lane-local px), previewed until release. */
   let stroke = $state.raw<{ x: number; y: number }[] | null>(null);
   let tip = $state.raw<{ x: number; y: number; text: string } | null>(null);
-  let menu = $state.raw<{ x: number; y: number; ids: string[] } | null>(null);
+  /** The context menu: `ids` the points it acts on (none: a press off the points), `range` where Insert shape writes. */
+  let menu = $state.raw<{ x: number; y: number; ids: string[]; range: ShapeRange } | null>(null);
+  /** The Insert shape ▸ submenu is open; `subLeft`: it opens to the menu's left (no room on the right). */
+  let sub = $state(false);
+  let subLeft = $state(false);
+  let subEl = $state<HTMLDivElement | null>(null);
+  let subItem = $state<HTMLButtonElement | null>(null);
   let cursor = $state('crosshair');
 
   /** Selected ids that still exist. */
@@ -472,18 +492,51 @@
     if (drag) return;
     const { x, y } = local(e);
     const hit = pointHit(geom, x, y, view, h);
+    const range = shapeRange(p, playhead());
+    sub = false;
+    subLeft = false;
     if (!hit) {
-      menu = null;
+      menu = { x: e.clientX, y: e.clientY, ids: [], range };
       return;
     }
     if (!selected.has(hit)) selected = new Set([hit]);
-    menu = { x: e.clientX, y: e.clientY, ids: sel.includes(hit) ? sel : [hit] };
+    menu = { x: e.clientX, y: e.clientY, ids: sel.includes(hit) ? sel : [hit], range };
   }
   const menuHold = $derived(menu ? menu.ids.every((id) => pointById(id)?.hold) : false);
   function closeMenu() {
     menu = null;
+    sub = false;
     el?.focus({ preventScroll: true });
   }
+  /** "Bars 1–4 (loop)" / "Bars 5–8": where Insert shape writes (bar numbers 1-based, the end bar the last one touched). */
+  function rangeText(r: ShapeRange) {
+    const a = Math.floor(r.start / BAR_TICKS) + 1;
+    const b = Math.max(a, Math.ceil(r.end / BAR_TICKS));
+    return `${a === b ? `Bar ${a}` : `Bars ${a}–${b}`}${p.loop.on ? ' (loop)' : ''}`;
+  }
+  function openSub(focus: boolean) {
+    sub = true;
+    if (focus) queueMicrotask(() => (subEl?.querySelector('button') as HTMLButtonElement | null)?.focus());
+  }
+  function closeSub() {
+    sub = false;
+    subItem?.focus();
+  }
+  function pickShape(id: string) {
+    const m = menu;
+    const pr = SHAPE_PRESETS.find((x) => x.id === id);
+    closeMenu();
+    if (!m || !pr) return;
+    const r = insertShape(p, engine, lane.id, pr.shape, m.range);
+    if (!r.ok) onhint(`${label}: ${r.message}`);
+    else selected = new Set();
+  }
+  // The submenu opens to the right of the menu unless that runs off the window.
+  $effect(() => {
+    const se = subEl;
+    if (!sub || !se || subLeft) return;
+    if (se.getBoundingClientRect().right > window.innerWidth - 4) subLeft = true;
+  });
   function shape(hold: boolean) {
     if (menu) setPointShape(p, engine, lane.id, menu.ids, hold);
     closeMenu();
@@ -594,13 +647,48 @@
     oncontextmenu={(e) => e.preventDefault()}
   >
     <div class="menu-ttl">{label}{menu.ids.length > 1 ? ` · ${menu.ids.length} points` : ''}</div>
-    <button role="menuitemradio" aria-checked={!menuHold} data-testid="auto-menu-linear" title="A straight line to the next point" onclick={() => shape(false)}>
-      <span class="check" aria-hidden="true">{menuHold ? '' : '✓'}</span>Linear
-    </button>
-    <button role="menuitemradio" aria-checked={menuHold} data-testid="auto-menu-hold" title="Keep this value until the next point, then step" onclick={() => shape(true)}>
-      <span class="check" aria-hidden="true">{menuHold ? '✓' : ''}</span>Hold
-    </button>
-    <button role="menuitem" data-testid="auto-menu-delete" onclick={menuDelete}>Delete</button>
+    {#if menu.ids.length}
+      <button role="menuitemradio" aria-checked={!menuHold} data-testid="auto-menu-linear" title="A straight line to the next point" onclick={() => shape(false)} onpointerenter={() => (sub = false)}>
+        <span class="check" aria-hidden="true">{menuHold ? '' : '✓'}</span>Linear
+      </button>
+      <button role="menuitemradio" aria-checked={menuHold} data-testid="auto-menu-hold" title="Keep this value until the next point, then step" onclick={() => shape(true)} onpointerenter={() => (sub = false)}>
+        <span class="check" aria-hidden="true">{menuHold ? '✓' : ''}</span>Hold
+      </button>
+      <button role="menuitem" data-testid="auto-menu-delete" onclick={menuDelete} onpointerenter={() => (sub = false)}>Delete</button>
+      <div class="menu-sep" role="separator"></div>
+    {/if}
+    <div class="sub-wrap">
+      <button
+        role="menuitem"
+        aria-haspopup="menu"
+        aria-expanded={sub}
+        data-testid="auto-menu-shape"
+        title="Write a ramp, duck, sine or gate over {rangeText(menu.range)}, replacing the points there"
+        bind:this={subItem}
+        onclick={() => (sub ? (sub = false) : openSub(true))}
+        onpointerenter={() => openSub(false)}
+        onkeydown={(e) => { if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); openSub(true); } }}
+      >
+        <span class="check" aria-hidden="true"></span>Insert shape<span class="more" aria-hidden="true">▸</span>
+      </button>
+      {#if sub}
+        <div
+          class="sub"
+          class:left={subLeft}
+          bind:this={subEl}
+          role="menu"
+          tabindex="-1"
+          aria-label="Insert shape"
+          data-testid="auto-shape-menu"
+          onkeydown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSub(); } }}
+        >
+          <div class="menu-ttl" data-testid="auto-shape-range">{rangeText(menu.range)}</div>
+          {#each SHAPE_PRESETS as s (s.id)}
+            <button role="menuitem" data-testid="auto-shape-{s.id}" onclick={() => pickShape(s.id)}>{s.label}</button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 {/if}
 
@@ -616,4 +704,10 @@
   .menu button { width: 100%; box-sizing: border-box; font: inherit; text-align: left; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; }
   .menu button:hover, .menu button:focus-visible { background: var(--raised); outline: none; }
   .menu .check { display: inline-block; width: 14px; }
+  .menu-sep { height: 1px; margin: 4px 0; background: var(--line); }
+  /* Insert shape ▸: the submenu flies out level with its item, past the menu's right padding (or to its left). */
+  .sub-wrap { position: relative; }
+  .more { float: right; padding-left: 12px; color: var(--text-2); }
+  .sub { position: absolute; top: -7px; left: calc(100% + 12px); z-index: 51; min-width: 130px; padding: 6px 16px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); display: flex; flex-direction: column; }
+  .sub.left { left: auto; right: calc(100% + 12px); }
 </style>

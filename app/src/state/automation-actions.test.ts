@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MIX_MASTER, Op, autoPoint, packAutoParam } from '../audio/protocol';
+import { BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_SONG_TICKS, MIX_MASTER, Op, autoPoint, packAutoParam } from '../audio/protocol';
 import { moduleDef, paramIndex } from '../audio/catalog';
 import { mixParam } from '../audio/mixerCatalog';
 import { createHistory } from '../history/history';
@@ -8,13 +8,17 @@ import { blankModel, run, view } from '../history/engineModel';
 import { projectCommands } from '../project/commands';
 import { serialize } from '../project/serialize';
 import type { ProjectJson } from '../project/schema';
-import { fromPos } from '../ui/rack/knobMath';
+import { fromPos, toPos } from '../ui/rack/knobMath';
 import { addDrumTrack, removeTrack } from './actions';
 import { addAudioTrack } from './audio-actions';
 import {
-  addLane, addPoint, deletePoints, drawPoints, movePoints, overrideLane, removeLane, setLaneEnabled, setPointCurve, setPointShape,
+  DUCK_CURVE, DUCK_DIP_TICKS, SHAPE_PRESETS, SINE_BACK_CURVE, SINE_OUT_CURVE,
+  addLane, addPoint, deletePoints, drawPoints, insertShape, movePoints, overrideLane, removeLane, setLaneEnabled, setPointCurve,
+  setPointShape, shapePoints, shapeRange,
 } from './automation-actions';
-import { commandEdits } from './edits';
+import type { AutoShape } from './automation-actions';
+import { laneValueAt } from './automation';
+import { commandEdits, edit } from './edits';
 import { STARTER_PATCHES } from './patches';
 import { Project } from './project.svelte';
 import type { AutomationLane } from './project.svelte';
@@ -360,5 +364,164 @@ describe('automation actions', () => {
     p.history!.undo();
     expect(p.tracks[0].automation.map((l) => l.lane)).toEqual([fader.lane]);
     agrees();
+  });
+
+  // ---- Shapes (plan 28 Task 2) ----------------------------------------------------------
+  const BAR = BAR_TICKS;
+  const BEAT = BAR / 4;
+  const preset = (id: string): AutoShape => SHAPE_PRESETS.find((x) => x.id === id)!.shape;
+  const cutoff = moduleDef('filter').params.find((d) => d.name === 'cutoff')!; // exp, 20..20000 Hz
+  const glide = moduleDef('midi_in').params.find((d) => d.name === 'glide')!; // exp from 0: a zero zone
+  const defs = { cutoff, glide, fader: mixParam('fader'), pan: mixParam('pan') };
+  const FOUR = { start: 0, end: 4 * BAR };
+
+  it('shapePoints: point counts and values over 4 bars', () => {
+    const d = defs.cutoff;
+    const at = (shape: AutoShape) => shapePoints(shape, d, FOUR);
+    const pos = (x: { value: number }) => toPos(d, x.value);
+    // Ramps: two points, a straight line (in knob position: logarithmic in Hz).
+    expect(at(preset('ramp-up'))).toEqual([
+      { tick: 0, value: d.min, hold: false, curve: 0 }, { tick: 4 * BAR, value: d.max, hold: false, curve: 0 },
+    ]);
+    expect(at(preset('ramp-down')).map((x) => [x.tick, x.value])).toEqual([[0, d.max], [4 * BAR, d.min]]);
+    // Duck: every beat the top, a fast dip, a curved recovery; the end back at the top.
+    const duck = at(preset('duck'));
+    expect(duck).toHaveLength(33);
+    for (let b = 0; b < 16; b++) {
+      expect(duck[2 * b]).toEqual({ tick: b * BEAT, value: d.max, hold: false, curve: 0 });
+      expect(duck[2 * b + 1]).toEqual({ tick: b * BEAT + DUCK_DIP_TICKS, value: d.min, hold: false, curve: DUCK_CURVE });
+    }
+    expect(duck[32]).toEqual({ tick: 4 * BAR, value: d.max, hold: false, curve: 0 });
+    // Sines: mid, top, mid, bottom per cycle, curved; a whole number of cycles ends on the mid line.
+    for (const [id, period, n] of [['sine-4', BAR / 4, 65], ['sine-2', BAR / 2, 33], ['sine-1', BAR, 17]] as const) {
+      const s = at(preset(id));
+      expect(s).toHaveLength(n);
+      expect(s.map((x) => x.tick)).toEqual(Array.from({ length: n }, (_, i) => (i * period) / 4));
+      s.forEach((x, i) => {
+        expect(pos(x)).toBeCloseTo([0.5, 1, 0.5, 0][i % 4], 9);
+        expect(x.hold).toBe(false);
+        expect(x.curve).toBe(i === n - 1 ? 0 : i % 2 === 0 ? SINE_OUT_CURVE : SINE_BACK_CURVE);
+      });
+      expect(s.filter((x) => x.value === d.max)).toHaveLength((4 * BAR) / period); // one top per cycle
+    }
+    // Gates: hold points, open (max) for the first half of each step, closed (min) for the second.
+    for (const [id, period, n] of [['gate-8', BAR / 8, 65], ['gate-16', BAR / 16, 129]] as const) {
+      const g = at(preset(id));
+      expect(g).toHaveLength(n);
+      g.slice(0, -1).forEach((x, i) => expect(x).toEqual({ tick: (i * period) / 2, value: i % 2 ? d.min : d.max, hold: true, curve: 0 }));
+      expect(g.at(-1)).toEqual({ tick: 4 * BAR, value: d.max, hold: false, curve: 0 });
+    }
+  });
+
+  it('shapePoints: values stay in the range; lo / hi; a cycle cut short; the sine is a sine', () => {
+    for (const d of Object.values(defs)) {
+      for (const { shape } of SHAPE_PRESETS) {
+        for (const range of [FOUR, { start: 1000, end: 5555 }]) {
+          const s = shapePoints(shape, d, range);
+          expect(s[0].tick).toBe(range.start);
+          expect(s.at(-1)!.tick).toBe(range.end);
+          for (let i = 0; i < s.length; i++) {
+            expect(s[i].value).toBeGreaterThanOrEqual(d.min);
+            expect(s[i].value).toBeLessThanOrEqual(d.max);
+            if (i) expect(s[i].tick).toBeGreaterThan(s[i - 1].tick);
+            expect(Math.abs(s[i].curve)).toBeLessThanOrEqual(1);
+          }
+        }
+        // Out-of-range lo / hi are clamped.
+        for (const x of shapePoints({ ...shape, lo: -1e9, hi: 1e9 }, d, FOUR)) expect([d.min <= x.value, x.value <= d.max]).toEqual([true, true]);
+      }
+    }
+    // lo / hi in the param's units (Task 3's riser: a fader from −24 dB to 0 dB).
+    expect(shapePoints({ kind: 'ramp-up', lo: -24, hi: 0 }, defs.fader, FOUR).map((x) => x.value)).toEqual([-24, 0]);
+    // A range that cuts a cycle: the last point is on the cut segment's own line.
+    const d = defs.pan; // lin, −1..1
+    const cut = shapePoints({ kind: 'sine', period: 960 }, d, { start: 0, end: 1000 });
+    expect(cut.map((x) => x.tick)).toEqual([0, 240, 480, 720, 960, 1000]);
+    const last = cut.at(-1)!;
+    expect(last.value).toBeCloseTo(laneValueAt(shapePoints({ kind: 'sine', period: 960 }, d, { start: 0, end: 1920 }), 1000, d)!, 9);
+    expect([last.hold, last.curve]).toEqual([false, 0]);
+    // The curved quarters stay within 4.5 % of the travel of a true sine (what the lane plays).
+    const sine = shapePoints({ kind: 'sine', period: BAR }, d, { start: 0, end: BAR });
+    let worst = 0;
+    for (let t = 0; t <= BAR; t += 8) worst = Math.max(worst, Math.abs(laneValueAt(sine, t, d)! - Math.sin((2 * Math.PI * t) / BAR)) / 2);
+    expect(worst).toBeLessThan(0.045);
+    // Empty range: nothing.
+    expect(shapePoints(preset('duck'), d, { start: 10, end: 10 })).toEqual([]);
+  });
+
+  it('shapeRange: the loop when it is on, else 4 bars from the playhead bar', () => {
+    const p = new Project();
+    expect(shapeRange(p, 5 * BAR + 100)).toEqual({ start: 5 * BAR, end: 9 * BAR });
+    expect(shapeRange(p, 0)).toEqual({ start: 0, end: 4 * BAR });
+    expect(shapeRange(p, MAX_SONG_TICKS)).toEqual({ start: MAX_SONG_TICKS - BAR, end: MAX_SONG_TICKS });
+    expect(shapeRange(p, MAX_SONG_TICKS - 2 * BAR)).toEqual({ start: MAX_SONG_TICKS - 2 * BAR, end: MAX_SONG_TICKS });
+    p.loop = { on: true, start: 2 * BAR, end: 6 * BAR + 480 };
+    expect(shapeRange(p, 0)).toEqual({ start: 2 * BAR, end: 6 * BAR + 480 });
+  });
+
+  it('insertShape replaces the range, keeps the rest: one undo entry', () => {
+    const { p, sink, agrees } = rig({ history: true });
+    const s = addSynthTrack(p, sink, 'Bass', STARTER_PATCHES[0])!;
+    const filter = s.modules.find((x) => x.kind === moduleDef('filter').kind)!;
+    const l = addLane(p, sink, s.id, { kind: 'rack', module: filter.idx, param: 'cutoff' })!;
+    for (const [tick, value] of [[0, 300], [BAR, 500], [2 * BAR, 800], [4 * BAR, 900], [6 * BAR, 1000]]) addPoint(p, sink, l.id, { tick, value });
+    p.history!.clear();
+    const before = pts(l);
+    const outside = l.points.filter((x) => x.tick < BAR || x.tick > 4 * BAR).map((x) => x.id);
+    // Bars 2-5 (BAR..4 BAR, both ends included): the points at BAR, 2 BAR and 4 BAR go.
+    const r = insertShape(p, sink, l.id, preset('sine-4'), { start: BAR, end: 4 * BAR });
+    expect(r).toEqual({ ok: true, points: 49 });
+    expect(l.points.map((x) => x.id).filter((id) => outside.includes(id))).toEqual(outside); // same objects
+    expect(l.points.map((x) => x.tick)).toEqual([0, ...Array.from({ length: 49 }, (_, i) => BAR + i * 240), 6 * BAR]);
+    expect(l.points.map((x) => x.curve).slice(1, 4)).toEqual([SINE_OUT_CURVE, SINE_BACK_CURVE, SINE_OUT_CURVE]);
+    invariants(l);
+    agrees();
+    expect(p.history!.labels.undo).toBe('Insert shape');
+    expect(p.history!.undo()).toBe(true);
+    expect(p.history!.canUndo).toBe(false);
+    expect(pts(l)).toEqual(before);
+    agrees();
+    p.history!.redo();
+    expect(l.points).toHaveLength(51);
+    agrees();
+  });
+
+  it('insertShape nests in an outer edit (no entry of its own) and refuses past the cap', () => {
+    const { p, sent, sink, agrees } = rig({ history: true });
+    const t = addDrumTrack(p, sink)!;
+    p.history!.clear();
+    // Task 3's use: one edit makes the lane and writes its shape; one undo takes both.
+    const lane = edit(p, 'Add transition', () => {
+      const l = addLane(p, sink, t.id, { kind: 'mix', param: 'fader' })!;
+      expect(insertShape(p, sink, l.id, { kind: 'ramp-up', lo: -24, hi: 0 }, { start: 8 * BAR, end: 16 * BAR })).toEqual({ ok: true, points: 2 });
+      return l;
+    });
+    expect(pts(lane)).toEqual([[8 * BAR, -24, false], [16 * BAR, 0, false]]);
+    expect(p.history!.labels.undo).toBe('Add transition');
+    agrees();
+    p.history!.undo();
+    expect(p.history!.canUndo).toBe(false);
+    expect(t.automation).toEqual([]);
+    p.history!.redo();
+    const l = t.automation[0];
+    // 447 points outside bars 1-4 (the ramp's 2 and 445 more); a 1/16 gate (129 points) would make 576: refused, not truncated.
+    for (let i = 0; i < 445; i++) addPoint(p, sink, l.id, { tick: 5 * BAR + i * 10, value: -6 });
+    const s0 = { json: JSON.stringify(serialize(p)), sent: sent.length, undo: p.history!.labels.undo, version: p.version };
+    const r = insertShape(p, sink, l.id, preset('gate-16'), FOUR);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.message).toMatch(/129 points.*576.*512/);
+    expect({ json: JSON.stringify(serialize(p)), sent: sent.length, undo: p.history!.labels.undo, version: p.version }).toEqual(s0);
+    // Exactly the cap is fine: a 1/8 gate (65 points) makes 512.
+    expect(insertShape(p, sink, l.id, preset('gate-8'), FOUR)).toEqual({ ok: true, points: 65 });
+    expect(l.points).toHaveLength(MAX_AUTO_POINTS);
+    invariants(l);
+    agrees();
+    // Other refusals: nothing changes either.
+    const s1 = JSON.stringify(serialize(p));
+    expect(insertShape(p, sink, 'nope', preset('duck'), FOUR).ok).toBe(false);
+    expect(insertShape(p, sink, l.id, preset('duck'), { start: BAR, end: BAR }).ok).toBe(false);
+    expect(insertShape(p, sink, l.id, { kind: 'duck', lo: NaN }, FOUR).ok).toBe(false);
+    expect(insertShape(p, sink, l.id, { kind: 'sine', period: 4 }, FOUR).ok).toBe(false);
+    expect(JSON.stringify(serialize(p))).toBe(s1);
   });
 });

@@ -16,12 +16,12 @@
 // the state by the action that removes the target, in the same edit():
 // removeModule, a patch load (RACK_CLEAR) and rollbackRefusedAdd in
 // rack-actions.ts; removeTrack takes the track's lanes with the track.
-import { MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_SONG_TICKS, Op } from '../audio/protocol';
+import { BAR_TICKS, MAX_AUTO_LANES, MAX_AUTO_POINTS, MAX_SONG_TICKS, Op } from '../audio/protocol';
 import { clampParam } from '../audio/catalog';
 import { fromPos, toPos } from '../ui/rack/knobMath';
 import type { CommandSink } from './actions';
 import {
-  DRAW_TOLERANCE, freeLane, isMasterChannel, laneCount, laneSetCommand, pointCommands, pointMap, pointTuple, projectLanes,
+  DRAW_TOLERANCE, bend, freeLane, isMasterChannel, laneCount, laneSetCommand, pointCommands, pointMap, pointTuple, projectLanes,
   sameTarget, targetDef, thin,
 } from './automation';
 import type { AutoDef, AutoOwner, PointTuple } from './automation';
@@ -286,6 +286,206 @@ export function drawPoints(p: Project, sink: CommandSink, laneId: string, sample
     commitPoints(sink, lane, want);
     return true;
   });
+}
+
+// ---- Shapes (plan 28 Task 2) ----------------------------------------------------------
+//
+// "Insert shape ▸" writes a ready-made curve over a tick range: ramps, a
+// per-beat duck, sine LFOs, square gates. Each shape is a few breakpoints
+// per cycle with CURVED segments (the engine bends a segment by its left
+// point's curve, f(x) = x^(2^(-3 curve)), in knob space: automation.rs),
+// not a dense run of points, so a 4-bar shape stays far below the 512-point
+// cap. shapePoints() is the pure generator; insertShape() is the action.
+
+/** One beat (a quarter note) in ticks, 4/4. */
+const BEAT_TICKS = BAR_TICKS / 4;
+/** The duck's dip: from the top to the bottom in a 1/32 of a beat (~15 ms at 120 BPM). */
+export const DUCK_DIP_TICKS = BEAT_TICKS / 32;
+/** The duck's recovery curve: x^2 of the way back, so it stays low a moment, then swells back by the next beat. */
+export const DUCK_CURVE = -1 / 3;
+/**
+ * A sine LFO is 4 breakpoints per cycle (mid, top, mid, bottom) and each
+ * quarter is one curved segment. Leaving the mid line the sine covers
+ * sin(πx/2) of the quarter's travel at fraction x; returning to it,
+ * 1 − cos(πx/2). x^k fits these best (least max error) at k ≈ 0.6135 and
+ * k ≈ 1.7435: curves +0.235 and −0.267. The fit is within 4.4 % (out) and
+ * 0.7 % (back) of the full travel of a true sine.
+ */
+export const SINE_OUT_CURVE = 0.235;
+export const SINE_BACK_CURVE = -0.267;
+/** Shortest sine / gate cycle (ticks): its quarter (a sine's breakpoint step) stays at least 2 ticks. */
+export const MIN_SHAPE_PERIOD = 8;
+
+/**
+ * A shape to insert. `lo` / `hi` are the ends of its travel in the param's
+ * units (default: the param's min and max; clamped to the range): a ramp up
+ * goes lo → hi, a duck dips from hi to lo, a sine swings between them, a
+ * gate opens at hi and closes at lo. `period` is one cycle in ticks.
+ */
+export type AutoShape =
+  | { kind: 'ramp-up' | 'ramp-down' | 'duck'; lo?: number; hi?: number }
+  | { kind: 'sine' | 'gate'; period: number; lo?: number; hi?: number };
+
+/** A tick range [start, end], both ends included. */
+export interface ShapeRange {
+  start: number;
+  end: number;
+}
+
+/** A point a shape writes (the lane gives it an id and an engine idx). */
+export interface ShapePoint {
+  tick: number;
+  value: number;
+  hold: boolean;
+  curve: number;
+}
+
+/** The shapes the lane menu offers ("Insert shape ▸"), in menu order; `id` names the test id auto-shape-<id>. */
+export const SHAPE_PRESETS: readonly { id: string; label: string; shape: AutoShape }[] = [
+  { id: 'ramp-up', label: 'Ramp up', shape: { kind: 'ramp-up' } },
+  { id: 'ramp-down', label: 'Ramp down', shape: { kind: 'ramp-down' } },
+  { id: 'duck', label: 'Duck per beat', shape: { kind: 'duck' } },
+  { id: 'sine-4', label: 'Sine 1/4 bar', shape: { kind: 'sine', period: BAR_TICKS / 4 } },
+  { id: 'sine-2', label: 'Sine 1/2 bar', shape: { kind: 'sine', period: BAR_TICKS / 2 } },
+  { id: 'sine-1', label: 'Sine 1 bar', shape: { kind: 'sine', period: BAR_TICKS } },
+  { id: 'gate-8', label: 'Gate 1/8', shape: { kind: 'gate', period: BAR_TICKS / 8 } },
+  { id: 'gate-16', label: 'Gate 1/16', shape: { kind: 'gate', period: BAR_TICKS / 16 } },
+];
+
+/** Bars a shape covers when no loop is set. */
+export const SHAPE_BARS = 4;
+
+/**
+ * Where a shape goes: the loop range while the loop is on, else SHAPE_BARS
+ * bars from the bar the playhead is in (`playhead`: the heard song tick
+ * while the song plays, else the parked song position), kept in the song.
+ */
+export function shapeRange(p: Project, playhead: number): ShapeRange {
+  if (p.loop.on) return { start: p.loop.start, end: p.loop.end };
+  // MAX_SONG_TICKS is whole bars: a playhead at the very end still gets its last bar.
+  const start = Math.min(MAX_SONG_TICKS - BAR_TICKS, Math.max(0, Math.floor(playhead / BAR_TICKS) * BAR_TICKS));
+  return { start, end: Math.min(MAX_SONG_TICKS, start + SHAPE_BARS * BAR_TICKS) };
+}
+
+/** A breakpoint in travel units: u 0 = lo, 1 = hi. */
+interface Bp {
+  tick: number;
+  u: number;
+  hold: boolean;
+  curve: number;
+}
+
+/**
+ * The breakpoints of `shape` from `start` until the first one past `end`
+ * (the one after `end` is needed to cut the last segment there).
+ */
+function breakpoints(shape: AutoShape, start: number, end: number): Bp[] {
+  const out: Bp[] = [];
+  const bp = (tick: number, u: number, hold = false, curve = 0) => out.push({ tick: Math.round(tick), u, hold, curve });
+  const past = () => out.length > 0 && out[out.length - 1].tick > end;
+  switch (shape.kind) {
+    case 'ramp-up':
+    case 'ramp-down': {
+      const up = shape.kind === 'ramp-up';
+      bp(start, up ? 0 : 1);
+      bp(end, up ? 1 : 0);
+      break;
+    }
+    case 'duck':
+      // Each beat: the top, a fast linear dip, a curved recovery that reaches the top at the next beat.
+      for (let b = start; !past(); b += BEAT_TICKS) {
+        bp(b, 1);
+        bp(b + DUCK_DIP_TICKS, 0, false, DUCK_CURVE);
+      }
+      break;
+    case 'sine': {
+      // mid → top → mid → bottom → mid ..., starting on the rise.
+      const q = shape.period / 4;
+      const u = [0.5, 1, 0.5, 0];
+      for (let i = 0; !past(); i++) bp(start + i * q, u[i % 4], false, i % 2 === 0 ? SINE_OUT_CURVE : SINE_BACK_CURVE);
+      break;
+    }
+    case 'gate':
+      // Open (hi) for the first half of each cycle, closed (lo) for the second: hold points, square steps.
+      for (let i = 0; !past(); i++) bp(start + (i * shape.period) / 2, i % 2 === 0 ? 1 : 0, true);
+      break;
+  }
+  return out;
+}
+
+/**
+ * The points `shape` writes over `range` for a param `def` (pure). Values
+ * are spread over the lo..hi travel in KNOB POSITION, as the lane is drawn
+ * and the engine interpolates (an exp cutoff ramps logarithmically in Hz),
+ * and always lie in the param's range. The first point is at range.start
+ * and the last at range.end: a cycle cut short by the end gets a point
+ * there on its own line (a power curve cut at any fraction is the same
+ * curve, so the segment keeps its curve exactly). The last point is linear
+ * with curve 0 (the segment after it leads to a point outside the shape).
+ * Empty when end <= start.
+ *
+ * For a 4-bar range (16 beats): ramps 2 points; duck 33 (2 per beat + the
+ * end); sine 1/4 bar 65, 1/2 bar 33, 1 bar 17 (4 per cycle + the end);
+ * gate 1/8 65, 1/16 129 (2 per cycle + the end).
+ */
+export function shapePoints(shape: AutoShape, def: AutoDef, range: ShapeRange): ShapePoint[] {
+  const { start, end } = range;
+  if (!(end > start)) return [];
+  const loV = clampParam(def, shape.lo ?? def.min);
+  const hiV = clampParam(def, shape.hi ?? def.max);
+  const p0 = toPos(def, loV);
+  const p1 = toPos(def, hiV);
+  // The ends map to lo / hi exactly (no position round trip).
+  const valueOf = (u: number) => (u === 0 ? loV : u === 1 ? hiV : clampParam(def, fromPos(def, p0 + u * (p1 - p0))));
+  const bps = breakpoints(shape, start, end);
+  const kept = bps.filter((b) => b.tick <= end);
+  const last = kept[kept.length - 1];
+  if (last.tick < end) {
+    // Cut the segment that crosses the end at the end.
+    const next = bps[kept.length];
+    const u = last.hold ? last.u : last.u + (next.u - last.u) * bend((end - last.tick) / (next.tick - last.tick), last.curve);
+    kept.push({ tick: end, u, hold: false, curve: 0 });
+  }
+  // The last point is linear and straight: its segment, to a later point the lane keeps, is not the shape's.
+  const n = kept.length - 1;
+  return kept.map((b, i) => ({ tick: b.tick, value: valueOf(b.u), hold: i < n && b.hold, curve: i < n ? b.curve : 0 }));
+}
+
+/** insertShape's result: how many points the shape wrote, or why it was refused. */
+export type InsertShapeResult = { ok: true; points: number } | { ok: false; message: string };
+
+/**
+ * Write `shape` over `range` (ticks, both ends included; rounded and kept in
+ * the song) on lane `laneId`: its points REPLACE every point of the lane in
+ * the range and the points outside it are kept. One edit() ("Insert
+ * shape"): one undo entry on its own, and none of its own inside an outer
+ * edit() (it then belongs to the caller's entry, as Task 3's transitions
+ * do: they create a track, a clip and lanes and insert shapes in one edit).
+ *
+ * Refused, with a message for the user (nothing changes, nothing is sent):
+ * no such lane, an empty range, a NaN lo / hi, a period under
+ * MIN_SHAPE_PERIOD, or a lane that would pass MAX_AUTO_POINTS (the shape is
+ * never truncated).
+ */
+export function insertShape(p: Project, sink: CommandSink, laneId: string, shape: AutoShape, range: ShapeRange): InsertShapeResult {
+  const f = findLane(p, laneId);
+  if (!f) return { ok: false, message: 'That automation lane is gone' };
+  const start = tickOf(range.start);
+  const end = tickOf(range.end);
+  if (start === null || end === null || end <= start) return { ok: false, message: 'The shape needs a range at least a tick long' };
+  if (Number.isNaN(shape.lo) || Number.isNaN(shape.hi)) return { ok: false, message: 'The shape has no value range' };
+  if ('period' in shape && !(shape.period >= MIN_SHAPE_PERIOD)) return { ok: false, message: 'The shape repeats too fast' };
+  const { lane, def } = f;
+  const made = shapePoints(shape, def, { start, end });
+  const want: Want[] = [
+    ...lane.points.filter((x) => x.tick < start || x.tick > end).map(keep),
+    ...made.map((m): Want => ({ old: null, ...m })),
+  ];
+  if (want.length > MAX_AUTO_POINTS) {
+    return { ok: false, message: `The shape needs ${made.length} points: the lane would hold ${want.length}, over the ${MAX_AUTO_POINTS} a lane holds` };
+  }
+  edit(p, 'Insert shape', () => commitPoints(sink, lane, want));
+  return { ok: true, points: made.length };
 }
 
 /**

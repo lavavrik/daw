@@ -354,6 +354,8 @@
   // ---- drawing -------------------------------------------------------------
   /** Heard song tick while playing in Song mode, else null. Not reactive: the rAF loop redraws. */
   let playTick: number | null = null;
+  /** The song playhead: the heard tick while the song plays, else the parked song position (split, Insert shape). */
+  const songPlayhead = () => (playTick !== null && p.playing && p.mode === 'song' ? Math.round(playTick) : p.songPosition);
 
   // The playlist is the song's view: with the PAT/SONG switch gone (plan 20)
   // the hidden `p.mode` (which transport ran last) must not change it while
@@ -1294,7 +1296,7 @@
       releaseHeldKeys();
       if (e.repeat || drag) return;
       // At the heard playhead while playing in Song mode, else the parked song position.
-      split(sel, playTick !== null && p.playing && p.mode === 'song' ? Math.round(playTick) : p.songPosition);
+      split(sel, songPlayhead());
     } else if (e.code === 'KeyA' && cmd && !e.altKey) {
       take();
       releaseHeldKeys();
@@ -1450,6 +1452,7 @@
             <AutoLane
               {p} {engine} lane={a.lane} owner={a.owner} def={a.def} color={a.color} {view} {width} {dpr} top={a.row.y} h={a.row.h}
               testid="auto-lane-{a.key}-{a.k}" label={a.label} suspended={laneView.suspended.has(a.lane.id)} root={scrollEl} onhint={flashHint}
+              playhead={songPlayhead}
             />
           {/if}
         {/each}

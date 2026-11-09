@@ -307,6 +307,7 @@ changes nothing and sends nothing.
 | `deletePoints`, `setPointShape(…, ids, hold)` | the difference | nothing changes |
 | `setPointCurve(p, sink, owner, laneId, pointId, curve)` (plan 16) | `AUTO_POINT_CURVE` | no such lane on that owner or no such point, NaN, or no change. The curve is clamped to −1..1. A hold or last point takes it (and ignores it until it is linear with a next point). Moves, shape changes and undo keep a point's curve: their SET is followed by the CURVE again |
 | `drawPoints(p, sink, laneId, samples)` | the difference | nothing usable drawn, or more than 512 points would result. The samples are rounded to whole ticks (the last on a tick wins), clamped, and thinned in knob position to `DRAW_TOLERANCE` (0.5 % of the travel); the result replaces every point between the first and last sample's tick. The stroke's ends are always kept |
+| `insertShape(p, sink, laneId, shape, range)` (plan 28) | the difference | see *Shapes* below; refusals return `{ ok: false, message }` instead of null |
 | `overrideLane(p, sink, laneId)` | `AUTO_OVERRIDE` only | no such lane. **Not an edit**: no undo entry, no unsaved mark. The manual move's own `setMix` / `setParam` that follows is the edit, and it sets the base |
 
 - **Dense idx.** A point edit computes the lane's new point set. Points keep
@@ -319,6 +320,63 @@ changes nothing and sends nothing.
   - `rollbackRefusedAdd` drops the lanes of a module the engine never added;
   - `removeTrack` takes the track's lanes with the track;
   - the Master row's lanes stay.
+
+### Shapes (plan 28 Task 2)
+
+"Insert shape ▸" writes a ready-made curve over a tick range. The shapes
+are few breakpoints with **curved segments** (the engine bends a segment
+by its left point's curve, `x^(2^(-3c))`, in knob space), not a dense run
+of points.
+
+```ts
+type AutoShape =
+  | { kind: 'ramp-up' | 'ramp-down' | 'duck'; lo?: number; hi?: number }
+  | { kind: 'sine' | 'gate'; period: number; lo?: number; hi?: number };
+interface ShapeRange { start: number; end: number }       // ticks, both ends included
+type InsertShapeResult = { ok: true; points: number } | { ok: false; message: string };
+
+shapePoints(shape, def, range): ShapePoint[]                // pure: {tick, value, hold, curve}[]
+insertShape(p, sink, laneId, shape, range): InsertShapeResult
+shapeRange(p, playhead): ShapeRange                          // where the menu puts it
+SHAPE_PRESETS                                                // the menu's 8 entries {id, label, shape}
+```
+
+- **Travel.** `lo` / `hi` are in the param's units (default its min / max,
+  clamped to the range). The shape is laid out in **knob position**
+  between them, as the lane draws and the engine interpolates (an exp
+  cutoff ramps logarithmically in Hz). The ends are exactly `lo` / `hi`.
+  Every value is inside the param's range.
+- **The shapes** (point counts for a 4-bar range):
+
+  | Preset | Breakpoints | 4 bars |
+  |---|---|---|
+  | Ramp up / down | `lo` at the start, `hi` at the end (reversed for down); straight | 2 |
+  | Duck per beat | each beat: `hi`, then `lo` 1/32 beat later (`DUCK_DIP_TICKS`, 30 ticks: the fast dip), then a recovery curved by `DUCK_CURVE` (−1/3: x², stays low, then swells) back to `hi` at the next beat | 33 |
+  | Sine 1/4, 1/2, 1 bar | mid, top, mid, bottom per cycle, starting on the rise; a quarter leaving the mid line has curve `SINE_OUT_CURVE` +0.235, one returning `SINE_BACK_CURVE` −0.267 (the least-max-error x^k fits of sin and 1 − cos; within 4.4 % of the travel of a true sine) | 65, 33, 17 |
+  | Gate 1/8, 1/16 | hold points: `hi` for the first half of each step, `lo` for the second | 65, 129 |
+
+- **Ends.** The first point is at `range.start`, the last at `range.end`.
+  A cycle cut short by the end gets a point there on its own line (a power
+  curve cut at any fraction is the same curve, so the cut segment keeps its
+  curve exactly). The last point is always linear with curve 0: the segment
+  after it leads to a point outside the shape.
+- **Replace.** `insertShape` replaces every point of the lane whose tick
+  is in `[start, end]` (both ends included, as `drawPoints`) and keeps the
+  rest (same objects, ids and idx where possible). The range is rounded and
+  kept in the song.
+- **Refusals** (nothing changes, nothing is sent, the message is for the
+  user: the lane menu shows it as a hint): no such lane; an empty range; a
+  NaN `lo` / `hi`; a `period` under `MIN_SHAPE_PERIOD` (8 ticks); and a lane
+  that would pass 512 points. A shape is **never truncated**.
+- **One undo entry.** It runs in one `edit()` ("Insert shape"). Inside an
+  outer `edit()` it makes no entry of its own (history transact nesting):
+  Task 3's transitions create a track, its clip, its lanes and their shapes
+  in one edit, one undo.
+- **Where.** `shapeRange(p, playhead)`: the loop range while the loop is on
+  (`p.loop.on`), else `SHAPE_BARS` (4) bars from the start of the bar the
+  playhead is in, kept in the song. The Timeline's playhead is the heard
+  tick while the song plays, else the parked song position (the same one
+  Split uses); the menu fixes the range when it opens.
 
 ### Persistence, replay, undo
 
@@ -389,8 +447,13 @@ changes nothing and sends nothing.
   pointer, added on release, in the same undo entry. Click adds a point (1/16, Alt free) and keeps dragging it;
   a point drag calls `movePoints` with the gesture's `origin` and the
   cumulative deltas, at most once per animation frame; Cmd/Ctrl-drag
-  previews a stroke and calls `drawPoints` once on release; right-click:
-  Linear / Hold / Delete. history/gestures.ts makes each gesture one undo
+  previews a stroke and calls `drawPoints` once on release; right-click a
+  point: Linear / Hold / Delete, then **Insert shape ▸**; right-click off
+  the points: Insert shape ▸ alone (plan 28). Its submenu (`auto-shape-menu`,
+  items `auto-shape-<preset id>`) names the bars it writes ("Bars 2–3
+  (loop)", "Bars 5–8"), opens on hover, click, → or Enter, and ← / Escape go
+  back to its item; it flips to the menu's left when the window has no room.
+  A refused shape (the 512-point cap) shows the message as a hint. history/gestures.ts makes each gesture one undo
   entry. Keys on a focused lane: Delete, Cmd/Ctrl+A, Escape, ←/→ (1/16,
   Shift a beat); the rest bubble.
 - **Play follow.** While a lane press is down, `laneView.gesture` is set,

@@ -837,3 +837,97 @@ test('Alt-click on a line adds a free point; it bends nothing (plan 16, Ruling P
   await page.keyboard.press(undoKey);
   await expect.poll(async () => (await savedLanes(page, slot))[0].points.length).toBe(2);
 });
+
+// ---- Insert shape ▸ (plan 28 Task 2) -------------------------------------------------------
+// The lane's right-click menu writes a shape over the loop range (loop on)
+// or the 4 bars from the playhead's bar, replacing the points there; one undo.
+const CUTOFF = { min: 20, max: 20000 }; // engine/catalog.json filter.cutoff
+
+/** Drag on the ruler from song tick `a` to `b`: a loop over the bars touched, loop on. */
+async function loopRange(page: Page, a: number, b: number) {
+  const v = await view(page);
+  const lane0 = (await page.getByTestId('tl-lane-0').boundingBox())!;
+  const r = (await page.getByTestId('tl-ruler').boundingBox())!;
+  const x = (t: number) => lane0.x + (t - v.scrollTick) / v.ticksPerPx;
+  await page.mouse.move(x(a), r.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(x(b), r.y + 10, { steps: 6 });
+  await page.mouse.up();
+}
+
+/** Right-click lane `lane` at `tick` (mid-height, off the points) and pick Insert shape ▸ `id`. */
+async function insertShapeVia(page: Page, lane: string, tick: number, id: string, range: RegExp) {
+  await clickLane(page, lane, tick, 0.5, { button: 'right' });
+  await expect(page.getByTestId('auto-menu')).toBeVisible();
+  await page.getByTestId('auto-menu-shape').hover();
+  await expect(page.getByTestId('auto-shape-menu')).toBeVisible();
+  await expect(page.getByTestId('auto-shape-range')).toHaveText(range);
+  await page.getByTestId(`auto-shape-${id}`).click();
+  await expect(page.getByTestId('auto-menu')).toBeHidden();
+}
+
+test('Insert shape ▸ Ramp up on a cutoff lane over the loop range; one undo removes it', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await addTrack(page, 'synth');
+  await loopRange(page, BAR + 500, 2 * BAR + 2000);
+  await expect(page.getByTestId('tl-ruler')).toHaveAttribute('data-loop', `${BAR},${3 * BAR},1`);
+  const t = (await tracks(page)).at(-1)!;
+  const lane = await addLane(page, t.slot, 'Filter', 'Cutoff');
+  // A point before the loop and one after it: both stay.
+  await clickLane(page, lane, 0, 0.5);
+  await clickLane(page, lane, 4 * BAR, 0.5);
+  const before = await savedLanes(page, t.slot);
+  expect(before[0].points.map((x: number[]) => x[0])).toEqual([0, 4 * BAR]);
+
+  await insertShapeVia(page, lane, 2 * BAR, 'ramp-up', /^Bars 2–3 \(loop\)$/);
+  const after = await savedLanes(page, t.slot);
+  const pts = after[0].points as number[][];
+  expect(pts.map((x) => x[0])).toEqual([0, BAR, 3 * BAR, 4 * BAR]);
+  expect(pts[1][1]).toBeCloseTo(CUTOFF.min, 6); // rises from the minimum...
+  expect(pts[2][1]).toBeCloseTo(CUTOFF.max, 6); // ...to the maximum over the loop
+  expect([pts[0], pts[3]]).toEqual([before[0].points[0], before[0].points[1]]);
+  await expect(page.getByTestId(lane)).toHaveAttribute('data-points', '4');
+  await page.getByTestId(lane).screenshot({ path: 'test-results/automation-shape-ramp.png' });
+
+  // One undo takes the whole shape back.
+  await page.keyboard.press(undoKey);
+  await expect.poll(() => savedLanes(page, t.slot)).toEqual(before);
+});
+
+test('Insert shape ▸ Sine 1/4 over the 4 bars from the playhead: 16 cycles', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await addTrack(page, 'synth');
+  const t = (await tracks(page)).at(-1)!;
+  const lane = await addLane(page, t.slot, 'Filter', 'Cutoff');
+  // No loop: the playhead (parked inside bar 5) gives bars 5-8.
+  await page.evaluate((tick) => (window as Any).__daw.actions.seek(tick), 4 * BAR + 700);
+  // The submenu from the keyboard: → opens it on its first item, Escape goes back to Insert shape.
+  await clickLane(page, lane, 6 * BAR, 0.5, { button: 'right' });
+  await expect(page.getByTestId('auto-menu-shape')).toBeFocused(); // off the points: the only item
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByTestId('auto-shape-ramp-up')).toBeFocused();
+  await expect(page.getByTestId('auto-shape-range')).toHaveText('Bars 5–8');
+  await page.screenshot({ path: 'test-results/automation-shape-menu.png' });
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('auto-shape-menu')).toBeHidden();
+  await expect(page.getByTestId('auto-menu-shape')).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('auto-menu')).toBeHidden();
+
+  await insertShapeVia(page, lane, 6 * BAR, 'sine-4', /^Bars 5–8$/);
+  const pts = (await savedLanes(page, t.slot))[0].points as number[][];
+  expect(pts).toHaveLength(65); // 4 breakpoints per cycle + the end
+  expect(pts[0][0]).toBe(4 * BAR);
+  expect(pts.at(-1)![0]).toBe(8 * BAR);
+  // One top and one bottom per cycle: 16 cycles of a 1/4-bar sine in 4 bars.
+  const tops = pts.filter((x) => Math.abs(x[1] - CUTOFF.max) < 1e-6);
+  const bottoms = pts.filter((x) => Math.abs(x[1] - CUTOFF.min) < 1e-6);
+  expect([tops.length, bottoms.length]).toEqual([16, 16]);
+  expect(tops.map((x) => x[0])).toEqual(Array.from({ length: 16 }, (_, i) => 4 * BAR + BAR / 16 + (i * BAR) / 4));
+  // The quarters are curved segments (the saved 4th element), not straight lines.
+  expect(pts.slice(0, -1).every((x) => x.length === 4 && x[3] !== 0)).toBe(true);
+  await page.getByTestId(lane).evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  await page.getByTestId(lane).screenshot({ path: 'test-results/automation-shape-sine.png' });
+});

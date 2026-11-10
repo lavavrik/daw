@@ -639,8 +639,12 @@
   .mute-h { width: 24px; flex: none; display: flex; justify-content: center; }
   .gain-h { width: 104px; flex: none; }
   .pan-h { width: 80px; flex: none; }
-  .row { height: 34px; border-radius: var(--r-sm); outline: 1px dashed transparent; outline-offset: -1px; }
-  .row.over, .add.over { outline: 1px dashed var(--c); background-color: color-mix(in srgb, var(--c) 15%, transparent); }
+  /* A row (or the add button) under a dragged sample: a 1 px dashed border
+     in --c, as an ::after overlay so nothing in the row moves. */
+  .row { position: relative; height: 34px; border-radius: var(--r-sm); }
+  .add { position: relative; }
+  .row.over, .add.over { background-color: color-mix(in srgb, var(--c) 15%, transparent); }
+  .row.over::after, .add.over::after { content: ''; position: absolute; inset: 0; border: 1px dashed var(--c); border-radius: inherit; pointer-events: none; }
 
   /* The row-colour tag, with the gloss and a glow (theme glow recipe). */
   .tag {
@@ -667,7 +671,8 @@
   .name.prev:hover .pi { color: var(--text); }
   .name.prev.on { color: var(--on-color); background-color: var(--play); }
   .name.prev.on .pi { color: var(--on-color); }
-  .name.prev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .name.prev:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
+  .name.prev.on:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); } /* on --play */
   .name.empty { line-height: 28px; border: 1px dashed var(--line); color: var(--text-2); font-weight: 400; font-style: italic; }
 
   /* Mute: a raised speaker toggle, quiet while the row plays; muted it is
@@ -683,7 +688,8 @@
     background-color: var(--accent); color: var(--on-color);
     box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
   }
-  .mute:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mute:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
+  .mute.on:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent); } /* on --accent */
   .row.muted .cells { opacity: 0.45; }
 
   /* Gain and pan: skinned native ranges (theme.css), filled in the row colour
@@ -714,17 +720,19 @@
   }
   /* Accent (velocity >= 110): a 2 px ring and a strong glow (the board's <c>aa, 12 px). */
   .cell.accent { box-shadow: 0 0 0 2px var(--c), 0 0 12px color-mix(in srgb, var(--c) 67%, transparent), var(--drop); }
-  /* The playing step: a white outline, and its fill brightens. A dark 1 px
-     ring just inside the outline keeps it readable on pale row colours
-     (yellows, the brightened fill); ::after paints over the fill. */
-  .cell.playhead { outline: 2px solid color-mix(in srgb, var(--text) 75%, transparent); outline-offset: -2px; }
-  .cell.playhead.on { outline-color: var(--text); }
-  .cell.playhead.on::after {
-    content: ''; position: absolute; inset: 2px; border-radius: calc(var(--r-sm) - 2px); pointer-events: none;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-color) 70%, transparent);
-  }
+  /* The rings over a cell are overlays above the .fill (z-index 1; the cell
+     isolates so they stay inside it): ::before the playing step, ::after the
+     keyboard focus (over the playhead ring when both).
+     The playing step: a white 2 px ring, and its fill brightens. On an on
+     cell a dark 1 px ring just inside keeps it readable on pale row colours
+     (yellows, the brightened fill). */
+  .cell { isolation: isolate; }
+  .cell.playhead::before, .cell:focus-visible::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; }
+  .cell.playhead::before { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text) 75%, transparent); }
+  .cell.playhead.on::before { box-shadow: inset 0 0 0 2px var(--text), inset 0 0 0 3px color-mix(in srgb, var(--on-color) 70%, transparent); }
   .cell.playhead .fill { filter: brightness(1.25); }
-  .cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .cell:focus-visible { outline: none; }
+  .cell:focus-visible::after { box-shadow: var(--focus-ring); }
 
   /* Delete row: an icon button at the row's end, faint until the row is
      hovered or holds focus (opacity only: it stays focusable). */
@@ -735,7 +743,7 @@
   }
   .row:hover .del, .row:focus-within .del { opacity: 1; }
   .del:hover { color: var(--rec); background: var(--raised); }
-  .del:focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 1px; }
+  .del:focus-visible { opacity: 1; outline: none; box-shadow: var(--focus-ring); }
 
   /* The velocity chip: centred over the edited cell, just above it (out of
      flow, so the rows never move); JetBrains Mono, tabular figures (.mono). */

@@ -76,6 +76,6 @@
   .hole::after { content: ''; position: absolute; inset: -3px; border-radius: 50%; box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 55%, transparent); pointer-events: none; }
   .jack:hover .hole::after { box-shadow: 0 0 0 2px var(--c), 0 0 8px color-mix(in srgb, var(--c) 40%, transparent); }
   .name { font-size: var(--fs-tag); white-space: nowrap; }
-  .jack:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .jack:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .picked .hole::after { box-shadow: 0 0 0 3px var(--accent), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
 </style>

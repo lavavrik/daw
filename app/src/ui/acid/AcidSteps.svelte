@@ -441,7 +441,8 @@
   button:hover:not(:disabled) { filter: brightness(1.08); }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   button.on { background-color: var(--accent); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
+  button.on:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); } /* on --accent */
   .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .bar label { display: flex; align-items: center; gap: 6px; }
   .grp { display: flex; align-items: center; gap: 2px; }

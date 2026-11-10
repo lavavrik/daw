@@ -38,7 +38,7 @@
   @media (max-width: 1399px) { .pill { font-size: 10.5px; } }
   .quiet { color: var(--text-2); font: 500 11px var(--font-ui); white-space: nowrap; }
   .pill:hover { filter: brightness(1.08); }
-  .pill:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .pill:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); } /* --text, not --accent: the pill is accent */
   /* A 24 px hit area around a short pill. */
   .pill::after { content: ''; position: absolute; inset: -4px -2px; }
 </style>

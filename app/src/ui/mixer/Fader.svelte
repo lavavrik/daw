@@ -305,7 +305,7 @@
      track colour (--c, set by Strip) and the grooved metal cap. Tokens only. */
   .wrap { display: flex; flex-direction: column; align-items: center; }
   .fader { position: relative; width: 30px; cursor: ns-resize; touch-action: none; user-select: none; outline: none; border-radius: var(--r-sm); }
-  .fader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .fader:focus-visible { box-shadow: var(--focus-ring); }
   /* Inset by CAP_H / 2 (8 px) top and bottom: the slot's height is the cap's travel. */
   .slot { position: absolute; left: 50%; top: 8px; bottom: 8px; width: 8px; margin-left: -4px; background: var(--mech-slot); border-radius: 4px; box-shadow: var(--mech-slot-shadow); }
   .fill { position: absolute; left: 2px; right: 2px; top: 0; bottom: 0; border-radius: 2px; transform-origin: bottom; transform: scaleY(0); background: var(--c, var(--accent)); box-shadow: 0 0 6px color-mix(in srgb, var(--c, var(--accent)) 66%, transparent); opacity: 0.85; }
@@ -317,8 +317,8 @@
   .fader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline. */
   .cc { position: absolute; top: -2px; left: -5px; z-index: 1; font: 700 var(--fs-tag)/10px var(--font-ui); padding: 0 2px; border-radius: var(--r-xs); background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
-  .fader.learning { outline: 2px solid var(--sig-cv); outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
-  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
+  .fader.learning::after { content: ''; position: absolute; inset: 0; z-index: 2; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--sig-cv); pointer-events: none; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .fader.learning { animation: none; } }
   .fader.auto-susp .cap { filter: grayscale(1) brightness(0.8); }
   .fader.auto-susp .fill { background-color: var(--text-dim); box-shadow: none; }

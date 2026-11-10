@@ -1044,7 +1044,7 @@
   }
   .m:first-child .mb { margin-left: -5px; } /* "File" lines up with the name under it */
   .mb:hover, .mb.open { background: var(--raised); color: var(--text); }
-  .mb:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .mb:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   /* Short windows (the 40 px top bar, TopBar.svelte): a 16 px row. */
   @media (max-height: 739px) { .mb { height: 16px; line-height: 16px; } }
 
@@ -1068,7 +1068,8 @@
   .it:hover:not([aria-disabled='true']) { background: var(--raised); }
   /* aria-disabled is set by use:inertItem (unseen by the compiler: :global). */
   .pop :global(.it[aria-disabled='true']) { opacity: 0.45; cursor: default; }
-  .it:focus-visible, .sq:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .it:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .sq:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   .ck { display: inline-flex; }
   .ck :global(svg) { color: var(--accent); }
   /* The unchecked note-name entry keeps the check's room (both rows line up). */
@@ -1113,7 +1114,7 @@
     margin: 0 10px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: var(--well); box-shadow: var(--well-shadow);
     color: var(--text); font: inherit;
   }
-  .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .name:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--well-shadow); }
   /* Load from library ▸: the submenu flies out to the right of its item. */
   .subwrap { position: relative; display: flex; flex-direction: column; }
   .chev { display: inline-flex; }

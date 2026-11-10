@@ -179,7 +179,8 @@
   .name, .val { white-space: nowrap; }
   .val { font: 500 var(--fs-lbl) var(--font-mono); color: var(--text); }
   .track { position: relative; width: 22px; border-radius: 11px; background: var(--well); box-shadow: var(--well-shadow); cursor: ns-resize; touch-action: none; overflow: hidden; }
-  .track:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Focus: an inset ring over the fill and thumb (::after, the last child, paints on top). */
+  .track:focus-visible::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: var(--focus-ring); pointer-events: none; }
   .track i { position: absolute; left: 0; right: 0; display: block; pointer-events: none; }
   .centre { top: 50%; height: 1px; background: var(--line); }
   .fill { background: color-mix(in srgb, var(--c) 40%, transparent) var(--gloss); }

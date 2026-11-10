@@ -415,7 +415,9 @@
 
 <style>
   .wv { position: relative; width: 100%; overflow: hidden; background: var(--lcd); border-radius: var(--r-sm); box-shadow: var(--well-shadow); box-sizing: border-box; }
-  .wv:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Focus: an inset ring over the canvas (::after paints above it). */
+  .wv:focus-visible { outline: none; }
+  .wv:focus-visible::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: var(--focus-ring); pointer-events: none; }
   canvas { display: block; width: 100%; }
   .ph { position: absolute; top: 0; left: 0; width: 1px; height: 100%; background: var(--text); pointer-events: none; will-change: transform; }
   .readout, .note {

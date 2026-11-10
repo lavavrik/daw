@@ -295,7 +295,7 @@
   input::-webkit-inner-spin-button, input::-webkit-outer-spin-button { appearance: none; margin: 0; }
   input:focus { cursor: text; }
   input:focus-visible { outline: none; }
-  .nf:has(input:focus-visible) { box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
+  .nf:has(input:focus-visible) { box-shadow: var(--focus-ring), var(--well-shadow); }
 
   /* plain: a --well field, − and + either side */
   .plain { background: var(--well); box-shadow: var(--well-shadow); border-radius: var(--r-md); }

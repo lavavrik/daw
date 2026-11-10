@@ -125,7 +125,7 @@
   .clip { height: 6px; flex: none; padding: 0; border: 0; border-radius: 2px; background: color-mix(in srgb, var(--rec) 22%, var(--well)); box-shadow: var(--well-shadow); cursor: pointer; }
   .clip.on { background: var(--rec); box-shadow: 0 0 10px color-mix(in srgb, var(--rec) 40%, transparent); }
   .clip.limit { background: var(--accent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
-  .clip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .clip:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--text); } /* 6 px tall: a 1 px ring; --text shows on rec / accent too */
   .bars { flex: 1; display: flex; gap: 2px; min-height: 0; }
   /* The scale (green -> yellow -> red) is the inline background-image, built in the script. */
   .bar { position: relative; flex: 1; overflow: hidden; border-radius: 2px; background-color: var(--well); }

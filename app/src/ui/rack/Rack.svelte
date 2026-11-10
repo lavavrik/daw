@@ -1395,7 +1395,7 @@
   .link { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--text); font: 500 var(--fs-lbl) var(--font-ui); text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 2px; cursor: pointer; }
   .link:hover:not(:disabled) { color: var(--accent); }
   .link:disabled { color: var(--text-2); opacity: 0.6; cursor: not-allowed; text-decoration: none; }
-  .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .link:focus-visible { outline: none; color: var(--accent); text-decoration-thickness: 2px; } /* bare text: a ring would cover it */
   .addwrap { position: relative; }
   .btn { padding: 4px 10px; }
   .btn[aria-expanded='true'] { filter: brightness(1.1); }
@@ -1418,7 +1418,7 @@
     border-radius: var(--r-sm); background: transparent; color: var(--text); font: inherit; text-align: left; white-space: nowrap; cursor: pointer;
   }
   .group button:hover:not([aria-disabled='true']) { background: var(--raised); }
-  .group button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .group button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .group button[aria-disabled='true'] { opacity: 0.45; cursor: default; }
   /* The name never wraps; a pool-full note goes on its own line under it. */
   .group .l { display: flex; flex-direction: column; padding: 4px 0; }

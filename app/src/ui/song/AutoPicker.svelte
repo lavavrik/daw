@@ -346,7 +346,7 @@
   /* Tokens only (theme.css). The button fits the lane header's 18 px line. */
   .auto { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 0; border-radius: var(--r-sm); background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text); font: 500 var(--fs-lbl) var(--font-ui); white-space: nowrap; cursor: pointer; }
   .auto:hover:not(:disabled) { color: var(--text); background-color: color-mix(in srgb, var(--raised), var(--text) 8%); }
-  .auto:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .auto:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   .auto:disabled { opacity: 0.5; cursor: default; }
   :global(.row.lane.compact) .auto { height: 15px; }
   .pop { position: fixed; z-index: 50; width: 240px; box-sizing: border-box; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--lift); }

@@ -246,5 +246,5 @@
   .flag { position: absolute; top: 0; box-sizing: border-box; cursor: ew-resize; touch-action: none; clip-path: polygon(0 0, 100% 0, 100% 60%, 0 100%); }
   .flag.end { clip-path: polygon(0 0, 100% 0, 100% 100%, 0 60%); }
   .flag.bottom { top: auto; bottom: 0; clip-path: polygon(0 0, 100% 40%, 100% 100%, 0 100%); }
-  .flag:focus-visible { outline: 1px solid var(--text); outline-offset: 0; clip-path: none; }
+  .flag:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--text); clip-path: none; }
 </style>

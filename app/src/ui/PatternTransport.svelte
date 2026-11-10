@@ -135,7 +135,7 @@
   }
   .b:hover:not(:disabled) { filter: brightness(1.08); }
   .b:disabled { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: not-allowed; }
-  .b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .b:focus-visible { box-shadow: var(--focus-ring), var(--raised-shadow); }
   /* Contrast (WCAG: 3:1 for icons, 4.5:1 for text): --play, --rec and
      --accent as text or icons on --raised fail (1.7-2.8:1). Play idle: a
      light green icon (--play mixed with --text, 3.3:1 on --raised); playing

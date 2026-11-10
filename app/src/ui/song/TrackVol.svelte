@@ -228,8 +228,9 @@
   .vol::-webkit-slider-thumb { width: 10px; height: 10px; margin-top: -3px; }
   /* A suspended lane (a manual move overrides it until its next point): a grey fill, as the Fader's grey cap. */
   .vol.auto-susp { --c: var(--text-dim); }
-  /* The MIDI learn target: the Fader's pulsing outline. */
-  .vol.learning { outline: 2px solid var(--sig-cv); outline-offset: 2px; animation: learn-pulse 0.9s ease-in-out infinite; }
-  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
+  /* The MIDI learn target: the Fader's pulsing ring (inset: a range input
+     has no ::after, and a ring outside would paint over its neighbours). */
+  .vol.learning { box-shadow: inset 0 0 0 2px var(--sig-cv); animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .vol.learning { animation: none; } }
 </style>

@@ -66,7 +66,7 @@
     font: 700 var(--fs-ctl) var(--font-ui); cursor: pointer;
   }
   .ghost:hover .add { color: var(--text); }
-  .add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .add:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .plus { display: inline-flex; }
   /* The card's rows, as the strips' Presets list (MenuBar's item look). */
   .pop-h { margin: 0 8px; }
@@ -76,5 +76,5 @@
     background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer;
   }
   .it:hover { background: var(--raised); }
-  .it:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .it:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 </style>

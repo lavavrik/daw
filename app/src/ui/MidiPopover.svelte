@@ -120,5 +120,5 @@
   .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .maps button { flex: none; padding: 0 6px; font: inherit; line-height: 1.5; color: var(--text); background: var(--raised) var(--gloss); border: 0; border-radius: var(--r-sm); box-shadow: var(--raised-shadow); cursor: pointer; }
   .maps button:hover { filter: brightness(1.08); }
-  .maps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .maps button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
 </style>

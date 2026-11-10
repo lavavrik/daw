@@ -53,6 +53,6 @@
   header b { color: var(--text); }
   .src { font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .back { margin-left: auto; font: 600 var(--fs-lbl) var(--font-ui); border: 0; border-radius: var(--r-sm); background: var(--raised); box-shadow: var(--raised-shadow); color: var(--text); padding: 1px 8px; cursor: pointer; }
-  .back:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .back:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   .note { margin: 0; font-size: var(--fs-lbl); color: var(--text-2); }
 </style>

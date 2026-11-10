@@ -42,6 +42,11 @@
   --drop: 0 2px 4px rgba(0,0,0,.3);
   --handle: linear-gradient(#fff, #cfd8df);
   --handle-shadow: 0 1px 3px rgba(0,0,0,.5);
+  /* The keyboard focus ring: inset, so it never paints outside the element
+     (over a neighbour, or cut off by a clipping parent). Put it FIRST in a
+     box-shadow list so it sits over the element's own inset shadows. The
+     app draws no CSS outlines (docs/architecture/ui-theme.md "Focus"). */
+  --focus-ring: inset 0 0 0 2px var(--accent);
 
   /* Radii: sm cells and small buttons, md buttons and inputs, lg cards and
      transport (spec §2). xs is for tags and badges (~10 px tall), menu for
@@ -175,7 +180,7 @@
 :where(select:focus-visible),
 :where(select:open) {
   outline: none;
-  box-shadow: var(--well-shadow), 0 0 0 2px var(--accent);
+  box-shadow: var(--focus-ring), var(--well-shadow);
 }
 :where(select)::picker-icon {
   color: var(--text-2);
@@ -297,7 +302,7 @@
 }
 :where(input[type='checkbox']:checked) { background: var(--play); }
 :where(input[type='checkbox']:checked)::before { translate: 14px 0; }
-:where(input[type='checkbox']:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+:where(input[type='checkbox']:focus-visible) { outline: none; box-shadow: var(--focus-ring), var(--well-shadow); }
 :where(input[type='checkbox']:disabled) { opacity: 0.5; cursor: default; }
 
 /* ----------------------------------------------------------- text inputs --
@@ -314,7 +319,7 @@
 }
 :where(input:not([type]):focus-visible, input[type='text']:focus-visible, input[type='search']:focus-visible, input[type='number']:focus-visible, input[type='url']:focus-visible, input[type='email']:focus-visible, textarea:focus-visible) {
   outline: none;
-  box-shadow: var(--well-shadow), 0 0 0 2px var(--accent);
+  box-shadow: var(--focus-ring), var(--well-shadow);
 }
 :where(input, textarea)::placeholder { color: var(--text-dim); }
 
@@ -345,7 +350,6 @@
 :where(.btn:hover:not(:disabled)) { filter: brightness(1.08); }
 :where(.btn:active:not(:disabled)) { translate: 0 1px; }
 :where(.btn:disabled) { opacity: 0.45; cursor: default; }
-:where(.btn:focus-visible, .seg > button:focus-visible, .tabs > button:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 :where(.btn.primary) {
   background-color: var(--accent);
   color: var(--on-color);
@@ -356,6 +360,10 @@
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--line);
 }
+/* Focus rings (after the variants: each keeps its own shadow under the ring). */
+:where(.btn, .seg > button, .tabs > button):where(:focus-visible) { outline: none; box-shadow: var(--focus-ring); }
+:where(.btn:not(.quiet, .primary)):where(:focus-visible) { box-shadow: var(--focus-ring), var(--raised-shadow); }
+:where(.btn.primary):where(:focus-visible) { box-shadow: var(--focus-ring), var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
 
 :where(.seg) {
   display: inline-flex;
@@ -478,12 +486,13 @@
   cursor: pointer;
 }
 :where(.mech-btn:hover:not(:disabled)) { filter: brightness(1.08); }
-:where(.mech-btn:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 :where(.mech-btn[aria-checked='true'], .mech-btn[aria-pressed='true'], .mech-btn.on) {
   background: var(--mech-btn-on);
   box-shadow: var(--mech-btn-on-shadow);
   transform: translateY(1px);
 }
+:where(.mech-btn:focus-visible) { outline: none; box-shadow: var(--focus-ring), var(--mech-btn-shadow); }
+:where(.mech-btn[aria-checked='true'], .mech-btn[aria-pressed='true'], .mech-btn.on):where(:focus-visible) { box-shadow: var(--focus-ring), var(--mech-btn-on-shadow); }
 :where(.led) {
   display: block;
   width: 7px;

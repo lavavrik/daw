@@ -53,6 +53,8 @@ export const THEME = {
   /** Slider handle fill and shadow. */
   handle: 'linear-gradient(#fff, #cfd8df)',
   handleShadow: '0 1px 3px rgba(0,0,0,.5)',
+  /** CSS only: the inset keyboard focus ring (theme.css --focus-ring). */
+  focusRing: 'inset 0 0 0 2px var(--accent)',
   // Type. The stacks end in system fonts so a blocked font degrades cleanly.
   fontUi: "'Inter Variable', Inter, system-ui, sans-serif",
   fontMono: "'JetBrains Mono', ui-monospace, monospace",

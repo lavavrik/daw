@@ -108,7 +108,7 @@
     border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer;
   }
   .x:hover { background: var(--raised); }
-  .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .x:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 24px; padding: 8px 16px 16px; }
   h3 {
     margin: 10px 0 4px; padding-bottom: 2px; border-bottom: 1px solid var(--line);

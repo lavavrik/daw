@@ -399,7 +399,8 @@
   .gain input { width: 180px; }
   output { font: 500 var(--fs-ctl)/1.4 var(--font-mono); color: var(--text); min-width: 64px; }
   .handle { position: absolute; touch-action: none; cursor: ew-resize; box-sizing: border-box; }
-  .handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* --on-color: the handles are accent / light, an accent ring would vanish on them. */
+  .handle:focus-visible { box-shadow: inset 0 0 0 2px var(--on-color), var(--handle-shadow); }
   /* Fade flags in the envelope's accent; the trim handle in white. */
   .handle.fadeIn, .handle.fadeOut { top: 0; width: 9px; height: 12px; background: var(--accent); box-shadow: var(--handle-shadow); }
   .handle.fadeIn { border-radius: 0 var(--r-xs) var(--r-xs) 0; }

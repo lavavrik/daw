@@ -103,6 +103,29 @@ These are the only shadows and gradients. Pick one:
 - **Handle** (slider thumb, switch knob): `background: var(--handle);
   box-shadow: var(--handle-shadow)`.
 
+## Focus and other rings (no CSS outlines)
+The app draws no `outline`. An outline paints outside the element's box, over
+its neighbours and into the edges of clipping parents, so a focused field or
+button looked like it grew or pushed things (the mixer strips were the worst).
+Every ring is drawn **inside** the box instead:
+- **Keyboard focus**: `box-shadow: var(--focus-ring)` (an inset 2 px
+  `--accent` ring), listed **first** so it sits over the element's own inset
+  shadows: `box-shadow: var(--focus-ring), var(--raised-shadow)`. A state
+  that changes the shadow (`.on`, `.lit`) needs its own `:focus-visible` rule
+  with the same composition, or the focus rule drops its glow.
+- On an `--accent` (or `--rec` / `--play`) surface, the ring is
+  `inset 0 0 0 2px var(--text)`: an accent ring would vanish.
+- When children cover the box (a canvas, a fill, a header strip), the ring is
+  an `::after` overlay: `content: ''; position: absolute; inset: 0;
+  border-radius: inherit; box-shadow: …; pointer-events: none` on a positioned
+  host (WaveformView, ScopeView, Wheels, step cells, the selected mixer strip,
+  the MIDI-learn pulse on knobs and faders).
+- Bare text buttons (the project name, Rack's links) underline in `--accent`
+  instead of a ring that would cover the text.
+- Dashed drop targets (step rows, a sampler panel) are an `::after` with a
+  dashed `border`.
+Set `outline: none` when replacing a browser default ring.
+
 ## Fonts
 Inter (variable) and JetBrains Mono (400/500/700) are self-hosted through
 `@fontsource-variable/inter` and `@fontsource/jetbrains-mono`, imported in
@@ -149,7 +172,7 @@ out of a skin with `appearance: auto`.
 - **checkbox**: a 34×20 switch (`--well` off, `--play` on, the handle as the
   knob, drawn with `::before`).
 - **text, search, number, url, email, textarea**: `--well` fields, 8 px radius,
-  accent focus ring. Every number input is `NumberField.svelte`'s core, which
+  inset accent focus ring (`--focus-ring`). Every number input is `NumberField.svelte`'s core, which
   hides the native spinners (its steppers and the vertical scrub replace them).
 - **scrollbars**: `scrollbar-color: var(--raised) transparent` on `html`, with
   `color-scheme: dark` for the native bits we don't skin.

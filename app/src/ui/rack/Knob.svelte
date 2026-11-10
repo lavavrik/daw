@@ -636,7 +636,7 @@
 <style>
   /* Tokens only (spec §2–§3). The dial is --dial wide (30 px unless the caller sets it). */
   .knob { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; width: max(56px, calc(var(--dial, 30px) + 8px)); padding: 2px 0; border-radius: var(--r-sm); cursor: ns-resize; touch-action: none; user-select: none; outline: none; }
-  .knob:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .knob:focus-visible { box-shadow: var(--focus-ring); }
   .knob:hover .readout, .knob.dragging .readout, .knob:focus-visible .readout { color: var(--accent); }
   .dial { width: var(--dial, 30px); height: var(--dial, 30px); }
   .track, .val { fill: none; stroke-width: 3; stroke-linecap: round; }
@@ -650,8 +650,8 @@
   .knob.auto-off .badge, .slider.auto-off .badge, .vfader.auto-off .badge { background: var(--text-dim); }
   /* MIDI: the CC tag (top left, opposite the A badge) and the learn target's pulsing outline (cv blue: a controller). */
   .cc { position: absolute; top: 1px; left: 3px; padding: 0 2px; font: 700 var(--fs-tag)/10px var(--font-ui); border-radius: var(--r-xs); background: var(--sig-cv); color: var(--on-color); pointer-events: none; }
-  .knob.learning, .slider.learning, .vfader.learning { outline: 2px solid var(--sig-cv); outline-offset: 1px; animation: learn-pulse 0.9s ease-in-out infinite; }
-  @keyframes learn-pulse { 50% { outline-color: color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
+  .knob.learning::after, .slider.learning::after, .vfader.learning::after { content: ''; position: absolute; inset: 0; z-index: 2; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--sig-cv); pointer-events: none; animation: learn-pulse 0.9s ease-in-out infinite; }
+  @keyframes learn-pulse { 50% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--sig-cv) 15%, transparent); } }
   @media (prefers-reduced-motion: reduce) { .knob.learning, .slider.learning, .vfader.learning { animation: none; } }
   .knob.auto-susp .val { stroke: var(--text-dim); }
   .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 var(--fs-lbl)/14px var(--font-ui); color: var(--text-2); }
@@ -660,7 +660,7 @@
   .readout.typeable { cursor: text; }
   /* The heard (automated) value: italic in the knob's colour. */
   .readout.auto { font-style: italic; color: var(--c); }
-  .readout.entry { width: 56px; min-width: 0; box-sizing: border-box; border: 0; padding: 0 3px; box-shadow: var(--well-shadow), 0 0 0 1px var(--accent); outline: none; }
+  .readout.entry { width: 56px; min-width: 0; box-sizing: border-box; border: 0; padding: 0 3px; box-shadow: inset 0 0 0 1px var(--accent), var(--well-shadow); outline: none; }
   .readout.entry.bad { background: color-mix(in srgb, var(--rec) 25%, var(--well)); box-shadow: var(--well-shadow), 0 0 0 1px var(--rec); }
   /* ---- slider variant ----
      Label (left) and mono value (right) on one row; below, the hit area
@@ -711,10 +711,10 @@
   .mech .ptr { stroke: var(--mech-pointer); stroke-width: 4; }
   .mech .base { stroke: var(--mech-pointer); stroke-width: 3; }
   .knob.mech:hover .readout, .knob.mech.dragging .readout, .knob.mech:focus-visible .readout { color: var(--accent); }
-  .knob.mech:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .knob.mech:focus-visible { box-shadow: var(--focus-ring); }
   /* Vertical fader: scale ticks | the hit area around the 8 px slot. */
   .vfader { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 44px; padding: 2px 0; border-radius: var(--r-sm); user-select: none; outline: none; }
-  .vfader:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .vfader:focus-visible { box-shadow: var(--focus-ring); }
   .vfader:hover .readout, .vfader.dragging .readout, .vfader:focus-visible .readout { color: var(--accent); }
   .vbody { display: flex; align-items: stretch; }
   .scale { display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; margin: 9px 0; }

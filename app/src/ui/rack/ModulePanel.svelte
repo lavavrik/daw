@@ -307,10 +307,11 @@
     flex: none; display: flex; flex-direction: column; box-sizing: border-box;
     width: calc-size(max-content, round(up, size, 10px)); min-width: 180px; color: var(--text);
   }
-  .panel.dropping { outline: 2px dashed var(--c); outline-offset: -2px; }
+  /* A sample dragged over a sampler: a dashed border over the faceplate (header included). */
+  .panel.dropping::after { content: ''; position: absolute; inset: 0; z-index: 3; border: 2px dashed var(--c); border-radius: inherit; pointer-events: none; }
   .screw { z-index: 1; }
   header { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px 0 18px; border-radius: var(--r-md) var(--r-md) 0 0; cursor: grab; touch-action: none; user-select: none; }
-  header:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  header:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--mech-head-shadow); }
   /* Positioned rack: the same rounded max-content width as in flow (above), not shrink-to-fit (far right, the
      containing block's leftover width would squeeze the panel). border-box: the row's min-height is a measured offsetHeight. */
   .panel.placed { position: absolute; }
@@ -323,7 +324,7 @@
   .x { display: inline-flex; align-items: center; padding: 2px 4px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--on-color); font: 16px/1 var(--font-ui); cursor: pointer; opacity: 0.55; }
   .panel:hover .x, .x:focus-visible { opacity: 0.85; }
   .x:hover { opacity: 1; }
-  .x:focus-visible { outline: 2px solid var(--on-color); }
+  .x:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--on-color); }
   /* Clear of the screws: 16 px each side (the screws sit 6 px in, 7 px wide). */
   .body { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 10px; }
   .smp { display: flex; flex-direction: column; gap: 4px; }

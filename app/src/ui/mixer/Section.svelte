@@ -71,7 +71,9 @@
   .open .ico { color: var(--text); } /* not --accent: too faint as an icon on the strip (ui-theme.md) */
   .on { font: 600 var(--fs-lbl) var(--font-ui); border: 0; background: var(--raised); color: var(--text); border-radius: var(--r-sm); padding: 1px 6px; cursor: pointer; min-width: 28px; box-shadow: var(--raised-shadow); }
   .on.lit { background: var(--accent) var(--gloss); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
-  .exp:focus-visible, .on:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .exp:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .on:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
+  .on.lit:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); } /* on --accent */
   .summary:empty { display: none; } /* a summary snippet that rendered nothing (Sends while open) */
   .summary { font-size: var(--fs-lbl); color: var(--text-2); padding: 0 2px 1px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* Dials sit two per row; a slider spans the row (Knob's grid-column), so sliders stack. */

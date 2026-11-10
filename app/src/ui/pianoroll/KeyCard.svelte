@@ -109,7 +109,8 @@
   }
   .tools button:hover:not(:disabled) { filter: brightness(1.08); }
   .tools button:disabled { opacity: 0.45; cursor: not-allowed; }
-  .tools button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tools button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   .tools button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
+  .tools button.on:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); } /* on --accent */
   .sub { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 </style>

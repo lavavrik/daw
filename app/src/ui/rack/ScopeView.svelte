@@ -291,7 +291,9 @@
 <style>
   /* An --lcd screen in a well (tokens only); frozen: a cv-blue ring and pause mark. */
   .scope { position: relative; display: block; padding: 0; margin: 0 auto; border: 0; border-radius: var(--r-sm); background: var(--lcd); box-shadow: var(--well-shadow); cursor: pointer; line-height: 0; overflow: hidden; }
-  .scope:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Focus: an inset ring over the canvas (::after paints above it). */
+  .scope:focus-visible { outline: none; }
+  .scope:focus-visible::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: var(--focus-ring); pointer-events: none; }
   .scope.frozen { box-shadow: var(--well-shadow), inset 0 0 0 1px var(--sig-cv); }
   canvas { display: block; }
   .pause { position: absolute; top: 3px; left: 4px; font-size: 9px; line-height: 1; color: var(--sig-cv); }

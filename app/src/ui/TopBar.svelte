@@ -492,7 +492,8 @@
   .undo { grid-area: undo; justify-self: end; }
   .name { display: block; max-width: 100%; padding: 0; border: 0; background: none; color: var(--text); font: 700 14px/18px var(--font-ui); text-align: left; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
   .name:hover .pname { text-decoration: underline; text-decoration-color: var(--text-2); }
-  .name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  .name:focus-visible { outline: none; }
+  .name:focus-visible .pname { text-decoration: underline 2px var(--accent); text-underline-offset: 2px; } /* bare text: a ring would cover it */
   .unsaved { margin-left: 6px; color: var(--accent); font-size: 10px; vertical-align: 2px; }
   .hint { overflow: hidden; text-overflow: ellipsis; font-size: 11px; line-height: 14px; color: var(--text-2); }
 
@@ -508,7 +509,7 @@
   /* Disabled is flat (no gloss, no shadow) and faint, never just a dim
      raised button: idle (enabled) controls must not look disabled. */
   .ib:disabled, .tp:disabled { opacity: 0.4; background: var(--raised); box-shadow: none; cursor: not-allowed; }
-  .ib:focus-visible, .tp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ib:focus-visible, .tp:focus-visible { box-shadow: var(--focus-ring), var(--raised-shadow); }
   .ib.on, .tp.on { background-color: var(--accent); color: var(--on-color); box-shadow: var(--raised-shadow), 0 0 10px color-mix(in srgb, var(--accent) 40%, transparent); }
   /* The song transport speaks the pattern transport's language
      (PatternTransport.svelte): idle Play is a raised button with a light
@@ -527,7 +528,7 @@
 
   .mini { display: flex; align-items: center; justify-content: center; flex: 3 1 66px; min-width: 66px; max-width: 360px; height: 40px; padding: 0; border: 0; border-radius: var(--r-md); background: var(--lcd); box-shadow: var(--well-shadow); line-height: 0; cursor: pointer; }
   .mini:hover { filter: brightness(1.15); }
-  .mini:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mini:focus-visible { box-shadow: var(--focus-ring), var(--well-shadow); }
 
   /* Right: the one badge (see RIGHT in the header comment). Warnings fill
      the badge (vivid colour, --on-color text: 5.6:1 on --rec, 8.8:1 on
@@ -540,7 +541,7 @@
   }
   .badge.latency { background-color: var(--accent); }
   .badge:hover { filter: brightness(1.08); }
-  .badge:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .badge:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); }
   /* A 24 px hit area around the short badge. */
   .badge::after { content: ''; position: absolute; inset: -4px -2px; }
   /* "MIDI blocked" carries a × (dismiss) joined to its right end. */
@@ -553,7 +554,7 @@
     color: var(--on-color); cursor: pointer;
   }
   .badge-x:hover { filter: brightness(1.08); }
-  .badge-x:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .badge-x:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); }
   .badge-x::after { content: ''; position: absolute; inset: -4px -2px -4px 0; }
 
   /* Short windows (< 740 px tall): a 40 px bar, so the piano roll keeps

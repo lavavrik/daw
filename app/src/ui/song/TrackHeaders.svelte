@@ -618,7 +618,7 @@
   .bar { width: 6px; flex: none; background: var(--c) var(--gloss); box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.18); }
   .body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
   .main { min-width: 0; display: flex; align-items: baseline; gap: 4px; padding: 0 2px 0 0; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; }
-  .main:focus-visible, .x:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .main:focus-visible, .x:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .mark { width: 8px; flex: none; color: var(--accent); font-size: 8px; }
   .name { flex: none; max-width: 100%; color: var(--text); font-size: var(--fs-ctl); font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
   .row:not(.sel) .name { font-weight: 600; color: var(--text-2); }
@@ -630,7 +630,7 @@
   /* Raised M / S / A: lit M is --accent, S --play, A the track colour; text on a lit button is --on-color. */
   .ms button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px; background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text-2); font: 700 9px/18px var(--font-ui); cursor: pointer; }
   .ms button:hover { color: var(--text); }
-  .ms button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ms button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   .ms button.lit { color: var(--on-color); }
   .m.lit { background-color: var(--accent); box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent); }
   .s.lit { background-color: var(--play); box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--play) 40%, transparent); }
@@ -654,7 +654,7 @@
   .row.lane .x { opacity: 0.7; height: 18px; }
   .en { width: 16px; height: 16px; flex: none; padding: 0; border: 0; background: transparent; color: var(--c); font-size: 11px; line-height: 16px; cursor: pointer; }
   .en:not(.on) { color: var(--text-2); opacity: 0.6; }
-  .en:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .en:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .cap { font-size: 9px; color: var(--rec); white-space: nowrap; }
   .pat { font-size: 9px; color: var(--accent); white-space: nowrap; }
   .empty { color: var(--text-2); margin: 0; padding: 6px 8px; }

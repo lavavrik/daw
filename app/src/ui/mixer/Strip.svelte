@@ -488,7 +488,8 @@
   .upper.fade-bot { mask-image: linear-gradient(to top, transparent, black 14px); }
   .upper.fade-top.fade-bot { mask-image: linear-gradient(to bottom, transparent, black 14px, black calc(100% - 14px), transparent); }
   .fm, .readout { flex: none; }
-  .strip.sel { outline: 2px solid var(--c); outline-offset: -1px; }
+  /* Selected: a 2 px ring in --c over the faceplate, header included (::after, above the screws and Presets). */
+  .strip.sel::after { content: ''; position: absolute; inset: 0; z-index: 3; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--c); pointer-events: none; }
   .screw { z-index: 1; }
   /* Right padding: room for the Presets button over the header's right end. */
   .name { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; height: 36px; flex: none; box-sizing: border-box; border: 0; margin: 0 -10px 4px; padding: 0 34px 0 12px; text-align: left; cursor: pointer; min-width: 0; }
@@ -504,7 +505,7 @@
     background: transparent; color: var(--text); font: 500 var(--fs-ctl) var(--font-ui); text-align: left; white-space: nowrap; cursor: pointer;
   }
   .it:hover { background: var(--raised); }
-  .it:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .it:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .plist hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
   .name:disabled { cursor: default; }
   .name:not(:disabled):hover { filter: brightness(1.06); }
@@ -514,13 +515,13 @@
   /* Renaming a return: the name becomes a recessed field, the subtitle stays. */
   .name.editing { cursor: default; }
   .rename { width: 100%; box-sizing: border-box; height: 16px; padding: 0 4px; border: 0; border-radius: var(--r-xs); background: var(--mech-recess); box-shadow: var(--mech-chip-shadow); color: var(--text); font: 700 var(--fs-lbl) var(--font-ui); }
-  .rename:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .rename:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--mech-chip-shadow); }
   .name b { font-size: var(--fs-lbl); line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .sub { font: 600 var(--fs-xs)/12px var(--font-ui); letter-spacing: 0.04em; text-transform: none; opacity: 0.75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   /* Returns and master sit on --raised: light text at full opacity (dark text and the dimmed subtitle lack contrast there). */
   .neutral .name { color: var(--text); }
   .neutral .sub { opacity: 1; }
-  .name:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .name:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--mech-head-shadow); }
   /* M / S / ∿: LED-over-button columns, centred (clear of the screws). The LED's colour per button. */
   .ms { display: flex; justify-content: center; gap: 6px; padding: 0 0 4px; }
   .lb { display: flex; flex-direction: column; align-items: center; gap: 2px; }

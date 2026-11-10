@@ -180,7 +180,7 @@
     flex: none; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0;
     border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer;
   }
-  .load:focus-visible, .ic:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .load:focus-visible, .ic:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .name {
     flex: 1; min-width: 0; margin: 0 2px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: var(--well);
     box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); color: var(--text); font: 500 var(--fs-ctl) var(--font-ui);

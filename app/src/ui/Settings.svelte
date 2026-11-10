@@ -217,7 +217,7 @@
     border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer;
   }
   .x:hover { background: var(--raised); }
-  .x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .x:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .settings { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; white-space: normal; color: var(--text); }
   .field { display: flex; align-items: center; gap: 6px; }
   .field > span { width: 52px; color: var(--text-2); font-size: 11px; }

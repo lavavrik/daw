@@ -1397,7 +1397,7 @@
   }
   .bar button:hover:not(:disabled) { filter: brightness(1.08); }
   .bar button:disabled { opacity: 0.45; cursor: not-allowed; }
-  .bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bar button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
   /* flex, not block: a block around the inline-flex button adds a line-box strut (+2 px toolbar). */
   .exwrap { position: relative; display: flex; }
   /* The examples popover: a --panel card with the lift, like the Rack's add menu. */
@@ -1431,6 +1431,7 @@
   .bar .split .caret { padding: 2px 4px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
   /* Chord: a toggle; on = the accent, like a lit step. */
   .bar button.on { background: var(--accent) var(--gloss); color: var(--on-color); }
+  .bar button.on:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); } /* on --accent */
   /* The row's right end: the readout, then the zoom group. The readout is
      there only while it has something to say (a selection, a velocity, a
      chord, a hint; idle it is hidden, not removed). Its flex-basis is 0, so

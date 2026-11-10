@@ -402,7 +402,7 @@
   input { width: 96px; box-sizing: border-box; padding: 7px 8px; font-size: var(--fs-ctl); line-height: 16px; }
   .field:has(.unit) input { padding-right: 36px; }
   .unit { position: absolute; right: 8px; color: var(--text-2); font-size: var(--fs-lbl); pointer-events: none; }
-  input.bad { outline: 2px solid var(--rec); outline-offset: 0; }
+  input.bad, input.bad:focus-visible { box-shadow: inset 0 0 0 2px var(--rec), var(--well-shadow); }
   .err { color: var(--rec); font: 500 var(--fs-lbl) var(--font-ui); }
   .range { color: var(--text-dim); font-size: var(--fs-lbl); }
   .items { margin: 0 -4px -4px; padding-top: 4px; border-top: 1px solid var(--line); }

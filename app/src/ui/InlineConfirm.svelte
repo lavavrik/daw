@@ -132,5 +132,6 @@
   }
   button:hover { filter: brightness(1.08); }
   .ok { background-color: var(--rec); color: var(--on-color); font-weight: 700; }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:focus-visible { outline: none; box-shadow: var(--focus-ring), var(--raised-shadow); }
+  .ok:focus-visible { box-shadow: inset 0 0 0 2px var(--text), var(--raised-shadow); } /* on --rec */
 </style>

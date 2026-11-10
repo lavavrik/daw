@@ -27,6 +27,13 @@
   import type { NoteInput } from '../input/noteInput';
   import { banners, flashHint } from '../state/banners.svelte';
   import { clearDownload } from '../export/exportFlow';
+  import Icon from './Icon.svelte';
+  import GridFour from 'phosphor-svelte/lib/GridFour';
+  import PianoKeys from 'phosphor-svelte/lib/PianoKeys';
+  import Flask from 'phosphor-svelte/lib/Flask';
+  import PlugsConnected from 'phosphor-svelte/lib/PlugsConnected';
+  import Faders from 'phosphor-svelte/lib/Faders';
+  import Waveform from 'phosphor-svelte/lib/Waveform';
 
   let {
     p, engine, clock, noteInput = null, capturing = () => false,
@@ -140,20 +147,28 @@
 
   const songHint = 'Song mode plays clips — playhead shows where a clip of this pattern plays';
 
+  // The header's title (plan 30): a fixed-width slot, ellipsized, with the
+  // whole text as its tooltip, so switching tracks never moves the pattern
+  // transport, the picker or the tabs after it.
+  const title = $derived(
+    ptrack ? `${ptrack.name} · ${currentPattern(ptrack).name}`
+    : track ? `${track.name}${audioClipName ? ` · ${audioClipName}` : ''}`
+    : null,
+  );
+
   // Banners show here (top of the body); any code can raise them via `banners`.
 </script>
 
 <section class="pane">
   <div class="head">
-    {#if ptrack}
-      <span class="swatch" style:background={ptrack.color}></span>
-      <b data-testid="panel-title">{ptrack.name} · {currentPattern(ptrack).name}</b>
-    {:else if track}
-      <span class="swatch" style:background={track.color}></span>
-      <b data-testid="panel-title">{track.name}{audioClipName ? ` · ${audioClipName}` : ''}</b>
-    {:else}
-      <span class="none">No track selected</span>
-    {/if}
+    <span class="ttl">
+      {#if track && title !== null}
+        <span class="swatch" style:background={track.color}></span>
+        <b data-testid="panel-title" title={title}>{title}</b>
+      {:else}
+        <span class="none">No track selected</span>
+      {/if}
+    </span>
     <!-- Pattern transport (plan 20): beside the picker; disabled without a pattern track. -->
     {#if recorder && rec}
       <PatternTransport
@@ -173,14 +188,15 @@
     {#if banners.hint !== null}
       <span class="flash" data-testid="flash-hint" role="status">{banners.hint}</span>
     {/if}
+    <!-- Icon tabs (plan 30): the name is each button's aria-label and leads its tooltip. -->
     <span class="tabs">
-      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} title={track?.kind === 'drum' ? 'Alt+1 / F6' : 'Select a drum track (Alt+1 / F6)'} onclick={() => (p.mixerOpen = false)}>Step grid</button>
-      <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+2 / F7' : 'Select a synth track (Alt+2 / F7)'} onclick={() => pickSynthTab('pianoroll')}>Piano roll</button>
+      <button class="tab" class:active={active === 'step'} disabled={track?.kind !== 'drum'} aria-label="Step grid" title={track?.kind === 'drum' ? 'Step grid (Alt+1 / F6)' : 'Step grid: select a drum track (Alt+1 / F6)'} onclick={() => (p.mixerOpen = false)}><Icon icon={GridFour} size={16} /></button>
+      <button class="tab" class:active={active === 'pianoroll'} disabled={track?.kind !== 'synth'} aria-label="Piano roll" title={track?.kind === 'synth' ? 'Piano roll (Alt+2 / F7)' : 'Piano roll: select a synth track (Alt+2 / F7)'} onclick={() => pickSynthTab('pianoroll')}><Icon icon={PianoKeys} size={16} /></button>
       <!-- Alt+N is the Nth tab (shortcuts.ts TAB_CODES); Acid and Clip have no F-key. -->
-      <button class="tab" class:active={active === 'acid'} disabled={track?.kind !== 'synth' || !acidOk} data-testid="tab-acid" title={track?.kind !== 'synth' ? 'Select a synth track (Alt+3)' : !acidOk ? `${acidWhy} (Alt+3)` : 'The pattern as steps (Alt+3)'} onclick={() => pickSynthTab('acid')}>Acid</button>
-      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} title={track?.kind === 'synth' ? 'Alt+4 / F8' : 'Select a synth track (Alt+4 / F8)'} onclick={() => pickSynthTab('instrument')}>Instrument</button>
-      <button class="tab" class:active={active === 'mixer'} title="All tracks, the Reverb and Delay returns and the Master (Alt+5 / F9)" data-testid="mixer-tab" onclick={() => (p.mixerOpen = true)}>Mixer</button>
-      <button class="tab" class:active={active === 'clip'} disabled={track?.kind !== 'audio'} data-testid="tab-clip" title={track?.kind === 'audio' ? 'The selected audio clip: gain, fades, loop (Alt+6)' : 'Select an audio track (Alt+6)'} onclick={() => (p.mixerOpen = false)}>Clip</button>
+      <button class="tab" class:active={active === 'acid'} disabled={track?.kind !== 'synth' || !acidOk} data-testid="tab-acid" aria-label="Acid" title={track?.kind !== 'synth' ? 'Acid: select a synth track (Alt+3)' : !acidOk ? `Acid: ${acidWhy} (Alt+3)` : 'Acid: the pattern as steps (Alt+3)'} onclick={() => pickSynthTab('acid')}><Icon icon={Flask} size={16} /></button>
+      <button class="tab" class:active={active === 'instrument'} disabled={track?.kind !== 'synth'} aria-label="Instrument" title={track?.kind === 'synth' ? 'Instrument (Alt+4 / F8)' : 'Instrument: select a synth track (Alt+4 / F8)'} onclick={() => pickSynthTab('instrument')}><Icon icon={PlugsConnected} size={16} /></button>
+      <button class="tab" class:active={active === 'mixer'} aria-label="Mixer" title="Mixer: all tracks, the Reverb and Delay returns and the Master (Alt+5 / F9)" data-testid="mixer-tab" onclick={() => (p.mixerOpen = true)}><Icon icon={Faders} size={16} /></button>
+      <button class="tab" class:active={active === 'clip'} disabled={track?.kind !== 'audio'} data-testid="tab-clip" aria-label="Clip" title={track?.kind === 'audio' ? 'Clip: the selected audio clip — gain, fades, loop (Alt+6)' : 'Clip: select an audio track (Alt+6)'} onclick={() => (p.mixerOpen = false)}><Icon icon={Waveform} size={16} /></button>
     </span>
   </div>
   <div class="body">
@@ -256,7 +272,12 @@
      onto a second row instead of running off the panel (layout.spec at 1024). */
   .head { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
   .head > * { flex: none; }
-  .head > b { font: 700 var(--fs-body) var(--font-ui); color: var(--text); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The title slot: one fixed width whatever the track (plan 30), so the
+     controls after it never move; a long name ellipsizes (tooltip: all of it).
+     The width follows the window only (180 px at 1280, 260 px from 1360). */
+  .ttl { display: inline-flex; align-items: center; gap: 8px; width: clamp(140px, calc(100vw - 1100px), 260px); min-width: 0; }
+  .ttl > b { font: 700 var(--fs-body) var(--font-ui); color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .swatch { flex: none; }
   @media (max-width: 1279px) { .head { flex-wrap: wrap; row-gap: 4px; } }
   .swatch { width: 12px; height: 12px; border-radius: var(--r-xs); box-shadow: var(--raised-shadow); }
   .none { color: var(--text-2); }
@@ -279,7 +300,7 @@
   /* The tabs are theme.css .tabs (selected = light, dark text), denser than
      the board's 30 px so the header stays one row under 40 px at 1280 px
      (layout.spec) beside the pattern transport. */
-  .tab { padding: 2px 9px; }
+  .tab { display: inline-flex; align-items: center; justify-content: center; padding: 2px 8px; height: 20px; }
   .tab:disabled { cursor: not-allowed; }
   .synth { display: flex; flex: 1; min-height: 0; min-width: 0; }
   .editor { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }

@@ -4,12 +4,18 @@
   // dropped audio files (Finder) and library samples (Browser pane). All
   // edits go through actions.ts (state + engine).
   //
-  // Row waveform (plan 12): "≈" on a row with a sample opens a 72 px
-  // waveform strip under the rows for that row (ui/vis/WaveformView: file
-  // time, the whole file at first, zoomable to single samples). One row at a
-  // time, not saved, display only. It draws no start/end/fade markers and no
-  // playhead: drum rows have no such engine params yet and drum voices
-  // report no position (follow-ups).
+  // Plan 30 (owner's step grid pass): the row waveform strip (plan 12's "≈")
+  // is gone (the owner found it unnecessary); the mute LED, which was lit
+  // while the row PLAYED and so read as "mute is on", is a speaker toggle
+  // that lights only while the row is muted (and dims the row's cells);
+  // cells have one fixed width (CELL_W in the CSS), so 16 steps no longer
+  // stretch across a wide panel and 32 / 64 steps scroll sideways instead
+  // of squeezing; Steps, Swing (+ its MPC presets) and Humanize moved off
+  // the footer into one "pattern settings" popover whose trigger reads out
+  // the step count and swing; and a Kit menu in the footer swaps the
+  // track's samples for another built-in kit (state/kit-actions.ts
+  // loadKitOntoTrack: steps kept, one undo entry), so changing kits no
+  // longer means deleting the track.
   //
   // Look (plan 20, spec §4): each row has its own colour, the palette walked
   // from the track's slot (stepGrid.ts rowColor; UI only). A cell's fill is
@@ -38,13 +44,13 @@
   // on a cell clears it), so the button is the only way in.
   //
   // Swing presets and Humanize (plan 25 Task 3; docs/architecture/sequencer.md
-  // "Swing presets", "Humanize"): the button after the swing readout opens a
-  // popover of MPC preset chips (state/groove.ts SWING_PRESETS: Straight,
-  // 54-66 %); a chip is setSwing with the preset's value, so one "Swing" undo
-  // entry, and the chip (and the button) shows the preset the swing matches.
-  // The slider and its right-click ValuePopover are unchanged. Humanize…
-  // opens an amount card (HumanizeCard) whose Apply is humanizeDrum on the
-  // current pattern: one "Humanize" entry.
+  // "Swing presets", "Humanize"), inside the pattern settings popover (plan
+  // 30): a row of MPC preset chips under the swing slider (state/groove.ts
+  // SWING_PRESETS: Straight, 54-66 %); a chip is setSwing with the preset's
+  // value, so one "Swing" undo entry, and the chip shows the preset the
+  // swing matches. The slider and its right-click ValuePopover are
+  // unchanged. Below them the Humanize amount card (HumanizeCard) whose
+  // Apply is humanizeDrum on the current pattern: one "Humanize" entry.
   //
   // Step velocity (plan 23 Task 1; docs/architecture/sequencer.md "Step
   // velocity"): on a LIT cell the wheel (±5 a notch, ±1 with Shift), a
@@ -56,7 +62,14 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import Trash from 'phosphor-svelte/lib/Trash';
   import CaretDown from 'phosphor-svelte/lib/CaretDown';
-  import DiceFive from 'phosphor-svelte/lib/DiceFive';
+  import SlidersHorizontal from 'phosphor-svelte/lib/SlidersHorizontal';
+  import Cylinder from 'phosphor-svelte/lib/Cylinder';
+  import Play from 'phosphor-svelte/lib/Play';
+  import Stop from 'phosphor-svelte/lib/Stop';
+  import SpeakerSimpleHigh from 'phosphor-svelte/lib/SpeakerSimpleHigh';
+  import SpeakerSimpleSlash from 'phosphor-svelte/lib/SpeakerSimpleSlash';
+  import { KITS } from '../state/kits';
+  import { loadKitOntoTrack } from '../state/kit-actions';
   import PopButton from './PopButton.svelte';
   import HumanizeCard from './HumanizeCard.svelte';
   import { HUMANIZE_VEL, SWING_PRESETS, activeSwingPreset } from '../state/groove';
@@ -75,14 +88,10 @@
   import type { AudioClock } from '../audio/audioClock';
   import { MAX_ROWS, currentPattern } from '../state/project.svelte';
   import { patternPosAt } from '../state/song-actions';
-  import { releaseSelect, selectKey } from './selectKey';
   import { deferSampleLoad } from '../state/sampleLoads';
   import { importSample } from '../state/sampleImport';
   import { bindPreview, previewState, togglePreview } from '../library/sharedPreview.svelte';
   import type { DrumRow, DrumTrack, Project } from '../state/project.svelte';
-  import { fineRequestFor } from '../audio/fineSamples';
-  import WaveformView from './vis/WaveformView.svelte';
-  import { fileMap, waveBase } from './vis/waveMath';
   import {
     dragVel, rowColor, stepCellStyle, velChip, velKeyStep, velStatus, velTip, wheelCarry, wheelNotch, wheelPx, wheelVelStep,
   } from './stepGrid';
@@ -119,21 +128,23 @@
     }
   }
 
-  // ---- row waveform -----------------------------------------------------
-  /** The row whose strip is open (view state: not saved, not an edit). */
-  let waveRowId = $state<string | null>(null);
-  const waveRow = $derived.by(() => {
-    void p.peaksVersion; // sampleMeta is a plain Map
-    const r = track.rows.findIndex((x) => x.id === waveRowId);
-    const row = track.rows[r];
-    if (!row || row.sampleId === null) return null;
-    const meta = p.sampleMeta.get(row.sampleId);
-    if (!meta) return null;
-    const base = waveBase(meta, engine.sampleRate);
-    const f = p.sampleFiles.get(row.sampleId);
-    const fine = f ? fineRequestFor(f, meta, engine.context) : null;
-    return { r, row, sampleId: row.sampleId, base, map: fileMap(base.frames), fine };
-  });
+  // ---- kit menu (plan 30) ----------------------------------------------
+  /**
+   * The kit loading now (its item says so; one load at a time, as the
+   * Browser's "Load onto track"). The load always settles (kit-actions.ts),
+   * so this never sticks.
+   */
+  let loadingKit = $state<string | null>(null);
+  async function pickKit(kitId: string, close: () => void) {
+    if (loadingKit) return;
+    loadingKit = kitId;
+    try {
+      await loadKitOntoTrack(p, engine, track.id, kitId);
+    } finally {
+      loadingKit = null;
+      close();
+    }
+  }
 
   /** The pattern being edited (steps, step count, swing); rows stay per track. */
   const pat = $derived(currentPattern(track));
@@ -431,7 +442,7 @@
 
 <div class="grid" bind:this={gridEl}>
   <div class="hdr" aria-hidden="true">
-    <span class="lbl tag-h"></span><span class="lbl name-h">Sample</span><span class="wave-h"></span>
+    <span class="lbl tag-h"></span><span class="lbl name-h">Sample</span>
     <span class="lbl mute-h">Mute</span><span class="lbl gain-h">Gain</span><span class="lbl pan-h">Pan</span>
     <span class="lbl">Steps</span>
   </div>
@@ -441,6 +452,7 @@
     <div
       class="row"
       class:over={dragOver === row.id}
+      class:muted={row.mute}
       style:--c={rowColor(track.slot, r)}
       data-testid="row-{r}"
       role="group"
@@ -453,7 +465,6 @@
       <span class="tag" aria-hidden="true"></span>
       {#if row.sampleId === null}
         <span class="name empty" data-testid="row-name" title={row.name}>drop sample</span>
-        <span class="wave-h"></span>
       {:else}
         {@const sid = row.sampleId}
         {@const on = previewState.key === rowKey(sid)}
@@ -462,19 +473,15 @@
           title="{row.name} — click to preview{on ? ' (click again to stop)' : ''}"
           aria-label="Preview {row.name}" aria-pressed={on}
           onclick={() => void previewRow(sid, row.name)}
-        >{row.name}</button>
-        <button
-          type="button" class="wave" class:on={waveRowId === row.id} data-testid="row-wave-btn-{r}"
-          title="Waveform of {row.name}" aria-label="Waveform of {row.name}" aria-pressed={waveRowId === row.id}
-          onclick={() => (waveRowId = waveRowId === row.id ? null : row.id)}
-        >≈</button>
+        ><span class="nm">{row.name}</span><span class="pi"><Icon icon={on ? Stop : Play} size={11} weight="fill" /></span></button>
       {/if}
-      <!-- The LED shows the row playing (lit) or muted (grey); pressed = muted. -->
+      <!-- A speaker toggle: plain while the row plays, lit with a slashed
+           speaker while it is muted (pressed = muted). -->
       <button
-        class="mute" class:on={row.mute} aria-pressed={row.mute}
-        title="{row.mute ? 'Unmute' : 'Mute'} {row.name}" aria-label="Mute {row.name}"
+        class="mute" class:on={row.mute} aria-pressed={row.mute} data-testid="row-mute-{r}"
+        title={row.mute ? `${row.name} is muted — click to unmute` : `Mute ${row.name}`} aria-label="Mute {row.name}"
         onclick={() => setRowMute(p, engine, track.id, row.id, !row.mute)}
-      ></button>
+      ><Icon icon={row.mute ? SpeakerSimpleSlash : SpeakerSimpleHigh} size={14} weight={row.mute ? 'fill' : 'regular'} /></button>
       <label class="sl gain" title="Gain {row.gain.toFixed(2)}">
         <input
           type="range" min="0" max="2" step="0.01" value={row.gain} style:--fill={gain.fill}
@@ -528,19 +535,6 @@
     </div>
   {/each}
 
-  {#if waveRow}
-    {@const w = waveRow}
-    <div class="strip">
-      <span class="strip-name" title={w.row.name}>{w.row.name}</span>
-      {#key `${w.row.id}:${w.sampleId}`}
-        <WaveformView
-          base={w.base} map={w.map} fine={w.fine} height={72} color={rowColor(track.slot, w.r)}
-          testid="row-wave-{w.r}" label="Waveform of {w.row.name}"
-        />
-      {/key}
-    </div>
-  {/if}
-
   {#if chip && chipVel !== null}
     <span class="vchip mono" data-testid="step-vel-chip" style:left="{chip.x}px" style:top="{chip.y}px">{velChip(chipVel)}</span>
   {/if}
@@ -556,53 +550,75 @@
       ondragleave={() => dragOver === 'add' && (dragOver = null)}
       ondrop={dropOnAdd}
     >+ Add row</button>
-    <label><span class="lbl">Steps</span>
-      <select
-        data-testid="step-count" value={pat.stepCount} onkeydown={selectKey}
-        onchange={(e) => { setStepCount(p, engine, track.id, Number(e.currentTarget.value) as 16 | 32 | 64); releaseSelect(e.currentTarget); }}
-      >
-        <option value={16}>16</option><option value={32}>32</option><option value={64}>64</option>
-      </select>
-    </label>
-    <label><span class="lbl">Swing</span>
-      <input
-        class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
-        style:--fill={rangeFill(pat.swing).fill}
-        data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
-        use:popoverOwner {...popoverHandlers(swingReq)}
-      />
-      <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
-    </label>
-    <PopButton id="swing-presets-pop-{track.id}" label="Swing presets" testid="swing-presets-pop" place="above">
+    <!-- Kit (plan 30): swap this track's samples for a built-in kit. -->
+    <PopButton id="kit-menu-pop-{track.id}" label="Drum kit" testid="kit-menu-pop" place="above">
       {#snippet trigger(a)}
-        <button {...a} class="btn pop" data-testid="swing-presets" title="Swing presets in MPC terms (50 % is straight)">
-          {preset ? (preset.mpc === 50 ? 'Straight' : `MPC ${preset.label}`) : 'Presets'} <Icon icon={CaretDown} />
+        <button {...a} class="btn pop" data-testid="kit-menu" title="Load a built-in drum kit onto this track (steps are kept)">
+          <Icon icon={Cylinder} /> Kit <Icon icon={CaretDown} />
         </button>
       {/snippet}
-      {#snippet children()}
-        <p class="lbl pop-h">Swing (MPC)</p>
-        <div class="seg" role="group" aria-label="Swing presets">
-          {#each SWING_PRESETS as s (s.mpc)}
+      {#snippet children(close)}
+        <p class="lbl pop-h">Load a kit onto “{track.name}”</p>
+        <div class="kits" role="group" aria-label="Drum kits">
+          {#each KITS as k (k.id)}
             <button
-              type="button" data-testid="swing-preset-{s.mpc}" aria-pressed={preset?.mpc === s.mpc}
-              title="{s.label === 'Straight' ? 'Straight (MPC 50 %)' : `MPC ${s.label}`}: swing {Math.round(s.swing * 100)}%"
-              onclick={() => setSwing(p, engine, track.id, s.swing)}
-            >{s.label}</button>
+              type="button" class="kit" data-testid="kit-pick-{k.id}" disabled={loadingKit !== null}
+              title="{k.blurb}. Each row named Kick, Clap… gets this kit's sound; steps are kept."
+              onclick={() => void pickKit(k.id, close)}
+            >{k.name}{loadingKit === k.id ? ' …' : ''}</button>
           {/each}
         </div>
       {/snippet}
     </PopButton>
-    <PopButton id="humanize-pop-{track.id}" label="Humanize" testid="humanize-pop" place="above">
+    <!-- Pattern settings (plan 30): steps, swing (+ MPC presets), humanize. -->
+    <PopButton id="pattern-settings-pop-{track.id}" label="Pattern settings" testid="pattern-settings-pop" place="above">
       {#snippet trigger(a)}
-        <button {...a} class="btn pop" data-testid="humanize" title="Jitter the velocity of every lit step in this pattern">
-          <Icon icon={DiceFive} /> Humanize…
+        <button {...a} class="btn pop" data-testid="pattern-settings" title="Steps, swing and humanize for this pattern">
+          <Icon icon={SlidersHorizontal} />
+          <span class="mono">{pat.stepCount}</span> steps · swing <span class="mono">{Math.round(pat.swing * 100)}%</span>
+          <Icon icon={CaretDown} />
         </button>
       {/snippet}
       {#snippet children(close)}
-        <HumanizeCard
-          hint="Moves each lit step's velocity by up to ±{HUMANIZE_VEL} at 100 %. Steps never turn on or off."
-          onapply={(a) => humanizeDrum(p, engine, track.id, a)} {close}
-        />
+        <section class="sec">
+          <p class="lbl pop-h">Steps</p>
+          <div class="seg" role="group" aria-label="Step count">
+            {#each [16, 32, 64] as const as n (n)}
+              <button
+                type="button" data-testid="step-count-{n}" aria-pressed={pat.stepCount === n}
+                onclick={() => setStepCount(p, engine, track.id, n)}
+              >{n}</button>
+            {/each}
+          </div>
+        </section>
+        <section class="sec">
+          <p class="lbl pop-h">Swing</p>
+          <label class="swl">
+            <span class="sr-only">Swing</span>
+            <input
+              class="swing" type="range" min="0" max="100" step="1" value={Math.round(pat.swing * 100)}
+              style:--fill={rangeFill(pat.swing).fill}
+              data-testid="swing" oninput={(e) => setSwing(p, engine, track.id, vol(e) / 100)}
+              use:popoverOwner {...popoverHandlers(swingReq)}
+            />
+            <span class="pct mono">{Math.round(pat.swing * 100)}%</span>
+          </label>
+          <div class="seg" role="group" aria-label="Swing presets (MPC)" data-testid="swing-presets">
+            {#each SWING_PRESETS as s (s.mpc)}
+              <button
+                type="button" data-testid="swing-preset-{s.mpc}" aria-pressed={preset?.mpc === s.mpc}
+                title="{s.label === 'Straight' ? 'Straight (MPC 50 %)' : `MPC ${s.label}`}: swing {Math.round(s.swing * 100)}%"
+                onclick={() => setSwing(p, engine, track.id, s.swing)}
+              >{s.label}</button>
+            {/each}
+          </div>
+        </section>
+        <section class="sec">
+          <HumanizeCard
+            hint="Moves each lit step's velocity by up to ±{HUMANIZE_VEL} at 100 %. Steps never turn on or off."
+            onapply={(a) => humanizeDrum(p, engine, track.id, a)} {close}
+          />
+        </section>
       {/snippet}
     </PopButton>
   </div>
@@ -612,14 +628,15 @@
   /* Spec §4 "Step grid". Every colour is a theme.css token; a row's colour is
      data (ui/stepGrid.ts rowColor), passed in as --c on the row. Widths: the
      header's labels line up with the row's controls (tag 5, name 120,
-     wave 18, mute 22, gain 104, pan 80; 8 px gaps). */
-  .grid { display: flex; flex-direction: column; gap: 4px; position: relative; }
+     mute 24, gain 104, pan 80; 8 px gaps). The grid is as wide as its
+     rows (fixed cells): wider than the panel, the panel body scrolls. */
+  .grid { display: flex; flex-direction: column; gap: 4px; position: relative; width: max-content; min-width: 100%; box-sizing: border-box; }
   .hdr, .row { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
   .hdr { height: 14px; }
   .tag-h { width: 5px; flex: none; }
   .name-h { width: 120px; flex: none; }
-  /* "MUTE" is wider than the 22 px LED: centred, it overhangs both gaps evenly. */
-  .mute-h { width: 22px; flex: none; display: flex; justify-content: center; }
+  /* "MUTE" is wider than the 24 px toggle: centred, it overhangs both gaps evenly. */
+  .mute-h { width: 24px; flex: none; display: flex; justify-content: center; }
   .gain-h { width: 104px; flex: none; }
   .pan-h { width: 80px; flex: none; }
   .row { height: 34px; border-radius: var(--r-sm); outline: 1px dashed transparent; outline-offset: -1px; }
@@ -632,8 +649,8 @@
     box-shadow: 0 0 10px color-mix(in srgb, var(--c) 40%, transparent);
   }
 
-  /* The name: a raised button (click previews); the ▶ / ■ glyph is CSS so the
-     text stays the sample name. */
+  /* The name: a raised button (click previews); a Phosphor Play / Stop icon
+     sits at its right end (.pi, beside the ellipsized name). */
   .name {
     display: block; width: 120px; height: 30px; flex: none; box-sizing: border-box; padding: 0 10px;
     line-height: 30px; text-align: left; border-radius: var(--r-md);
@@ -641,30 +658,33 @@
     font: 600 var(--fs-ctl) var(--font-ui); color: var(--text);
   }
   .name.prev {
-    border: 0; cursor: pointer; position: relative; padding-right: 24px;
+    border: 0; cursor: pointer; display: flex; align-items: center; gap: 6px; padding-right: 8px;
     background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow);
   }
+  .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pi { display: inline-flex; flex: none; color: var(--text-2); }
   .name.prev:hover { filter: brightness(1.08); }
-  .name.prev::after { content: '▶'; position: absolute; right: 10px; font-size: var(--fs-xs); color: var(--text-2); }
+  .name.prev:hover .pi { color: var(--text); }
   .name.prev.on { color: var(--on-color); background-color: var(--play); }
-  .name.prev.on::after { content: '■'; color: var(--on-color); }
+  .name.prev.on .pi { color: var(--on-color); }
   .name.prev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .name.empty { line-height: 28px; border: 1px dashed var(--line); color: var(--text-2); font-weight: 400; font-style: italic; }
 
-  .wave-h, .wave { width: 18px; flex: none; }
-  .wave { font: inherit; height: 22px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-2); cursor: pointer; }
-  .wave:hover, .wave.on { color: var(--text); background: var(--raised); }
-  .wave:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-
-  /* Mute LED: lit (--play, glowing) while the row plays, grey when muted. */
+  /* Mute: a raised speaker toggle, quiet while the row plays; muted it is
+     lit (--accent, as the track headers' M) with a slashed speaker, and the
+     row's cells dim, so "lit" only ever means "muted". */
   .mute {
-    width: 22px; height: 22px; flex: none; padding: 0; border: 2px solid var(--well); border-radius: 50%;
-    background: var(--play) var(--gloss);
-    box-shadow: 0 0 10px color-mix(in srgb, var(--play) 40%, transparent);
-    cursor: pointer;
+    width: 24px; height: 24px; flex: none; padding: 0; border: 0; border-radius: var(--r-sm);
+    display: grid; place-items: center; cursor: pointer;
+    background: var(--raised) var(--gloss); box-shadow: var(--raised-shadow); color: var(--text-2);
   }
-  .mute.on { background-color: var(--raised); box-shadow: none; }
+  .mute:hover { color: var(--text); filter: brightness(1.08); }
+  .mute.on {
+    background-color: var(--accent); color: var(--on-color);
+    box-shadow: var(--raised-shadow), 0 0 8px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
   .mute:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row.muted .cells { opacity: 0.45; }
 
   /* Gain and pan: skinned native ranges (theme.css), filled in the row colour
      (--c inherits from the row); pan fills from the centre (--fill-pos). */
@@ -674,11 +694,12 @@
   .sl input { width: 100%; }
   .val { font-size: var(--fs-xs); line-height: 1; color: var(--text-2); text-align: center; }
 
-  /* Steps: groups of 4, 12 px apart. */
-  .cells { display: flex; gap: 12px; flex: 1; min-width: 0; user-select: none; }
-  .grp { display: flex; gap: 3px; flex: 1 1 0; min-width: 0; max-width: 156px; }
+  /* Steps: groups of 4, 10 px apart; every cell one fixed width (plan 30:
+     they no longer stretch with the panel). */
+  .cells { --cell-w: 30px; display: flex; gap: 10px; flex: none; user-select: none; }
+  .grp { display: flex; gap: 3px; flex: none; }
   .cell {
-    flex: 1 1 0; min-width: 7px; height: 30px; padding: 0; border: 0; position: relative; overflow: hidden;
+    flex: none; width: var(--cell-w); height: 30px; padding: 0; border: 0; position: relative; overflow: hidden;
     border-radius: var(--r-sm); cursor: pointer; touch-action: none;
     /* Off: recessed, in the area colour; odd groups a shade lighter (between --work and --grid). */
     background: var(--work); box-shadow: var(--well-shadow);
@@ -725,14 +746,23 @@
     font-size: var(--fs-lbl); line-height: 14px;
   }
 
-  .strip { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
-  .strip-name { width: 133px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
-
-  .foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; padding: 0 4px; color: var(--text-2); }
-  .foot label { display: flex; align-items: center; gap: 8px; }
+  /* The footer stays at the panel's left edge while the cells scroll sideways. */
+  .foot { position: sticky; left: 0; align-self: flex-start; display: flex; align-items: center; gap: 8px; margin-top: 6px; padding: 0 4px; color: var(--text-2); }
   .add { padding: 4px 12px; }
-  .swing { width: 160px; }
-  .pct { width: 32px; color: var(--text); }
-  .pop { padding: 4px 10px; }
+  .pop { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; }
+  .pop .mono { color: var(--text); }
   .pop-h { margin: 0; }
+  /* The popovers' content (PopButton's card is a column with 8 px gaps). */
+  .sec { display: flex; flex-direction: column; gap: 6px; }
+  .sec + .sec { padding-top: 8px; border-top: 1px solid var(--line); }
+  .swl { display: flex; align-items: center; gap: 8px; }
+  .swing { width: 180px; }
+  .pct { width: 36px; text-align: right; color: var(--text); }
+  .kits { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+  .kit {
+    font: 500 var(--fs-ctl) var(--font-ui); text-align: left; padding: 5px 10px; border: 0; border-radius: var(--r-sm);
+    background: transparent; color: var(--text); cursor: pointer;
+  }
+  .kit:hover:not(:disabled), .kit:focus-visible { background: var(--raised); outline: none; }
+  .kit:disabled { color: var(--text-2); cursor: progress; }
 </style>

@@ -94,14 +94,29 @@ and custom properties, and its CSS draws them with theme tokens.
   `ACCENT_MIN_VEL` (110, shared with the Acid tab, `state/acidSteps.ts`)
   adds the `accent` class: a 2 px ring in the row colour and a glow. The
   playing step (`playhead` class, from the grid's heard-position loop) gets
-  a white outline and a brighter fill. Groups of four sit 12 px apart.
+  a white outline and a brighter fill. Groups of four sit 10 px apart.
+  Every cell is one fixed width (30 px, `--cell-w`; plan 30): the cells
+  never stretch with the panel, and 32 / 64 steps scroll the panel
+  sideways (the footer stays put: `position: sticky`).
 - **Gain and pan** stay native `<input type="range">` with the theme skin
   (`--fill`, `--c` from the row). They are not rack params (no MIDI-learn or
   automation for the Knob slider variant to keep), and a native drag is one
   undo entry through the pointer gesture. Pan fills from the centre
   (`panFill` → `--fill` and `--fill-pos`, see `ui-theme.md`).
-- The mute LED is lit (`--play`, with a glow) while the row plays and grey
-  when muted; `aria-pressed` = muted, as before.
+- **Mute** (plan 30) is a speaker toggle (`row-mute-<i>`): plain while the
+  row plays, lit `--accent` with a slashed speaker while it is muted, and the
+  row's cells dim. The old LED was lit while the row *played*, which read as
+  "mute is on". `aria-pressed` = muted, as before.
+- The sample name button previews the row; its Play / Stop glyph is a
+  Phosphor icon (plan 30), not CSS text.
+- **Kit** (plan 30): the footer's Kit menu (`kit-menu`, items
+  `kit-pick-<kit id>`) loads a built-in kit onto the track
+  (`loadKitOntoTrack`, see `projects.md`), so changing kits keeps the track
+  and its steps.
+- **Pattern settings** (plan 30): Steps (16 / 32 / 64 chips,
+  `step-count-<n>`), Swing (slider + MPC preset chips) and Humanize live in
+  one popover (`pattern-settings`; its trigger reads "16 steps · swing 0%")
+  instead of across the footer.
 - **Delete row** (plan 21): a trash icon button at the row's end
   (`row-delete-<i>`, aria-label and tooltip "Delete row <name>"), faded in
   on row hover and while focus is in the row; opacity only, so it is always
@@ -190,19 +205,19 @@ ticks, so the off-16th sounds at `240 + 120 * swing`, which is
 pair: 66.7 %, swing 0.667). Every preset falls on the slider's 1 % grid, so
 the slider, its readout and the right-click ValuePopover show it exactly.
 
-The button after the swing readout opens the presets popover (shared
-`ui/PopButton.svelte`: Esc, a press outside and Tab out close it). A chip
-calls `setSwing` with the preset's value, so it is one "Swing" undo entry,
-like a slider drag. The chip whose value matches the current swing (at the
-slider's 1 % resolution) is pressed, and the button shows its name
-("MPC 58 %", "Straight"), else "Presets".
+The preset chips sit under the swing slider in the pattern settings
+popover (plan 30; shared `ui/PopButton.svelte`: Esc, a press outside and
+Tab out close it). A chip calls `setSwing` with the preset's value, so it
+is one "Swing" undo entry, like a slider drag. The chip whose value matches
+the current swing (at the slider's 1 % resolution) is pressed; none is when
+the swing is off the presets.
 
 ### Humanize (plan 25)
 Code: `app/src/state/groove.ts` (the jitter and the bounds),
 `humanizeDrum` in `state/actions.ts`, `humanizeNotes` in
 `state/pattern-actions.ts`, and the shared `ui/HumanizeCard.svelte`
-(amount 0–100 %, Apply) behind the **Humanize…** buttons of the step grid
-footer and the piano roll toolbar.
+(amount 0–100 %, Apply) in the step grid's pattern settings popover
+(plan 30) and behind the piano roll toolbar's **Humanize…** button.
 
 - **Drums:** every lit step in the current pattern's first `stepCount`
   steps gets a velocity moved by up to ±`HUMANIZE_VEL` (20) × amount,

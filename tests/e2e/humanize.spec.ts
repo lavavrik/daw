@@ -8,7 +8,7 @@ import { startApp } from './startApp';
 
 type Note = { id: string; start: number; vel: number };
 type Daw = {
-  project: { tracks: { kind: string; currentPatternId: string; patterns: { id: string; swing: number; steps: number[][]; notes: Note[] }[] }[] };
+  project: { tracks: { kind: string; currentPatternId: string; patterns: { id: string; swing: number; stepCount: number; steps: number[][]; notes: Note[] }[] }[] };
   history: { labels: { undo: string | null } } | null;
 };
 const daw = (page: Page) => page.evaluate(() => {
@@ -30,37 +30,49 @@ async function home(page: Page) {
 
 test('the 58 % chip sets swing 0.32 and shows as active; one undo entry; the slider popover still works', async ({ page }) => {
   await home(page);
-  await page.getByTestId('swing-presets').click();
-  const pop = page.getByTestId('swing-presets-pop');
+  // Swing, its presets and Humanize live in the pattern settings popover (plan 30).
+  await page.getByTestId('pattern-settings').click();
+  const pop = page.getByTestId('pattern-settings-pop');
   await expect(pop).toBeVisible();
-  await expect(pop.getByRole('button')).toHaveText(['Straight', '54 %', '58 %', '62 %', '66 %']);
+  await expect(page.getByTestId('swing-presets').getByRole('button')).toHaveText(['Straight', '54 %', '58 %', '62 %', '66 %']);
   await expect(page.getByTestId('swing-preset-50')).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('swing-preset-58').click();
   await expect.poll(async () => (await pat(page)).swing).toBe(0.32);
   await expect(page.getByTestId('swing')).toHaveValue('32');
   await expect(page.getByTestId('swing-preset-58')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('swing-preset-50')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByTestId('swing-presets')).toContainText('MPC 58 %');
+  await expect(page.getByTestId('pattern-settings')).toContainText('swing 32%');
   await expect.poll(async () => undoLabel(page)).toBe('Swing');
 
-  // Esc closes it, back on its button; a value off the presets shows none.
-  await page.keyboard.press('Escape');
-  await expect(pop).toHaveCount(0);
-  await expect(page.getByTestId('swing-presets')).toBeFocused();
-  // The swing slider's right-click ValuePopover (plan 24) is unchanged.
+  // The swing slider's right-click ValuePopover (plan 24) is unchanged; a value off the presets lights none.
   await page.getByTestId('swing').click({ button: 'right' });
   await expect(page.getByTestId('value-input')).toBeFocused();
   await page.keyboard.type('33');
   await page.keyboard.press('Enter');
   await expect.poll(async () => (await pat(page)).swing).toBe(0.33);
-  await expect(page.getByTestId('swing-presets')).toContainText('Presets');
+  await expect(page.getByTestId('swing-presets').locator('[aria-pressed="true"]')).toHaveCount(0);
+
+  // Esc closes the settings, back on their button.
+  await page.keyboard.press('Escape');
+  await expect(pop).toHaveCount(0);
+  await expect(page.getByTestId('pattern-settings')).toBeFocused();
 
   // One Cmd+Z per edit: the typed 33, then the chip.
-  await page.getByTestId('swing-presets').focus();
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(async () => (await pat(page)).swing).toBe(0.32);
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(async () => (await pat(page)).swing).toBe(0);
+});
+
+test('the pattern settings set the step count', async ({ page }) => {
+  await home(page);
+  await expect(page.getByTestId('pattern-settings')).toContainText('16 steps');
+  await page.getByTestId('pattern-settings').click();
+  await page.getByTestId('step-count-32').click();
+  await expect.poll(async () => (await pat(page)).stepCount).toBe(32);
+  await expect(page.getByTestId('step-count-32')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('pattern-settings')).toContainText('32 steps');
+  await expect(page.getByTestId('step-0-31')).toBeAttached();
 });
 
 test('Humanize at 50 % changes some step velocities, never turns a step on or off, in one undo', async ({ page }) => {
@@ -71,11 +83,11 @@ test('Humanize at 50 % changes some step velocities, never turns a step on or of
   const lit = before.flatMap((row, r) => row.map((v, s) => [r, s, v] as const)).filter(([, , v]) => v > 0);
   expect(lit.length).toBeGreaterThanOrEqual(12);
 
-  await page.getByTestId('humanize').click();
-  await expect(page.getByTestId('humanize-pop')).toBeVisible();
+  await page.getByTestId('pattern-settings').click();
+  await expect(page.getByTestId('pattern-settings-pop')).toBeVisible();
   await expect(page.getByTestId('humanize-pct')).toHaveText('50%'); // the default amount
   await page.getByTestId('humanize-apply').click();
-  await expect(page.getByTestId('humanize-pop')).toHaveCount(0);
+  await expect(page.getByTestId('pattern-settings-pop')).toHaveCount(0);
   await expect.poll(async () => undoLabel(page)).toBe('Humanize');
 
   const after = (await pat(page)).steps;
@@ -94,14 +106,14 @@ test('Humanize at 50 % changes some step velocities, never turns a step on or of
   expect(await undoLabel(page)).not.toBe('Humanize');
 
   // Enter at 0 % applies nothing and is not remembered: the card opens at the last nonzero amount.
-  await page.getByTestId('humanize').click();
+  await page.getByTestId('pattern-settings').click();
   await page.getByTestId('humanize-amount').fill('0');
   await expect(page.getByTestId('humanize-pct')).toHaveText('0%');
   await page.getByTestId('humanize-amount').press('Enter');
-  await expect(page.getByTestId('humanize-pop')).toBeVisible();
+  await expect(page.getByTestId('pattern-settings-pop')).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('humanize-pop')).toHaveCount(0);
-  await page.getByTestId('humanize').click();
+  await expect(page.getByTestId('pattern-settings-pop')).toHaveCount(0);
+  await page.getByTestId('pattern-settings').click();
   await expect(page.getByTestId('humanize-pct')).toHaveText('50%');
 });
 

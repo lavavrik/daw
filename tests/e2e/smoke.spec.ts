@@ -265,8 +265,10 @@ test('drop outside a row is caught: no navigation, hint shown', async ({ page })
 test('Space and piano keys still work after touching a slider or the BPM field', async ({ page }) => {
   await startAudio(page);
   await buildSynth(page);
-  await page.getByTestId('swing').fill('30'); // focuses the range input
-  await expect(page.getByTestId('swing')).toBeFocused();
+  // A row's gain slider (swing moved into a popover, plan 30).
+  const gain = page.getByTestId('row-0').getByRole('slider', { name: /^Gain / });
+  await gain.fill('1.5'); // focuses the range input
+  await expect(gain).toBeFocused();
   await page.keyboard.press('Space');
   await expect.poll(slot(page, 1)).toBe(1); // playing
   await page.keyboard.press('Space');

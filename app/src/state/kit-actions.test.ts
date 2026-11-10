@@ -13,7 +13,7 @@ import { commandEdits } from './edits';
 import { addDefaultDrumTrack, attachKitSample } from './defaultKit';
 import { KITS, KIT_ROLES, kitById } from './kits';
 import type { Kit, KitSound } from './kits';
-import { addKitDrumTrack, kitRowPlan, loadKitOntoTrack } from './kit-actions';
+import { addKitDrumTrack, kitRowPlan, kitTrackRename, loadKitOntoTrack } from './kit-actions';
 import type { KitFileDeps } from './kit-actions';
 import { MAX_ROWS, MAX_TRACKS, Project, currentPattern } from './project.svelte';
 import type { DrumTrack } from './project.svelte';
@@ -92,7 +92,32 @@ describe('kitRowPlan', () => {
   });
 });
 
+describe('kitTrackRename', () => {
+  const garage = kitById('garage')!;
+  it('a track named after a kit takes the new kit\'s name (unique among the others)', () => {
+    expect(kitTrackRename(['Drums'], 'Drums', garage)).toBe('Garage');
+    expect(kitTrackRename(['Deep 2', 'Garage'], 'Deep 2', garage)).toBe('Garage 2');
+    expect(kitTrackRename(['Deep'], 'Deep', kitById('starter')!)).toBe('Drums');
+  });
+  it('a name the user picked, or the same kit\'s name, is kept', () => {
+    expect(kitTrackRename(['Beat'], 'Beat', garage)).toBeNull();
+    expect(kitTrackRename(['Deep two'], 'Deep two', garage)).toBeNull();
+    expect(kitTrackRename(['Garage'], 'Garage', garage)).toBeNull();
+  });
+});
+
 describe('loadKitOntoTrack', () => {
+  it('renames a track named after its kit, in the same undo entry', async () => {
+    const { p, engine, t, h } = await fresh();
+    const was = t.name;
+    const { d } = deps();
+    await loadKitOntoTrack(p, engine, t.id, 'garage', d);
+    expect(was).toBe('Drums');
+    expect(p.tracks[0].name).toBe('Garage');
+    h.undo();
+    expect(p.tracks[0].name).toBe(was);
+  });
+
   it('replaces every role row\'s sample, keeps the steps, is one undo entry; undo restores the starter samples', async () => {
     const { p, engine, t, h } = await fresh();
     toggleStep(p, engine, t.id, t.rows[0].id, 0);

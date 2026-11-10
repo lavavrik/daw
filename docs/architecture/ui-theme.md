@@ -251,9 +251,20 @@ of these class names keeps its own box when it sets its own padding and font.
   `--fs-body` where they are (the bottom panel's title, the clip name).
 - The skinned `<select>` drops base-select's 24 px minimum height
   (`min-block-size: 0`): dense toolbars would otherwise grow.
-- The bottom panel's tabs are 20 px (`padding: 2px 9px` on a 2 px `--work`
+- The bottom panel's tabs are 20 px (`padding: 2px 8px` on a 2 px `--work`
   tray), not the board's 30 px: the header must stay one row under 40 px at
-  1280 px beside the pattern transport (`layout.spec.ts`).
+  1280 px beside the pattern transport (`layout.spec.ts`). Since plan 30 they
+  are 16 px Phosphor icons (Step grid `GridFour`, Piano roll `PianoKeys`,
+  Acid `Flask`, Instrument `PlugsConnected`, Mixer `Faders`, Clip
+  `Waveform`); the name is the button's aria-label and leads its tooltip.
+- The bottom panel header's title is a fixed slot (140–260 px by window width only) (ellipsized, the
+  whole text as its tooltip) and the pattern picker a fixed 150 px (its
+  name fields too), so switching tracks or patterns never moves a control
+  (plan 30).
+- The song area / bottom panel split is draggable (plan 30): a horizontal
+  `Splitter` (`axis="y"`) on the bottom panel's top edge, saved as
+  `daw.paneWidth.song` (0 = the default 1 : 3 split); the CSS keeps the
+  song area >= 100 px and the bottom panel >= 200 px.
 - Popovers with their own controls are a `--panel` card with the lift (the
   Rack's add-module menu, the piano roll's Examples, `InlineConfirm`, the
   precise-entry card below, whose lower half is the Automate / MIDI learn

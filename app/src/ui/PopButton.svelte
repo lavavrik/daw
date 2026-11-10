@@ -15,6 +15,11 @@
   // scoped look (the piano roll's dense toolbar buttons, the step grid's
   // .btn). `children` gets `close` for actions that end the popover.
   //
+  // An overlay a control inside the card opened (`[data-overlay]`: the
+  // ValuePopover a right-click on the step grid's Swing opens, plan 30) is
+  // not "outside": focus or a press moving into it keeps the card open, so
+  // the control that owns the overlay is not unmounted under it.
+  //
   // `float` (plan 27: the mixer strip's Presets): the card is fixed to the
   // window instead of absolutely placed under the trigger, for a trigger
   // inside a box that clips (the strip's overflow: hidden). It opens under
@@ -48,6 +53,8 @@
   let wrap = $state<HTMLElement | null>(null);
   let card = $state<HTMLElement | null>(null);
   const triggerBtn = () => wrap?.querySelector<HTMLElement>(':scope > button');
+  /** Inside this pair, or in an overlay opened from it (see the header). */
+  const ours = (n: Node | null) => !!n && (!!wrap?.contains(n) || (n instanceof Element && !!n.closest('[data-overlay]')));
 
   /** The floating card's window position (float only). */
   let left = $state(0);
@@ -85,12 +92,12 @@
   /** Tab / Shift+Tab out of the trigger + card pair closes it (a null target is left to the press rule). */
   function focusOut(e: FocusEvent) {
     const to = e.relatedTarget as Node | null;
-    if (open && to && !wrap?.contains(to)) close(false);
+    if (open && to && !ours(to)) close(false);
   }
   $effect(() => {
     if (!open) return;
     const outside = (e: PointerEvent) => {
-      if (!wrap?.contains(e.target as Node)) close(false);
+      if (!ours(e.target as Node)) close(false);
     };
     window.addEventListener('pointerdown', outside, true);
     if (!float) return () => window.removeEventListener('pointerdown', outside, true);

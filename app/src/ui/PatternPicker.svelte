@@ -169,7 +169,7 @@
     <input class="name" bind:this={input} bind:value={draft} maxlength="40" data-testid="pattern-rename-input"
       aria-label="Pattern name" onkeydown={onKey} onblur={cancel} />
   {:else}
-    <select data-testid="pattern-picker" aria-label="Pattern" value={track.currentPatternId} onkeydown={selectKey}
+    <select data-testid="pattern-picker" aria-label="Pattern" title={cur.name} value={track.currentPatternId} onkeydown={selectKey}
       onchange={(e) => { selectPattern(p, engine, track.id, e.currentTarget.value); releaseSelect(e.currentTarget); }}>
       {#each track.patterns as pat (pat.id)}
         <option value={pat.id}>{pat.name}</option>
@@ -180,9 +180,9 @@
     onclick={() => newPattern(p, engine, track.id)}><Icon icon={Plus} /> New</button>
   <button class="btn" data-testid="pattern-dup" aria-label="Duplicate" disabled={full} title={full ? PATTERNS_FULL_TEXT : 'Duplicate this pattern'}
     onclick={() => duplicatePattern(p, engine, track.id)}><Icon icon={Copy} /><span class="t"> Duplicate</span></button>
-  <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} onclick={startRename}><Icon icon={PencilSimple} /> Rename</button>
+  <button class="btn" data-testid="pattern-rename" title="Rename this pattern" onmousedown={(e) => e.preventDefault()} aria-label="Rename" onclick={startRename}><Icon icon={PencilSimple} /><span class="t"> Rename</span></button>
   <button class="btn" data-testid="pattern-delete" disabled={track.patterns.length <= 1 || used > 0} title={deleteTip}
-    onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /> Delete</button>
+    aria-label="Delete" onclick={() => deletePattern(p, engine, track.id, cur.id)}><Icon icon={Trash} /><span class="t"> Delete</span></button>
   <button class="btn ic" data-testid="pattern-save" bind:this={saveBtn} aria-label="Save to library" disabled={!!saveWhy}
     title={saveWhy ?? "Save a copy of this pattern to the project's pattern library"}
     onmousedown={(e) => e.preventDefault()} onclick={startSave}><Icon icon={BookmarkSimple} /></button>
@@ -209,13 +209,16 @@
   .picker { display: inline-flex; align-items: center; gap: 4px; --ctl-h: 24px; }
   .btn, select, .name { box-sizing: border-box; height: var(--ctl-h); }
   .btn { padding: 0 6px; font-size: 11px; }
-  select { padding: 0 4px 0 6px; font-size: 11px; white-space: nowrap; }
-  .name { width: 130px; box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
+  /* One fixed width for the picker and the name fields that replace it
+     (plan 30): a long pattern name is cut (its tooltip has all of it), and
+     the buttons after it never move. */
+  select { width: 150px; padding: 0 4px 0 6px; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
+  .name { width: 150px; box-shadow: var(--well-shadow), 0 0 0 2px var(--accent); }
   .ic { display: inline-flex; align-items: center; padding: 0 4px; }
   /* Room for Save / Load in the one-row header at 1280 px (layout.spec.ts):
-     Duplicate, the longest label, is icon-only below 1440 px (its name
-     stays: aria-label, and the tooltip says what it does). */
-  @media (max-width: 1439px) { .t { display: none; } }
+     Duplicate, Rename and Delete are icon-only below 1600 px (their names
+     stay: aria-label, and the tooltip says what each does). */
+  @media (max-width: 1599px) { .t { display: none; } }
   /* The library popover: a --panel card with the lift (as the menus), under its button. */
   .lib { position: relative; display: inline-flex; }
   .pop {

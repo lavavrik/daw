@@ -42,7 +42,7 @@ import { banners } from './banners.svelte';
 import { edit } from './edits';
 import { whenIdle, whenSessionEnds } from './idle';
 import { defaultKitLoad, knownKitSample, rememberKitSample } from './kitSamples';
-import { STARTER_KIT_ID, kitById, rowHasRole } from './kits';
+import { KITS, STARTER_KIT_ID, kitById, rowHasRole } from './kits';
 import type { Kit, KitRole, KitSound } from './kits';
 import { importSample } from './sampleImport';
 import type { ImportEngine } from './sampleImport';
@@ -171,12 +171,40 @@ export function kitRowPlan(rowNames: readonly string[], kit: Kit, maxRows = MAX_
   return { rows, skipped };
 }
 
+/** The name a new track of `kit` gets before uniquing ("Drums" for the starter kit). */
+export const kitTrackBase = (kit: Kit) => (kit.id === STARTER_KIT_ID ? 'Drums' : kit.name);
+
+/**
+ * Switching kits (the step grid's Kit menu, the Browser's "Load onto
+ * track"): a track still named after a kit, as a new track of one is
+ * ("Garage", "Deep 2", "Drums"), takes the new kit's name, so the name never
+ * claims a kit the track no longer plays. A name the user picked (anything
+ * else) is kept. Returns the new name (unique among the other tracks), or
+ * null to keep it. Pure.
+ */
+export function kitTrackRename(trackNames: readonly string[], current: string, kit: Kit): string | null {
+  const auto = KITS.some((k) => {
+    const base = kitTrackBase(k);
+    const rest = current.startsWith(`${base} `) ? current.slice(base.length + 1) : null;
+    return current === base || (rest !== null && /^\d+$/.test(rest));
+  });
+  if (!auto) return null;
+  const base = kitTrackBase(kit);
+  const taken = new Set(trackNames.filter((n) => n !== current));
+  let n = 1;
+  while (taken.has(n === 1 ? base : `${base} ${n}`)) n++;
+  const next = n === 1 ? base : `${base} ${n}`;
+  return next === current ? null : next;
+}
+
 /**
  * Load kit `kitId` onto drum track `trackId` (the Browser's "Load onto
- * track"): each row named after a role gets the kit's sound for it, roles
- * the track lacks get new rows (up to MAX_ROWS), other rows and every step
- * stay as they are. One undo entry ("Load kit <name>"), made when the
- * samples are in (see the header). Resolves true when it committed.
+ * track", the step grid's Kit menu): each row named after a role gets the
+ * kit's sound for it, roles the track lacks get new rows (up to MAX_ROWS),
+ * other rows and every step stay as they are; a track still named after a
+ * kit takes the new kit's name (kitTrackRename). One undo entry ("Load kit
+ * <name>"), made when the samples are in (see the header). Resolves true
+ * when it committed.
  */
 export async function loadKitOntoTrack(
   p: Project, sink: CommandSink & ImportEngine, trackId: string, kitId: string, deps: KitFileDeps = appKitFileDeps,
@@ -195,6 +223,8 @@ export async function loadKitOntoTrack(
   let skipped: KitRole[] = [];
   const done = loaded.length > 0 && edit(p, `Load kit ${kit.name}`, () => {
     const t = drumTrack(p, trackId)!;
+    const rename = kitTrackRename(p.tracks.map((x) => x.name), t.name, kit);
+    if (rename) t.name = rename;
     const plan = kitRowPlan(t.rows.map((r) => r.name), { ...kit, rows: loaded });
     for (const { role, row } of plan.rows) {
       const r = row === null ? addRow(p, sink, t.id) : t.rows[row];
@@ -241,7 +271,7 @@ export async function addKitDrumTrack(
     return null;
   }
   return edit(p, 'Add drum track', () => {
-    const name = uniqueTrackName(p, kit.id === STARTER_KIT_ID ? 'Drums' : kit.name);
+    const name = uniqueTrackName(p, kitTrackBase(kit));
     const t = addDrumTrack(p, engine, name, kit.rows.map((s) => s.role));
     if (!t) return null;
     t.rows.forEach((r, i) => {

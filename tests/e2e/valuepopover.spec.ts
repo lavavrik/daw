@@ -273,6 +273,7 @@ test('step grid: row gain "1.5", row pan "L25" (−0.25), swing "60" (60 %)', as
   const gain = row.getByRole('slider', { name: /^Gain / });
   const pan = row.getByRole('slider', { name: /^Pan / });
   const swing = page.getByTestId('swing');
+  const settings = page.getByTestId('pattern-settings-pop');
 
   await gain.click({ button: 'right' });
   await expect(page.getByTestId('value-input')).toHaveValue('1.00'); // as the row shows it
@@ -298,9 +299,13 @@ test('step grid: row gain "1.5", row pan "L25" (−0.25), swing "60" (60 %)', as
   await page.getByTestId('value-reset').click();
   await expect.poll(async () => (await row0(page)).pan).toBe(0);
 
+  // Swing lives in the pattern settings popover (plan 30).
+  await page.getByTestId('pattern-settings').click();
+  await expect(settings).toBeVisible();
   await enter(page, swing, '60');
   await expect.poll(async () => (await row0(page)).swing).toBe(0.6);
-  await expect(page.locator('.pct')).toHaveText('60%');
+  await expect(settings.locator('.swl .pct')).toHaveText('60%');
+  await expect(page.getByTestId('pattern-settings')).toContainText('swing 60%');
   // A finer value snaps to the slider's 1 % step; one undo entry.
   await enter(page, swing, '33.3');
   await expect.poll(async () => (await row0(page)).swing).toBe(0.33);
@@ -321,6 +326,7 @@ test('one popover at a time: opening a second closes the first', async ({ page }
   const pop = page.getByTestId('value-popover');
   await page.getByTestId(`track-vol-${slot}`).click({ button: 'right' });
   await expect(pop).toContainText(/volume/i);
+  await page.getByTestId('pattern-settings').click();
   await page.getByTestId('swing').click({ button: 'right' });
   await expect(pop).toHaveCount(1);
   await expect(pop.locator('.ttl')).toHaveText('Swing');

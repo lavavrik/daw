@@ -388,16 +388,12 @@ view is a `slider` for assistive tech: `aria-valuenow` is the scroll
 position in %, `aria-valuetext` the visible span and where it starts.
 The readout shows the visible span ("1.25 s", "2.6 ms · 125 samples").
 Test hooks: the canvas's `data-draw` (`none`, `peaks`, `floats`, `line`,
-`dots`) and `data-fpp`; `cliptab-wave`, `row-wave-<r>`, `row-wave-btn-<r>`,
-`wave-zoom-text`.
+`dots`) and `data-fpp`; `cliptab-wave`, `wave-zoom-text`.
 
-**Drum rows.** "≈" on a row with a sample opens a 72 px strip under the
-rows (file time, the whole file at first; one row at a time; not saved).
-It has no start/end/fade markers and no playhead: drum rows have no such
-engine params yet (spec §4's per-row start offset is unbuilt) and drum
-voices report no position, so the strip draws nothing it cannot back. Both
-are follow-ups, as are drag handles for clip fades and trim (the Clip tab's
-waveform is display only; editing stays in the fields).
+**Drum rows.** The row waveform strip (plan 12's "≈") was removed in plan
+30: the owner found it unnecessary in the step grid. Drag handles for clip
+fades and trim remain a follow-up (the Clip tab's waveform is display only;
+editing stays in the fields).
 
 ## Shape previews
 

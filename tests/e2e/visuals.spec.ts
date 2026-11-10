@@ -316,32 +316,10 @@ test('clip tab waveform zooms to samples', async ({ page }) => {
   await expect(head).toBeHidden();
 });
 
-test('drum row waveform strip opens and closes', async ({ page }) => {
+test('drum rows have no waveform strip (plan 30: removed)', async ({ page }) => {
   await startAudio(page);
   await expect(page.getByTestId('row-0').getByTestId('row-name')).toHaveText('Kick');
-  await expect(page.getByTestId('row-wave-0')).toHaveCount(0);
-  await page.getByTestId('row-wave-btn-0').click();
-  const strip = page.getByTestId('row-wave-0');
-  await expect(strip).toBeVisible();
-  await expect(strip.locator('canvas')).not.toHaveAttribute('data-draw', 'none');
-  await expect(page.getByTestId('row-wave-btn-0')).toHaveClass(/\bon\b/);
-  // Zoom to samples on a kit one-shot (keys this time).
-  await expect.poll(() => fpp(page, 'row-wave-0')).toBeGreaterThan(0);
-  const fit = await fpp(page, 'row-wave-0');
-  await strip.focus();
-  for (let i = 0; i < 12; i++) await page.keyboard.press('+');
-  await expect.poll(() => fpp(page, 'row-wave-0')).toBeLessThan(fit / 8);
-  await expect(page.getByTestId('wave-zoom-text')).toContainText(/samples/);
-  // Strip only, no markers or playhead (the engine has no row trim and drum voices report no position).
-  await expect(strip.locator('.ph')).toBeHidden();
-  // One row at a time: another row's ≈ moves the strip.
-  await page.getByTestId('row-wave-btn-1').click();
-  await expect(page.getByTestId('row-wave-0')).toHaveCount(0);
-  await expect(page.getByTestId('row-wave-1')).toBeVisible();
-  // Its own ≈ closes it. View state, not an edit.
-  await page.getByTestId('row-wave-btn-1').click();
-  await expect(page.locator('[data-testid^="row-wave-"]:not([data-testid^="row-wave-btn"])')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as unknown as { __daw: Daw }).__daw.project.dirty)).toBe(false);
+  await expect(page.locator('[data-testid^="row-wave"]')).toHaveCount(0);
 });
 
 // ---- Shape previews and voice LEDs --------------------------------------------

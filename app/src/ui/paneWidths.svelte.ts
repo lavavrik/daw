@@ -1,5 +1,7 @@
-// Resizable pane widths: the library sidebar (App's left column) and the
-// song timeline's track header column (Timeline's --header-w). A UI
+// Resizable pane sizes: the library sidebar (App's left column), the
+// song timeline's track header column (Timeline's --header-w), and (plan 30)
+// the song area's HEIGHT over the bottom panel (App's .right rows; 0 = auto,
+// the old 1 : 3 split, until the first drag). A UI
 // preference kept in localStorage (like the note names or the octave), never
 // in the project: no undo entry, the project is not dirty.
 //
@@ -9,15 +11,18 @@
 // double-click reset), so a drag does not write storage on every move.
 // The grab strip itself is ui/Splitter.svelte.
 
-export type PaneId = 'library' | 'trackHeaders';
+export type PaneId = 'library' | 'trackHeaders' | 'song';
 
-export interface PaneDef { def: number; min: number; max: number }
+/** `auto`: 0 is a valid value meaning "no size set" (the CSS default); it is the default. */
+export interface PaneDef { def: number; min: number; max: number; auto?: boolean }
 
 export const PANES: Record<PaneId, PaneDef> = {
   /** The old fixed 220 px; under 180 the search field and tabs crowd. */
   library: { def: 220, min: 180, max: 480 },
   /** The old tlMath.HEADER_W (176); under 150 the name, slider and M/S/A crowd. */
   trackHeaders: { def: 176, min: 150, max: 360 },
+  /** The song area's height. App's CSS also keeps 200 px for the bottom panel whatever is stored. */
+  song: { def: 0, min: 100, max: 2000, auto: true },
 };
 
 const KEY = (id: PaneId) => `daw.paneWidth.${id}`;
@@ -32,6 +37,7 @@ function storage(): Storage | undefined {
 export function clampPaneWidth(id: PaneId, w: number): number {
   const d = PANES[id];
   if (!Number.isFinite(w)) return d.def;
+  if (d.auto && w === 0) return 0;
   return Math.min(d.max, Math.max(d.min, Math.round(w)));
 }
 
@@ -47,6 +53,7 @@ function load(id: PaneId): number {
 export const paneWidths = $state<Record<PaneId, number>>({
   library: load('library'),
   trackHeaders: load('trackHeaders'),
+  song: load('song'),
 });
 
 /** Set a pane's width (clamped); `save` also remembers it for the next start. */

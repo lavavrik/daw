@@ -342,6 +342,7 @@
     aria-label={`Set ${req.label}`}
     tabindex="-1"
     data-testid="value-popover"
+    data-overlay
     style:left="{left}px"
     style:top="{top}px"
     onkeydown={key}

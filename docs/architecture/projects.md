@@ -315,10 +315,12 @@ Dragging a generated kit's sound carries `<kit id>/<file>` as
 
 **Load onto track** (`loadKitOntoTrack(p, engine, trackId, kitId)`; the
 Browser's per-kit "Load" and the kit header's context menu, on the
-selected drum track): each row named after a role (`rowHasRole`: case and
-outer spaces ignored) gets the kit's sound, roles the track lacks get new
-rows (up to `MAX_ROWS`; the rest are reported), other rows and all steps are
-kept. **Add track ▸ Drum track** (`addKitDrumTrack`, via ui/addTrack.ts
+selected drum track, and the step grid's **Kit** menu, plan 30): each row
+named after a role (`rowHasRole`: case and outer spaces ignored) gets the
+kit's sound, roles the track lacks get new rows (up to `MAX_ROWS`; the rest
+are reported), other rows and all steps are kept. A track still named after
+a kit ("Drums", "Garage", "Deep 2": `kitTrackRename`) takes the new kit's
+name in the same undo entry; a name the user picked is kept. **Add track ▸ Drum track** (`addKitDrumTrack`, via ui/addTrack.ts
 `addKitTrack`): a new track whose rows are the roles with a kit's sounds,
 named after the kit. The plain "Drum track" item (the playlist's menu) is
 the **starter kit's** track ("Drums 2"…), exactly like a new project's

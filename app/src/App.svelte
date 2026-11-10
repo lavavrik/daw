@@ -457,6 +457,7 @@
    * phase, on the window, so nothing can stop it first).
    */
   let bottomEl = $state<HTMLElement | null>(null);
+  let songEl = $state<HTMLElement | null>(null);
   let lastInPanel = false;
   const inPanel = (t: EventTarget | null) => !!bottomEl && t instanceof Node && bottomEl.contains(t);
   const inBottomPanel = (t: EventTarget | null) => {
@@ -1019,9 +1020,14 @@
       <Browser {engine} p={project} />
       <!-- The library's right edge: drag to resize it (ui/Splitter.svelte; a UI preference). -->
       <Splitter pane="library" label="Library width" testid="library-resize" style="top: 3px; bottom: 3px; left: calc(var(--lib-w) + 2px); width: 5px" />
-      <div class="right">
-        <div class="song"><SongArea p={project} {engine} {clock} /></div>
+      <div class="right" class:sized={paneWidths.song > 0} style:--song-h="{paneWidths.song}px">
+        <div class="song" bind:this={songEl}><SongArea p={project} {engine} {clock} /></div>
         <div class="bottom" bind:this={bottomEl}>
+          <!-- The song area's bottom edge: drag to resize the split (plan 30; ui/Splitter.svelte, a UI preference). -->
+          <Splitter
+            pane="song" axis="y" label="Tracks height" testid="song-resize" measure={() => songEl?.getBoundingClientRect().height ?? 0}
+            style="left: 0; right: 0; top: -5px"
+          />
           <BottomPanel
             bind:this={bottomPanel} p={project} {engine} {clock} {noteInput} capturing={() => !!recorder?.armed && project.playing}
             {recorder} {rec} onPatternPlay={() => startTransport('pattern')} onPatternStop={() => { if (transportPlaying(project, 'pattern')) stopAny(); }} onToggleArm={toggleArm}
@@ -1054,7 +1060,12 @@
   /* The editor (piano roll / step grid / rack) gets the larger share: the roll
      needs C2..C5 at >= 9 px rows to show note names (anti-goal: what's where). */
   .right { display: grid; grid-template-rows: minmax(140px, 0.5fr) minmax(380px, 1.5fr); gap: 3px; min-height: 0; min-width: 0; }
+  /* Dragged (plan 30: the Splitter on the bottom panel's top edge): the song
+     area takes the stored height, kept between 100 px and what leaves the
+     bottom panel 200 px. */
+  .right.sized { grid-template-rows: clamp(100px, var(--song-h), max(100px, calc(100% - 203px))) minmax(0, 1fr); }
   .song, .bottom { display: grid; min-height: 0; min-width: 0; }
+  .bottom { position: relative; }
   /* Banners (plan 20: tokens): the restore offer is an --accent-tinted --panel, the autosave note a quiet --panel line. */
   .restore { display: flex; align-items: center; gap: 8px; margin: 3px 3px 0; padding: 5px 8px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--text); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel)); }
   .restore span { flex: 1; }

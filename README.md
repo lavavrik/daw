@@ -7,6 +7,8 @@ undo/redo and WAV export. A Rust audio engine compiled to WASM runs in an
 AudioWorklet; the UI is Svelte 5. Architecture notes per area are in
 [docs/architecture/](docs/architecture/).
 
+![The Deep House 122 template: tracks on the timeline, the drum step grid below](docs/screenshot.png)
+
 **Contents:** [Getting started](#getting-started) ·
 [The first loop](#the-first-loop) · [Synth and rack](#synth-and-rack) ·
 [Recording](#recording) · [Piano roll](#piano-roll) · [Acid steps](#acid-steps) ·

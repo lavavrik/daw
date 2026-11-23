@@ -14,7 +14,7 @@
     "test:e2e": "playwright test"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "devDependencies": {
     "@playwright/test": "^1.65.0",

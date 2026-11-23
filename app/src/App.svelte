@@ -43,6 +43,7 @@
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners, flashHint } from './state/banners.svelte';
+  import { TEMPLATES, templateFromUrl } from './state/templates';
   import { installSampleLoads, pendingSampleIds, rebindSampleLoads } from './state/sampleLoads';
   import { createProjectSession, markSaved, warningsText } from './project/session';
   import { warnOnUnload } from './project/discard';
@@ -270,10 +271,16 @@
    * last session" on the next start); the first real edit autosaves as
    * usual. Only the owner tab touches the autosave. Then the kit loads (New
    * from template: the template's kit, `kitId`, into its drum track).
+   * A `?template=` start-up (urlStart) discards nothing: it is the first
+   * session of the page, so an autosave there is the previous visit's work,
+   * still to be offered (checkAutosave runs after it).
    */
+  let urlStart = false;
   function onFresh(trackId: string, kitId?: string) {
-    autosave.cancel();
-    if (ownerClaim?.owns) void deleteAutosave();
+    if (!urlStart) {
+      autosave.cancel();
+      if (ownerClaim?.owns) void deleteAutosave();
+    }
     void loadDefaultKit(project, live, trackId, kitDeps, kitId);
   }
 
@@ -622,8 +629,12 @@
   function onstarted(e: AudioEngine) {
     latencyHint = e.latencyHint;
     // The fresh session: the default kit's drum track (state/defaultKit.ts),
-    // its samples loaded once everything below is wired.
-    const kitTrack = addDefaultDrumTrack(project, e);
+    // its samples loaded once everything below is wired. A `?template=<id>`
+    // URL (state/templates.ts templateFromUrl) opens that template instead,
+    // once the session exists (below).
+    const fromUrl = templateFromUrl(location.search);
+    const startTemplate = fromUrl && 'id' in fromUrl ? fromUrl.id : null;
+    const kitTrack = startTemplate ? null : addDefaultDrumTrack(project, e);
     markSaved(project); // a fresh session has nothing to save yet
     const r = recorderFor(project, live, liveClock, () => {
       banners.error = 'Pattern is full (1024 notes): some recorded notes were dropped';
@@ -704,7 +715,18 @@
       onFresh,
     });
     session = s;
-    void checkAutosave(); // after audio started: a restore needs the engine
+    // After audio started: a restore needs the engine. A URL template loads
+    // first, so the autosave offer still comes after it (checkAutosave skips
+    // the offer when the session changed under it), and it keeps the
+    // autosave (onFresh, urlStart).
+    if (startTemplate) {
+      urlStart = true; // onFresh runs inside newFromTemplate, before it resolves
+      void s.newFromTemplate(startTemplate).finally(() => (urlStart = false)).then(checkAutosave);
+    }
+    else void checkAutosave();
+    if (fromUrl && 'unknown' in fromUrl) {
+      banners.error = `No template "${fromUrl.unknown}" (templates: ${TEMPLATES.map((t) => t.id).join(', ')})`;
+    }
     uninstall = installShortcuts(project, live, input, {
       initialOctave: octave,
       onOctave: (o) => changeOctave(o, true),

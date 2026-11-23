@@ -372,3 +372,17 @@ export function buildTemplate(id: string): ProjectJson {
   selectTrack(p, NO_ENGINE, drums.id);
   return serialize(p);
 }
+
+/**
+ * The page URL's `?template=<id>` (App.svelte onstarted): open that template
+ * at start-up in place of the default drum track, e.g. a link to
+ * `/?template=deep-house-122`. `{ id }` for a TEMPLATES id, `{ unknown }`
+ * for any other value (start-up stays the default; App shows a banner), null
+ * when the parameter is absent or empty. `empty` counts as absent: it is
+ * the default start-up anyway.
+ */
+export function templateFromUrl(search: string): { id: string } | { unknown: string } | null {
+  const v = new URLSearchParams(search).get('template')?.trim();
+  if (!v || v === EMPTY_TEMPLATE_ID) return null;
+  return templateById(v) ? { id: v } : { unknown: v };
+}

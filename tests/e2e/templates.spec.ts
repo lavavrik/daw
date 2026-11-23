@@ -144,3 +144,49 @@ test('every other template plays too: a couple of bars of its groove each, peak 
     expect(peak, id).toBeGreaterThan(0.05);
   }
 });
+
+// ?template=<id> on the page URL (state/templates.ts templateFromUrl, App.svelte
+// onstarted): that template replaces the default drum track at start-up.
+test('?template=garage-130 opens Garage 130 at start-up, clean, its kit landed', async ({ page }) => {
+  await page.goto('/?template=garage-130');
+  await startApp(page);
+  await expect(page.getByTestId('project-name')).toHaveText('Garage 130');
+  await expect.poll(() => daw(page, (d) => d.project.tempo)).toBe(130);
+  await kitLanded(page);
+  expect(await daw(page, (d) => d.project.tracks[0].name)).toBe('Drums');
+  await page.waitForTimeout(800);
+  expect(await daw(page, (d) => [d.project.dirty, d.history.canUndo])).toEqual([false, false]);
+  await expect(page.getByTestId('banner')).toBeHidden();
+});
+
+test('an unknown ?template= starts the default session with a banner naming the templates', async ({ page }) => {
+  await page.goto('/?template=polka-90');
+  await startApp(page);
+  await expect(page.getByTestId('banner')).toContainText('No template "polka-90"');
+  await expect(page.getByTestId('banner')).toContainText('deep-house-122');
+  expect(await daw(page, (d) => d.project.tracks.map((t: Any) => t.name))).toEqual(['Drums']);
+  await expect(page.getByTestId('project-name')).toContainText('Untitled');
+});
+
+test('?template= still offers an unrestored autosave, after the template loads', async ({ page }) => {
+  test.setTimeout(60_000);
+  await start(page);
+  await daw(page, (d) => { d.project.name = 'Night Drive'; d.actions.setMix('master', 'fader', -3); });
+  await expect.poll(() => daw(page, (d) => d.autosave.lastSaved), { timeout: 15_000 }).not.toBeNull();
+
+  await page.goto('/?template=acid-126');
+  await startApp(page);
+  await expect(page.getByTestId('project-name')).toHaveText('Acid 126');
+  const offer = page.getByTestId('restore');
+  await expect(offer).toBeVisible();
+  await expect(offer).toContainText('Night Drive');
+  await offer.getByRole('button', { name: 'Restore last session' }).click();
+  await expect(page.getByTestId('project-name')).toContainText('Night Drive');
+
+  // Leave no autosave state behind.
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    for (const n of ['autosave', 'autosave.tmp']) await root.removeEntry(n, { recursive: true }).catch(() => {});
+    localStorage.removeItem('daw.lastExplicitSave');
+  });
+});

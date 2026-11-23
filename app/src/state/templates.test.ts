@@ -19,7 +19,7 @@ import { Project } from './project.svelte';
 import { addDrumTrack } from './actions';
 import { newReturn } from './returns';
 import { mixParam } from '../audio/mixerCatalog';
-import { ARRANGEMENT, SONG_BARS, TEMPLATES, applyStripMix, buildTemplate, factoryShift, templateById, templateClipCount } from './templates';
+import { ARRANGEMENT, SONG_BARS, TEMPLATES, applyStripMix, buildTemplate, factoryShift, templateById, templateClipCount, templateFromUrl } from './templates';
 import type { Template } from './templates';
 
 const roundJson = <T>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -233,5 +233,23 @@ describe('template sends follow the returns (plan 29)', () => {
     expect(ps[mixParam('send_c').id]).toBe(-26);
     expect(ps[mixParam('send_a').id]).toBe(-60);
     expect(ps[mixParam('send_b').id]).toBe(-20); // the Delay is on slot 1
+  });
+});
+
+describe('templateFromUrl (?template=<id> at start-up)', () => {
+  it('finds a template id', () => {
+    expect(templateFromUrl('?template=deep-house-122')).toEqual({ id: 'deep-house-122' });
+    expect(templateFromUrl('?x=1&template=acid-126')).toEqual({ id: 'acid-126' });
+  });
+  it('flags an unknown id', () => {
+    expect(templateFromUrl('?template=polka-90')).toEqual({ unknown: 'polka-90' });
+  });
+  it('is null when absent, empty or "empty"', () => {
+    for (const s of ['', '?', '?template=', '?template=%20', '?template=empty', '?other=deep-house-122']) {
+      expect(templateFromUrl(s)).toBeNull();
+    }
+  });
+  it('covers every template', () => {
+    for (const t of TEMPLATES) expect(templateFromUrl(`?template=${t.id}`)).toEqual({ id: t.id });
   });
 });

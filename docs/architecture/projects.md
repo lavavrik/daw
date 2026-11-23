@@ -388,6 +388,15 @@ patches, factory patterns and mixer presets (`state/mixerPresets.ts`).
 | Acid 126 | 126 | A minor | Drum Machine | Four on the floor → Classic house | Acid Line · Acid 303 line | Piano Stab · Classic M1 stab | — | Room · 3/16 dub · Clean |
 | Tech House 125 | 125 | G minor | Drum Machine | Minimal → Tech house | Reese Bass · Rolling 16ths | Brass Stab · Dub chord | Strings · Pad long | Hall · 3/16 dub · Warm |
 
+**From the URL.** `?template=<id>` opens that template at start-up in place
+of the default drum track (`templateFromUrl`, called in App.svelte
+`onstarted`). It goes through `session.newFromTemplate` like the menu, with
+two differences: the autosave check runs after it, and `onFresh` keeps the
+autosave (`urlStart`). The previous visit's unsaved session is still offered,
+not deleted as File ▸ New deletes it. An unknown id starts the default
+session with an error banner listing the ids; `empty` is the default
+start-up. e2e: `templates.spec.ts`.
+
 **Building one** (`buildTemplate(id)`, a `ProjectJson`). The ordinary
 actions run on a fresh `Project` that has no history and an engine sink
 that discards every command, and the result is serialized. So a template is

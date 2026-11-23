@@ -43,7 +43,8 @@
   import type { Recorder, RecStatus } from './state/recorder';
   import type { MidiStatus } from './input/midi';
   import { banners, flashHint } from './state/banners.svelte';
-  import { TEMPLATES, templateFromUrl } from './state/templates';
+  import { TEMPLATES, templateById, templateFromUrl } from './state/templates';
+  import TemplateStartCard from './ui/TemplateStartCard.svelte';
   import { installSampleLoads, pendingSampleIds, rebindSampleLoads } from './state/sampleLoads';
   import { createProjectSession, markSaved, warningsText } from './project/session';
   import { warnOnUnload } from './project/discard';
@@ -276,6 +277,31 @@
    * still to be offered (checkAutosave runs after it).
    */
   let urlStart = false;
+  /**
+   * The `?template=` template still to open (onstarted), with its start card
+   * (ui/TemplateStartCard.svelte) shown until it has. It opens once audio
+   * runs: a project load resets the engine, which needs a running context
+   * (project/load.ts), so it waits for the first gesture.
+   */
+  let urlTemplate = $state<{ id: string; name: string; blurb: string } | null>(null);
+  let urlTemplateOpening = $state(false);
+  $effect(() => {
+    const t = urlTemplate;
+    const s = session;
+    if (!t || !s || ctxState !== 'running') return;
+    untrack(() => {
+      if (urlTemplateOpening) return;
+      urlTemplateOpening = true;
+      urlStart = true; // onFresh runs inside newFromTemplate, before it resolves
+      void s.newFromTemplate(t.id)
+        .finally(() => {
+          urlStart = false;
+          urlTemplate = null;
+          urlTemplateOpening = false;
+        })
+        .then(checkAutosave);
+    });
+  });
   function onFresh(trackId: string, kitId?: string) {
     if (!urlStart) {
       autosave.cancel();
@@ -715,14 +741,12 @@
       onFresh,
     });
     session = s;
-    // After audio started: a restore needs the engine. A URL template loads
-    // first, so the autosave offer still comes after it (checkAutosave skips
-    // the offer when the session changed under it), and it keeps the
-    // autosave (onFresh, urlStart).
-    if (startTemplate) {
-      urlStart = true; // onFresh runs inside newFromTemplate, before it resolves
-      void s.newFromTemplate(startTemplate).finally(() => (urlStart = false)).then(checkAutosave);
-    }
+    // After audio started: a restore needs the engine. A URL template opens
+    // first (the urlTemplate effect, once audio runs), so the autosave offer
+    // still comes after it (checkAutosave skips the offer when the session
+    // changed under it), and it keeps the autosave (onFresh, urlStart).
+    const t = startTemplate ? templateById(startTemplate) : undefined;
+    if (t) urlTemplate = { id: t.id, name: t.name, blurb: t.blurb };
     else void checkAutosave();
     if (fromUrl && 'unknown' in fromUrl) {
       banners.error = `No template "${fromUrl.unknown}" (templates: ${TEMPLATES.map((t) => t.id).join(', ')})`;
@@ -1030,6 +1054,9 @@
     <div class="autosave-off" data-testid="autosave-off" role="status">{AUTOSAVE_OFF}</div>
   {/if}
   {#if engine}
+    {#if urlTemplate}
+      <TemplateStartCard name={urlTemplate.name} blurb={urlTemplate.blurb} loading={urlTemplateOpening} />
+    {/if}
     {#if restoreOffer}
       {@const offer = restoreOffer}
       <div class="restore" data-testid="restore" role="region" aria-label="Restore last session">

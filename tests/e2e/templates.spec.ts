@@ -190,3 +190,36 @@ test('?template= still offers an unrestored autosave, after the template loads',
     localStorage.removeItem('daw.lastExplicitSave');
   });
 });
+
+test('?template= waits for the first gesture behind a start card (a real browser keeps audio paused until then)', async ({ page }) => {
+  // The e2e Chrome runs with autoplay allowed; emulate the real rule: every
+  // AudioContext stays suspended and resume() is refused until a trusted
+  // pointerdown / keydown.
+  await page.addInitScript(() => {
+    let gesture = false;
+    const mark = (e: Event) => { if (e.isTrusted) gesture = true; };
+    addEventListener('pointerdown', mark, true);
+    addEventListener('keydown', mark, true);
+    const Real = window.AudioContext;
+    const realResume = Real.prototype.resume;
+    window.AudioContext = class extends Real {
+      constructor(...a: ConstructorParameters<typeof AudioContext>) { super(...a); if (!gesture) void this.suspend(); }
+    };
+    window.AudioContext.prototype.resume = function (this: AudioContext) { return gesture ? realResume.call(this) : Promise.resolve(); };
+  });
+  await page.goto('/?template=tech-house-125');
+  await page.waitForFunction(() => !!(window as unknown as { __daw?: { engine?: unknown } }).__daw?.engine);
+  const card = page.getByTestId('template-start');
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('Tech House 125');
+  await page.waitForTimeout(500);
+  expect(await daw(page, (d) => [d.engine.state, d.project.tracks.length])).toEqual(['suspended', 0]); // nothing opened yet
+  await expect(page.getByTestId('banner')).toBeHidden(); // and no "Audio is paused" error
+
+  await page.getByTestId('template-start-go').click();
+  await expect(card).toBeHidden();
+  await expect(page.getByTestId('project-name')).toHaveText('Tech House 125');
+  await kitLanded(page);
+  expect(await daw(page, (d) => [d.engine.state, d.project.dirty, d.history.canUndo])).toEqual(['running', false, false]);
+  await expect(page.getByTestId('banner')).toBeHidden();
+});

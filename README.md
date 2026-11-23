@@ -515,7 +515,9 @@ time you save.
 House 122, Garage 130, Acid 126 or Tech House 125. To open one straight
 away, add `?template=<id>` to the page URL, e.g.
 `http://localhost:5174/?template=deep-house-122` (ids: `deep-house-122`,
-`garage-130`, `acid-126`, `tech-house-125`). An unsaved session from your
+`garage-130`, `acid-126`, `tech-house-125`). The page shows the template's
+name with **Click to start**: browsers start audio only after a click, and
+the template opens right after it. An unsaved session from your
 last visit is still offered back ("Restore last session") after it loads.
 
 - **● unsaved** next to the name marks unsaved edits; it goes away on Save, or

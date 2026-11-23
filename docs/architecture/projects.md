@@ -390,8 +390,13 @@ patches, factory patterns and mixer presets (`state/mixerPresets.ts`).
 
 **From the URL.** `?template=<id>` opens that template at start-up in place
 of the default drum track (`templateFromUrl`, called in App.svelte
-`onstarted`). It goes through `session.newFromTemplate` like the menu, with
-two differences: the autosave check runs after it, and `onFresh` keeps the
+`onstarted`). A load resets the engine, which needs the AudioContext
+running (`load.ts` refuses with "Audio is paused" otherwise), and a browser
+only starts it after a gesture. So `onstarted` only records the template
+(`urlTemplate`), and `ui/TemplateStartCard.svelte`, a modal "Click to start"
+card, covers the app until the first click or key press starts audio. An
+effect then opens it (at once if audio already runs). It goes through
+`session.newFromTemplate` like the menu, with two differences: the autosave check runs after it, and `onFresh` keeps the
 autosave (`urlStart`). The previous visit's unsaved session is still offered,
 not deleted as File ▸ New deletes it. An unknown id starts the default
 session with an error banner listing the ids; `empty` is the default

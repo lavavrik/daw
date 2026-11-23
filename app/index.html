@@ -4,6 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>House DAW</title>
+    <script>
+      // Static hosts that cannot send COOP/COEP: let /coi-sw.js add them
+      // (see that file), then reload once so the page starts isolated. The
+      // session flag allows one reload per attempt, so a worker that never
+      // takes control cannot cause a reload loop.
+      if (self.crossOriginIsolated) {
+        sessionStorage.removeItem('coi-reloaded');
+      } else if ('serviceWorker' in navigator && self.isSecureContext && !sessionStorage.getItem('coi-reloaded')) {
+        navigator.serviceWorker.register('/coi-sw.js').then((reg) => {
+          const go = () => {
+            sessionStorage.setItem('coi-reloaded', '1');
+            location.reload();
+          };
+          if (reg.active) go();
+          else (reg.installing || reg.waiting)?.addEventListener('statechange', (e) => e.target.state === 'activated' && go());
+        });
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

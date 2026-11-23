@@ -650,6 +650,12 @@ restart; click it to grant access again.
 - `npm run dev`: engine + Vite on http://localhost:5174 (cross-origin
   isolated: COOP/COEP headers set).
 - `npm run preview`: production build + preview on the same port.
+- Hosting: `dist/` (after `npm run preview`, or `npm run build:engine` then
+  `npx vite build`) is plain static files. Serve it over HTTPS with
+  `Cross-Origin-Opener-Policy: same-origin` and
+  `Cross-Origin-Embedder-Policy: require-corp` if the host allows it. If it
+  doesn't, `app/public/coi-sw.js` (a service worker) adds them in the browser
+  after one automatic reload.
 - `npm run test:e2e`: Playwright (`npx playwright install chromium` once). It
   reuses a server already on :5174, else starts `npm run preview`. The
   `serial` project (real-time and CPU assertions) runs after the rest, in one

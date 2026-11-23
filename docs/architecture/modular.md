@@ -9,8 +9,7 @@ the audio thread renders in small sub-blocks. Code: `engine/src/rack/mod.rs` (gr
 ## Layout (plan 18; plan 22 placement rule)
 
 The Instrument tab's rack (`app/src/ui/rack/Rack.svelte`) has two layouts.
-Spec: `docs/superpowers/specs/2026-11-13-acid-steps-rack-layout-addendum.md` §3;
-the placement rule is plan 22's "Rack placement" (it supersedes plan 18's
+The placement rule is plan 22's "Rack placement" (it supersedes plan 18's
 push rule).
 
 **The grid.** Everything sits on one grid: columns of 10 px (`GRID`) from
@@ -614,7 +613,7 @@ Bass sound quieter on small speakers at equal RMS; that is accepted.
 (`UPDATE_FIXTURES=1 npx vitest run app/src/state/patches.fixture.test.ts`),
 then run `cargo test -p daw-engine --test house_patches` and read the
 numbers. Tune the patch, never the test band; any band change is recorded
-in `docs/followups/plan-11.md`.
+in the commit message.
 
 ## Noise (2)
 

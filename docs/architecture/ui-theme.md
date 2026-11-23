@@ -1,8 +1,6 @@
 # UI theme (tokens, depth, native-control skins)
 
-The redesign spec (`docs/superpowers/specs/2026-11-14-redesign.md` §2–§3) holds
-the approved values; this page says where they live in code and how to use
-them.
+This page says where the theme values live in code and how to use them.
 
 ## Files
 - `app/src/ui/theme.css`: the `:root` tokens, the native-control skins and the

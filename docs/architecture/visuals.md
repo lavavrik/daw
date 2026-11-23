@@ -130,7 +130,7 @@ the dev machine (Apple silicon), plan 12 Task 6:
 No phase added a dropout, and the engine stayed inside the spec-6 budget
 (CPU max 17–28 %, blocks at 100 % of real time). If a new visual pushes a
 phase near 5 %, lower its rate (`hz: 30`) or its resolution first; a Worker
-for the FFT is the last resort (see `docs/followups/plan-12.md`).
+for the FFT is the last resort.
 
 Consumers draw their canvas or DOM directly, never through Svelte state
 (the MeterBus rule). The mixer meters are one: `MixerView` registers its

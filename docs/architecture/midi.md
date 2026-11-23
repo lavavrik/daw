@@ -1,6 +1,5 @@
 # MIDI CC and MIDI learn
 
-Plan 14, spec addendum §2 (`docs/superpowers/specs/2026-11-12-midi-learn-sampler-addendum.md`).
 A knob or fader can be bound to a Control Change number on a MIDI controller;
 moving that controller knob then moves the control exactly as dragging it
 would.

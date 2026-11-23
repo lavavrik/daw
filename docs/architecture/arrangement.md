@@ -221,7 +221,7 @@ Plan 9 Task 5: `ui/song/Timeline.svelte` (AUDIO LANES comment),
   `shortcuts.ts tabFor` says which tab fits which track kind.
 
 ## The playlist look (plan 20)
-Spec `docs/superpowers/specs/2026-11-14-redesign.md` §4 *Playlist*; code in
+Code in
 `ui/song/Timeline.svelte` (LOOK comment: what is drawn when),
 `clipDraw.ts` (the clip drawing: body, previews and their bitmap cache,
 waveform, repeats, hatch), `TrackHeaders.svelte` (LOOK), `TrackVol.svelte`
@@ -341,5 +341,4 @@ colour is stored on the track. So reordering is a permutation of
 | Declick fade / gain ramp | 2 ms / 5 ms |
 | Sample memory | 1 GiB (`MAX_ARENA_FLOATS`), 256 MB per file |
 
-Known gaps are tracked in `docs/followups/plan-3.md` (Song-mode perf with many
-clips, `set_bars` releasing every pitch).
+Known gaps: Song-mode perf with many clips, `set_bars` releasing every pitch.

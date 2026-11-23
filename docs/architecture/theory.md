@@ -1,6 +1,5 @@
 # Theory helpers (key, scale highlight, Snap to key, Transpose, Fit to key)
 
-Plan 26 (spec `docs/superpowers/specs/2026-11-19-builtin-content.md` §2).
 The project knows the song's key, so the piano roll can show it and put
 notes in it without the user knowing any theory.
 

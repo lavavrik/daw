@@ -4,9 +4,8 @@ A personal browser DAW for making house music: drum step grids, modular synth
 racks, a piano roll with recording, patterns arranged on a song timeline, a
 mixer with sends, sidechain and a master limiter, projects saved to folders,
 undo/redo and WAV export. A Rust audio engine compiled to WASM runs in an
-AudioWorklet; the UI is Svelte 5. Design:
-[docs/superpowers/specs/2026-11-06-daw-design.md](docs/superpowers/specs/2026-11-06-daw-design.md);
-architecture notes per area in [docs/architecture/](docs/architecture/).
+AudioWorklet; the UI is Svelte 5. Architecture notes per area are in
+[docs/architecture/](docs/architecture/).
 
 **Contents:** [Getting started](#getting-started) ·
 [The first loop](#the-first-loop) · [Synth and rack](#synth-and-rack) ·
@@ -656,6 +655,5 @@ restart; click it to grant access again.
   repeats only `serial` (`chromium` is its dependency); to repeat everything
   run `--project=chromium --repeat-each=3` and then
   `--project=serial --no-deps --repeat-each=3`.
-- Follow-ups and decisions per plan: [docs/followups/](docs/followups/).
 - Sampler track: "+ Sampler track" on the timeline (drop a sample on it) makes a synth track on the Sampler patch; see [docs/architecture/modular.md](docs/architecture/modular.md#sampler-patch).
 - Drum pads from the MIDI keyboard (or the computer keyboard, from the octave's C): select a drum track and MIDI notes 36 (C2) and up play its rows 1–16 live, velocity-scaled, and record into steps while armed; see [docs/architecture/sequencer.md](docs/architecture/sequencer.md#live-drum-input).
